@@ -259,6 +259,7 @@ test('ordinary workspace-source Vitest configs use the canonical resolver instea
         piSpawnedRealOwnersConfig,
         qaFixturesConfig,
         voiceModelpacksDirectSourceConfig,
+        serverUnitConfig,
     ] = await Promise.all([
         'apps/ui/vitest.artifact-cache.config.ts',
         'packages/plugin-sdk/vitest.facade-current.config.ts',
@@ -267,6 +268,7 @@ test('ordinary workspace-source Vitest configs use the canonical resolver instea
         'packages/plugins/pi/vitest.spawnedRealOwners.config.ts',
         'packages/tests/vitest.qa-fixtures.config.ts',
         'packages/voice-modelpacks/vitest.direct-source.config.ts',
+        'apps/server/vitest.config.ts',
     ].map(async (configPath) => {
         // Authored Vitest configs are evaluated by Vite, including their source
         // policy dependencies; native Node imports are not that loading contract.
@@ -277,6 +279,18 @@ test('ordinary workspace-source Vitest configs use the canonical resolver instea
         return loaded.config;
     }));
     for (const { config, pluginName, importId, expectedSourcePath, additionalImports = [] } of [
+        {
+            config: serverUnitConfig,
+            pluginName: 'happier-server-workspace-package-sources',
+            importId: '@happier-dev/peer-transport/duplexFrames',
+            expectedSourcePath: '/packages/peer-transport/src/duplexFrames/index.ts',
+            additionalImports: [
+                ['@happier-dev/plugin-ui/environment', '/packages/plugin-ui/src/environment/index.public.ts'],
+                ['@happier-dev/plugin-ui/presentation', '/packages/plugin-ui/src/presentation/index.public.ts'],
+                ['@happier-dev/plugin-ui/declarative', '/packages/plugin-ui/src/declarative/index.public.ts'],
+                ['@happier-dev/brand/planet', '/packages/brand/planet.mjs'],
+            ],
+        },
         {
             config: uiArtifactCacheConfig,
             pluginName: 'happier-ui-artifact-cache-workspace-package-sources',
