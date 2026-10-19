@@ -1,4 +1,32 @@
 import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
+import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
+
+import { t } from '@/text';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+/** Answer identity is a separate, host-stamped actor, never the worker's requester. */
+export function resolveAskUserQuestionAnsweredByLabel(input: Readonly<{
+  answeredBy: SessionQuestionHandlerV1 | null | undefined;
+  answeringSession?: Readonly<{ sessionId: string; name: string | null }>;
+  serverId?: string | null;
+  viewerScope?: ServerAccountScope | null;
+  answeringAccountActor?: TranscriptAccountActor | null;
+}>): string | null {
+  const { answeredBy } = input;
+  if (answeredBy?.kind === 'session') {
+    const name = input.answeringSession?.sessionId === answeredBy.sessionId ? input.answeringSession.name?.trim() : null;
+    return t('workflows.run.answeredBy', { name: name || t('message.provenanceSession') });
+  }
+  if (answeredBy?.kind !== 'person') return null;
+  const scope = answeredBy.accountId && input.serverId ? { serverId: input.serverId, accountId: answeredBy.accountId } : null;
+  const actor = areServerAccountScopesEqual(scope, input.answeringAccountActor) ? input.answeringAccountActor : null;
+  if (actor && actor.profile === null) return t('workflows.run.answeredBy', { name: t('message.accountActorFormerMember') });
+  if (areServerAccountScopesEqual(scope, input.viewerScope)) return t('workflows.run.answeredByYou');
+  const name = actor?.profile ? formatAccountDisplayName(actor.profile) : null;
+  return name ? t('workflows.run.answeredBy', { name }) : t('workflows.run.answeredByPerson');
+}
 
 /** The handling manager as the card may show it: a display name and its current reachability. */
 export type AskUserQuestionHandler = Readonly<{

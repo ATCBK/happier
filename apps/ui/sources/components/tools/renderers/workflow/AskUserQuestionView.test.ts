@@ -249,6 +249,16 @@ describe('AskUserQuestionView', () => {
         });
     }
 
+    it('names the authenticated person in the completed question answer byline', async () => {
+        const viewer = storage.getState().profileScope;
+        expect(viewer?.accountId).toBeTruthy();
+        const tool = makeTool({ state: 'completed', result: { status: 'answered', answers: { 'Pick one': ['B'] } },
+            permission: { id: 'toolu_1', status: 'approved', answeredBy: { kind: 'person', accountId: viewer!.accountId } } });
+        const screen = await renderScreen(React.createElement(AskUserQuestionView, makeToolViewProps(tool, { sessionId: 's1' })));
+        expect(screen.getTextContent()).toContain('workflows.run.answeredByYou');
+        expect(screen.getTextContent()).toContain('B');
+    });
+
     it('shows serialized structured answers on the completed question card', async () => {
         const tool = makeTool({
             state: 'completed',

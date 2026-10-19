@@ -6,8 +6,8 @@ import { knownTools } from '@/components/tools/catalog';
 import { inferToolNameForRendering } from '@/components/tools/normalization/policy/toolNameInference';
 import { formatMCPSubtitle, formatMCPTitle } from '@/components/tools/renderers/system/MCPToolView';
 import { t } from '@/text';
-import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolveAskUserQuestionAnsweredByLabel } from '@/components/tools/renderers/workflow/askUserQuestionCardState';
 
 const KNOWN_TOOL_KEYS = Object.keys(knownTools);
 
@@ -78,19 +78,7 @@ export function resolveToolHeaderTextPresentation(params: {
     const actor = tool.permission?.status === 'approved'
         ? SessionQuestionHandlerV1Schema.safeParse(tool.permission.answeredBy) : null;
     const answeredBy = actor?.success ? actor.data : null;
-    const answeringSessionName = answeredBy?.kind === 'session' && params.answeringSession?.sessionId === answeredBy.sessionId
-        ? params.answeringSession.name?.trim() : null;
-    const personAccountId = answeredBy?.kind === 'person' ? answeredBy.accountId : undefined;
-    const personScope = personAccountId && params.serverId ? { serverId: params.serverId, accountId: personAccountId } : null;
-    const personActor = areServerAccountScopesEqual(personScope, params.answeringAccountActor) ? params.answeringAccountActor : null;
-    const personName = personActor?.profile ? formatAccountDisplayName(personActor.profile) : null;
-    const personLabel = answeredBy?.kind !== 'person' ? null : personActor && personActor.profile === null
-        ? t('workflows.run.answeredBy', { name: t('message.accountActorFormerMember') })
-        : areServerAccountScopesEqual(personScope, params.viewerScope) ? t('workflows.run.answeredByYou')
-            : personName ? t('workflows.run.answeredBy', { name: personName }) : t('workflows.run.answeredByPerson');
-    const answeredByLabel = answeredBy?.kind === 'session'
-        ? t('workflows.run.answeredBy', { name: answeringSessionName || t('message.provenanceSession') })
-        : answeredBy?.kind === 'person' ? personLabel : null;
+    const answeredByLabel = resolveAskUserQuestionAnsweredByLabel({ ...params, answeredBy });
 
     if (tool.name.startsWith('mcp__')) {
         return {

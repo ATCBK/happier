@@ -39,7 +39,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SaveMemoryDecisionSheet, type SaveMemoryDecisionSeed } from '@/components/memory/SaveMemoryDecisionSheet';
 import { readAnsweringClientCategory } from '@/sync/ops/sessions';
 import { resolveAskUserQuestionFooterHint, resolveAskUserQuestionLead, type AskUserQuestionFooterHint, type AskUserQuestionLead } from './askUserQuestionCardState';
-import { useAskUserQuestionHandler } from './useAskUserQuestionHandler';
+import { useAskUserQuestionAnsweredByLabel, useAskUserQuestionHandler } from './useAskUserQuestionHandler';
 
 
 interface QuestionOption {
@@ -739,7 +739,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
     const completedRequest = toolCallId ? agentState?.completedRequests?.[toolCallId] : null;
     const questionV1 = activeMatchingRequest?.questionV1 ?? completedRequest?.questionV1;
     const handler = useAskUserQuestionHandler(isRunning ? activeMatchingRequest?.currentHandler : undefined, source.serverId ?? null);
-    const answeringSession = useAskUserQuestionHandler(tool.permission?.answeredBy, source.serverId ?? null);
+    const answeredByLabel = useAskUserQuestionAnsweredByLabel(tool.permission?.status === 'approved' ? tool.permission.answeredBy : undefined, source.serverId ?? null);
     const rememberAnchorRef = React.useRef<View>(null);
     const [rememberOpen, setRememberOpen] = React.useState(false);
     const [remembered, setRemembered] = React.useState(false);
@@ -1056,10 +1056,6 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                 ? options[Array.from(selected)[0]!]?.description : undefined;
             return { key: `${q.answerKey}:${qIndex}`, qIndex, label: q.header ?? q.question, value: selectedLabels, reason: firstSelectedDescription };
         });
-        const answeredBy = tool.permission?.answeredBy;
-        const byline = answeredBy?.kind === 'session'
-            ? t('workflows.run.answeredBy', { name: answeringSession?.name ?? t('message.provenanceSession') })
-            : null;
         const thisClient = readAnsweringClientCategory();
         const answeredElsewhere = !isSubmitted && completedRequest?.answeringClientCategory !== undefined
             && thisClient !== undefined && completedRequest.answeringClientCategory !== thisClient;
@@ -1077,7 +1073,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                 >
                     <View style={styles.stateHeader}>
                         <Icon name="check" size={16} color={theme.colors.text.secondary} />
-                        <Text style={styles.stateTitle}>{byline ?? t('tools.askUserQuestion.answered')}</Text>
+                        <Text style={styles.stateTitle}>{answeredByLabel ?? t('tools.askUserQuestion.answered')}</Text>
                         {answeredElsewhere ? <Text style={styles.stateByline}>{` · ${t('tools.askUserQuestion.answeredElsewhere')}`}</Text> : null}
                     </View>
                     <View style={styles.answerGrid}>

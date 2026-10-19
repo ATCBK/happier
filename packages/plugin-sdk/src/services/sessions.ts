@@ -112,7 +112,7 @@ export type SessionMessageProvenanceV1 =
     | {
         v: 1;
         kind: 'happierApp';
-        actor: { kind: 'owner' } | { kind: 'sharedCollaborator' };
+        actor: { kind: 'owner' } | { kind: 'sharedCollaborator' } | { kind: 'person'; accountId: string };
     }
     | { v: 1; kind: 'cli' }
     | { v: 1; kind: 'voice' }
