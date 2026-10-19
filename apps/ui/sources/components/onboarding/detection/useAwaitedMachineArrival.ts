@@ -1,9 +1,11 @@
 import * as React from 'react';
 
 import { useAllMachines, useMachineListByServerId } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
-import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import { listServerProfiles, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachinePresence } from '@/sync/store/domains/machines';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { useHasMachineForGettingStartedGuidance } from '@/components/sessions/guidance/useHasMachineForGettingStartedGuidance';
 
@@ -81,12 +83,16 @@ export function createAwaitedMachineArrivalBaseline(serverUrl: string, machines:
  * one that went from offline to online while waiting. A heartbeat of a computer that was already
  * there is never an arrival (another computer on the account keeps heartbeating the whole time).
  */
-function resolveArrival(machines: readonly Machine[], snapshot: AwaitedMachineArrivalBaseline): Machine | null {
+function resolveArrival(
+    machines: readonly Machine[],
+    snapshot: AwaitedMachineArrivalBaseline,
+    presenceById: Readonly<Record<string, MachinePresence>> | undefined,
+): Machine | null {
     let arrived: Machine | null = null;
     let arrivedSortValue = Number.NEGATIVE_INFINITY;
 
     for (const machine of machines) {
-        if (machine.revokedAt || !isMachineOnline(machine)) continue;
+        if (machine.revokedAt || !isMachineOnline(presenceById?.[machine.id] ?? machine)) continue;
         const existedAtSnapshot = snapshot.knownIds.has(machine.id);
         const isNew = !existedAtSnapshot;
         const transitionedOnline = existedAtSnapshot && snapshot.wasOnlineById.get(machine.id) === false;
@@ -111,6 +117,12 @@ export function useAwaitedMachineArrival(input: AwaitedMachineArrivalInput = {})
     const activeMachineListKnown = useHasMachineForGettingStartedGuidance() !== null;
     const explicitId = normalizeServerScope(input.serverId);
     const serverId = React.useMemo(() => explicitId || resolveServerProfileIdForUrl(serverUrl), [explicitId, serverUrl]);
+    const presenceScopeId = serverId ? resolveServerProfileScopeIdForIdentifier(serverId) : null;
+    // Inventory identities deliberately survive heartbeat-only updates. The presence owner
+    // publishes a new scoped map when freshness recovers, not on every heartbeat.
+    const presenceById = storage(state => presenceScopeId
+        ? state.machinePresenceByServerId[presenceScopeId]
+        : !serverUrl ? state.machinePresenceById : undefined);
     const machineListKnown = serverId !== null ? Array.isArray(machineListByServerId[serverId]) : !serverUrl && activeMachineListKnown;
     // A named but unresolved/loading Home never borrows the active Home's computers.
     const machines = serverId || !serverUrl ? selectMachinesForScope({ allMachines, machineListByServerId, serverId }) : [];
@@ -134,7 +146,7 @@ export function useAwaitedMachineArrival(input: AwaitedMachineArrivalInput = {})
         if (snapshot && snapshot !== persistedBaseline) onBaselineCaptured?.(snapshot);
     }, [onBaselineCaptured, persistedBaseline, snapshot]);
 
-    const arrived = snapshot ? resolveArrival(machines, snapshot) : null;
+    const arrived = snapshot ? resolveArrival(machines, snapshot, presenceById) : null;
     if (!arrived) {
         return { status: 'waiting', machine: undefined, isOnline: false };
     }

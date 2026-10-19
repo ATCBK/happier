@@ -21,6 +21,20 @@ const signedOutAgent = {
 const notInstalledAgent = { ...signedOutAgent, state: 'notInstalled', installed: false } satisfies MachineAgent;
 
 describe('resolveAgentSessionStartBlockLine', () => {
+    it('explains the selected revoked account and offers reconnect instead of native sign-in', () => {
+        const reconnect = vi.fn();
+        const line = resolveAgentSessionStartBlockLine({ machineName: 'Devbox',
+            agent: { ...signedOutAgent, signIn: { ...signedOutAgent.signIn, connectedAccountFailure: {
+                code: 'connected_service_credential_reconnect_required', serviceId: 'acme.agent/account', profileId: 'work',
+            } } },
+            connectedServicesRecoveryAction: { label: 'Reconnect', testID: 'new-session-agent-blocker.reconnect', onPress: reconnect },
+        });
+        expect(line?.text).toBe('connectedServices.diagnostics.status.connected_service_credential_reconnect_required');
+        expect(line?.action.testID).toBe('new-session-agent-blocker.reconnect');
+        expect(line?.secondaryAction).toBeUndefined();
+        line?.action.onPress();
+        expect(reconnect).toHaveBeenCalledOnce();
+    });
     it('says nothing when the agent can start', () => {
         expect(resolveAgentSessionStartBlockLine({ agent: null, machineName: 'Devbox' })).toBeNull();
         expect(resolveAgentSessionStartBlockLine({ agent: { ...signedOutAgent, state: 'ready', signIn: { ...signedOutAgent.signIn, status: 'signedIn' } }, machineName: 'Devbox' })).toBeNull();

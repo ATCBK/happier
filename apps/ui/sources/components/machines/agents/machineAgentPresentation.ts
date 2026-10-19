@@ -3,6 +3,7 @@ import type {
     MachineAgentSignInSession,
 } from '@/agents/machineAgents/machineAgentTypes';
 import type { AgentInstallJobFailurePresentationInput } from '@/agents/machineAgents/installJobs/presentAgentInstallJobFailure';
+import type { MachineAgentsSnapshot } from '@/agents/machineAgents/machineAgentInventoryStore';
 
 /** A reported installer failure or the presentation owner's uncertainty fallback. */
 export type MachineAgentJobFailure = AgentInstallJobFailurePresentationInput;
@@ -35,7 +36,9 @@ export type MachineAgentRowAction =
     | Readonly<{ kind: 'retry' }>
     | Readonly<{ kind: 'cancel' }>
     | Readonly<{ kind: 'showTerminal' }>
-    | Readonly<{ kind: 'guide'; url: string }>;
+    | Readonly<{ kind: 'guide'; url: string }>
+    /** Uninstall a Happier-managed install from this machine (offered beside the row's own action). */
+    | Readonly<{ kind: 'remove' }>;
 
 export type MachineAgentStatusTone = 'quiet' | 'warn' | 'bad';
 
@@ -115,11 +118,30 @@ function runningStep(agent: MachineAgent) {
     return steps.find((step) => step.state === 'running') ?? steps.find((step) => step.state === 'pending') ?? null;
 }
 
+/**
+ * Nothing has asked the machine about this agent yet (an embedded composer before anyone uses it): the
+ * inventory is idle and holds no answer. That is neither a check in progress nor a failed one, so a status
+ * line has nothing honest to say until the check is requested.
+ */
+export function isMachineAgentUnchecked(
+    agent: MachineAgent | null,
+    inventoryStatus?: MachineAgentsSnapshot['status'],
+): boolean {
+    return inventoryStatus === 'idle' && (!agent || agent.state === 'unknown');
+}
+
 /** The one status line of a row or card. Only trouble has a tone. */
 export function resolveMachineAgentStatus(
-    agent: MachineAgent,
+    agent: MachineAgent | null,
     session?: MachineAgentSignInSession | null,
+    inventoryStatus?: MachineAgentsSnapshot['status'],
 ): MachineAgentStatus {
+    // A missing or unanswered row is not a failed check while its inventory is loading.
+    // Retained installation/authentication facts still speak during a refresh.
+    if (inventoryStatus === 'loading' && (!agent || agent.state === 'unknown' || agent.state === 'checking')) {
+        return { kind: 'checking', tone: 'quiet' };
+    }
+    if (!agent) return { kind: 'unknown', tone: 'quiet' };
     if (agent.stale) {
         if (agent.staleReason === 'error') return { kind: 'unknown', tone: 'quiet' };
         const lastKnown = !agent.installed
@@ -253,7 +275,7 @@ export function rankFirstAgentChoices(agents: readonly MachineAgent[]): Readonly
  * Home offers "Set up your first agent" only while the composer's machine is known to have no agent at
  * all (lab H1): facts are in (fresh or last known), there are agents it could run, and none is installed.
  */
-export function shouldOfferFirstAgentSetup(inventory: Readonly<{ status: 'loading' | 'ready' | 'offline' | 'error'; agents: readonly MachineAgent[] }>): boolean {
+export function shouldOfferFirstAgentSetup(inventory: Pick<MachineAgentsSnapshot, 'status' | 'agents'>): boolean {
     return (inventory.status === 'ready' || inventory.status === 'offline')
         && inventory.agents.length > 0
         && !inventory.agents.some((agent) => agent.installed);

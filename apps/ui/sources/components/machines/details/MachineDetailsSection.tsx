@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { hasProviderMachineStateV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { composeProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineConnection';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -19,6 +20,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProviderCatalog } from '@/sync/store/useProviderCatalog';
 import { sync } from '@/sync/sync';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { t } from '@/text';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -76,6 +78,8 @@ export const MachineDetailsSection = React.memo(function MachineDetailsSection(p
             setIsRevokingMachine(true);
             try {
                 const execution = await stopExecution.execute('machines.remove', { serverId: machineServerId, machineId });
+                if (!execution.ok && (execution.errorCode === 'cancelled'
+                    || isActionApprovalDeclinedErrorCode(execution.errorCode))) return;
                 const result = execution.ok ? MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS['machines.remove'].parse(execution.result) : null;
                 if (!result?.ok) {
                     if (result && 'machineRevoked' in result && result.machineRevoked) {
@@ -83,7 +87,7 @@ export const MachineDetailsSection = React.memo(function MachineDetailsSection(p
                         await sync.refreshMachinesThrottled({ staleMs: 0, force: true });
                         await Modal.alert(t('common.error'), t('settingsProviders.errors.machineCleanupPendingDescription'));
                     } else {
-                        await Modal.alert(t('common.error'), t('errors.operationFailed'));
+                        await Modal.alert(t('common.error'), resolveActionExecutionFailureMessage(execution, t('errors.operationFailed')) ?? t('errors.operationFailed'));
                     }
                     return;
                 }

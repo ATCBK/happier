@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
+import { withAgentInstallJobFailureFeedback } from '@/agents/machineAgents/installJobs/installJobActionFeedback';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -23,7 +24,7 @@ export function useMachineAgentRowActions(input: Readonly<{
 }>): (agent: MachineAgent, action: MachineAgentRowAction) => void {
     const terminalHost = useAgentSignInTerminalHost();
     const { serverId, machineId, machineName, onOpenForm } = input;
-    const { binding, execute } = useMountedActionExecution(serverId);
+    const { binding, execute, isCurrent } = useMountedActionExecution(serverId, { openOnRequest: true });
     return React.useCallback((agent, action) => {
         const target = { serverId, machineId, agentId: agent.agentId, definitionId: agent.definitionId };
         switch (action.kind) {
@@ -32,17 +33,24 @@ export function useMachineAgentRowActions(input: Readonly<{
             case 'update': {
                 if (!binding?.isCurrent()) return;
                 const intent = action.kind === 'retry' ? agent.job?.intent ?? 'install' : action.kind;
-                fireAndForget(execute(intent === 'uninstall' ? 'machines.agents.uninstall' : 'machines.agents.install', {
+                fireAndForget(withAgentInstallJobFailureFeedback(execute(intent === 'uninstall' ? 'machines.agents.uninstall' : 'machines.agents.install', {
                     machineId, agentId: agent.agentId, ...(agent.definitionId === undefined ? {} : { definitionId: agent.definitionId }),
                     // Consent is reviewed by the shared Action confirmation before execution.
                     ...(intent === 'uninstall' ? {} : { intent, consent: { vendorRecipe: agent.install.requiresVendorConsent } }),
-                }), { tag: 'machineAgentRowAction.install' });
+                }), isCurrent), { tag: 'machineAgentRowAction.install' });
                 onOpenForm(agent);
                 return;
             }
+            case 'remove':
+                // Removing confirms through the uninstall Action's own policy (D22: deletions confirm).
+                if (!binding?.isCurrent()) return;
+                fireAndForget(withAgentInstallJobFailureFeedback(execute('machines.agents.uninstall', {
+                    machineId, agentId: agent.agentId, ...(agent.definitionId === undefined ? {} : { definitionId: agent.definitionId }),
+                }), isCurrent), { tag: 'machineAgentRowAction.remove' });
+                return;
             case 'cancel':
                 if (!binding?.isCurrent() || !agent.job || agent.job.outcome) return;
-                fireAndForget(execute('machines.agents.install.cancel', { machineId, jobId: agent.job.jobId }), { tag: 'machineAgentRowAction.cancel' });
+                fireAndForget(withAgentInstallJobFailureFeedback(execute('machines.agents.install.cancel', { machineId, jobId: agent.job.jobId }), isCurrent), { tag: 'machineAgentRowAction.cancel' });
                 return;
             case 'signIn':
                 onOpenForm(agent);
@@ -57,5 +65,5 @@ export function useMachineAgentRowActions(input: Readonly<{
                 fireAndForget(openExternalUrl(action.url), { tag: 'machineAgentRowAction.guide' });
                 return;
         }
-    }, [binding, execute, machineId, machineName, onOpenForm, serverId, terminalHost]);
+    }, [binding, execute, isCurrent, machineId, machineName, onOpenForm, serverId, terminalHost]);
 }

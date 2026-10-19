@@ -69,7 +69,7 @@ describe('Home first-agent setup target', () => {
             createMachineFixture({ id: 'replaced', activeAt: now, metadata: { ...createMachineFixture().metadata!, displayName: 'Replaced' }, replacedByMachineId: 'current' }),
             createMachineFixture({ id: 'current', activeAt: now, metadata: { ...createMachineFixture().metadata!, displayName: 'Current' } }),
         ]);
-        expect(hook.getCurrent().item?.renderTile()).toMatchObject({ props: { machineName: 'Current' } });
+        expect(hook.getCurrent().item?.renderTile({ open: () => {} })).toMatchObject({ props: { machineName: 'Current' } });
         expect(network.requests).toEqual([]);
         await hook.unmount();
     });

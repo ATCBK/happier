@@ -7,12 +7,19 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { persistRemoteHostAfterRemoteSshCompletion } from './persistRemoteHostAfterRemoteSshCompletion';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+const owner = await import('./persistRemoteHostAfterRemoteSshCompletion');
 let disposeNativeStorage: (() => void) | undefined;
 let failLocalOverrideWrite = false;
 let localOverrideWriteFailed = false;
+let focusedConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 beforeAll(async () => {
     // Metro's call-time require must reach the same canonical native storage boundary as Vitest imports.
@@ -31,6 +38,8 @@ beforeAll(async () => {
 beforeEach(() => { failLocalOverrideWrite = false; localOverrideWriteFailed = false; });
 afterEach(async () => {
     failLocalOverrideWrite = false;
+    await focusedConnection?.dispose();
+    focusedConnection = undefined;
     await homes.reset();
     const profiles = await import('@/sync/domains/server/serverProfiles');
     for (const profile of profiles.listServerProfiles()) {
@@ -47,8 +56,12 @@ function completion(scope: ServerAccountScope, overrides: Partial<Params> = {}):
         completion: { machineId: 'machine-remote', relayRuntimeUrl: 'https://discovered-relay.example' }, ...overrides };
 }
 async function seedSource(): Promise<ServerAccountScope> {
-    const source = await homes.addHome({ name: 'Source', serverUrl: 'https://source.example', accountId: 'source-account', active: false });
-    await homes.addHome({ name: 'Focused', serverUrl: 'https://focused.example', active: true });
+    const source = await homes.addHome({ name: 'Source', serverUrl: 'https://source.example', accountId: 'source-account', currentAccount: true, active: false });
+    const focused = await homes.addHome({ name: 'Focused', serverUrl: 'https://focused.example', accountId: 'focused-account', currentAccount: true });
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://focused.example', { serverId: focused });
+    if (!credentials) throw new Error('Expected the focused Home credentials');
+    focusedConnection = await restoreServerAccountForTest({ serverUrl: 'https://focused.example', accountId: 'focused-account',
+        credentials, request: homes.request, additionalRequestOrigins: ['https://source.example'] });
     homes.answer(source, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }) });
     homes.answer(source, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: {} } } });
     homes.answer(source, '/v2/account/settings/history', { body: { snapshots: [] } });
@@ -68,7 +81,6 @@ describe('Remote SSH completion through Home and Account owners', () => {
         await profiles.saveHomeViewState({ version: 1, groups: [{ id: 'visible-homes', name: 'Visible Homes', serverIds: [before.serverId] }],
             activeTargetKind: 'server', activeTargetId: before.serverId });
         const viewBefore = profiles.loadHomeViewState();
-        const owner = await import('./persistRemoteHostAfterRemoteSshCompletion');
         const withoutCatalog = { ...completion(scope, { managementEnabled: false, runContext: null }), scope: null, expectedRevision: null };
         await expect(owner.persistRemoteHostAfterRemoteSshCompletion(withoutCatalog)).resolves.toEqual({ ok: false, reason: 'not_requested' });
         expect(profiles.listServerProfiles()).toContainEqual(expect.objectContaining({ serverUrl: 'https://discovered-relay.example', source: 'manual' }));
@@ -79,14 +91,14 @@ describe('Remote SSH completion through Home and Account owners', () => {
 
     it('keeps a durable host acknowledgement successful when the device-local override write fails', async () => {
         const scope = await seedSource();
-        const owner = await import('./persistRemoteHostAfterRemoteSshCompletion');
         failLocalOverrideWrite = true;
         const result = await owner.persistRemoteHostAfterRemoteSshCompletion(completion(scope));
+        expect(result, JSON.stringify(homes.requests.map(({ path }) => ({ path }))))
+            .toMatchObject({ ok: true, revision: 5, hostId: expect.any(String), localOverrides: 'pending' });
         const writes = homes.requestsFor('/v1/account/entity-rows/remote-hosts')
             .filter(request => request.input !== null);
         expect(writes).toHaveLength(1);
         expect(localOverrideWriteFailed).toBe(true);
-        expect(result).toMatchObject({ ok: true, revision: 5, hostId: expect.any(String), localOverrides: 'pending' });
         const profiles = await import('@/sync/domains/server/serverProfiles');
         const relay = profiles.listServerProfiles().find(profile => profile.serverUrl === 'https://discovered-relay.example');
         expect(writes[0]?.input).toMatchObject({ mutation: { content: { t: 'plain', v: { hosts: [
@@ -96,7 +108,6 @@ describe('Remote SSH completion through Home and Account owners', () => {
 
     it('refuses malformed discovered Homes before a catalog mutation', async () => {
         const scope = await seedSource();
-        const owner = await import('./persistRemoteHostAfterRemoteSshCompletion');
         const result = await owner.persistRemoteHostAfterRemoteSshCompletion(completion(scope,
             { completion: { machineId: null, relayRuntimeUrl: 'ssh://not-a-home' } }));
         expect(result.ok).toBe(false);
@@ -109,7 +120,6 @@ describe('Remote SSH completion through Home and Account owners', () => {
             createdAt: 1, updatedAt: 1, lastUsedAt: null };
         homes.answer(scope.serverId, '/v1/account/entity-rows/remote-hosts', { body: { status: 'present', revision: 4,
             content: { t: 'plain', v: { v: 1, hosts: [host, { id: 'future-host', v: 2, transport: 'future' }] } } } });
-        const owner = await import('./persistRemoteHostAfterRemoteSshCompletion');
         const result = await owner.persistSavedRemoteHostAfterRemoteSshCompletion({ scope, host, expectedRevision: 4,
             completion: { machineId: 'machine-remote', relayRuntimeUrl: null } });
         expect(result.ok).toBe(false);

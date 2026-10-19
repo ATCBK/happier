@@ -1,14 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import type { ServerCredentialLookupOptions } from '@/auth/storage/tokenStorage';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SystemTaskJsonObject, SystemTaskJsonValue, SystemTaskSpec } from '@happier-dev/protocol';
+import type { SystemTaskBridgeListenerSet } from '@/components/systemTasks/types';
+import { installPersonalHomeBootstrapNetworkBoundary } from '@/dev/testkit/harness/personalHomeBootstrapNetworkBoundary';
 
 import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { PersonalHomeBootstrapContent } from './PersonalHomeBootstrapGate';
 import type { PersonalHomeFacts } from './personalHomeBootstrapTypes';
 
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+
 // The real `useThisComputerSetupTask` resolves its runner through the shared system-tasks
-// runtime. Keep that real path but select the deterministic dev bridge: the test's process
-// boundary is the system-task bridge, and the Tauri bridge does not exist in this environment.
+// runtime. The dev runner still crosses the explicit native-process bridge below.
 process.env.EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE = 'dev';
 
 const harness = vi.hoisted(() => {
@@ -42,14 +47,12 @@ const harness = vi.hoisted(() => {
     const relayTaskOccurrences = new Map<string, number>();
     let statusAvailable = true;
     const routerPush = vi.fn();
-    const readRelayStatus = async () => statusAvailable ? statusData() : null;
-    const useLocalRelayRuntimeControl = vi.fn(() => ({
-        activeTaskSnapshot: null,
-        isUnavailable: false,
-        lastErrorMessage: null,
-        status: statusAvailable ? statusData() : null,
-        readStatus: readRelayStatus,
-        runTaskAndWait: async (kind: string, options: Record<string, unknown> = {}) => {
+    const token = `eyJhbGciOiJub25lIn0.${btoa(JSON.stringify({ sub: 'acct_home_b' }))}.fixture`;
+    const isTaskObject = (value: SystemTaskJsonValue): value is SystemTaskJsonObject =>
+        value !== null && typeof value === 'object' && !Array.isArray(value);
+    const runRelayTask = async (kind: string, params: SystemTaskJsonValue = {}) => {
+            if (!isTaskObject(params)) throw new Error('Relay task fixture requires object params');
+            const options = params;
             taskCalls.push({ kind, options });
             const occurrence = (relayTaskOccurrences.get(kind) ?? 0) + 1;
             relayTaskOccurrences.set(kind, occurrence);
@@ -71,7 +74,7 @@ const harness = vi.hoisted(() => {
                 runtime.healthy = true;
                 runtime.dataPresent = true;
                 runtime.purpose = options.purpose as typeof runtime.purpose;
-                runtime.signupEnabled = options.anonymousSignupEnabled !== false;
+                runtime.signupEnabled = (options.env as Record<string, string> | undefined)?.AUTH_ANONYMOUS_SIGNUP_ENABLED !== '0';
             } else if (kind === 'relay.runtime.start.v1' || kind === 'relay.runtime.restart.v1') {
                 runtime.healthy = true;
             }
@@ -79,51 +82,44 @@ const harness = vi.hoisted(() => {
                 protocolVersion: 1,
                 taskId: `task-${taskCalls.length}`,
                 ok: true,
-                data: statusData(),
+                data: statusAvailable ? statusData() : {},
             };
+    };
+    const taskSpecs = new Map<string, SystemTaskSpec>();
+    const taskResults: Array<{ kind: string; ok: boolean; error?: { code: string; message: string } }> = [];
+    let nextTaskId = 0;
+    const bridge = {
+        start: async (spec: SystemTaskSpec) => {
+            const taskId = `runtime-task-${++nextTaskId}`;
+            taskSpecs.set(taskId, spec);
+            return taskId;
         },
-    }));
-    const useLocalDaemonControl = vi.fn(() => ({
-        activeTaskSnapshot: null,
-        canInstall: false,
-        canStart: false,
-        status: null,
-        readStatus: async () => null,
-        refreshStatus: async () => null,
-        installBackgroundService: () => {},
-        startDaemonService: () => {},
-    }));
-    const isDesktopHost = vi.fn(() => true);
-    const desktopHostKind = vi.fn<() => 'tauri' | 'electron' | null>(() => 'tauri');
-    const isDesktopOverlayWindowContext = vi.fn(() => false);
+        subscribe: async (taskId: string, listener: SystemTaskBridgeListenerSet) => {
+            const spec = taskSpecs.get(taskId)!;
+            queueMicrotask(async () => {
+                const result = spec.kind.startsWith('relay.runtime.')
+                    ? await runRelayTask(spec.kind, spec.params)
+                    : { protocolVersion: 1, ok: true, data: {} };
+                taskResults.push({ kind: spec.kind, ...result });
+                listener.onResult({ ...result, taskId });
+            });
+            return () => {};
+        },
+        cancel: async () => {},
+        respond: async () => {},
+    };
     const currentWindowLabel = vi.fn(() => 'main');
 
-    // Pending Personal Home bootstrap-seed custody boundary state (native storage beneath the
-    // Home-scoped token-storage owner). `lastPersistedSeed` is what the verified custody held
-    // at the moment the account-creating network call fired.
-    const pendingSeedStore = new Map<string, Uint8Array>();
-    let lastPersistedSeed: Uint8Array | null = null;
     const authCallSecrets: Uint8Array[] = [];
 
-    function seedCustodyKey(serverUrl: string, options: ServerCredentialLookupOptions | undefined): string {
-        return `${serverUrl}|${options?.serverId ?? ''}`;
-    }
-
-    const authGetTokenAtEndpoint = vi.fn(async (params: { secret?: Uint8Array } = {}) => {
+    const redeemHomeChallenge = vi.fn(async (params: { secret?: Uint8Array } = {}) => {
         if (!runtime.signupEnabled) {
             throw Object.assign(new Error('signup disabled'), { code: 'signup-disabled' });
         }
         if (params.secret) {
             authCallSecrets.push(new Uint8Array(params.secret));
-            if (!lastPersistedSeed || lastPersistedSeed.length !== params.secret.length
-                || lastPersistedSeed.some((byte, index) => byte !== params.secret![index])) {
-                throw new Error('account-creating endpoint call ran without verified pending seed custody');
-            }
         }
-        return { token: 'home-b-token' };
-    });
-    const focusedAuthGetToken = vi.fn(async () => {
-        throw new Error('focused auth must not be used');
+        return { token };
     });
 
     // Status identity is stable while the underlying runtime state is unchanged (mirroring the
@@ -156,6 +152,15 @@ const harness = vi.hoisted(() => {
 
     return {
         canonicalServerUrl,
+        token,
+        bridge,
+        taskSpecs,
+        taskResults,
+        mutations: () => [...taskSpecs.values()].filter(spec => spec.kind !== 'relay.runtime.status.v1' && spec.kind !== 'daemon.service.status.v1'),
+        clearTaskObservations() {
+            taskCalls.length = 0;
+            relayTaskOccurrences.clear();
+        },
         runtime,
         endpoint,
         taskCalls,
@@ -169,14 +174,8 @@ const harness = vi.hoisted(() => {
             statusAvailable = next;
         },
         routerPush,
-        useLocalRelayRuntimeControl,
-        useLocalDaemonControl,
-        isDesktopHost,
-        desktopHostKind,
-        isDesktopOverlayWindowContext,
         currentWindowLabel,
-        authGetTokenAtEndpoint,
-        focusedAuthGetToken,
+        redeemHomeChallenge,
         getCredentials: () => credentials,
         setCredentials(value: Readonly<{ token: string }> | null) {
             credentials = value;
@@ -185,21 +184,7 @@ const harness = vi.hoisted(() => {
         setSegments(value: readonly string[]) {
             segments = value;
         },
-        pendingSeedStore: () => [...pendingSeedStore.entries()].map(([key, seed]) => ({ key, seed })),
         authCallSecrets: () => authCallSecrets.map((seed) => new Uint8Array(seed)),
-        readPendingSeed: (serverUrl: string, options?: ServerCredentialLookupOptions) => {
-            const seed = pendingSeedStore.get(seedCustodyKey(serverUrl, options));
-            return seed ? new Uint8Array(seed) : null;
-        },
-        setPendingSeed: (serverUrl: string, options: ServerCredentialLookupOptions | undefined, seed: Uint8Array) => {
-            pendingSeedStore.set(seedCustodyKey(serverUrl, options), new Uint8Array(seed));
-            lastPersistedSeed = new Uint8Array(seed);
-            return Promise.resolve(true);
-        },
-        clearPendingSeed: (serverUrl: string, options?: ServerCredentialLookupOptions) => {
-            pendingSeedStore.delete(seedCustodyKey(serverUrl, options));
-            return Promise.resolve(true);
-        },
         statusData,
         reset() {
             runtime.installed = false;
@@ -212,21 +197,15 @@ const harness = vi.hoisted(() => {
             credentials = null;
             segments = ['(app)', 'index'];
             taskCalls.length = 0;
+            taskSpecs.clear();
+            taskResults.length = 0;
             failNextRelayTask = null;
             failRelayTaskOnOccurrence = null;
             relayTaskOccurrences.clear();
             statusAvailable = true;
-            pendingSeedStore.clear();
-            lastPersistedSeed = null;
             authCallSecrets.length = 0;
             routerPush.mockClear();
-            useLocalRelayRuntimeControl.mockClear();
-            useLocalDaemonControl.mockClear();
-            authGetTokenAtEndpoint.mockClear();
-            focusedAuthGetToken.mockClear();
-            isDesktopHost.mockReturnValue(true);
-            desktopHostKind.mockReturnValue('tauri');
-            isDesktopOverlayWindowContext.mockReturnValue(false);
+            redeemHomeChallenge.mockClear();
             currentWindowLabel.mockReturnValue('main');
         },
     };
@@ -254,97 +233,25 @@ vi.mock('expo-router', async () => {
     };
 });
 
-vi.mock('@/utils/platform/desktopHost', () => ({
-    isDesktopHost: () => harness.isDesktopHost(),
-    desktopHostKind: () => harness.desktopHostKind(),
-}));
-
-vi.mock('@/desktop/window/isDesktopOverlayWindowContext', () => ({
-    isDesktopOverlayWindowContext: () => harness.isDesktopOverlayWindowContext(),
-}));
-
 vi.mock('@tauri-apps/api/window', () => ({
     getCurrentWindow: () => ({ label: harness.currentWindowLabel() }),
 }));
 
-vi.mock('@/components/settings/server/localControl/useLocalRelayRuntimeControl', () => ({
-    useLocalRelayRuntimeControl: () => harness.useLocalRelayRuntimeControl(),
+vi.mock('@/components/systemTasks/createSystemTaskBridge', () => ({
+    createSystemTaskBridge: () => harness.bridge,
 }));
-
-vi.mock('@/components/settings/machines/localControl/useLocalDaemonControl', () => ({
-    useLocalDaemonControl: () => harness.useLocalDaemonControl(),
-}));
-
-vi.mock('@/auth/flows/getToken', () => ({
-    authGetToken: harness.focusedAuthGetToken,
-    authGetTokenAtEndpoint: harness.authGetTokenAtEndpoint,
-}));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-        getCredentialsForServerUrl: vi.fn(async () => harness.getCredentials()),
-        setCredentialsForServerUrl: vi.fn(async (
-            _url: string,
-            _options: ServerCredentialLookupOptions,
-            credentials: Readonly<{ token: string }>,
-        ) => {
-            harness.setCredentials(credentials);
-            return true;
-        }),
-        getPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options?: ServerCredentialLookupOptions,
-        ) => harness.readPendingSeed(serverUrl, options)),
-        setPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options: ServerCredentialLookupOptions | undefined,
-            seed: Uint8Array,
-        ) => harness.setPendingSeed(serverUrl, options, seed)),
-        clearPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options?: ServerCredentialLookupOptions,
-        ) => harness.clearPendingSeed(serverUrl, options)),
-        },
-    });
-});
 
 vi.mock('@/platform/cryptoRandom', () => ({
     getRandomBytes: vi.fn(() => new Uint8Array(32).fill(7)),
     getRandomBytesAsync: vi.fn(async () => new Uint8Array(32).fill(7)),
 }));
 
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    probeServerFeaturesAtUrl: vi.fn(async () => !harness.endpoint.reachable || !harness.runtime.installed || !harness.runtime.healthy
-        ? { status: 'error', reason: 'network' }
-        : {
-            status: 'ready',
-            serverIdentityId: 'srv_home_b_identity',
-            features: {
-                homeConnectionDescriptor: harness.endpoint.homeConnectionDescriptor,
-                capabilities: {
-                    auth: {
-                        signup: {
-                            methods: [{ id: 'anonymous', enabled: harness.runtime.signupEnabled }],
-                        },
-                    },
-                    encryption: { storagePolicy: harness.endpoint.storagePolicy },
-                    serverIdentity: { serverIdentityId: 'srv_home_b_identity' },
-                },
-            },
-        }),
-}));
-
-vi.mock('@/sync/api/capabilities/probeAuthenticatedServerAuthPingEndpoint', () => ({
-    probeAuthenticatedServerAuthPingEndpoint: vi.fn(async ({ token }: { token: string }) => {
-        if (!harness.endpoint.reachable) return { status: 'server_unreachable' };
-        return token === 'home-b-token' && harness.runtime.healthy
-            ? { status: 'ready' }
-            : { status: 'auth_failed', statusCode: 401, errorMessage: 'unauthorized' };
-    }),
-}));
+let network: Awaited<ReturnType<typeof installPersonalHomeBootstrapNetworkBoundary>>;
+async function seedExistingCredentials() {
+    const credentials = { token: harness.token };
+    expect(await network.seedCredentials({ serverId: 'srv_home_b_identity' }, credentials)).toBe(true);
+    harness.setCredentials(credentials);
+}
 
 const initialFacts: PersonalHomeFacts = {
     hostIsDesktop: true,
@@ -362,12 +269,40 @@ const initialFacts: PersonalHomeFacts = {
 };
 
 describe('usePersonalHomeBootstrapRuntime production composition', () => {
+    beforeEach(async () => {
+        harness.reset();
+        network = await installPersonalHomeBootstrapNetworkBoundary({
+            serverUrl: harness.canonicalServerUrl,
+            serverIdentityId: 'srv_home_b_identity',
+            readFeatures: async () => !harness.endpoint.reachable || !harness.runtime.installed || !harness.runtime.healthy
+                ? { status: 'error', reason: 'network' }
+                : {
+                    status: 'ready', serverIdentityId: 'srv_home_b_identity',
+                    features: {
+                        homeConnectionDescriptor: harness.endpoint.homeConnectionDescriptor,
+                        capabilities: {
+                            auth: { signup: { methods: [{ id: 'anonymous', enabled: harness.runtime.signupEnabled }] } },
+                            encryption: { storagePolicy: harness.endpoint.storagePolicy },
+                        },
+                    },
+                },
+            authenticate: harness.redeemHomeChallenge,
+            authPing: async ({ token }) => ({ status: harness.endpoint.reachable && token === harness.token && harness.runtime.healthy ? 'ready' : 'auth_failed' }),
+            credentialPersisted: async (_url, _scope, credentials) => harness.setCredentials(credentials),
+            request: async ({ path }) => path === '/v1/account/profile'
+                ? Response.json({ id: 'acct_home_b' }) : new Response(null, { status: 404 }),
+        });
+        const profiles = await import('@/sync/domains/server/serverProfiles');
+        profiles.resetServerProfilesRuntimeForTests();
+    });
     afterEach(async () => {
         standardCleanup();
         await harness.reset();
         const profiles = await import('@/sync/domains/server/serverProfiles');
         profiles.clearTabActiveServerId();
         for (const profile of profiles.listServerProfiles()) await profiles.removeServerProfile(profile.id);
+        network.dispose();
+        vi.restoreAllMocks();
     });
 
     it('runs the canonical bootstrap through system tasks, persists token-only credentials, adopts only after verification, and preserves focus', async () => {
@@ -382,31 +317,31 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
 
         const { usePersonalHomeBootstrapRuntime } = await import('./usePersonalHomeBootstrapRuntime');
         const hook = await renderHook(() => usePersonalHomeBootstrapRuntime());
+        await flushHookEffects();
+        harness.clearTaskObservations();
 
         await hook.getCurrent().operations['ensure-home-ready']?.(initialFacts);
 
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual([
+        // Readback refreshes may repeat; retain the exact mutation order and every transition.
+        expect(harness.taskCalls.map((call) => call.kind).filter((kind, index, kinds) => (
+            kind !== 'relay.runtime.status.v1' || kinds[index - 1] !== kind
+        ))).toEqual([
             'relay.runtime.status.v1',
             'relay.runtime.installOrUpdate.v1',
             'relay.runtime.status.v1',
-            'relay.runtime.status.v1',
             'relay.runtime.installOrUpdate.v1',
-            'relay.runtime.status.v1',
             'relay.runtime.status.v1',
         ]);
         expect(harness.runtime.signupEnabled).toBe(false);
-        expect(harness.getCredentials()).toEqual({ token: 'home-b-token' });
+        expect(harness.getCredentials()).toEqual({ token: harness.token });
         // The account-creating call carried the deterministic 32-byte seed, taken from verified
         // pending custody, and the custody was released after the verified credential persisted.
         expect(harness.authCallSecrets()).toHaveLength(1);
         expect([...harness.authCallSecrets()[0]!]).toEqual(new Array(32).fill(7));
-        expect(harness.pendingSeedStore()).toEqual([]);
-        expect(harness.authGetTokenAtEndpoint).toHaveBeenCalledWith(expect.objectContaining({
-            endpointUrl: harness.canonicalServerUrl,
-            canonicalServerUrl: harness.canonicalServerUrl,
-            serverIdentityId: 'srv_home_b_identity',
-            requireKeyChallengeV2: true,
-        }));
+        expect(network.pendingSeeds()).toEqual([]);
+        // Both account creation and the live signup-refusal check used real v2 proofs.
+        expect(network.requests.filter(request => request.path === '/v1/auth/challenge')).toHaveLength(2);
+        expect(network.requests.filter(request => request.path === '/v1/auth')).toHaveLength(2);
         expect(profiles.listServerProfiles()).toContainEqual(expect.objectContaining({
             source: 'desktop-personal-home',
             serverUrl: harness.canonicalServerUrl,
@@ -415,13 +350,16 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
             personalHomeBootstrapCompleted: true,
         }));
         expect(profiles.getActiveServerSnapshot().serverId).toBe(focusedHome.id);
-        expect(harness.focusedAuthGetToken).not.toHaveBeenCalled();
+        expect(network.requests.every(request => new URL(request.url).origin === harness.canonicalServerUrl)).toBe(true);
     });
 
     it('resumes with the URL-scoped seed when the first post-install readback fails after creating Home data', async () => {
         const { usePersonalHomeBootstrapRuntime } = await import('./usePersonalHomeBootstrapRuntime');
         let hook = await renderHook(() => usePersonalHomeBootstrapRuntime());
-        // The first status read is preflight. Fail the post-install readback, after the one
+        await flushHookEffects();
+        harness.clearTaskObservations();
+        // After the real hooks' read-only mount work, the first operation read is preflight.
+        // Fail the post-install readback, after the one
         // runtime mutation has created meaningful Home data, to prove that seed custody was
         // established before the mutation without relying on the retired start task.
         harness.failRelayTaskOnOccurrence('relay.runtime.status.v1', 2);
@@ -435,11 +373,9 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
             'relay.runtime.installOrUpdate.v1',
             'relay.runtime.status.v1',
         ]);
-        expect(harness.pendingSeedStore()).toEqual([
-            expect.objectContaining({ key: `${harness.canonicalServerUrl}|` }),
-        ]);
-        expect(harness.pendingSeedStore()[0]?.seed).toHaveLength(32);
-        const seedAfterFailure = harness.pendingSeedStore()[0]!.seed;
+        expect(network.pendingSeeds()).toHaveLength(1);
+        expect(network.pendingSeeds()[0]?.seed).toHaveLength(32);
+        const seedAfterFailure = network.pendingSeeds()[0]!.seed;
         expect(harness.runtime.installed).toBe(true);
         expect(harness.runtime.dataPresent).toBe(true);
         expect(harness.authCallSecrets()).toEqual([]);
@@ -449,7 +385,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await hook.getCurrent().operations['ensure-home-ready']?.(initialFacts);
         expect(harness.authCallSecrets()).toHaveLength(1);
         expect([...harness.authCallSecrets()[0]!]).toEqual([...seedAfterFailure]);
-        expect(harness.pendingSeedStore()).toEqual([]);
+        expect(network.pendingSeeds()).toEqual([]);
         await hook.unmount();
     });
 
@@ -495,9 +431,9 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         expect(screen.findByTestId('personal-home-use-another')).not.toBeNull();
         // The canonical status projection carries retained-data state into the gate, so the
         // recovery decision appears without invoking the bootstrap runner at all.
-        expect(harness.taskCalls).toEqual([]);
+        expect(harness.mutations()).toEqual([]);
         expect(harness.runtime.installed).toBe(false);
-        expect(harness.authGetTokenAtEndpoint).not.toHaveBeenCalled();
+        expect(harness.redeemHomeChallenge).not.toHaveBeenCalled();
         expect(harness.getCredentials()).toBeNull();
         const profiles = await import('@/sync/domains/server/serverProfiles');
         expect(profiles.listServerProfiles().filter((profile) => profile.source === 'desktop-personal-home')).toEqual([]);
@@ -505,7 +441,8 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await screen.pressByTestIdAsync('personal-home-use-existing');
         await flushHookEffects({ cycles: 4, turns: 4 });
         expect(harness.routerPush).toHaveBeenCalledWith(`/server?url=${encodeURIComponent(harness.canonicalServerUrl)}&auto=1`);
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual(['relay.runtime.status.v1']);
+        expect(harness.mutations()).toEqual([]);
+        expect(harness.taskCalls.some(call => call.kind === 'relay.runtime.status.v1')).toBe(true);
         expect(harness.runtime.installed).toBe(false);
         expect(harness.getCredentials()).toBeNull();
     });
@@ -526,7 +463,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         harness.runtime.installed = true;
         harness.runtime.healthy = true;
         harness.runtime.purpose = { kind: 'generic' };
-        harness.setCredentials({ token: 'home-b-token' });
+        await seedExistingCredentials();
 
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
         const screen = await renderScreen(
@@ -538,17 +475,18 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         );
         await flushHookEffects({ cycles: 6, turns: 4 });
 
+        harness.clearTaskObservations();
         await screen.pressByTestIdAsync('personal-home-use-existing');
         await flushHookEffects({ cycles: 8, turns: 6 });
 
         // The existing runtime was recovered through the canonical system-task caller in place.
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual([
+        expect(harness.taskCalls.map((call) => call.kind).filter((kind, index, kinds) => (
+            kind !== 'relay.runtime.status.v1' || kinds[index - 1] !== kind
+        ))).toEqual([
             'relay.runtime.status.v1',
             'relay.runtime.installOrUpdate.v1',
             'relay.runtime.status.v1',
-            'relay.runtime.status.v1',
             'relay.runtime.installOrUpdate.v1',
-            'relay.runtime.status.v1',
             'relay.runtime.status.v1',
         ]);
         expect(harness.runtime.purpose).toEqual({ kind: 'personal-home', canonicalServerUrl: harness.canonicalServerUrl });
@@ -556,9 +494,9 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         // Token-only recovery: the existing verified credential is kept, no account is created
         // (no call passes the signup-open gate), and no pending bootstrap seed is ever
         // generated or consumed by recovery.
-        expect(harness.getCredentials()).toEqual({ token: 'home-b-token' });
+        expect(harness.getCredentials()).toEqual({ token: harness.token });
         expect(harness.authCallSecrets()).toEqual([]);
-        expect(harness.pendingSeedStore()).toEqual([]);
+        expect(network.pendingSeeds()).toEqual([]);
         expect(profiles.listServerProfiles()).toContainEqual(expect.objectContaining({
             source: 'desktop-personal-home',
             canonicalServerUrl: harness.canonicalServerUrl,
@@ -575,7 +513,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         harness.runtime.healthy = true;
         harness.runtime.purpose = { kind: 'generic' };
         harness.endpoint.storagePolicy = 'required_e2ee';
-        harness.setCredentials({ token: 'home-b-token' });
+        await seedExistingCredentials();
 
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
         const screen = await renderScreen(
@@ -593,7 +531,8 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         // The decision is routed to the established generic login path for this local Home.
         expect(harness.routerPush).toHaveBeenCalledWith(`/server?url=${encodeURIComponent(harness.canonicalServerUrl)}&auto=1`);
         // The canonical caller preflighted through the read-only status task and mutated nothing.
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual(['relay.runtime.status.v1']);
+        expect(harness.mutations()).toEqual([]);
+        expect(harness.taskCalls.some(call => call.kind === 'relay.runtime.status.v1')).toBe(true);
         expect(harness.runtime.purpose).toEqual({ kind: 'generic' });
         const profiles = await import('@/sync/domains/server/serverProfiles');
         expect(profiles.listServerProfiles().filter((profile) => profile.source === 'desktop-personal-home')).toEqual([]);
@@ -618,7 +557,8 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await flushHookEffects({ cycles: 8, turns: 6 });
 
         expect(harness.routerPush).toHaveBeenCalledWith(`/server?url=${encodeURIComponent(harness.canonicalServerUrl)}&auto=1`);
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual(['relay.runtime.status.v1']);
+        expect(harness.mutations()).toEqual([]);
+        expect(harness.taskCalls.some(call => call.kind === 'relay.runtime.status.v1')).toBe(true);
         expect(harness.runtime.purpose).toEqual({ kind: 'generic' });
         expect(harness.getCredentials()).toBeNull();
         const profiles = await import('@/sync/domains/server/serverProfiles');
@@ -650,7 +590,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
 
         expect(harness.routerPush).toHaveBeenCalledTimes(1);
         expect(harness.routerPush).toHaveBeenCalledWith('/server');
-        expect(harness.taskCalls).toEqual([]);
+        expect(harness.mutations()).toEqual([]);
         expect(harness.getCredentials()).toBeNull();
         expect(harness.runtime.purpose).toEqual({ kind: 'generic' });
         expect(profiles.listServerProfiles().map(({ id, serverUrl, source }) => ({ id, serverUrl, source }))).toEqual(profilesBefore);
@@ -671,7 +611,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         harness.runtime.installed = true;
         harness.runtime.healthy = true;
         harness.runtime.purpose = { kind: 'generic' };
-        harness.setCredentials({ token: 'home-b-token' });
+        await seedExistingCredentials();
         harness.setFailNextRelayTask('relay.runtime.installOrUpdate.v1');
 
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
@@ -688,6 +628,9 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await flushHookEffects({ cycles: 8, turns: 6 });
 
         // Transient failure: no route, the runtime stays generic and untouched.
+        expect(harness.taskResults.filter(result => result.kind === 'relay.runtime.installOrUpdate.v1').at(-1)).toMatchObject({
+            ok: false, error: { code: 'relay_task_injected_failure' },
+        });
         expect(harness.routerPush).not.toHaveBeenCalled();
         expect(harness.runtime.purpose).toEqual({ kind: 'generic' });
         // The decision surface remains available and the failure is observable as retryable.
@@ -710,7 +653,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         harness.runtime.healthy = true;
         harness.runtime.signupEnabled = false;
         harness.runtime.purpose = { kind: 'personal-home', canonicalServerUrl: harness.canonicalServerUrl };
-        harness.setCredentials({ token: 'home-b-token' });
+        await seedExistingCredentials();
 
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
         const screen = await renderScreen(
@@ -727,11 +670,9 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         expect(screen.findByTestId('personal-home-setup-surface')).toBeNull();
         expect(harness.routerPush).not.toHaveBeenCalled();
         // Completion reuses the canonical caller mutation-free: read-only verification only.
-        expect(harness.taskCalls.map((call) => call.kind)).toEqual([
-            'relay.runtime.status.v1',
-            'relay.runtime.status.v1',
-        ]);
-        expect(harness.getCredentials()).toEqual({ token: 'home-b-token' });
+        expect(harness.mutations()).toEqual([]);
+        expect(harness.taskCalls.some(call => call.kind === 'relay.runtime.status.v1')).toBe(true);
+        expect(harness.getCredentials()).toEqual({ token: harness.token });
         const profiles = await import('@/sync/domains/server/serverProfiles');
         expect(profiles.listServerProfiles()).toContainEqual(expect.objectContaining({
             source: 'desktop-personal-home',
@@ -742,8 +683,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
     it('renders off-Desktop and overlay windows without constructing the bootstrap runtime hooks', async () => {
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
 
-        harness.isDesktopHost.mockReturnValue(false);
-        harness.desktopHostKind.mockReturnValue(null);
+        network.setDesktopHostKind(null);
         const offDesktopScreen = await renderScreen(
             <PersonalHomeBootstrapRuntimeMount>
                 <div data-testid="normal-shell">
@@ -753,13 +693,12 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         );
         await flushHookEffects({ cycles: 2, turns: 2 });
         expect(offDesktopScreen.findByTestId('normal-shell')).not.toBeNull();
-        expect(harness.useLocalRelayRuntimeControl).not.toHaveBeenCalled();
-        expect(harness.useLocalDaemonControl).not.toHaveBeenCalled();
+        expect(harness.taskSpecs.size).toBe(0);
 
         standardCleanup();
         await harness.reset();
 
-        harness.isDesktopOverlayWindowContext.mockReturnValue(true);
+        network.setDesktopHostKind('tauri');
         harness.currentWindowLabel.mockReturnValue('activity_overlay');
         const overlayScreen = await renderScreen(
             <PersonalHomeBootstrapRuntimeMount>
@@ -770,12 +709,11 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         );
         await flushHookEffects({ cycles: 2, turns: 2 });
         expect(overlayScreen.findByTestId('normal-shell')).not.toBeNull();
-        expect(harness.useLocalRelayRuntimeControl).not.toHaveBeenCalled();
-        expect(harness.useLocalDaemonControl).not.toHaveBeenCalled();
+        expect(harness.taskSpecs.size).toBe(0);
     });
 
     it('renders Electron without constructing the Tauri-only Personal Home runtime hooks', async () => {
-        harness.desktopHostKind.mockReturnValue('electron');
+        network.setDesktopHostKind('electron');
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
         const screen = await renderScreen(
             <PersonalHomeBootstrapRuntimeMount>
@@ -785,8 +723,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         expect(screen.findByTestId('electron-shell')).not.toBeNull();
-        expect(harness.useLocalRelayRuntimeControl).not.toHaveBeenCalled();
-        expect(harness.useLocalDaemonControl).not.toHaveBeenCalled();
+        expect(harness.taskSpecs.size).toBe(0);
     });
 
     it.each([
@@ -803,8 +740,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         expect(screen.findByTestId('secondary-window-shell')).not.toBeNull();
-        expect(harness.useLocalRelayRuntimeControl).not.toHaveBeenCalled();
-        expect(harness.useLocalDaemonControl).not.toHaveBeenCalled();
+        expect(harness.taskSpecs.size).toBe(0);
     });
 
     it('renders Desktop callback routes without constructing the bootstrap runtime hooks', async () => {
@@ -818,8 +754,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         expect(screen.findByTestId('callback-route')).not.toBeNull();
-        expect(harness.useLocalRelayRuntimeControl).not.toHaveBeenCalled();
-        expect(harness.useLocalDaemonControl).not.toHaveBeenCalled();
+        expect(harness.taskSpecs.size).toBe(0);
     });
 
     it('releases a durable returning Personal Home without misclassifying an unverified Home as computer recovery', async () => {
@@ -855,7 +790,7 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         expect(screen.findByTestId('home-content')).not.toBeNull();
         expect(screen.findByTestId('personal-home-setup-surface')).toBeNull();
         expect(screen.findByTestId('personal-home-recovery-strip')).toBeNull();
-        expect(harness.taskCalls).toEqual([]);
+        expect(harness.mutations()).toEqual([]);
     });
 
     it('uses durable completion only to release the shell while runtime status has no canonical origin', async () => {
@@ -874,8 +809,8 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         });
         const features = await import('@/sync/api/capabilities/serverFeaturesClient');
         const tokenStorage = await import('@/auth/storage/tokenStorage');
-        vi.mocked(features.probeServerFeaturesAtUrl).mockClear();
-        vi.mocked(tokenStorage.TokenStorage.getCredentialsForServerUrl).mockClear();
+        const featureProbe = vi.spyOn(features, 'probeServerFeaturesAtUrl');
+        const credentialRead = vi.spyOn(tokenStorage.TokenStorage, 'getCredentialsForServerUrl');
 
         const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
         const screen = await renderScreen(
@@ -891,8 +826,11 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
 
         await flushHookEffects({ cycles: 6, turns: 4 });
 
-        expect(features.probeServerFeaturesAtUrl).not.toHaveBeenCalled();
-        expect(tokenStorage.TokenStorage.getCredentialsForServerUrl).not.toHaveBeenCalled();
-        expect(harness.taskCalls).toHaveLength(0);
+        expect(featureProbe).not.toHaveBeenCalled();
+        // Mounted Action admission still checks its captured Home's credentials. The
+        // bootstrap owner must not attempt its own Home-auth classification without an origin.
+        expect(credentialRead.mock.calls.filter(([, options]) => options?.storageReadFailure !== 'surface')).toEqual([]);
+        expect(network.requests).toEqual([]);
+        expect(harness.mutations()).toEqual([]);
     });
 });

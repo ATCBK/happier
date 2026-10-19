@@ -52,5 +52,6 @@ export function formatMachineAgentAction(action: MachineAgentRowAction): string 
         case 'cancel': return t('machineAgents.actionCancel');
         case 'showTerminal': return t('machineAgents.actionShowTerminal');
         case 'guide': return t('machineAgents.actionGuide');
+        case 'remove': return t('machineAgents.actionRemove');
     }
 }

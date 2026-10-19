@@ -6,6 +6,8 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { createDeferred } from '@/dev/testkit';
+import { withHomeMutationAuthority } from '@/sync/domains/server/homeMutationLock';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -15,7 +17,6 @@ const { readMachineAddFlowDraft, updateMachineAddFlowDraft } = await import('./m
 const { createManualSystemTaskRunner } = await import('@/dev/testkit/harness/manualSystemTaskRunner');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { createAccountSettingsScope } = await import('@/sync/domains/settings/scope/accountSettingsScope');
-const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 // Substitute Metro's loader only; admission and task execution remain real.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
@@ -227,26 +228,27 @@ describe('machine add flow lifetime', () => {
         await admitSsh(serverId, 'alice');
         vi.stubGlobal('isTauri', true);
         const manual = createManualSystemTaskRunner('native');
-        const readCredentials = vi.mocked(TokenStorage.getCredentialsForServerUrl).getMockImplementation()!;
-        let releaseCredentials!: () => void;
-        const blockedCredentials = new Promise<void>(resolve => { releaseCredentials = resolve; });
-        // Secure storage is the genuine boundary; Account binding and admission remain real.
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (...args) => {
-            if (args[0] === serverUrl) await blockedCredentials;
-            return readCredentials(...args);
+        const blockedCredentials = createDeferred<void>();
+        const lockAcquired = createDeferred<void>();
+        // A pending device write holds the real Home storage lock. Credential
+        // lookup and Account binding must wait through their normal owners.
+        const pendingStorageWrite = withHomeMutationAuthority(undefined, async () => {
+            lockAcquired.resolve();
+            await blockedCredentials.promise;
         });
+        await lockAcquired.promise;
         try {
             const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
             await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'box' }));
             expect(hook.getCurrent().ssh.ready).toBe(false);
-            await act(async () => releaseCredentials());
+            await act(async () => blockedCredentials.resolve());
             await vi.waitFor(() => expect(hook.getCurrent().ssh.ready).toBe(true));
             await act(async () => hook.getCurrent().startSsh());
             await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.taskId).toBeTruthy());
             await hook.unmount();
         } finally {
-            releaseCredentials();
-            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(readCredentials);
+            blockedCredentials.resolve();
+            await pendingStorageWrite;
             await act(async () => discardMachineAdd());
             storage.setState(previous); vi.unstubAllGlobals();
         }

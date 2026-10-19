@@ -9,24 +9,27 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
+import { Modal } from '@/modal';
+import { t } from '@/text';
 
 import { AgentSetupFormView, type AgentSetupFormHandlers } from './AgentSetupFormView';
 import { useAgentSignInTerminalHost } from './signInTerminalHost';
 import { showAgentSignInTerminalSheet } from './AgentSignInTerminalSheet';
+import { buildAgentSetupCredentialIntents } from './agentSetupCredentialIntents';
 
 export type AgentSetupFormProps = Readonly<{
     serverId: string;
     machineId: string;
     machineName: string;
     agentId: string;
+    definitionId?: string;
     layout: 'full' | 'compact';
     /** Ready: start a session with this agent here. */
     onStartSession?: (agent: MachineAgent) => void;
     onSetUpAnother?: () => void;
     /** A connected service to connect first (the surface's own connect flow: Settings → Connected services, the Home panel). */
     onConnectService?: (serviceId: string) => void;
-    /** Use a connected account for this agent on this machine. */
-    onUseService?: (serviceId: string) => void;
     testID: string;
 }>;
 
@@ -37,14 +40,27 @@ export type AgentSetupFormProps = Readonly<{
  * popover, Home — renders this with its layout; none re-derives the state.
  */
 export const AgentSetupForm = React.memo(function AgentSetupForm(props: AgentSetupFormProps) {
-    const target = { serverId: props.serverId, machineId: props.machineId, agentId: props.agentId };
+    const target = { serverId: props.serverId, machineId: props.machineId, agentId: props.agentId, definitionId: props.definitionId };
     const agent = useMachineAgent(target);
     const installJob = useAgentInstallJob(target);
     const signIn = useAgentSignIn(target);
     const terminalHost = useAgentSignInTerminalHost();
     const router = useRouter();
+    const { mutateDefaults, execution } = useConnectedAccountPurposeDefaults(props.serverId);
     const agentRef = React.useRef(agent);
     agentRef.current = agent;
+
+    const selectCredential = React.useCallback(async (serviceId: string | null) => {
+        const current = agentRef.current;
+        if (!current || !execution.isCurrent()) return false;
+        for (const intent of buildAgentSetupCredentialIntents({ agent: current, machineId: props.machineId, serviceId })) {
+            if (!await mutateDefaults(intent)) return false;
+        }
+        return execution.isCurrent();
+    }, [execution.isCurrent, mutateDefaults, props.machineId]);
+    const credentialFailure = React.useCallback(() => {
+        Modal.alert(t('common.error'), t('errors.operationFailed'));
+    }, []);
 
     const install = React.useCallback((intent: 'install' | 'update' | 'uninstall') => {
         const current = agentRef.current;
@@ -73,21 +89,26 @@ export const AgentSetupForm = React.memo(function AgentSetupForm(props: AgentSet
         onCancelInstall: () => { fireAndForget(installJob.cancel(), { tag: 'AgentSetupForm.cancel' }); },
         onCheckAgain: () => { fireAndForget(signIn.checkAgain(), { tag: 'AgentSetupForm.checkAgain' }); },
         onOpenGuide: (url) => { fireAndForget(openExternalUrl(url), { tag: 'AgentSetupForm.guide' }); },
-        onUseService: (serviceId) => props.onUseService?.(serviceId),
+        onUseService: (serviceId) => {
+            fireAndForget(selectCredential(serviceId), { tag: 'AgentSetupForm.selectCredential', onError: credentialFailure });
+        },
         onConnectService: (serviceId) => {
             // Connecting is the connected-services owner's flow; surfaces with it in place pass it in.
             if (props.onConnectService) props.onConnectService(serviceId);
             else router.push(`${SETTINGS_ROUTES.connectedServices}/${encodeURIComponent(serviceId)}` as never);
         },
         onOpenNativeSignIn: () => {
-            fireAndForget(signIn.start(), { tag: 'AgentSetupForm.signIn' });
-            openTerminal();
+            fireAndForget((async () => {
+                if (!await selectCredential(null)) return;
+                fireAndForget(signIn.start(), { tag: 'AgentSetupForm.signIn' });
+                openTerminal();
+            })(), { tag: 'AgentSetupForm.selectNativeCredential', onError: credentialFailure });
         },
         onShowTerminal: openTerminal,
         onCancelSignIn: () => { fireAndForget(signIn.cancel(), { tag: 'AgentSetupForm.cancelSignIn' }); },
         ...(props.onStartSession ? { onStartSession: () => { if (agentRef.current) props.onStartSession?.(agentRef.current); } } : {}),
         ...(props.onSetUpAnother ? { onSetUpAnother: props.onSetUpAnother } : {}),
-    }), [install, installJob, openTerminal, props.onConnectService, props.onSetUpAnother, props.onStartSession, props.onUseService, router, signIn]);
+    }), [credentialFailure, install, installJob, openTerminal, props.onConnectService, props.onSetUpAnother, props.onStartSession, router, selectCredential, signIn]);
 
     if (!agent) return null;
     return (

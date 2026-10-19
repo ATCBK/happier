@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { MachineAgent, MachineAgentSignInSession } from '@/agents/machineAgents/machineAgentTypes';
 
 import {
+    isMachineAgentUnchecked,
     resolveAgentSetupPhase,
     rankFirstAgentChoices,
     resolveAgentSessionStartBlock,
@@ -35,6 +36,23 @@ function agent(overrides: Partial<MachineAgent> = {}): MachineAgent {
 }
 
 describe('machine agent presentation', () => {
+    it('tells an agent nobody asked about yet from a check in progress or a failed one', () => {
+        expect(isMachineAgentUnchecked(null, 'idle')).toBe(true);
+        expect(isMachineAgentUnchecked(null, 'loading')).toBe(false);
+        expect(isMachineAgentUnchecked(null, 'error')).toBe(false);
+        expect(isMachineAgentUnchecked(null, 'ready')).toBe(false);
+    });
+    it('presents unanswered inventory as checking until the probe settles, retaining known Agent facts', () => {
+        const unanswered = agent({ state: 'unknown' });
+        expect(resolveMachineAgentStatus(unanswered, idleSession, 'loading')).toEqual({ kind: 'checking', tone: 'quiet' });
+        expect(resolveMachineAgentStatus(null, idleSession, 'loading')).toEqual({ kind: 'checking', tone: 'quiet' });
+        expect(resolveMachineAgentStatus(unanswered, idleSession, 'error')).toEqual({ kind: 'unknown', tone: 'quiet' });
+        expect(resolveMachineAgentStatus(null, idleSession, 'ready')).toEqual({ kind: 'unknown', tone: 'quiet' });
+        const ready = agent({ state: 'ready', installed: true });
+        expect(resolveMachineAgentStatus(ready, idleSession, 'loading').kind).toBe('ready');
+        expect(resolveMachineAgentStatus(agent({ state: 'needsSignIn' }), idleSession, 'loading').kind).toBe('needsSignIn');
+    });
+
     it('offers Install for an agent that is not installed, and the setup guide when Happier cannot install it', () => {
         expect(resolveAgentSetupPhase(agent(), idleSession)).toBe('install');
         expect(resolveMachineAgentRowAction(agent(), idleSession)).toEqual({ kind: 'install' });

@@ -4,6 +4,10 @@ import type { SystemTaskSpec } from '@happier-dev/protocol';
 import { SystemTaskExecutionError } from '@happier-dev/cli-common/systemTasks';
 import type { NativeSshModule } from '@happier-dev/ssh-native';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -58,16 +62,22 @@ function readInstallationTextResult(command: string) {
 }
 
 async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = serverUrl) {
+    const browser = await installBrowserRuntimeForTests({ url: serverUrl });
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
     const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const machineKey = new Uint8Array(32).fill(5);
     const publicKey = (await import('tweetnacl')).default.box.keyPair.fromSecretKey(machineKey).publicKey;
-    const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-        token: 'home-token',
+    const storedCredentials = {
+        token: createAccountTokenForTests('native-task-owner', { currentAccount: true }),
         encryption: { publicKey: Buffer.from(publicKey).toString('base64'), machineKey: Buffer.from(machineKey).toString('base64') },
-    });
+    };
+    const encryption = await createEncryptionFromAuthCredentials(storedCredentials);
+    const contentKey = (await import('tweetnacl')).default.box.keyPair.fromSecretKey(encryption.getContentPrivateKey()).publicKey;
+    const currentness = { mode: 'e2ee', version: 1, updatedAt: 0, signingKeyFingerprint: null,
+        contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(contentKey),
+        recipientEnvelopeReadiness: { status: 'available' } };
     const approvals: Array<{ url: string; authorization: string | null; body: unknown }> = [];
     setRuntimeFetch(async (url, init) => {
         const target = new URL(String(url));
@@ -79,6 +89,7 @@ async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = server
             capabilities: { serverIdentity: { serverIdentityId: HOME_TARGET.homeServerIdentityId } },
         }));
         if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 0 });
+        if (target.pathname === '/v1/account/encryption/currentness') return Response.json(currentness);
         if (target.pathname === '/v1/auth/request/status') return Response.json({ status: 'pending', supportsV2: true });
         if (target.pathname === '/v1/auth/response') {
             approvals.push({ url: String(url), authorization: new Headers(init?.headers).get('Authorization'), body: JSON.parse(String(init?.body)) });
@@ -88,7 +99,9 @@ async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = server
     });
     const profile = await upsertAndActivateServer({ serverUrl });
     await setServerProfileIdentityForUrl(serverUrl, HOME_TARGET.homeServerIdentityId);
-    return { profile, credentials, approvals, dispose() { credentials.mockRestore(); resetRuntimeFetch(); } };
+    expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, storedCredentials)).toBe(true);
+    const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
+    return { profile, credentials, storedCredentials, approvals, dispose() { credentials.mockRestore(); resetRuntimeFetch(); browser.restore(); } };
 }
 
 function completeRemoteEnrollment(
@@ -108,8 +121,8 @@ function completeRemoteEnrollment(
         homeServerIdentityId,
         pairing: {
             secretB64Url: PAIRING_SECRET,
-            createdAtMs: input.createdAtMs ?? 123,
-            expiresAtMs: input.expiresAtMs ?? 456,
+            createdAtMs: input.createdAtMs ?? Date.now(),
+            expiresAtMs: input.expiresAtMs ?? Date.now() + 60_000,
         },
         supportsTokenOnly: true,
         pairingRequirement: 'v3',
@@ -372,6 +385,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('approves local terminal auth after the user accepts remote provisioning', async () => {
+        const pairingWindow = { createdAtMs: Date.now(), expiresAtMs: Date.now() + 60_000 };
         const loaded = await import('./nativeTask').catch(() => null);
         expect(loaded).not.toBeNull();
 
@@ -418,7 +432,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 return { ok: true, data: {} };
             }),
             runTextCommand: vi.fn(async (options: { command: string; onStdoutChunk?: (text: string) => void }) =>
-                readInstallationTextResult(options.command) ?? completeRemoteEnrollment(options)),
+                readInstallationTextResult(options.command) ?? completeRemoteEnrollment(options, pairingWindow)),
         };
         const approveLocalAuthRequest = vi.fn(async () => undefined);
 
@@ -439,8 +453,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
             homeServerIdentityId: 'srv_home_identity',
             pairing: {
                 secretB64Url: PAIRING_SECRET,
-                createdAtMs: 123,
-                expiresAtMs: 456,
+                ...pairingWindow,
             },
             supportsTokenOnly: true,
             endpointUrl: 'https://relay.example.test',
@@ -630,7 +643,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 prompt: async () => ({ approved: true }),
             })).resolves.toMatchObject({ machineId: 'machine-paired' });
             expect(boundary.approvals).toEqual([{
-                url: 'https://relay.example.test/v1/auth/response', authorization: 'Bearer home-token',
+                url: 'https://relay.example.test/v1/auth/response', authorization: `Bearer ${boundary.storedCredentials.token}`,
                 body: expect.objectContaining({ publicKey, responseKind: 'dataKey', response: expect.any(String) }),
             }]);
             expect(boundary.credentials).toHaveBeenCalledWith(
@@ -762,7 +775,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 endpointId: irohEndpointId,
             }));
             expect(boundary.approvals).toEqual([expect.objectContaining({
-                url: 'http://127.0.0.1:45992/v1/auth/response', authorization: 'Bearer home-token',
+                url: 'http://127.0.0.1:45992/v1/auth/response', authorization: `Bearer ${boundary.storedCredentials.token}`,
                 body: expect.objectContaining({ responseKind: 'dataKey' }),
             })]);
             expect(release).toHaveBeenCalledTimes(1);

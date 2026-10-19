@@ -5,10 +5,16 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installPersonalHomeBootstrapNetworkBoundary } from '@/dev/testkit/harness/personalHomeBootstrapNetworkBoundary';
 import type { ServerCredentialLookupOptions } from '@/auth/storage/tokenStorage';
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { PersonalHomeFacts } from './personalHomeBootstrapTypes';
 import { usePersonalHomeBootstrapRuntime } from './usePersonalHomeBootstrapRuntime';
+
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
 
 /**
  * Production-composition regression test for the Desktop Personal Home bootstrap.
@@ -27,8 +33,8 @@ import { usePersonalHomeBootstrapRuntime } from './usePersonalHomeBootstrapRunti
  * Mocked boundaries (genuine system boundaries only):
  * - the system-task bridge (process/native boundary behind `createSystemTaskBridge`) — the only
  *   mocked process boundary;
- * - endpoint/network probes and the endpoint auth request;
- * - Home-scoped secure token storage.
+ * - runtimeFetch HTTP replies, including native-verified key-challenge requests;
+ * - desktop native secure-storage commands beneath the real Home-scoped credential owner.
  */
 const harness = vi.hoisted(() => {
     const SYSTEM_TASK_PROTOCOL_VERSION = 1;
@@ -119,9 +125,7 @@ const harness = vi.hoisted(() => {
         secretBase64Url: string | null;
     }>> = [];
 
-    // Home-scoped pending bootstrap-seed custody boundary state (the storage beneath the
-    // Home-scoped token-storage owner). Keyed by explicit canonical URL + stable identity.
-    const pendingSeedStore = new Map<string, Uint8Array>();
+    // Inject failures at the native secure-storage command, below the real custody owner.
     let pendingSeedWriteFailure = false;
     let pendingSeedReadbackFailure = false;
 
@@ -132,12 +136,8 @@ const harness = vi.hoisted(() => {
     /** When set, the endpoint commits the Account and then fails before the token returns. */
     let failCreateAfterCommit = false;
 
-    function seedKey(serverUrl: string, options: ServerCredentialLookupOptions | undefined): string {
-        return `${serverUrl}|${options?.serverId ?? ''}`;
-    }
-
-    function seedBase64Url(seed: Uint8Array | undefined): string {
-        if (!seed) return '';
+    function seedBase64Url(seed: Uint8Array | undefined): string | null {
+        if (!seed) return null;
         let binary = '';
         for (const byte of seed) binary += String.fromCharCode(byte);
         return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -415,7 +415,7 @@ const harness = vi.hoisted(() => {
         },
     });
 
-    const authGetTokenAtEndpoint = vi.fn(async (params: {
+    const redeemHomeChallenge = vi.fn(async (params: {
         endpointUrl: string;
         canonicalServerUrl?: string;
         serverIdentityId?: string;
@@ -446,10 +446,6 @@ const harness = vi.hoisted(() => {
         events.push('auth:endpoint-token:signup-open');
         return { token: HOME_B_TOKEN };
     });
-    const focusedAuthGetToken = vi.fn(async () => {
-        events.push('auth:focused-token');
-        throw new Error('focused auth must not be used during Personal Home bootstrap');
-    });
 
     return {
         CANONICAL_SERVER_URL,
@@ -475,8 +471,7 @@ const harness = vi.hoisted(() => {
         endpointAuthCalls: () => endpointAuthCalls,
         persistCalls: () => persistCalls,
         persistedCredentials: () => persistedCredentials,
-        authGetTokenAtEndpoint,
-        focusedAuthGetToken,
+        redeemHomeChallenge,
         recordedPromptAnswers: () => recordedPromptAnswers,
         endpointRequests: () => endpointRequests,
         endpointRequest,
@@ -527,40 +522,16 @@ const harness = vi.hoisted(() => {
             persistedCredentials = null;
             persistCalls.length = 0;
             endpointAuthCalls.length = 0;
-            pendingSeedStore.clear();
             pendingSeedWriteFailure = false;
             pendingSeedReadbackFailure = false;
             serverAccountsBySeedBase64Url.clear();
             failCreateAfterCommit = false;
             authPingFailureCount = 0;
             publishedHomeConnectionDescriptor = { ...DEFAULT_HOME_DESCRIPTOR };
-            authGetTokenAtEndpoint.mockClear();
-            focusedAuthGetToken.mockClear();
+            redeemHomeChallenge.mockClear();
         },
-        // Storage/auth/probe side effects shared with the vi.mock factories below.
+        // Call-through credential persistence observation; no credential reader is replaced.
         storage: {
-            readCredentials: async () => {
-                events.push('storage:read');
-                return credentialsStore;
-            },
-            getPendingSeed: async (serverUrl: string, options: ServerCredentialLookupOptions | undefined) => {
-                if (pendingSeedReadbackFailure) return null;
-                const seed = pendingSeedStore.get(seedKey(serverUrl, options));
-                return seed ? new Uint8Array(seed) : null;
-            },
-            setPendingSeed: async (
-                serverUrl: string,
-                options: ServerCredentialLookupOptions | undefined,
-                seed: Uint8Array,
-            ) => {
-                if (pendingSeedWriteFailure) return false;
-                pendingSeedStore.set(seedKey(serverUrl, options), new Uint8Array(seed));
-                return true;
-            },
-            clearPendingSeed: async (serverUrl: string, options: ServerCredentialLookupOptions | undefined) => {
-                pendingSeedStore.delete(seedKey(serverUrl, options));
-                return true;
-            },
             persistCredentials: async (serverUrl: string, options: ServerCredentialLookupOptions, credentials: { token: string }) => {
                 events.push('storage:persist');
                 persistCalls.push({
@@ -574,13 +545,14 @@ const harness = vi.hoisted(() => {
             },
         },
         serverAccounts: () => serverAccountsBySeedBase64Url,
-        pendingSeeds: () => [...pendingSeedStore.entries()].map(([key, seed]) => ({ key, seed })),
         setPendingSeedWriteFailure(value: boolean) {
             pendingSeedWriteFailure = value;
         },
         setPendingSeedReadbackFailure(value: boolean) {
             pendingSeedReadbackFailure = value;
         },
+        seedWriteFails: () => pendingSeedWriteFailure,
+        seedReadbackFails: () => pendingSeedReadbackFailure,
         setFailCreateAfterCommit(value: boolean) {
             failCreateAfterCommit = value;
         },
@@ -645,72 +617,11 @@ vi.mock('@/components/systemTasks/createSystemTaskBridge', () => ({
     createSystemTaskBridge: () => harness.makeManualBridge(),
 }));
 
-// Explicit-endpoint HTTP transport boundary. The focused-Home fetch must never be entered.
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: async () => {
-        throw new Error('focused serverFetch must not be used by Personal Home bootstrap');
-    },
-    createServerFetchAtEndpoint: (params: { endpointUrl: string; serverId?: string }) => {
-        const endpointUrl = params.endpointUrl;
-        const serverId = params.serverId ?? null;
-        return async (path: string, init?: RequestInit) => {
-            const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
-            return await harness.endpointRequest({ endpointUrl, serverId, path, authorization });
-        };
-    },
-}));
-
-// Endpoint auth request boundary. The focused-Home flow must never be entered by bootstrap.
-vi.mock('@/auth/flows/getToken', () => ({
-    authGetToken: harness.focusedAuthGetToken,
-    authGetTokenAtEndpoint: harness.authGetTokenAtEndpoint,
-}));
-
-// Home-scoped secure token storage boundary (native storage beneath the owner), including the
-// pending Personal Home bootstrap-seed custody used before the account-creating endpoint call.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-        getCredentialsForServerUrl: vi.fn(async () => await harness.storage.readCredentials()),
-        setCredentialsForServerUrl: vi.fn(async (
-            serverUrl: string,
-            options: ServerCredentialLookupOptions,
-            credentials: Readonly<{ token: string }>,
-        ) => await harness.storage.persistCredentials(serverUrl, options, credentials)),
-        getPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options?: ServerCredentialLookupOptions,
-        ) => await harness.storage.getPendingSeed(serverUrl, options)),
-        setPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options: ServerCredentialLookupOptions | undefined,
-            seed: Uint8Array,
-        ) => await harness.storage.setPendingSeed(serverUrl, options, seed)),
-        clearPendingPersonalHomeBootstrapSeed: vi.fn(async (
-            serverUrl: string,
-            options?: ServerCredentialLookupOptions,
-        ) => await harness.storage.clearPendingSeed(serverUrl, options)),
-        },
-    });
-});
-
-// Endpoint/network feature probe boundary.
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    probeServerFeaturesAtUrl: vi.fn(async () => await harness.probes.serverFeatures()),
-}));
-
-// Endpoint/network authenticated probe boundary.
-vi.mock('@/sync/api/capabilities/probeAuthenticatedServerAuthPingEndpoint', () => ({
-    probeAuthenticatedServerAuthPingEndpoint: vi.fn(async (
-        params: Readonly<{ endpoint: string; token: string }>,
-    ) => await harness.probes.authPing(params)),
-}));
+let network: Awaited<ReturnType<typeof installPersonalHomeBootstrapNetworkBoundary>>;
 
 async function resetProfileRegistry(): Promise<void> {
     const profiles = await import('@/sync/domains/server/serverProfiles');
-    profiles.clearTabActiveServerId();
+    profiles.resetServerProfilesRuntimeForTests();
     for (const profile of profiles.listServerProfiles()) await profiles.removeServerProfile(profile.id);
 }
 
@@ -765,6 +676,17 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
     beforeEach(async () => {
         vi.useFakeTimers();
         await harness.reset();
+        network = await installPersonalHomeBootstrapNetworkBoundary({
+            serverUrl: harness.CANONICAL_SERVER_URL,
+            serverIdentityId: harness.HOME_B_IDENTITY,
+            readFeatures: harness.probes.serverFeatures,
+            authenticate: harness.redeemHomeChallenge,
+            authPing: harness.probes.authPing,
+            request: harness.endpointRequest,
+            credentialPersisted: harness.storage.persistCredentials,
+            seedWriteFails: harness.seedWriteFails,
+            seedReadbackFails: harness.seedReadbackFails,
+        });
         await resetProfileRegistry();
     });
 
@@ -774,8 +696,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
             await resetProfileRegistry();
         } finally {
             await harness.reset();
-            const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async () => await harness.storage.readCredentials());
+            network.dispose();
             vi.useRealTimers();
         }
     });
@@ -826,10 +747,6 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
             descriptor: { serverUrl: harness.CANONICAL_SERVER_URL, homeServerIdentityId: 'srv_home_a_identity' },
             source: 'desktop-personal-home',
         }) : null;
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (_url, options) => (
-            options?.serverId === harness.HOME_B_IDENTITY ? { token: harness.HOME_B_TOKEN } : null
-        ));
         const hook = await renderHook(() => usePersonalHomeBootstrapRuntime());
         // Settle the native status read while the predecessor (or no profile) is
         // still present, so the mounted approval owner has already seen this URL.
@@ -842,6 +759,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
                 descriptor: { serverUrl: harness.CANONICAL_SERVER_URL, homeServerIdentityId: harness.HOME_B_IDENTITY },
                 source: 'desktop-personal-home',
             });
+            expect(await network.seedCredentials({ serverId: harness.HOME_B_IDENTITY }, { token: harness.HOME_B_TOKEN })).toBe(true);
         });
         const facts = await runHookOperation(() => hook.getCurrent().readFacts());
         await runHookOperation(() => hook.getCurrent().operations['prepare-computer']!(facts));
@@ -849,7 +767,6 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         expect(harness.endpointRequests().filter((request) => request.path === '/v1/auth/response')).toEqual([
             expect.objectContaining({ serverId: harness.HOME_B_IDENTITY, authorization: `Bearer ${harness.HOME_B_TOKEN}` }),
         ]);
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async () => await harness.storage.readCredentials());
     });
 
     it('drives the real relay runtime control and bootstrap helper through canonical install/update readbacks and ends healthy with signup closed', async () => {
@@ -871,10 +788,10 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         const { usePersonalHomeBootstrapRuntime } = await import('./usePersonalHomeBootstrapRuntime');
         const hook = await renderHook(() => usePersonalHomeBootstrapRuntime());
 
-        // Both real runtime-control hooks refresh at mount before bootstrap starts.
-        expect(harness.recordedSpecs().map((spec) => [spec.phase, spec.kind])).toEqual([
-            ['auto-refresh', 'relay.runtime.status.v1'],
-            ['auto-refresh', 'daemon.service.status.v1'],
+        // Independent mount refreshes have no cross-hook ordering contract.
+        expect(harness.recordedSpecs().filter(spec => spec.phase === 'auto-refresh').map(spec => spec.kind).sort()).toEqual([
+            'daemon.service.status.v1',
+            'relay.runtime.status.v1',
         ]);
 
         harness.markBootstrapStarted();
@@ -967,7 +884,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
             expect(call.canonicalServerUrl).toBe(harness.CANONICAL_SERVER_URL);
             expect(call.serverIdentityId).toBe(harness.HOME_B_IDENTITY);
         }
-        expect(harness.focusedAuthGetToken).not.toHaveBeenCalled();
+        expect(network.requests.every(request => new URL(request.url).origin === harness.CANONICAL_SERVER_URL)).toBe(true);
 
         // 5. Stored credentials are exactly { token } — no secret material.
         expect(harness.persistedCredentials()).toEqual({ token: harness.HOME_B_TOKEN });
@@ -1257,7 +1174,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
             code: 'daemon_url_mismatch',
             thisComputer: expect.objectContaining({
                 status: 'daemon_url_mismatch',
-                daemonHomeLabel: 'https://home-a.example',
+                daemonHomeLabel: 'Focused Home A',
             }),
         });
         expect(modalConsent.confirm).not.toHaveBeenCalled();
@@ -1420,10 +1337,10 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         expect(harness.persistCalls()).toHaveLength(0);
         expect(harness.persistedCredentials()).toBeNull();
         // The pending seed stayed in Home custody across the crash: retry custody for this Home.
-        expect(harness.pendingSeeds()).toHaveLength(2);
-        expect(harness.pendingSeeds().every(({ seed }) => seed.length === 32)).toBe(true);
-        expect([...harness.pendingSeeds()[0]!.seed]).toEqual([...harness.pendingSeeds()[1]!.seed]);
-        const seedAfterCrash = new Uint8Array(harness.pendingSeeds()[0]!.seed);
+        expect(network.pendingSeeds()).toHaveLength(2);
+        expect(network.pendingSeeds().every(({ seed }) => seed.length === 32)).toBe(true);
+        expect([...network.pendingSeeds()[0]!.seed]).toEqual([...network.pendingSeeds()[1]!.seed]);
+        const seedAfterCrash = new Uint8Array(network.pendingSeeds()[0]!.seed);
         await hook.unmount();
 
         // A true renderer remount now observes retained Home data and no token. The exact pending
@@ -1452,7 +1369,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         expect(harness.persistCalls()).toHaveLength(1);
         expect(harness.persistedCredentials()).toEqual({ token: harness.HOME_B_TOKEN });
         // Final credentials persisted and authenticated: pending custody was released.
-        expect(harness.pendingSeeds()).toEqual([]);
+        expect(network.pendingSeeds()).toEqual([]);
         const profiles = await import('@/sync/domains/server/serverProfiles');
         expect(profiles.listServerProfiles().filter((profile) => profile.source === 'desktop-personal-home')).toHaveLength(1);
 
@@ -1463,7 +1380,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
             answers: harness.recordedPromptAnswers(),
         });
         for (const call of accountCalls) {
-            expect(serializedArtifacts).not.toContain(call.secretBase64Url);
+            if (call.secretBase64Url) expect(serializedArtifacts).not.toContain(call.secretBase64Url);
         }
         await hook.unmount();
     });
@@ -1482,7 +1399,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
 
         expect(harness.endpointAuthCalls()).toEqual([]);
         expect(harness.serverAccounts().size).toBe(0);
-        expect(harness.pendingSeeds()).toEqual([]);
+        expect(network.pendingSeeds()).toEqual([]);
         expect(harness.persistCalls()).toHaveLength(0);
         await hook.unmount();
     });
@@ -1496,7 +1413,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         await expect(runHookOperation(
             () => hook.getCurrent().operations['ensure-home-ready']!(initialFacts),
         )).rejects.toThrow(
-            /seed could not be verified/i,
+            /seed custody is unavailable/i,
         );
 
         expect(harness.endpointAuthCalls()).toEqual([]);
@@ -1521,8 +1438,8 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         expect(harness.serverAccounts().size).toBe(1);
         expect(harness.persistCalls()).toHaveLength(1);
         expect(harness.persistedCredentials()).toEqual({ token: harness.HOME_B_TOKEN });
-        expect(harness.pendingSeeds()).toHaveLength(2);
-        expect([...harness.pendingSeeds()[0]!.seed]).toEqual([...harness.pendingSeeds()[1]!.seed]);
+        expect(network.pendingSeeds()).toHaveLength(2);
+        expect([...network.pendingSeeds()[0]!.seed]).toEqual([...network.pendingSeeds()[1]!.seed]);
 
         // Retry: the persisted credential is read, verified, and the pending seed is cleared
         // without any second account creation.
@@ -1534,7 +1451,7 @@ describe('usePersonalHomeBootstrapRuntime system-task composition', () => {
         expect(harness.serverAccounts().size).toBe(1);
         expect(harness.endpointAuthCalls().length).toBeGreaterThanOrEqual(2);
         expect(harness.events().filter((entry) => entry === 'auth:endpoint-token:signup-open')).toHaveLength(1);
-        expect(harness.pendingSeeds()).toEqual([]);
+        expect(network.pendingSeeds()).toEqual([]);
         expect(harness.persistCalls()).toHaveLength(1);
         const profiles = await import('@/sync/domains/server/serverProfiles');
         expect(profiles.listServerProfiles().filter((profile) => profile.source === 'desktop-personal-home')).toHaveLength(1);

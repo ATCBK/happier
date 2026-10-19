@@ -95,7 +95,7 @@ function resolveBackgroundServiceDecisionDetails(prompt: BackgroundServiceSetupP
         ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n');
     }
 
-    const serviceLabels = prompt.services.map((service) => `${service.label} • ${resolveHomeDisplayNameForRelayUrl(service.serverUrl) ?? t('settingsAccount.thisHomeTitle')}`).join('\n');
+    const serviceLabels = prompt.services.map((service) => `${service.label} • ${resolveHomeDisplayNameForRelayUrl(service.serverUrl ?? '') ?? t('settingsAccount.thisHomeTitle')}`).join('\n');
     return [
         `${prompt.targetReleaseChannel} • ${prompt.targetServerUrl}`,
         serviceLabels,

@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import type { MachineAgent, MachineAgentSignInSession } from '@/agents/machineAgents/machineAgentTypes';
+import type { MachineAgentsSnapshot } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -16,7 +18,7 @@ const ADD_LIST_PREVIEW = 5;
 
 export type MachineAgentsSectionViewProps = Readonly<{
     agents: readonly MachineAgent[];
-    status: 'loading' | 'ready' | 'offline' | 'error';
+    status: MachineAgentsSnapshot['status'];
     lastCheckedAt: number | null;
     machineName: string;
     renderMark: (agent: MachineAgent) => React.ReactNode;
@@ -26,6 +28,8 @@ export type MachineAgentsSectionViewProps = Readonly<{
     onExpandedChange: (agentId: string, expanded: boolean) => void;
     onAction: (agent: MachineAgent, action: MachineAgentRowAction) => void;
     onCheckAgain: () => void;
+    /** A page whose own header already says "Agents" hosts the section without repeating its title. Default: titled. */
+    titled?: boolean;
     testID: string;
 }>;
 
@@ -36,30 +40,41 @@ export type MachineAgentsSectionViewProps = Readonly<{
  * setup form (M2). An offline machine shows what it last reported, without actions.
  */
 export const MachineAgentsSectionView = React.memo(function MachineAgentsSectionView(props: MachineAgentsSectionViewProps) {
-    const { installed, available } = splitMachineAgents(props.agents);
+    const { installed, available: listed } = splitMachineAgents(props.agents);
+    // Only a finished check makes an agent one "to add"; a row still checking (or unreadable) may turn out installed
+    // and would jump groups when its answer lands.
+    const available = listed.filter((agent) => agent.state !== 'checking' && agent.state !== 'unknown');
     const [showAll, setShowAll] = React.useState(false);
     const shownAvailable = showAll ? available : available.slice(0, ADD_LIST_PREVIEW);
     const row = (agent: MachineAgent, index: number, list: readonly MachineAgent[]) => (
         <MachineAgentRow
-            key={agent.agentId}
-            testID={`${props.testID}.${agent.agentId}`}
+            key={buildMachineAgentInventoryKey(agent)}
+            testID={`${props.testID}.${buildMachineAgentInventoryKey(agent)}`}
             agent={agent}
             mark={props.renderMark(agent)}
             session={props.sessionFor(agent)}
             onAction={(action) => props.onAction(agent, action)}
             form={agent.stale ? undefined : props.renderForm(agent)}
-            expanded={props.expandedAgentIds.has(agent.agentId)}
-            onExpandedChange={(expanded) => props.onExpandedChange(agent.agentId, expanded)}
+            expanded={props.expandedAgentIds.has(buildMachineAgentInventoryKey(agent))}
+            onExpandedChange={(expanded) => props.onExpandedChange(buildMachineAgentInventoryKey(agent), expanded)}
             showDivider={index < list.length - 1}
         />
     );
-    const firstLoad = props.status === 'loading' && props.agents.length === 0;
+    // "No agent here" is a claim about a finished check. Descriptor-only rows (still checking, or the machine could not
+    // answer) say nothing about installation, so they keep the section on its checking / unavailable lines.
+    const unresolved = installed.length === 0 && (
+        (props.status === 'offline' && props.lastCheckedAt === null)
+        || props.agents.some((agent) => agent.state === 'checking' || agent.state === 'unknown')
+    );
+    const checking = (props.status === 'loading' && props.agents.length === 0) || (unresolved && props.status === 'loading');
+    // A check that is not running and has no answer (an error, or a machine that never answered) is said with its retry.
+    const unreadable = installed.length === 0 && (props.status === 'error' || (unresolved && (props.status === 'ready' || props.status === 'idle')));
     return (
         <View testID={props.testID}>
             <ItemGroup
-                title={t('machineAgents.sectionTitle')}
+                title={props.titled === false ? undefined : t('machineAgents.sectionTitle')}
                 description={t('machineAgents.sectionDescription')}
-                action={props.status === 'offline' || (props.status === 'error' && props.agents.length === 0) ? undefined : (
+                action={props.status === 'offline' || unreadable || checking ? undefined : (
                     <RoundButton
                         testID={`${props.testID}.checkAgain`}
                         size="small"
@@ -77,17 +92,17 @@ export const MachineAgentsSectionView = React.memo(function MachineAgentsSection
                         reason={t('machineAgents.offlineNote', { machine: props.machineName })}
                     />
                 ) : null}
-                {firstLoad ? (
+                {checking ? (
                     <SurfaceStateCard testID={`${props.testID}.loading`} size="line" kind="loading" title={t('machineAgents.checking')} />
-                ) : props.status === 'error' && props.agents.length === 0 ? (
+                ) : unreadable ? (
                     <SurfaceStateCard
                         testID={`${props.testID}.error`}
                         size="line"
-                        kind="error"
+                        kind={props.status === 'error' ? 'error' : 'unavailable'}
                         title={t('machineAgents.unknown')}
                         action={{ label: t('machineAgents.checkAgain'), onPress: props.onCheckAgain }}
                     />
-                ) : installed.length === 0 ? (
+                ) : unresolved ? null : installed.length === 0 ? (
                     <SurfaceStateCard testID={`${props.testID}.empty`} size="line" kind="empty" title={t('machineAgents.emptyInstalled')} />
                 ) : installed.map(row)}
             </ItemGroup>

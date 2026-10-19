@@ -107,9 +107,11 @@ describe('useAwaitedMachineArrival', () => {
             const hook = await renderHook(() => useAwaitedMachineArrival(), {
                 flushOptions: { cycles: 1, turns: 4 },
             });
+            const waiting = hook.getCurrent();
 
             await applyMachine({ id: 'm-existing', active: true, activeAt: now + 500, updatedAt: now + 500 });
 
+            expect(hook.getCurrent()).toBe(waiting);
             expect(hook.getCurrent()).toMatchObject({ status: 'waiting', machine: undefined, isOnline: false });
             await hook.unmount();
         } finally {
@@ -127,15 +129,43 @@ describe('useAwaitedMachineArrival', () => {
             const hook = await renderHook(() => useAwaitedMachineArrival(), {
                 flushOptions: { cycles: 1, turns: 4 },
             });
+            const machines = storage.getState().machines;
 
             await applyMachine({ id: 'm-returning', active: true, activeAt: freshAt, updatedAt: freshAt });
 
+            expect(storage.getState().machines).toBe(machines);
             expect(hook.getCurrent().status).toBe('arrived');
             expect(hook.getCurrent().machine?.id).toBe('m-returning');
             expect(hook.getCurrent().isOnline).toBe(true);
             await hook.unmount();
         } finally {
             storage.setState(previousState);
+        }
+    });
+
+    it('observes presence recovery only for the named Home while retaining its inventory', async () => {
+        const previousState = storage.getState();
+        const one = await upsertServerProfile({ serverUrl: 'https://arrival-one.example.test', name: 'Arrival one' });
+        const two = await upsertServerProfile({ serverUrl: 'https://arrival-two.example.test', name: 'Arrival two' });
+        const staleAt = Date.now() - 10 * 60_000;
+        try {
+            storage.getState().applyMachines([createMachineFixture({ id: 'shared-id', activeAt: staleAt, updatedAt: staleAt })], true, { sourceServerId: one.id });
+            storage.getState().applyMachines([createMachineFixture({ id: 'shared-id', activeAt: staleAt, updatedAt: staleAt })], true, { sourceServerId: two.id });
+            const hook = await renderHook(() => useAwaitedMachineArrival({ serverId: one.id, serverUrl: one.serverUrl }));
+            const waiting = hook.getCurrent();
+            const inventory = storage.getState().machineListByServerId[one.id];
+
+            await applyMachine({ id: 'shared-id', activeAt: Date.now(), updatedAt: Date.now() }, two.id);
+            expect(hook.getCurrent()).toBe(waiting);
+            await applyMachine({ id: 'shared-id', activeAt: Date.now(), updatedAt: Date.now() }, one.id);
+
+            expect(storage.getState().machineListByServerId[one.id]).toBe(inventory);
+            expect(hook.getCurrent()).toMatchObject({ status: 'arrived', machine: { id: 'shared-id' }, isOnline: true });
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+            await removeServerProfile(one.id);
+            await removeServerProfile(two.id);
         }
     });
 

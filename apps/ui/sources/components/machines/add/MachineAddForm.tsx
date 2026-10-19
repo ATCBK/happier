@@ -37,7 +37,7 @@ import { useMachine } from '@/sync/domains/state/storage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { MachineProvisionerPicker } from '@/components/settings/machines/managed/MachineProvisionerPicker';
 import type { ManagedControllerScope } from '@/components/settings/machines/managed/useManagedControllerScope';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 export type MachineAddFormLayout = 'page' | 'panel';
@@ -588,7 +588,7 @@ function ConnectedThisComputerPane(props: Readonly<{
             testID={props.testID}
             serverId={serverId}
             machineId={props.machineId}
-            machineName={getMachineDisplayName(machine) ?? t('addFlows.subjectThisComputer')}
+            machineName={machine ? getMachineSentenceName(machine) : t('addFlows.subjectThisComputer')}
             homeName={props.flow.homeName}
             onOpenMachine={openMachine}
             onStartSession={() => props.onStartSession({ machineId: props.machineId, serverId })}

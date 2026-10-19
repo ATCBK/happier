@@ -9,6 +9,7 @@ import { CapacityRing } from '@/components/ui/progress/CapacityRing';
 import { sanitizePersonalHomeDiagnosticMessage } from './PersonalHomeDiagnosticDetails';
 import type { PersonalHomeBootstrapSnapshot } from '../bootstrap/personalHomeBootstrapTypes';
 import type { SystemTaskRunState } from '@/components/systemTasks/types';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 vi.mock('react-native', async () => {
     // Import the boundary factory directly: the barrel's render helpers also import react-native.
@@ -51,8 +52,8 @@ describe('PersonalHomeSetupSurface', () => {
         };
         const screen = await renderScreen(<PersonalHomeSetupSurface snapshot={snapshot} activeTask={activeTask} />);
         expect(screen.findByTestId('personal-home-bootstrap-download-progress')).not.toBeNull();
-        expect(screen.getTextContent()).toContain('1.0 KB');
-        expect(screen.getTextContent()).toContain('2.0 KB');
+        expect(screen.getTextContent()).toContain(formatHappierDataBytes(1024, { kind: 'storage' }));
+        expect(screen.getTextContent()).toContain(formatHappierDataBytes(2048, { kind: 'storage' }));
         expect(screen.findByTestId('personal-home-bootstrap-progress')?.props.accessibilityValue).toEqual({ min: 0, max: 5, now: 0 });
         await screen.update(<PersonalHomeSetupSurface snapshot={snapshot} activeTask={{
             ...activeTask, status: 'succeeded', result: { protocolVersion: 1, taskId: 'acquire', ok: true },
