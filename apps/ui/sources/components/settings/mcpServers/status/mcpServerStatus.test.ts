@@ -55,10 +55,27 @@ describe('mcpServerStatus', () => {
                 { kind: 'mcp_server', itemId: 'other', name: 'other', code: 'other_failed' }] }],
             tests: { mbp: { ok: true, toolCount: 1, checkedAt: 1 } } });
         const failure = pickMostBlockingCapabilityStatus(mcpServerStatus(current));
-        expect(failure).toMatchObject({ kind: 'error', machineName: 'MacBook Pro', detail: 'spawn_failed' });
+        expect(failure).toMatchObject({ kind: 'error', machineName: 'MacBook Pro' });
+        // A bare producer code is not words: the status says where it stopped, never "spawn_failed".
+        expect(failure?.detail).toBeUndefined();
         failure?.fix?.onPress();
         expect(current.fixes.tryAgain).toHaveBeenCalledWith('mbp');
         expect(mcpServerStatus({ ...current, entry: local }).some(status => status.kind === 'error')).toBe(false);
+    });
+    it('reads a runtime notice\'s reason as the status it is: sign-in, a missing key, or words', () => {
+        const notices = (detail: string) => [{ v: 1 as const, items: [{ kind: 'mcp_server' as const, itemId: remote.id, name: remote.name, code: 'mcp_unavailable', detail }] }];
+        const signIn = mcpServerStatus(input({ entry: remote, sessionNotices: notices('mcp_sign_in_required') }));
+        expect(pickMostBlockingCapabilityStatus(signIn)?.kind).toBe('signin');
+        expect(mcpServerStatus(input({ entry: remote, signIn: { state: 'connected' }, sessionNotices: notices('mcp_sign_in_required') }))
+            .some(status => status.kind === 'signin' || status.kind === 'error')).toBe(false);
+        const key = input({ entry: remote, sessionNotices: notices('env:LINEAR_API_KEY') });
+        const keyStatus = pickMostBlockingCapabilityStatus(mcpServerStatus(key));
+        expect(keyStatus).toMatchObject({ kind: 'key', detail: 'LINEAR_API_KEY' });
+        keyStatus?.fix?.onPress();
+        expect(key.fixes.addKey).toHaveBeenCalled();
+        const bridge = pickMostBlockingCapabilityStatus(mcpServerStatus(input({ entry: remote, sessionNotices: notices('remote bridge unavailable') })));
+        expect(bridge?.kind).toBe('error');
+        expect(bridge?.detail).not.toMatch(/_|:/);
     });
     it('uses Saved Secret catalog references and availability for direct and template bindings', async () => {
         const ref = formatSharedSavedSecretRefV1('bound-key');

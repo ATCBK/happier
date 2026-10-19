@@ -20,7 +20,6 @@ import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProf
 import { resolveFreshMachineAdministrationExecutionTarget, useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { ItemList } from '@/components/ui/lists/ItemList';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
@@ -33,7 +32,6 @@ const modal = await import('@/modal');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-const { McpServerTestPanel } = await import('./McpServerTestPanel');
 const { McpDetectedServersScreen } = await import('./McpDetectedServersScreen');
 const initialState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -57,14 +55,11 @@ afterEach(async () => {
 
 describe('offered MCP Machine Actions through their selected Home', () => {
     it.each([
-        { operation: 'test', disabled: true, retry: false },
-        { operation: 'probe', disabled: true, retry: false },
-        { operation: 'test', disabled: false, retry: false },
-        { operation: 'test', disabled: false, retry: true },
-        { operation: 'probe', disabled: false, retry: true },
-    ] as const)('honors the selected Home $operation Action policy (disabled=$disabled, retry=$retry)', async ({ operation, disabled, retry }) => {
-        const actionId = operation === 'test' ? 'mcp.servers.test' : 'mcp.found.list';
-        const rpcMethod = operation === 'test' ? RPC_METHODS.DAEMON_MCP_SERVERS_TEST : RPC_METHODS.DAEMON_MCP_SERVERS_DETECT;
+        { disabled: true, retry: false },
+        { disabled: false, retry: true },
+    ] as const)('honors the selected Home Found scan Action policy (disabled=$disabled, retry=$retry)', async ({ disabled, retry }) => {
+        const actionId = 'mcp.found.list';
+        const rpcMethod = RPC_METHODS.DAEMON_MCP_SERVERS_DETECT;
         const active = await upsertServerProfileOnly({ serverUrl: 'https://mcp-policy-focus.test', name: 'Focused Home' });
         await upsertServerProfileOnly({ serverUrl: 'https://mcp-policy-machine.test', name: 'Machine Home' });
         const target = await setServerProfileIdentityForUrl('https://mcp-policy-machine.test', 'srv_mcp-policy-machine');
@@ -91,8 +86,7 @@ describe('offered MCP Machine Actions through their selected Home', () => {
                 const content = { mode: 'plain' } as const;
                 const request = await socketRpcCodec.decodeRequestParams(content, Reflect.get(payload, 'params'), method);
                 return { ok: true, result: await socketRpcCodec.encodeResponse(content,
-                    operation === 'test' ? { ok: true, toolCount: 1, durationMs: 1 }
-                        : { ok: true, servers: [], warnings: [] }, request.callId) };
+                    { ok: true, servers: [], warnings: [] }, request.callId) };
             });
         });
         const request: Parameters<typeof setRuntimeFetch>[0] = async (url, init) => {
@@ -141,15 +135,8 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         await selection.unmount();
         if (retry) recordMachineRequestFailed({ serverId: target.id, accountId: 'machine-owner', machineId: machine.id, observedAtMs: Date.now() });
         const alert = vi.spyOn(modal.Modal, 'alert');
-        const screen = await renderScreen(operation === 'probe' ? React.createElement(McpDetectedServersScreen)
-            : React.createElement(ItemList, null, React.createElement(McpServerTestPanel, {
-            server: { id: 'policy-server', name: 'policy_server', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] },
-                env: {}, createdAt: 1, updatedAt: 1 }, bindings: [], machines: [machine], targetSelection: {
-                    selectedTarget: targetSelection,
-                    resolveExecutionTarget: (options) => resolveFreshMachineAdministrationExecutionTarget(targetSelection, { ...options, accountScope: targetAccountScope }),
-                },
-        })));
-        const buttonId = operation === 'probe' ? 'settings.mcpServers.detect.refresh' : 'mcp.server.test.run';
+        const screen = await renderScreen(React.createElement(McpDetectedServersScreen));
+        const buttonId = 'settings.mcpServers.detect.refresh';
         await vi.waitFor(() => expect(screen.findByTestId(buttonId)?.props.disabled).toBe(false));
         alert.mockClear();
         rpcRequests.length = 0;
@@ -164,7 +151,6 @@ describe('offered MCP Machine Actions through their selected Home', () => {
                 if (!item.home) throw new Error('Expected the selected RPC Home');
                 return { home: new URL(item.home).origin, method: item.method };
             })).toEqual([{ home: target.serverUrl, method: `${machine.id}:${rpcMethod}` }]);
-            if (operation === 'test') await vi.waitFor(() => expect(screen.findByTestId('mcp.server.test.result.ok')).not.toBeNull());
             // The actual Machine publication withdraws this exact target.
             // A stale button must not dispatch on the focused Home instead.
             await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: target.id }); });

@@ -82,7 +82,7 @@ function Resting(
           {props.title ? (
             <View style={styles.titleRow}>
               {props.leading}
-              <Text variant="label" emphasis="strong" style={styles.title}>
+              <Text variant="label" emphasis="semiBold" style={styles.title}>
                 {props.title}
               </Text>
             </View>
@@ -145,7 +145,7 @@ function Signing(
     return (
       <SectionContentRow testID={`${props.testID}:paste`}>
         <View style={styles.stack}>
-          <Text variant="label" emphasis="strong" style={styles.title}>
+          <Text variant="label" emphasis="semiBold" style={styles.title}>
             {t('capabilities.mcpSignIn.pasteTitle')}
           </Text>
           <Text variant="body" style={styles.body}>
@@ -171,7 +171,7 @@ function Signing(
             <QRCode data={props.authorizationUrl} size={168} />
           </View>
           <View style={styles.stack}>
-            <Text variant="label" emphasis="strong" style={styles.title}>
+            <Text variant="label" emphasis="semiBold" style={styles.title}>
               {t('capabilities.mcpSignIn.phoneTitle')}
             </Text>
             <Text variant="body" style={styles.body}>
@@ -206,7 +206,7 @@ function Signing(
     <>
       <SectionContentRow testID={props.testID}>
         <View style={styles.stack}>
-          <Text variant="label" emphasis="strong" style={styles.title}>
+          <Text variant="label" emphasis="semiBold" style={styles.title}>
             {t('capabilities.mcpSignIn.signingTitle')}
           </Text>
           <Text variant="body" style={styles.body}>
@@ -235,7 +235,7 @@ function Signing(
             {t('capabilities.mcpSignIn.notSignedInHere', { name: props.name })}{' '}
             <Text
               variant="body"
-              emphasis="strong"
+              emphasis="semiBold"
               style={styles.inlineLink}
               onPress={() => setMode('phone')}
               testID={`${props.testID}:use-phone`}
@@ -245,7 +245,7 @@ function Signing(
             {` ${t('capabilities.mcpSignIn.or')} `}
             <Text
               variant="body"
-              emphasis="strong"
+              emphasis="semiBold"
               style={styles.inlineLink}
               onPress={() => void copyLink()}
               testID={`${props.testID}:copy-link`}
@@ -287,7 +287,7 @@ function Link(
       {({ hovered }: { hovered?: boolean }) => (
         <Text
           variant="meta"
-          emphasis={props.quiet ? undefined : 'strong'}
+          emphasis={props.quiet ? undefined : 'semiBold'}
           style={[
             props.quiet ? styles.quietLink : styles.link,
             hovered ? styles.linkHover : null,
@@ -311,21 +311,12 @@ export function McpSignInSection(props: Props) {
   const styles = stylesheet;
   const { name, signIn } = props;
   const signOut = React.useCallback(async () => {
-    const confirmed = await Modal.confirm(
-      t('capabilities.mcpSignIn.signOutTitle', { name }),
-      t('capabilities.mcpSignIn.signOutBody', { name }),
-      {
-        confirmText: t('capabilities.mcpSignIn.signOut'),
-        destructive: true,
-      },
-    );
-    if (!confirmed) return;
     if (!(await signIn.signOut()))
       Modal.alert(
         t('capabilities.mcpSignIn.signOut'),
         t('capabilities.mcpSignIn.signOutFailed'),
       );
-  }, [name, signIn]);
+  }, [signIn]);
 
   let body: React.ReactNode;
   switch (view.state) {

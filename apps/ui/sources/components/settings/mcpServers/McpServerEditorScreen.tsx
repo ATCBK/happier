@@ -1,43 +1,74 @@
 import * as React from 'react';
 import { useLocalSearchParams, useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import {
-    McpServerRuleV1Schema,
     McpServerCatalogEntryV1Schema,
-    type McpServerRuleV1,
     type McpServerCatalogEntryV1,
 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 
-import { McpServerConfigureForm } from '@/components/settings/mcpServers/McpServerConfigureForm';
+import { McpServerConfigurationSection } from '@/components/settings/mcpServers/McpServerConfigurationSection';
 import { McpServerDetailPage } from '@/components/settings/mcpServers/detail/McpServerDetailPage';
-import type { McpConfigurationSaveState } from '@/components/settings/mcpServers/McpServerConfigureForm';
-import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
+import type { McpConfigurationSaveState } from '@/components/settings/mcpServers/McpServerConfigurationSection';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
-import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Modal } from '@/modal';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { randomUUID } from '@/platform/randomUUID';
-import { useAllMachines } from '@/sync/domains/state/storage';
-import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
-import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
 import { promptUnsavedChangesAlert } from '@/utils/ui/promptUnsavedChangesAlert';
 import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
-import { Icon } from '@/components/ui/icons/Icon';
 
-import { MCP_COLLECTION_ROUTE, mcpServerDraftTitle, mcpServerRoute } from './collection/mcpServerCollectionModel';
-import { resolveTransportIconName, resolveTransportLabel, summarizeBindings } from './mcpServerUi';
+import { MCP_COLLECTION_ROUTE, mcpServerRoute } from './collection/mcpServerCollectionModel';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useMcpServersSettings } from './useMcpServersSettings';
 import { McpServerCatalogOperationError, requireUpdatedMcpServerCatalogMutation } from '@/sync/api/account/apiMcpServerCatalog';
 import { areAccountSettingsScopesEqual, type AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
-import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import { useReachRules } from '@/sync/domains/capabilities/reach/useReachRules';
+import { CapabilityDetailHeader } from '@/components/capabilities/detail/CapabilityDetailHeader';
+import { useDraftReachRules, WhereItsOnControl } from '@/components/capabilities/where/WhereItsOnControl';
+import { projectReachOnMachines, type ReachMachine } from '@/sync/domains/capabilities/reach/useReachProjection';
+import { McpServerMark } from './identity/McpServerMark';
+import { useMcpAddPlaces } from './add/useMcpAddPlaces';
+import { ReachRulesChangeV1Schema } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { getMcpServerCatalogSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+/** Reapply only edited fields; lists remain one ordered value. Timestamps are not an edit conflict. */
+function rebaseServerDraft(base: McpServerCatalogEntryV1, draft: McpServerCatalogEntryV1, current: McpServerCatalogEntryV1) {
+    let conflict = false;
+    function field<T>(before: T, edited: T, published: T): T {
+        if (sameStrictJsonValue(before, edited)) return published;
+        if (sameStrictJsonValue(before, published) || sameStrictJsonValue(edited, published)) return edited;
+        if (before && edited && published && typeof before === 'object' && typeof edited === 'object'
+            && typeof published === 'object' && !Array.isArray(before) && !Array.isArray(edited) && !Array.isArray(published)) {
+            const previous = before as Record<string, unknown>;
+            const local = edited as Record<string, unknown>;
+            const latest = published as Record<string, unknown>;
+            // Object.fromEntries preserves data keys such as __proto__ in env/header maps.
+            return Object.fromEntries([...new Set([...Object.keys(previous), ...Object.keys(local), ...Object.keys(latest)])]
+                .flatMap(key => {
+                    const value = field(previous[key], local[key], latest[key]);
+                    return value === undefined ? [] : [[key, value]];
+                })) as T;
+        }
+        conflict = true;
+        return edited;
+    }
+    const server = field(base, { ...draft, updatedAt: base.updatedAt }, current);
+    return { server: { ...server, updatedAt: Math.max(draft.updatedAt, current.updatedAt) }, conflict };
+}
+
+function isCatalogConflict(error: unknown): boolean {
+    return error instanceof McpServerCatalogOperationError
+        && ['conflict', 'settings-conflict', 'mcp_catalog_conflict'].includes(error.code);
+}
+
+function sameServerFields(left: McpServerCatalogEntryV1, right: McpServerCatalogEntryV1): boolean {
+    return sameStrictJsonValue({ ...left, updatedAt: 0 }, { ...right, updatedAt: 0 });
+}
 
 type NavigationLike = Readonly<{
     setOptions?: (options: Readonly<Record<string, unknown>>) => void;
@@ -67,25 +98,23 @@ function createDraftServer(existingNames: ReadonlySet<string>): McpServerCatalog
 }
 
 export const McpServerEditorScreen = React.memo(function McpServerEditorScreen() {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const navigation = useNavigation();
     const nav = navigation as NavigationLike;
     const ignoreBeforeRemoveRef = React.useRef(false);
     const isDirtyRef = React.useRef(false);
-    const machines = useAllMachines();
-    const administrationTargetSelection = useMachineAdministrationTargetSelection(
-        MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers,
-    );
 
     const { serverId: serverIdParam } = useLocalSearchParams<{ serverId?: string }>();
     const serverId = typeof serverIdParam === 'string' && serverIdParam.trim() ? serverIdParam.trim() : null;
 
-    const { settings: normalizedSettings, writable: writableMcpSettings, mutate: mutateMcpCatalog, snapshot, scope, approval: catalogApproval } = useMcpServersSettings();
-    const reachRules = useReachRules('mcp_server', serverId ?? '');
+    const { settings: normalizedSettings, writable: writableMcpSettings, mutate: mutateMcpCatalog, snapshot, scope, reload, approval: catalogApproval } = useMcpServersSettings();
     const liveScopeRef = React.useRef(scope);
     liveScopeRef.current = scope;
-    const draftBaseRef = React.useRef<Readonly<{ scope: AccountSettingsScope; revision: number }> | null>(null);
+    const draftBaseRef = React.useRef<Readonly<{ scope: AccountSettingsScope; revision: number; server: McpServerCatalogEntryV1 | null }> | null>(null);
+    const submittedServerRef = React.useRef<McpServerCatalogEntryV1 | null>(null);
+    const [configurationConflict, setConfigurationConflict] = React.useState<Readonly<{
+        phase: 'detected' | 'reviewing'; currentServer: McpServerCatalogEntryV1 | null;
+    }> | null>(null);
     const savedSecretCatalog = useSavedSecretCatalog({ scope: draftBaseRef.current?.scope ?? scope });
     const secrets = React.useMemo(() => [...savedSecretCatalog.materializedSecrets], [savedSecretCatalog.materializedSecrets]);
     const { resolveReference } = savedSecretCatalog;
@@ -100,32 +129,94 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
         return normalizedSettings.servers.find((server) => server.id === serverId) ?? null;
     }, [normalizedSettings, serverId]);
 
-    const existingBindings: McpServerRuleV1[] = React.useMemo(() => {
-        if (!serverId) return [];
-        return reachRules.rules.map(rule => ({ ...rule, serverId }));
-    }, [reachRules.rules, serverId]);
-
     const [draftServer, setDraftServer] = React.useState<McpServerCatalogEntryV1>(() => existingServer ?? createDraftServer(existingNames));
+    // A new server picks where it's on before it exists; a saved server's reach is edited on its own page.
+    const draftReach = useDraftReachRules('mcp_server');
+    const places = useMcpAddPlaces();
+    const draftProjection = React.useMemo(
+        () => projectReachOnMachines(draftReach.rules, places.machines as readonly ReachMachine[], undefined, places.workspaceRefs),
+        [draftReach.rules, places.machines, places.workspaceRefs],
+    );
     // A new server starts with a generated unique name; until the user names it, it is still unnamed.
     const generatedNameRef = React.useRef(existingServer ? null : draftServer.name);
-    const [draftBindings, setDraftBindings] = React.useState<McpServerRuleV1[]>(() => existingBindings);
     const [isDirty, setIsDirty] = React.useState(false);
-    const dirtyFields = React.useRef({ server: false, rules: false });
-    const liveDraftRef = React.useRef({ server: draftServer, bindings: draftBindings });
-    liveDraftRef.current = { server: draftServer, bindings: draftBindings };
+    const dirtyFields = React.useRef({ server: false });
+    const liveDraftRef = React.useRef({ server: draftServer });
+    liveDraftRef.current = { server: draftServer };
+    const changeDraftServer = React.useCallback((updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1) => {
+        const next = updater(liveDraftRef.current.server);
+        liveDraftRef.current = { server: next };
+        const base = draftBaseRef.current?.server;
+        const dirty = !base || !sameServerFields(next, base);
+        dirtyFields.current = { server: dirty };
+        setIsDirty(dirty);
+        setDraftServer(next);
+    }, []);
     React.useEffect(() => {
-        if (!scope || snapshot.status !== 'ready' || snapshot.authority !== 'active' || snapshot.revision === 'absent') return;
+        if (!scope || snapshot.status !== 'ready' || snapshot.authority !== 'active' || snapshot.stale || snapshot.revision === 'absent') return;
         if (draftBaseRef.current && !areAccountSettingsScopesEqual(draftBaseRef.current.scope, scope)) return;
-        if (!draftBaseRef.current) draftBaseRef.current = { scope, revision: snapshot.revision };
-        if (isDirty) return;
-        draftBaseRef.current = { scope, revision: snapshot.revision };
+        const base = draftBaseRef.current;
+        if (base && snapshot.revision < base.revision) return;
+        if (isDirty && base) {
+            if (snapshot.revision === base.revision) return;
+            if (base.server && existingServer) {
+                const submitted = submittedServerRef.current;
+                const acknowledged = submitted && sameServerFields(submitted, existingServer);
+                const rebased = rebaseServerDraft(acknowledged ? submitted : base.server, draftServer, existingServer);
+                if (!rebased.conflict) {
+                    draftBaseRef.current = { scope, revision: snapshot.revision, server: existingServer };
+                    const dirty = !sameServerFields(rebased.server, existingServer);
+                    dirtyFields.current = { server: dirty };
+                    setIsDirty(dirty);
+                    liveDraftRef.current = { server: rebased.server };
+                    setDraftServer(current => sameStrictJsonValue(current, rebased.server) ? current : rebased.server);
+                    setConfigurationConflict(null);
+                    return;
+                }
+            } else if (!serverId) {
+                // A newly created draft has no saved server fields for another writer to overlap.
+                draftBaseRef.current = { scope, revision: snapshot.revision, server: null };
+                return;
+            }
+            setConfigurationConflict(current => current?.phase === 'detected' && current.currentServer === existingServer
+                ? current : { phase: 'detected', currentServer: existingServer });
+            return;
+        }
+        draftBaseRef.current = { scope, revision: snapshot.revision, server: existingServer };
+        setConfigurationConflict(null);
         if (existingServer) {
-            dirtyFields.current = { server: false, rules: false };
+            dirtyFields.current = { server: false };
+            liveDraftRef.current = { server: existingServer };
             setDraftServer(existingServer);
-            setDraftBindings(existingBindings);
             setIsDirty(false);
         }
-    }, [existingBindings, existingServer, isDirty, scope, snapshot.status, snapshot.authority, snapshot.revision]);
+    }, [draftServer, existingServer, isDirty, scope, serverId, snapshot.status, snapshot.authority, snapshot.stale, snapshot.revision]);
+
+    const detectCatalogConflict = React.useCallback(() => {
+        setConfigurationConflict({ phase: 'detected', currentServer: existingServer });
+    }, [existingServer]);
+
+    const reviewConfigurationConflict = React.useCallback(async () => {
+        const base = draftBaseRef.current;
+        if (!base || !areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) return;
+        await reload();
+        if (!areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) return;
+        const current = getMcpServerCatalogSnapshot(base.scope);
+        if (current.status !== 'ready' || current.authority !== 'active' || current.stale) return;
+        // A catalog with no revision left holds no server: the open one was removed elsewhere.
+        const server = current.value?.servers.find(item => item.id === serverId) ?? null;
+        // Review keeps both versions available to the presentation owner and preserves local edits.
+        if (server && base.server && current.revision !== 'absent') {
+            const next = rebaseServerDraft(base.server, liveDraftRef.current.server, server).server;
+            liveDraftRef.current = { server: next };
+            setDraftServer(next);
+            draftBaseRef.current = { scope: base.scope, revision: current.revision, server };
+        } else if (!server && current.revision !== 'absent') {
+            // Reviewed: the removal is acknowledged, so the publication that reported it stops re-detecting.
+            draftBaseRef.current = { ...base, revision: current.revision };
+        }
+        setConfigurationConflict({ phase: 'reviewing', currentServer: server });
+    }, [reload, serverId]);
 
     React.useEffect(() => {
         isDirtyRef.current = isDirty;
@@ -149,10 +240,8 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
     const saveDisabled = React.useMemo(() => {
         if (!writableMcpSettings) return true;
         if (draftBaseRef.current && !areAccountSettingsScopesEqual(draftBaseRef.current.scope, scope)) return true;
-        const parsedServer = McpServerCatalogEntryV1Schema.safeParse(draftServer);
-        if (!parsedServer.success) return true;
-        return dirtyFields.current.rules && draftBindings.some((binding) => !McpServerRuleV1Schema.safeParse(binding).success);
-    }, [draftBindings, draftServer, scope, writableMcpSettings]);
+        return !McpServerCatalogEntryV1Schema.safeParse(draftServer).success;
+    }, [draftServer, scope, writableMcpSettings]);
 
     const closeToMcpServersSettings = React.useCallback(() => {
         // `router.replace` expects the public route (group segments like `/(app)` are not valid here on web).
@@ -160,51 +249,51 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
     }, [router]);
 
     const commitDraft = React.useCallback(async (): Promise<boolean> => {
+        if (configurationConflict && (configurationConflict.phase === 'detected' || !configurationConflict.currentServer)) return false;
         const submittedFields = { ...dirtyFields.current };
         if (!writableMcpSettings) {
             Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
             return false;
         }
-        const parsedServer = McpServerCatalogEntryV1Schema.safeParse(draftServer);
+        // An observed catalog rebase may run earlier in this same commit's effect flush.
+        const submittedDraft = liveDraftRef.current.server;
+        const parsedServer = McpServerCatalogEntryV1Schema.safeParse(submittedDraft);
         if (!parsedServer.success) {
             Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
             return false;
         }
-        const parsedBindings: McpServerRuleV1[] = [];
-        for (const binding of !serverId || submittedFields.rules ? draftBindings : []) {
-            const parsed = McpServerRuleV1Schema.safeParse(binding);
-            if (!parsed.success) {
-                Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
-                return false;
-            }
-            parsedBindings.push(parsed.data);
-        }
-
         try {
             const base = draftBaseRef.current;
             if (!base || !areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) throw new McpServerCatalogOperationError('scope-retired');
             if (!serverId || submittedFields.server) {
+                submittedServerRef.current = parsedServer.data;
                 const receipt = serverId
                     ? await mutateMcpCatalog('mcp.servers.update', { entry: parsedServer.data, expectedRevision: base.revision })
                     : await mutateMcpCatalog('mcp.servers.create', { entry: parsedServer.data, expectedRevision: base.revision,
-                        ...(parsedBindings.length > 0 ? { where: { kind: 'replace', rules: reachRulesToDraftsV1(parsedBindings) } } : {}) });
+                        ...(draftReach.where ? { where: ReachRulesChangeV1Schema.parse(draftReach.where) } : {}) });
                 requireUpdatedMcpServerCatalogMutation(receipt);
-                draftBaseRef.current = { scope: base.scope, revision: receipt.revision };
-            }
-            if (serverId && submittedFields.rules) {
-                const result = await reachRules.change({ kind: 'replace', rules: reachRulesToDraftsV1(parsedBindings) });
-                if (!result.ok) throw new McpServerCatalogOperationError(result.message);
+                if (receipt.revision >= (draftBaseRef.current?.revision ?? base.revision)) {
+                    draftBaseRef.current = { scope: base.scope, revision: receipt.revision, server: parsedServer.data };
+                }
             }
             if (!areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) return false;
-            if (liveDraftRef.current.server !== draftServer || liveDraftRef.current.bindings !== draftBindings) return false;
-            dirtyFields.current = { server: false, rules: false };
+            const acknowledged = draftBaseRef.current?.server ?? submittedDraft;
+            if (!sameServerFields(liveDraftRef.current.server, acknowledged)) return false;
+            dirtyFields.current = { server: false };
+            setConfigurationConflict(null);
             setIsDirty(false);
             return true;
         } catch (error) {
+            if (isCatalogConflict(error)) {
+                detectCatalogConflict();
+                return false;
+            }
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
             return false;
+        } finally {
+            if (submittedServerRef.current === parsedServer.data) submittedServerRef.current = null;
         }
-    }, [draftBindings, draftServer, navigation, router, mutateMcpCatalog, reachRules.change, serverId, writableMcpSettings]);
+    }, [configurationConflict, detectCatalogConflict, draftReach.where, mutateMcpCatalog, serverId, writableMcpSettings]);
 
     // A saved server's Configuration saves on blur (T5): a committed value asks for a save, which runs
     // once the draft holding that value has rendered. Invalid drafts stay with their inline error.
@@ -231,11 +320,24 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
     const discardDraft = React.useCallback(() => {
         const next = existingServer ?? createDraftServer(existingNames);
         if (!existingServer) generatedNameRef.current = next.name;
+        liveDraftRef.current = { server: next };
         setDraftServer(next);
-        setDraftBindings(existingBindings);
-        dirtyFields.current = { server: false, rules: false };
+        setConfigurationConflict(null);
+        dirtyFields.current = { server: false };
         setIsDirty(false);
-    }, [existingBindings, existingNames, existingServer]);
+    }, [existingNames, existingServer]);
+
+    // Review's two answers: keep the open version (saved over the reviewed current one) or take what is
+    // saved now. A server removed elsewhere has nothing to take, so the open edit is dropped and the page closes.
+    const keepMyConfiguration = React.useCallback(() => { void commitDraft(); }, [commitDraft]);
+    const useCurrentConfiguration = React.useCallback(() => {
+        if (configurationConflict?.currentServer) {
+            discardDraft();
+            return;
+        }
+        ignoreBeforeRemoveRef.current = true;
+        closeToMcpServersSettings();
+    }, [closeToMcpServersSettings, configurationConflict, discardDraft]);
 
     const handleDeleteOrCancel = React.useCallback(async () => {
         if (!serverId) {
@@ -247,29 +349,45 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
             Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
             return;
         }
-
-        const confirmed = await Modal.confirm(
-            t('settings.mcpServersDeleteTitle'),
-            // Name the saved server as the collection shows it, never an unsaved edit.
-            t('settings.mcpServersDeleteConfirm', { name: existingServer?.title || existingServer?.name || serverId }),
-            { destructive: true, cancelText: t('common.cancel'), confirmText: t('common.delete') },
-        );
-        if (!confirmed) return;
+        if (configurationConflict && (configurationConflict.phase === 'detected' || !configurationConflict.currentServer)) return;
 
         try {
             const base = draftBaseRef.current;
             if (!base || !areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) throw new McpServerCatalogOperationError('scope-retired');
             const receipt = await mutateMcpCatalog('mcp.servers.delete', {
-                serverId, removeBindings: true, expectedRevision: base.revision },
-                { presentUserConfirmation: { actionId: 'mcp.servers.delete' } });
+                serverId, removeBindings: true, expectedRevision: base.revision });
             requireUpdatedMcpServerCatalogMutation(receipt);
             if (!areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) return;
             ignoreBeforeRemoveRef.current = true;
             closeToMcpServersSettings();
         } catch (error) {
+            if (error instanceof McpServerCatalogOperationError && (isActionApprovalDeclinedErrorCode(error.code)
+                || error.code === 'action_account_scope_changed')) return;
+            if (isCatalogConflict(error)) {
+                detectCatalogConflict();
+                return;
+            }
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
         }
-    }, [closeToMcpServersSettings, existingServer, serverId, mutateMcpCatalog, writableMcpSettings]);
+    }, [closeToMcpServersSettings, configurationConflict, detectCatalogConflict, serverId, mutateMcpCatalog, writableMcpSettings]);
+
+    // Duplicate is the person's own direct Action: a new server with the default reach and no sign-in,
+    // opened as soon as the catalog acknowledges it.
+    const handleDuplicate = React.useCallback(async () => {
+        if (!serverId || !existingServer || !writableMcpSettings) {
+            Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
+            return;
+        }
+        try {
+            const base = draftBaseRef.current;
+            if (!base || !areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) throw new McpServerCatalogOperationError('scope-retired');
+            const receipt = await mutateMcpCatalog('mcp.servers.duplicate', { serverId });
+            if (!areAccountSettingsScopesEqual(base.scope, liveScopeRef.current)) return;
+            router.push(mcpServerRoute(receipt.serverId) as never);
+        } catch (error) {
+            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
+        }
+    }, [existingServer, mutateMcpCatalog, router, serverId, writableMcpSettings]);
 
     const requestUnsavedChangesDecision = React.useCallback(async () => {
         return await promptUnsavedChangesAlert(
@@ -308,10 +426,11 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
     const isNew = !serverId;
     const draftDisplayName = draftServer.title?.trim()
         || (draftServer.name === generatedNameRef.current ? '' : draftServer.name.trim());
+    const mcpServerDraftTitle = useCollectionDraftTitle();
     React.useEffect(() => {
         if (isNew) mcpServerDraftTitle.publish(draftDisplayName);
-    }, [draftDisplayName, isNew]);
-    React.useEffect(() => (isNew ? () => mcpServerDraftTitle.publish('') : undefined), [isNew]);
+    }, [draftDisplayName, isNew, mcpServerDraftTitle]);
+    React.useEffect(() => (isNew ? () => mcpServerDraftTitle.publish('') : undefined), [isNew, mcpServerDraftTitle]);
 
     const menuActions = React.useMemo((): readonly PageHeaderMenuAction[] => [{
         id: serverId ? 'delete' : 'discard',
@@ -320,7 +439,9 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
         onSelect: () => { void handleDeleteOrCancel(); },
     }], [handleDeleteOrCancel, serverId]);
 
-    if (serverId && !existingServer) {
+    // A deleted saved server loses authority, but its open unsaved editor remains available for review/copy.
+    const displayedServer = existingServer ?? (isDirty ? draftBaseRef.current?.server ?? null : null);
+    if (serverId && !displayedServer) {
         if (!settingsLoaded) return null;
         return (
             <ItemList>
@@ -334,18 +455,26 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
         );
     }
 
-    if (serverId && existingServer) {
+    if (serverId && displayedServer) {
         return (
             <McpServerDetailPage
-                server={existingServer}
+                server={displayedServer}
                 draftServer={draftServer}
+                configurationBaseServer={draftBaseRef.current?.server}
                 catalogRevision={draftBaseRef.current?.revision ?? null}
                 secrets={secrets}
                 secretAvailability={secretAvailability}
                 scope={draftBaseRef.current?.scope ?? scope}
                 onCommitConfiguration={requestConfigurationCommit}
                 configurationSaveState={configurationSaveState}
+                configurationConflict={configurationConflict ? {
+                    ...configurationConflict,
+                    onReview: reviewConfigurationConflict,
+                    onKeepMine: keepMyConfiguration,
+                    onUseCurrent: useCurrentConfiguration,
+                } : null}
                 onRemove={() => { void handleDeleteOrCancel(); }}
+                onDuplicate={handleDuplicate}
                 approvalNotice={approval.approvalId && approvalScope ? (
                     <ItemGroup>
                         <ActionApprovalPendingNotice testID="mcp.server.editor.approval"
@@ -353,50 +482,29 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
                             onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(approvalScope.serverId)}`)} />
                     </ItemGroup>
                 ) : null}
-                onChangeServer={(updater) => {
-                    dirtyFields.current.server = true;
-                    setIsDirty(true);
-                    setDraftServer((current) => updater(current));
-                }}
+                onChangeServer={changeDraftServer}
             />
         );
     }
 
-    const title = draftDisplayName || t('mcpSettings.newServer');
-    const meta = existingServer ? [
-        { key: 'transport', text: resolveTransportLabel(existingServer.transport) },
-        { key: 'bindings', text: summarizeBindings(existingBindings, machines) },
-    ] : undefined;
-
     return (
         <ItemList keyboardShouldPersistTaps="handled">
-            <PageHeader
+            <CapabilityDetailHeader
                 testID="mcp.server.editor.header"
-                alwaysShowTitle
-                title={title}
-                description={t('mcpSettings.serverPurpose')}
-                meta={meta}
-                leading={(
-                    <PageHeaderMarkSlot>
-                        <Icon name={resolveTransportIconName(draftServer.transport)} size={22} color={theme.colors.text.secondary} />
-                    </PageHeaderMarkSlot>
-                )}
+                mark={<McpServerMark transport={draftServer.transport} size={28} />}
+                title={draftDisplayName || t('mcpSettings.newServer')}
+                purpose={t('mcpSettings.serverPurpose')}
+                facts={{
+                    source: { kind: 'you' },
+                    extra: [draftServer.transport === 'stdio' ? t('capabilities.mcp.local') : t('capabilities.mcp.remote')],
+                }}
+                menuItems={menuActions}
                 primaryAction={{
                     testID: 'mcp.server.editor.save',
-                    title: t('common.save'),
+                    title: t('capabilities.mcpAdd.addServer'),
                     disabled: saveDisabled || (!isDirty && !isNew),
                     onPress: save,
                 }}
-                actions={(
-                    <View style={styles.headerActions}>
-                        <MachineAdministrationTargetSelector
-                            selection={administrationTargetSelection}
-                            presentation="chip"
-                            testIDPrefix="settings.mcpServers.administration.target"
-                        />
-                        <PageHeaderMenu testID="mcp.server.editor.menu" actions={menuActions} />
-                    </View>
-                )}
             />
 
             {approval.approvalId && approvalScope ? (
@@ -407,33 +515,25 @@ export const McpServerEditorScreen = React.memo(function McpServerEditorScreen()
                 </ItemGroup>
             ) : null}
 
-            <McpServerConfigureForm
-                    draftServer={draftServer}
-                    draftBindings={draftBindings}
-                    machines={machines}
-                    targetSelection={administrationTargetSelection}
-                    secrets={secrets}
-                    scope={draftBaseRef.current?.scope ?? scope}
-                    onChangeServer={(updater) => {
-                        dirtyFields.current.server = true;
-                        setIsDirty(true);
-                        setDraftServer((current) => updater(current));
-                    }}
-                    onChangeBindings={(updater) => {
-                        dirtyFields.current.rules = true;
-                        setIsDirty(true);
-                        setDraftBindings((current) => updater(current));
-                    }}
-                />
+            <WhereItsOnControl
+                testID="mcp.server.where"
+                kind="mcp_server"
+                presentation="section"
+                rules={draftReach.rules}
+                status="ready"
+                projection={draftProjection}
+                places={{ agentIds: places.agentIds, machines: places.placeMachines, projects: places.projects }}
+                agentTakes={places.agentTakes}
+                onChange={draftReach.onChange}
+            />
 
+            <McpServerConfigurationSection
+                draftServer={draftServer}
+                secrets={secrets}
+                scope={draftBaseRef.current?.scope ?? scope}
+                mode="create"
+                onChangeServer={changeDraftServer}
+            />
         </ItemList>
     );
 });
-
-const styles = StyleSheet.create(() => ({
-    headerActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-}));

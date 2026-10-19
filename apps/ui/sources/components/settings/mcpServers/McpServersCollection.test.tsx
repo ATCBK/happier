@@ -52,6 +52,14 @@ function createEmptyPreviewResponse() {
     return { ok: true, builtIn: [], managed: [], detected: [] as [] };
 }
 
+// Validate fake daemon receipts before dispatch so fixture drift cannot masquerade as a lost Socket acknowledgement.
+const successfulTestReceipt = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.test'].parse({
+    ok: true, toolCount: 1, durationMs: 2, tools: [{ name: 'write', tokens: 10 }],
+});
+const missingRuntimeTestReceipt = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.test'].parse({
+    ok: false, errorCode: 'mcp_connect_failed', error: 'Runtime unavailable', runtimeMissing: 'npx', durationMs: 2,
+});
+
 const {
     routerPushSpy,
     routerReplaceSpy,
@@ -125,6 +133,8 @@ const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontD
 const { useMcpServerTools } = await import('./tools/useMcpServerTools');
 const { McpServerToolsSection } = await import('./tools/McpServerToolsSection');
 const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+const { McpServerWhereAndTools } = await import('./detail/McpServerDetailBody');
+const { CapabilityBlockingBanner } = await import('@/components/capabilities/detail/CapabilityBlockingBanner');
 const { resolveSavedSecretReference } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
 const { useMcpServerMachineTests } = await import('./status/useMcpServerMachineTests');
 const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
@@ -254,11 +264,7 @@ describe('MCP servers collection and tools', () => {
                 rpcRequests.push({ home, method, input: request.params });
                 if (method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_TEST)) {
                     await testResponseGate?.promise;
-                    const result = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.test'].parse(runtimeMissing ? {
-                        ok: false, errorCode: 'spawn_failed', error: 'Runtime unavailable', runtimeMissing: 'uv', durationMs: 2,
-                    } : {
-                        ok: true, toolCount: 1, durationMs: 2, tools: [{ name: 'write', tokens: 10 }],
-                    });
+                    const result = runtimeMissing ? missingRuntimeTestReceipt : successfulTestReceipt;
                     return { ok: true, result: await socketRpcCodec.encodeResponse(content, result, request.callId) };
                 }
                 return { ok: true, result: await socketRpcCodec.encodeResponse(content,
@@ -362,9 +368,12 @@ describe('MCP servers collection and tools', () => {
         const screen = await renderSettingsView(<McpServerDetailPage server={server} draftServer={server}
             catalogRevision={catalogRevision} secrets={[]} secretAvailability={{ resolveReference: ref => resolveSavedSecretReference(scope, [], ref) }}
             scope={scope} onCommitConfiguration={() => {}} configurationSaveState="idle" onRemove={() => {}}
-            approvalNotice={null} onChangeServer={() => {}} />);
+            approvalNotice={null} onDuplicate={() => {}} onChangeServer={() => {}} />);
         await screen.pressByTestIdAsync('mcp.server.machines:action');
-        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.banner.action')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findByType(McpServerWhereAndTools).props.detail.tests.results).toMatchObject({
+            [machine.id]: { ok: false, errorCode: 'mcp_connect_failed', runtimeMissing: 'npx', message: 'Runtime unavailable' },
+        }));
+        await vi.waitFor(() => expect(screen.findByType(CapabilityBlockingBanner).props.status).toMatchObject({ kind: 'cantrun', detail: 'npx' }));
         await screen.pressByTestIdAsync('mcp.server.banner.action');
         expect(routerPushSpy).toHaveBeenCalledWith(`/machines/${machine.id}/installables?serverId=${encodeURIComponent(scope.serverId)}`);
     });

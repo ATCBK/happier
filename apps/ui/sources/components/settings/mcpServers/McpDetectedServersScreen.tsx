@@ -7,6 +7,7 @@ import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/s
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { Modal } from '@/modal';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -22,6 +23,7 @@ import { loadFoundWarmCacheEntry, saveFoundWarmCacheEntry, subscribeFoundWarmCac
 import { McpDetectedServersTab } from './McpDetectedServersTab';
 import { mcpServerRoute } from './collection/mcpServerCollectionModel';
 import { useMcpServersSettings, useMcpServerCatalogForServer } from './useMcpServersSettings';
+import { McpFoundAdoptionPanel } from './found/McpFoundAdoptionPanel';
 import { useMcpFoundAdoption } from './found/useMcpFoundAdoption';
 
 /**
@@ -49,6 +51,8 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
     const adoption = useMcpFoundAdoption({ machineId: adoptionTarget?.machine.id ?? null,
         scopeKey: JSON.stringify([selectionKey, probeExecution.binding?.scope]), catalog: snapshot.value,
         catalogRevision: adoptionRevision, execution: adoptionExecution });
+    const savedSecretCatalog = useSavedSecretCatalog({ scope: probeExecution.binding?.scope ?? null });
+    const secrets = React.useMemo(() => [...savedSecretCatalog.materializedSecrets], [savedSecretCatalog.materializedSecrets]);
     const [directory, setDirectory] = React.useState('');
     const directoryRef = React.useRef(directory);
     directoryRef.current = directory;
@@ -151,6 +155,15 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
                 warnings={warnings}
                 onRefresh={() => { void runDetect('retry'); }}
                 onImport={(server) => { void adoption.begin(server); }}
+                adopting={adoption.item}
+                adoptionPanel={(
+                    <McpFoundAdoptionPanel
+                        testID="mcp.detected.adopt"
+                        adoption={adoption}
+                        secrets={secrets}
+                        scope={probeExecution.binding?.scope ?? null}
+                    />
+                )}
             />
         </ItemList>
     );

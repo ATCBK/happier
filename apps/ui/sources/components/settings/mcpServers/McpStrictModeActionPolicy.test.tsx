@@ -44,6 +44,8 @@ describe('MCP strict mode declared settings admission', () => {
         harness.answer(home, 'POST /v2/account/settings', { body: { success: true, version: 2 } });
         const { Modal } = await import('@/modal');
         const alert = vi.spyOn(Modal, 'alert');
+        const { router } = await import('expo-router');
+        const push = vi.spyOn(router, 'push');
         try {
             if (entry === 'owner') {
                 const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
@@ -62,13 +64,18 @@ describe('MCP strict mode declared settings admission', () => {
                 await hook.unmount();
             }
             if (disabled) {
-                await waitForHomeGovernance(() => expect(alert).toHaveBeenCalledWith('Error', 'action_disabled'));
+                await waitForHomeGovernance(() => expect(alert).toHaveBeenCalled());
+                const buttons = alert.mock.calls.at(-1)![2];
+                const openSettings = buttons?.find(button => button.style !== 'cancel');
+                expect(openSettings?.onPress).toEqual(expect.any(Function));
+                await act(async () => { openSettings!.onPress!(); });
+                expect(push).toHaveBeenCalledWith('/settings/actions/settings.set');
                 expect(harness.requestsFor('/v2/account/settings').filter(request => Reflect.get(request.input ?? {}, 'content') !== undefined)).toEqual([]);
             } else {
                 await waitForHomeGovernance(() => expect(harness.requestsFor('/v2/account/settings').some(request =>
                     Reflect.get(request.input ?? {}, 'content') !== undefined)).toBe(true));
                 expect(alert).not.toHaveBeenCalled();
             }
-        } finally { alert.mockRestore(); }
+        } finally { alert.mockRestore(); push.mockRestore(); }
     });
 });

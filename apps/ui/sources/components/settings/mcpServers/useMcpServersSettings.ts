@@ -1,10 +1,9 @@
 import * as React from 'react';
 import type { McpServersSettingsV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
-import type { McpServerCatalogRowMutationResponseV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1,
     type McpServerActionIdV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { McpRulesSetInputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
@@ -24,7 +23,7 @@ const emptyCatalog = emptyMcpServerCatalogV1();
 export type McpCatalogAuthoringActionId = Extract<McpServerActionIdV1,
     'mcp.servers.create' | 'mcp.servers.update' | 'mcp.servers.duplicate' | 'mcp.servers.delete'>;
 type ExecuteMcpCatalogMutation = <A extends McpCatalogAuthoringActionId>(actionId: A,
-    input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>, operation?: UiActionOperation) => Promise<McpServerCatalogRowMutationResponseV1>;
+    input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>, operation?: UiActionOperation) => Promise<z.output<(typeof MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1)[A]>>;
 
 /** Read the selected Home's Account, rather than borrowing the focused Account's projection. */
 export function useMcpServerCatalogForServer(targetServerId: string | null | undefined, demanded = true): McpServerCatalogValueSnapshot {
@@ -72,11 +71,14 @@ export function useMcpServersSettings(): Readonly<{
     const snapshot = React.useSyncExternalStore(subscribeMcpServerCatalogSnapshots, read, read);
     const settings = React.useMemo(() => ({ ...(snapshot.value ?? emptyCatalog), strictMode: strictMode === true }), [snapshot.value, strictMode]);
     const writable = snapshot.status === 'ready' && snapshot.authority === 'active' && !snapshot.stale ? settings : null;
-    const mutate: ExecuteMcpCatalogMutation = React.useCallback(async (actionId, input, operation) => {
+    const mutate: ExecuteMcpCatalogMutation = React.useCallback(async <A extends McpCatalogAuthoringActionId>(actionId: A,
+        input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>, operation?: UiActionOperation) => {
         if (!scope || !writable || snapshot.revision === 'absent') throw new McpServerCatalogOperationError('authority-not-confirmed');
         const result = await execution.execute(actionId, input, operation);
         if (!result.ok) throw new McpServerCatalogOperationError(result.errorCode ?? 'mcp_catalog_operation_failed');
-        return MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result);
+        // The selected Action owns its receipt shape; indexing the family
+        // widens parse's return type, so retain that input/output correlation.
+        return MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result) as z.output<(typeof MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1)[A]>;
     }, [execution.execute, scope, writable, snapshot.revision]);
     const reload = React.useCallback(() => scope ? refreshMcpServerCatalog(scope) : Promise.resolve(), [scope]);
     const executeRules = React.useCallback((input: z.input<typeof McpRulesSetInputV1Schema>) => execution.execute('mcp.rules.set', input), [execution.execute]);

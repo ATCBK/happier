@@ -3,16 +3,10 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import {
-    type McpServerRuleV1,
     type McpServerCatalogEntryTransportV1,
     type McpServerCatalogEntryV1,
 } from '@happier-dev/protocol';
-import { reachPlaceKeyV1 } from '@happier-dev/protocol/reach/reachPlaceV1';
-import { applyMcpServerConfigOverrideV1 } from '@happier-dev/protocol/mcp/servers/resolveMcpServerConfigForContextV1';
 
-import { McpServerBindingEditor } from '@/components/settings/mcpServers/McpServerBindingEditor';
-import { McpServerBindingDraftExpander } from '@/components/settings/mcpServers/McpServerBindingDraftExpander';
-import { McpServerTestPanel } from '@/components/settings/mcpServers/McpServerTestPanel';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -25,117 +19,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
-import { useSettingMutable } from '@/sync/domains/state/storage';
-import type { Machine } from '@/sync/domains/state/storageTypes';
-import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
-
-/**
- * The sections of one MCP server's editor: what it is called, how Happier starts or reaches it, the
- * values it receives, where it applies (each rule expands in place; a new rule is a draft row), and a
- * test against the managed machine. Saving and deleting belong to the page header.
- */
-export const McpServerConfigureForm = React.memo(function McpServerConfigureForm(props: Readonly<{
-    draftServer: McpServerCatalogEntryV1;
-    draftBindings: McpServerRuleV1[];
-    machines: readonly Machine[];
-    targetSelection: MachineAdministrationTargetSelectionV1;
-    secrets: SavedSecret[];
-    scope?: AccountSettingsScope | null;
-    onChangeServer: (updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1) => void;
-    onChangeBindings: (updater: (current: McpServerRuleV1[]) => McpServerRuleV1[]) => void;
-}>) {
-    const [favoriteDirectoriesRaw, setFavoriteDirectoriesRaw] = useSettingMutable('favoriteDirectories');
-    const favoriteDirectories = Array.isArray(favoriteDirectoriesRaw) ? favoriteDirectoriesRaw : [];
-    const { onChangeServer } = props;
-
-    return (
-        <>
-            <ItemGroup title={t('mcpSettings.serverSection')} description={t('mcpSettings.serverSectionDescription')}>
-                <Item
-                    title={t('settings.mcpServersFieldName')}
-                    accessoryLayout="adaptive"
-                    showChevron={false}
-                    rightElement={(
-                        <FieldTextInput
-                            testID="mcp.server.editor.name"
-                            value={props.draftServer.name}
-                            onChangeText={(text) => onChangeServer((current) => ({ ...current, name: text, updatedAt: Date.now() }))}
-                            accessibilityLabel={t('settings.mcpServersFieldName')}
-                            placeholder="my_server"
-                            monospace
-                        />
-                    )}
-                />
-                <Item
-                    title={t('settings.mcpServersFieldTitle')}
-                    accessoryLayout="adaptive"
-                    showChevron={false}
-                    rightElement={(
-                        <FieldTextInput
-                            testID="mcp.server.editor.title"
-                            value={props.draftServer.title ?? ''}
-                            onChangeText={(text) => onChangeServer((current) => ({
-                                ...current,
-                                title: text.trim() ? text : undefined,
-                                updatedAt: Date.now(),
-                            }))}
-                            accessibilityLabel={t('settings.mcpServersFieldTitle')}
-                            placeholder={t('settings.mcpServersFieldTitlePlaceholder')}
-                            autoCapitalize="words"
-                        />
-                    )}
-                />
-            </ItemGroup>
-
-            <McpServerConfigurationSection
-                draftServer={props.draftServer}
-                secrets={props.secrets}
-                scope={props.scope}
-                mode="create"
-                onChangeServer={onChangeServer}
-            />
-
-            <ItemGroup title={t('settings.mcpServersEditorAppliesTo')} description={t('settings.mcpServersEditorAppliesToSubtitle')}>
-                {props.draftBindings.map((binding) => (
-                    <McpServerBindingEditor
-                        key={binding.id}
-                        binding={binding}
-                        configOverride={props.draftServer.configOverrides?.find(override => reachPlaceKeyV1(override.target) === reachPlaceKeyV1(binding.target))}
-                        serverTransport={props.draftServer.transport}
-                        secrets={props.secrets}
-                        scope={props.scope}
-                        machines={props.machines}
-                        onChange={(next) => props.onChangeBindings((current) => current.map((item) => (item.id === binding.id ? next : item)))}
-                        onDelete={() => props.onChangeBindings((current) => current.filter((item) => item.id !== binding.id))}
-                        onChangeConfigOverride={(fields) => onChangeServer((current) => {
-                            if (binding.target.t === 'allMachines' || binding.target.t === 'project') {
-                                return { ...applyMcpServerConfigOverrideV1(current, fields), updatedAt: Date.now() };
-                            }
-                            const configOverrides = (current.configOverrides ?? []).filter(override => reachPlaceKeyV1(override.target) !== reachPlaceKeyV1(binding.target));
-                            if (fields) configOverrides.push({ ...fields, target: binding.target });
-                            return { ...current, configOverrides, updatedAt: Date.now() };
-                        })}
-                    />
-                ))}
-                <McpServerBindingDraftExpander
-                    serverId={props.draftServer.id}
-                    machines={props.machines}
-                    favoriteDirectories={favoriteDirectories}
-                    onChangeFavoriteDirectories={setFavoriteDirectoriesRaw}
-                    onAddBinding={(binding) => props.onChangeBindings((current) => [...current, binding])}
-                />
-            </ItemGroup>
-
-            <McpServerTestPanel
-                server={props.draftServer}
-                bindings={props.draftBindings}
-                machines={props.machines}
-                targetSelection={props.targetSelection}
-            />
-        </>
-    );
-});
 
 export type McpConfigurationSaveState = 'idle' | 'saving' | 'saved' | 'failed';
 
@@ -147,10 +31,15 @@ export type McpConfigurationSaveState = 'idle' | 'saving' | 'saved' | 'failed';
  */
 export const McpServerConfigurationSection = React.memo(function McpServerConfigurationSection(props: Readonly<{
     draftServer: McpServerCatalogEntryV1;
+    /** The last reviewed/acknowledged server, separate from the controlled local draft. */
+    committedServer?: McpServerCatalogEntryV1 | null;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
-    /** `create` adds the transport choice; a saved server's transport is a fact of its header. */
-    mode?: 'create' | 'edit';
+    /**
+     * `create` adds the transport choice; a saved server's transport is a fact of its header. `machine` edits the
+     * values one machine runs, so the rows drop the descriptions that speak for every machine.
+     */
+    mode?: 'create' | 'edit' | 'machine';
     /** Section title and purpose (the server page names it Configuration). */
     title?: string;
     description?: string;
@@ -164,6 +53,7 @@ export const McpServerConfigurationSection = React.memo(function McpServerConfig
     const { theme } = useUnistyles();
     const { onChangeServer, onCommit } = props;
     const server = props.draftServer;
+    const committed = props.committedServer;
     const local = server.transport === 'stdio';
     const [folderMenuOpen, setFolderMenuOpen] = React.useState(false);
     const [folderChoice, setFolderChoice] = React.useState<'session' | 'path'>(server.stdio?.cwd?.t === 'path' ? 'path' : 'session');
@@ -210,9 +100,26 @@ export const McpServerConfigurationSection = React.memo(function McpServerConfig
         <ItemGroup
             testID="mcp.server.config"
             title={props.title ?? t('mcpSettings.connectionSection')}
-            description={props.description ?? t('mcpSettings.connectionSectionDescription')}
+            description={props.description ?? (props.mode === 'machine' ? undefined : t('mcpSettings.connectionSectionDescription'))}
             action={savedLine}
         >
+            {props.mode === 'create' ? (
+                <Item
+                    title={t('settings.mcpServersFieldName')}
+                    accessoryLayout="adaptive"
+                    showChevron={false}
+                    rightElement={(
+                        <FieldTextInput
+                            testID="mcp.server.editor.name"
+                            value={server.name}
+                            onChangeText={(text) => onChangeServer((current) => ({ ...current, name: text, updatedAt: Date.now() }))}
+                            accessibilityLabel={t('settings.mcpServersFieldName')}
+                            placeholder="my_server"
+                            monospace
+                        />
+                    )}
+                />
+            ) : null}
             {props.mode === 'create' ? (
                 <SegmentedChoiceItem<McpServerCatalogEntryTransportV1>
                     testID="mcp.server.transport"
@@ -229,10 +136,12 @@ export const McpServerConfigurationSection = React.memo(function McpServerConfig
                         testID="mcp.server.config.command"
                         fieldTestID="mcp.server.editor.command"
                         title={t('capabilities.mcp.config.command')}
-                        subtitle={t('capabilities.mcp.config.commandDescription')}
+                        subtitle={props.mode === 'machine' ? undefined : t('capabilities.mcp.config.commandDescription')}
                         value={server.stdio?.command ?? ''}
+                        committedValue={committed ? committed.stdio?.command ?? '' : undefined}
                         placeholder="npx"
                         monospace
+                        onDraftChange={(command) => setStdio((stdio) => ({ ...stdio, command }))}
                         onCommit={(draft) => {
                             const command = draft.trim();
                             commitWith(() => setStdio((stdio) => ({ ...stdio, command })));
@@ -286,9 +195,11 @@ export const McpServerConfigurationSection = React.memo(function McpServerConfig
                             fieldTestID="mcp.server.editor.cwd"
                             title={t('capabilities.mcp.config.folderPath')}
                             value={server.stdio?.cwd?.t === 'path' ? server.stdio.cwd.path : ''}
+                            committedValue={committed ? committed.stdio?.cwd?.t === 'path' ? committed.stdio.cwd.path : '' : undefined}
                             placeholder="/srv/project"
                             monospace
                             autoFocus={server.stdio?.cwd?.t !== 'path'}
+                            onDraftChange={(path) => setStdio((stdio) => ({ ...stdio, cwd: { t: 'path', path } }))}
                             onCommit={(draft) => {
                                 const path = draft.trim();
                                 if (!path) return;
@@ -302,12 +213,14 @@ export const McpServerConfigurationSection = React.memo(function McpServerConfig
                     testID="mcp.server.config.address"
                     fieldTestID="mcp.server.editor.url"
                     title={t('capabilities.mcp.config.address')}
-                    subtitle={t('capabilities.mcp.config.addressDescription')}
+                    subtitle={props.mode === 'machine' ? undefined : t('capabilities.mcp.config.addressDescription')}
                     // An address is long: it takes the row's width under its label.
                     accessoryLayout="stacked"
                     value={server.remote?.url ?? ''}
+                    committedValue={committed ? committed.remote?.url ?? '' : undefined}
                     placeholder="https://example.com/mcp"
                     monospace
+                    onDraftChange={(url) => onChangeServer((current) => ({ ...current, remote: { ...(current.remote ?? { headers: {} }), url }, updatedAt: Date.now() }))}
                     onCommit={(draft) => {
                         const url = draft.trim();
                         commitWith(() => onChangeServer((current) => ({ ...current, remote: { ...(current.remote ?? { headers: {} }), url }, updatedAt: Date.now() })));

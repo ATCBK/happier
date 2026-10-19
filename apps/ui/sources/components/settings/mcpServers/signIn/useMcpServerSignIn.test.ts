@@ -5,7 +5,7 @@ import { MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } from '@happier-dev/protocol/mcp/
 import { QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/connect/configurationActionsV1';
 
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storageStore';
 
 const boundary = vi.hoisted(() => ({
@@ -233,6 +233,140 @@ describe('useMcpServerSignIn', () => {
     );
     expect(accepted).toBe(false);
     expect(hook.getCurrent().view).toEqual({ state: 'did_not_finish' });
+  });
+
+  it('accepts a connected grant after the completion response failed to arrive', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start(); });
+    boundary.execute.mockRejectedValueOnce(new Error('response lost'));
+    await act(async () => {
+      expect(await hook.getCurrent().complete({ code: 'c', state: 'attempt-1.n' })).toBe(false);
+    });
+    expect(hook.getCurrent().view?.state).toBe('did_not_finish');
+    await act(async () => { setGrants([grant('connected', 1)]); });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+  });
+
+  it('submits an OAuth answer once when callback and paste arrive before the next render', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start(); });
+    const response = createDeferred<unknown>();
+    const completions: unknown[] = [];
+    boundary.execute.mockImplementation(async (id: string, input: unknown) => {
+      if (id === 'connectedServices.authentication.completeOAuth') {
+        completions.push(input);
+        return response.promise;
+      }
+      return { ok: true, result: configuration() };
+    });
+    let first: Promise<boolean>;
+    let duplicate: Promise<boolean>;
+    await act(async () => {
+      const complete = hook.getCurrent().complete;
+      first = complete({ code: 'c', state: 'attempt-1.n' });
+      duplicate = complete({ code: 'c', state: 'attempt-1.n' });
+    });
+    expect(completions).toHaveLength(1);
+    await act(async () => {
+      setGrants([grant('connected', 1)]);
+      response.resolve({ ok: true, result: { status: 'connected', attemptId: started.attemptId, account: grant('connected', 1).ref } });
+      expect(await Promise.all([first!, duplicate!])).toEqual([true, false]);
+    });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+  });
+
+  it('keeps Connected when a late completion refusal follows the synced grant', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start(); });
+    const response = createDeferred<unknown>();
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.authentication.completeOAuth'
+      ? response.promise : { ok: true, result: configuration() });
+    let completing: Promise<boolean>;
+    await act(async () => { completing = hook.getCurrent().complete({ code: 'c', state: 'attempt-1.n' }); });
+    await act(async () => { setGrants([grant('connected', 1)]); });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+    await act(async () => {
+      response.resolve({ ok: true, result: { status: 'rejected', attemptId: started.attemptId, code: 'invalid_grant' } });
+      await completing!;
+    });
+    expect(hook.getCurrent().view?.state).toBe('connected');
+  });
+
+  it('does not let an old completion overwrite a replacement attempt on the same server', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start(); });
+    const response = createDeferred<unknown>();
+    const replacement = { ...started, attemptId: 'attempt-2', authorizationUrl: 'https://linear.app/oauth/authorize?state=attempt-2.n' };
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.authentication.completeOAuth'
+      ? response.promise : { ok: true, result: replacement });
+    let completing: Promise<boolean>;
+    await act(async () => { completing = hook.getCurrent().complete({ code: 'c', state: 'attempt-1.n' }); });
+    await act(async () => { await hook.getCurrent().start(); });
+    expect(hook.getCurrent().view).toMatchObject({ state: 'signing', authorizationUrl: replacement.authorizationUrl });
+    await act(async () => {
+      response.resolve({ ok: true, result: { status: 'rejected', attemptId: started.attemptId, code: 'invalid_grant' } });
+      await completing!;
+    });
+    expect(hook.getCurrent().view).toMatchObject({ state: 'signing', authorizationUrl: replacement.authorizationUrl });
+  });
+
+  it('ignores an old callback answer while a replacement attempt is waiting', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start(); });
+    const replacement = { ...started, attemptId: 'attempt-2', authorizationUrl: 'https://linear.app/oauth/authorize?state=attempt-2.n' };
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: replacement });
+    await act(async () => { await hook.getCurrent().start(); });
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: { status: 'rejected', attemptId: replacement.attemptId, code: 'invalid_grant' } });
+    await act(async () => {
+      expect(await hook.getCurrent().complete({ code: 'old', state: 'attempt-1.n' })).toBe(false);
+    });
+    expect(hook.getCurrent().view).toMatchObject({ state: 'signing', authorizationUrl: replacement.authorizationUrl });
+  });
+
+  it.each(['account', 'server'] as const)('retires completion callbacks when the %s changes, even after returning', async (target) => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const scope = { serverId: 'home', accountId: 'account' };
+    const hook = await renderHook((props: { server: McpServerCatalogEntryV1; scope: typeof scope }) =>
+      useMcpServerSignIn(props.server, online, { scope: props.scope }), { initialProps: { server, scope } });
+    await act(async () => { await hook.getCurrent().start(); });
+    const response = createDeferred<unknown>();
+    boundary.execute.mockImplementation(async (id: string) => id === 'connectedServices.authentication.completeOAuth'
+      ? response.promise : { ok: true, result: configuration() });
+    let completing: Promise<boolean>;
+    await act(async () => { completing = hook.getCurrent().complete({ code: 'c', state: 'attempt-1.n' }); });
+    await hook.rerender({ server: target === 'server' ? { ...server, id: 'other-server' } : server,
+      scope: target === 'account' ? { ...scope, accountId: 'other-account' } : scope });
+    expect(hook.getCurrent().view?.state).toBe('not_connected');
+    await hook.rerender({ server, scope });
+    expect(hook.getCurrent().view?.state).toBe('not_connected');
+    await act(async () => {
+      response.resolve({ ok: true, result: { status: 'rejected', attemptId: started.attemptId, code: 'invalid_grant' } });
+      await completing!;
+    });
+    expect(hook.getCurrent().view?.state).toBe('not_connected');
+  });
+
+  it('does not reopen a superseded authorization link when an earlier start settles last', async () => {
+    const response = createDeferred<unknown>();
+    boundary.execute.mockReturnValueOnce(response.promise);
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    let first: Promise<void>;
+    await act(async () => { first = hook.getCurrent().start(); });
+    const replacement = { ...started, attemptId: 'attempt-2', authorizationUrl: 'https://linear.app/oauth/authorize?state=attempt-2.n' };
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: replacement });
+    await act(async () => { await hook.getCurrent().start(); });
+    await act(async () => {
+      response.resolve({ ok: true, result: started });
+      await first!;
+    });
+    expect(hook.getCurrent().view).toMatchObject({ state: 'signing', authorizationUrl: replacement.authorizationUrl });
+    expect(boundary.open).toHaveBeenCalledTimes(1);
+    expect(boundary.open).toHaveBeenCalledWith(replacement.authorizationUrl);
   });
 
   it('cancel reverses the attempt on its machine and returns to Not connected', async () => {
