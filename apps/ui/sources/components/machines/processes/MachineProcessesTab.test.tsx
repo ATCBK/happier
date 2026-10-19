@@ -195,6 +195,8 @@ async function mount(
   });
   // A test renderer never lays out: measure the table the way the platform does on its first layout.
   await measureMountedCollections(screen, { width: 1200 });
+  // FX77 makes the default direct; this scenario needs the person's explicit Account-owned Ask setting.
+  if (options.askBeforeStop) await act(async () => { await home.requireUiApproval(serverId, 'machines.processes.stop'); });
   return { screen, serverId, setParams };
 }
 
@@ -618,27 +620,35 @@ describe('MachineProcessesTab', () => {
     expect(screen.findByTestId('machine-processes-stop-guest-confirm')).toBeNull();
   });
 
-  it('lets the shared Stop policy show guest identity and keeps a declined row available', async () => {
+  it('keeps guest work available when the person cancels an explicit Ask-first Stop', async () => {
     const base = createProcessesAnswer();
     const answer = { ...base, owners: base.owners.map(owner => owner.rowId === 'session:refactor'
       ? { ...owner, requester: { accountId: 'guest', displayName: 'Ben' } } : owner) };
     const stops: unknown[] = [];
-    const { screen } = await mount({ answer, askBeforeStop: true, reply: rpc => {
+    const { screen, serverId } = await mount({ answer, askBeforeStop: true, reply: rpc => {
       if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP) return undefined;
       stops.push(rpc.payload);
       return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
     } });
+    const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+    const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const approvals = home.artifacts(serverId);
     await act(async () => { chooseMenuItem(screen, 'o:session:refactor', 'stop'); });
-    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-stop-guest-confirm')).not.toBeNull()); });
-    expect(screen.getTextContent()).toContain('This is Ben’s work on this machine.');
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(1));
+    const first = approvals.list()[0]!;
+    const request = () => ApprovalRequestV2Schema.parse(JSON.parse(approvals.readPlainBody(first.id)!));
+    expect(request()).toMatchObject({ status: 'open', actionId: 'machines.processes.stop',
+      actionArgs: { targets: [{ ref: 'runner', expect: { owner: { kind: 'session', sessionId: 'refactor' } } }] } });
     expect(stops).toHaveLength(0);
-    await act(async () => { screen.pressByTestId('machine-processes-stop-guest-cancel'); });
+    // Explicit Ask retains durable approval custody, rather than a default-only inline confirmation.
+    expect(screen.findByTestId('machine-processes-stop-guest-confirm')).toBeNull();
+    expect((await decideApprovalAsInbox(serverId, first.id, 'cancel')).ok).toBe(true);
+    expect(request().status).toBe('canceled');
     expect(screen.findByTestId('machine-processes-row-o:session:refactor')).not.toBeNull();
     expect(stops).toHaveLength(0);
     await act(async () => { chooseMenuItem(screen, 'o:session:refactor', 'stop'); });
-    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-stop-guest-confirm')).not.toBeNull()); });
-    await act(async () => { screen.pressByTestId('machine-processes-stop-guest-confirm'); });
-    await act(async () => { await vi.waitFor(() => expect(stops).toHaveLength(1)); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(2));
+    expect(stops).toHaveLength(0);
   });
 
   it('keeps Stop session as the alternative inside shared Kill-tree policy without issuing Kill', async () => {
@@ -959,6 +969,13 @@ describe('MachineProcessesTab port chips', () => {
     expect([...new Set(chips('p:term-server'))]).toEqual(['machine-processes-port-p:term-server-4000']);
     expect(screen.findByTestId('machine-processes-ports-more-p:term-server')).not.toBeNull();
     expect(textOf(screen.findByTestId('machine-processes-ports-more-p:term-server'))).toBe('+1');
+    // The count is its own button: it shows the rest in place, each listener its own chip and menu.
+    const more = screen.root.findAll((node) => node.props.testID === 'machine-processes-ports-more-p:term-server'
+      && typeof node.props.onPress === 'function')[0]!;
+    expect(more.props.accessibilityRole).toBe('button');
+    await act(async () => { more.props.onPress(); });
+    expect([...new Set(chips('p:term-server'))]).toHaveLength(2);
+    expect(screen.findByTestId('machine-processes-ports-more-p:term-server')).toBeNull();
   });
 
   it('opens what Local services offers for the listener and copies its address through that Action', async () => {

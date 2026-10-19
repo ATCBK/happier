@@ -54,6 +54,22 @@ export function buildMachinesRailSeen(fleet: MachineResourceFleetAttention, nowM
     return { look, guardSeenAt: nowMs };
 }
 
+/** Forget only reasons a reporting machine has actually recovered from; never acknowledge a new one. */
+export function forgetRecoveredMachinesRailReasons(fleet: MachineResourceFleetAttention, seen: ReturnType<typeof buildMachinesRailSeen>): ReturnType<typeof buildMachinesRailSeen> {
+    const reporting = new Set(fleet.reportingMachineKeys);
+    const current = buildMachinesRailSeen(fleet, seen.guardSeenAt).look;
+    let look = seen.look;
+    for (const [machineKey, reasons] of Object.entries(seen.look)) {
+        if (!reporting.has(machineKey)) continue;
+        const retained = reasons.filter(reason => current[machineKey]?.includes(reason));
+        if (retained.length === reasons.length) continue;
+        if (look === seen.look) look = { ...look };
+        if (retained.length > 0) look[machineKey] = retained;
+        else delete look[machineKey];
+    }
+    return look === seen.look ? seen : { look, guardSeenAt: seen.guardSeenAt };
+}
+
 /**
  * The closed rail icon's signal, tooltip and accessible name. It reads only string-keyed projections — the
  * fleet attention, the seen record, presence counts, and (only while one is named) one machine's name and

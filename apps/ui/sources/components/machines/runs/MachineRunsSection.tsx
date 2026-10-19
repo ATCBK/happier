@@ -22,9 +22,11 @@ import { useMountedShouldContinue } from '@/hooks/ui/useMountedShouldContinue';
 import { Modal } from '@/modal';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { machineExecutionRunsList } from '@/sync/ops';
+import { isExecutionRunMutationCancelled } from '@/sync/ops/sessionExecutionRuns';
 import { t } from '@/text';
 import { showDaemonUnavailableAlert, tryShowDaemonUnavailableAlertForRpcFailure } from '@/utils/errors/daemonUnavailableAlert';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 type ExecutionRunsState =
     | { status: 'idle' | 'loading'; runs: readonly DaemonExecutionRunEntry[] }
@@ -56,17 +58,23 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
     const [executionRunsState, setExecutionRunsState] = React.useState<ExecutionRunsState>({ status: 'idle', runs: [] });
     const [showFinishedRuns, setShowFinishedRuns] = React.useState(false);
     const [stoppingRunId, setStoppingRunId] = React.useState<string | null>(null);
+    const readLifetime = React.useMemo(() => ({ controller: new AbortController() }), [machineId, machineServerId]);
+    React.useEffect(() => {
+        if (readLifetime.controller.signal.aborted) readLifetime.controller = new AbortController();
+        const controller = readLifetime.controller;
+        return () => controller.abort();
+    }, [readLifetime]);
 
     React.useEffect(() => {
         if (!machineId) return;
         if (!isOnline) return;
         if (isServerSwitching) return;
 
-        let cancelled = false;
+        const controller = new AbortController();
         setExecutionRunsState((prev) => ({ status: 'loading', runs: prev.runs }));
         fireAndForget((async () => {
-            const res = await machineExecutionRunsList(machineId, { serverId: machineServerId });
-            if (cancelled) return;
+            const res = await machineExecutionRunsList(machineId, { serverId: machineServerId, signal: controller.signal });
+            if (controller.signal.aborted) return;
             if (res.ok) {
                 setExecutionRunsState({ status: 'loaded', runs: res.runs });
             } else {
@@ -75,7 +83,7 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
         })(), { tag: 'MachineRunsSection.fetchExecutionRuns' });
 
         return () => {
-            cancelled = true;
+            controller.abort();
             // A load abandoned because the machine went offline (or the Home changed) has no answer
             // coming: leave "Loading…" rather than hold it forever. Loaded rows stay as they were.
             setExecutionRunsState((prev) => (prev.status === 'loading' ? { status: 'idle', runs: prev.runs } : prev));
@@ -222,18 +230,27 @@ export const MachineRunsSection = React.memo(function MachineRunsSection(props: 
                                     const res = await stopExecution.execute('execution.run.stop',
                                         { sessionId, runId: run.runId }, { onTransportIssued: () => { issued = true; } });
                                     refreshRuns = res.ok || issued;
-                                    if (!res.ok) {
+                                    if (!res.ok && !isExecutionRunMutationCancelled(res)) {
                                         await showStopFailure(res.error || t('runs.stop.failedToStopRun'));
                                     }
                                 } catch (error) {
                                     refreshRuns = issued;
-                                    await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                                    if (!isExecutionRunMutationCancelled(error)) {
+                                        await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                                    }
                                 } finally {
                                     setStoppingRunId(null);
                                     if (refreshRuns && stopExecution.isCurrent()) {
-                                        const refreshed = await machineExecutionRunsList(machineId, { serverId: machineServerId });
-                                        if (refreshed.ok && stopExecution.isCurrent()) {
-                                            setExecutionRunsState({ status: 'loaded', runs: refreshed.runs });
+                                        const cancellation = mergeAbortSignals([readLifetime.controller.signal, stopExecution.getSignal()]);
+                                        try {
+                                            const refreshed = await machineExecutionRunsList(machineId, {
+                                                serverId: machineServerId, signal: cancellation.signal,
+                                            });
+                                            if (refreshed.ok && !cancellation.signal.aborted && stopExecution.isCurrent()) {
+                                                setExecutionRunsState({ status: 'loaded', runs: refreshed.runs });
+                                            }
+                                        } finally {
+                                            cancellation.dispose();
                                         }
                                     }
                                 }

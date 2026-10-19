@@ -11,7 +11,8 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useMachineGuardView } from '@/sync/domains/machines/guard/useMachineGuardView';
+import { DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY } from '@/sync/domains/machines/guard/machineGuardRpc';
+import { useMachineGuardActivity, useMachineGuardView } from '@/sync/domains/machines/guard/useMachineGuardView';
 import { t } from '@/text';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
@@ -52,6 +53,7 @@ export const GuardTab = React.memo(function GuardTab(props: MachinePageTabBodyPr
 function GuardRules(props: Readonly<{ serverId: string; machineId: string; machineName: string; onOpenActivity: () => void; barAccessoryShown: boolean }>) {
     const facts = useMachineTabFacts(props.serverId, props.machineId);
     const guard = useMachineGuardView({ machineId: props.machineId, serverId: props.serverId });
+    const activity = useMachineGuardActivity({ machineId: props.machineId, serverId: props.serverId, ...DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY });
     const policyState = useGuardPolicy(guard);
     const wayBack = useGuardWayBack({ serverId: props.serverId, machineId: props.machineId });
     const view = guard.view;
@@ -80,7 +82,8 @@ function GuardRules(props: Readonly<{ serverId: string; machineId: string; machi
         return (
             <ItemGroup>
                 <SurfaceStateCard testID="machine-guard-offline-empty" kind="unavailable" size="line"
-                    title={t('machineGuard.states.offlineEmpty', { machine: props.machineName })} />
+                    title={t('machineGuard.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineGuard.states.offlineReason')} />
             </ItemGroup>
         );
     }
@@ -94,7 +97,13 @@ function GuardRules(props: Readonly<{ serverId: string; machineId: string; machi
     if (!policy) return readFailed ?? <GuardLoading machineName={props.machineName} />;
 
     const nowMs = Date.now();
-    const recent = view?.recentActivity.slice(0, RECENT_ACTIVITY) ?? [];
+    // Only the Activity list can establish emptiness. The Guard view's recentActivity covers today,
+    // whereas this preview and the detail page share the same default history and retained store entry.
+    const recent = activity.list?.entries.slice(0, RECENT_ACTIVITY) ?? [];
+    const activityLine = activity.list ? { id: 'empty', kind: 'empty' as const, iconName: 'clock' as const, title: t('machineGuard.activity.empty', { machine: props.machineName }) }
+        : activity.offline ? { id: 'offline', kind: 'unavailable' as const, iconName: undefined, title: t('machineGuard.states.offlineTitle', { machine: props.machineName }), reason: t('machineGuard.states.offlineReason') }
+            : activity.status === 'error' || activity.status === 'not_reported' ? { id: 'error', kind: 'unavailable' as const, iconName: undefined, title: t('machineGuard.activity.error') }
+                : { id: 'loading', kind: 'loading' as const, iconName: undefined, title: t('machineGuard.activity.loading') };
     return (
         <View testID="machine-guard">
             <ItemGroup surface="none" header="none">
@@ -122,10 +131,11 @@ function GuardRules(props: Readonly<{ serverId: string; machineId: string; machi
                 action={recent.length > 0 ? <TextLinkButton testID="machine-guard-all-activity" label={t('machineGuard.activity.all')} onPress={props.onOpenActivity} /> : undefined}>
                 {recent.length > 0 ? recent.map((entry, index) => (
                     <MachineActivityRow key={entry.id} entry={entry} pendingId={wayBack.pendingId} onWayBack={wayBack.run}
-                        readOnly={guard.offline} showDivider={index < recent.length - 1} />
+                        readOnly={activity.offline} showDivider={index < recent.length - 1} />
                 )) : (
-                    <SurfaceStateCard testID="machine-guard-activity-empty" kind="empty" size="line" iconName="clock"
-                        title={t('machineGuard.activity.empty', { machine: props.machineName })} />
+                    <SurfaceStateCard testID={`machine-guard-activity-${activityLine.id}`} kind={activityLine.kind} size="line"
+                        {...(activityLine.iconName ? { iconName: activityLine.iconName } : {})} title={activityLine.title}
+                        {...('reason' in activityLine ? { reason: activityLine.reason } : {})} />
                 )}
             </ItemGroup>
         </View>
@@ -154,7 +164,7 @@ function OfflineBanner(props: Readonly<{ machineName: string; asOf: number | nul
 /** Loading (G9-4): the sections and rows at their final size; only values and candidates are reserved. */
 function GuardLoading(props: Readonly<{ machineName: string }>) {
     const { theme } = useUnistyles();
-    const color = theme.colors.border.default;
+    const color = theme.colors.surface.skeleton;
     return (
         <View testID="machine-guard-loading" accessibilityLabel={t('machineGuard.states.loading')} accessibilityRole="progressbar">
             <ItemGroup title={t('machineGuard.memory.title')} description={t('machineGuard.memory.description', { machine: props.machineName })}>

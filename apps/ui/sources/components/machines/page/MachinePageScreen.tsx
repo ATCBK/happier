@@ -24,10 +24,12 @@ import { useDeviceType } from '@/utils/platform/responsive';
 
 import { MachinePageHeader } from './MachinePageHeader';
 import { MachinePageStateContext, type MachinePageState } from './machinePageContext';
+import { useMachinePageScroll } from './machinePageScroll';
 import { readRememberedMachinePageTab, rememberMachinePageTab } from './machinePageTabMemory';
 import { isMachinePageTabRoot, machinePageTabQuery, machinePageTabRouteParams } from './machinePageTabQuery';
 import { MACHINE_PAGE_TABS, resolveMachinePageTab } from './machinePageTabs';
 import { MachineResourcesAskBlock } from '@/components/machines/resources/ask/MachineResourcesAskBlock';
+import { MachinePageTabBodies } from './MachinePageTabBodies';
 import type { MachinePageTabId, MachinePageTabParams } from './machinePageTabQuery';
 import { useMachinePageTarget } from './useMachinePageTarget';
 
@@ -115,6 +117,13 @@ export function MachinePageScreen() {
     } as const), [headerBackTitle, hostedInCollection]);
 
     const pageState = React.useMemo((): MachinePageState => ({ target, managedEnrolled, refreshKey, reload }), [managedEnrolled, refreshKey, reload, target]);
+    // One scroller for every tab and every page a tab pushes: a pushed page opens at its top (FA1 #9).
+    const scroll = useMachinePageScroll(tab.params);
+    const barAccessoriesInBar = MACHINE_PAGE_TABS.length > 1 && !phone;
+    const machineName = target.machineSentenceName;
+    const online = target.online;
+    const tabBody = React.useMemo(() => ({ serverId, machineId, machineName, online, setParams: setTabParams }),
+        [machineId, machineName, online, serverId, setTabParams]);
 
     if (!machine) {
         // The page keeps its identity while the machine loads or when it no longer exists: the same
@@ -136,13 +145,15 @@ export function MachinePageScreen() {
         );
     }
 
-    const Body = tab.entry.Body;
     // A wide page draws the tab's accessory at the end of the tab bar (lab `rv` O); a phone keeps it in the body.
-    const BarAccessory = MACHINE_PAGE_TABS.length > 1 && !phone ? tab.entry.BarAccessory : undefined;
+    const BarAccessory = barAccessoriesInBar ? tab.entry.BarAccessory : undefined;
     return (
         <MachinePageStateContext.Provider value={pageState}>
             <Stack.Screen options={screenOptions} />
             <ItemList
+                ref={scroll.ref}
+                onScroll={scroll.onScroll}
+                scrollEventThrottle={64}
                 // The wide column, as All machines: the two doors' index and the page keep one edge, and the
                 // tabs' tables, charts and maps get the room the lab draws them at (a created machine's
                 // receipt columns share it).
@@ -170,20 +181,15 @@ export function MachinePageScreen() {
                     </ItemGroup>
                 ) : null}
                 {rename.editor}
-                <Body
-                    key={tab.entry.id}
-                    serverId={serverId}
-                    machineId={machineId}
-                    machineName={target.machineName}
-                    online={target.online}
-                    params={tab.params}
-                    setParams={setTabParams}
-                    barAccessoryShown={BarAccessory !== undefined}
+                <MachinePageTabBodies
+                    tabs={MACHINE_PAGE_TABS}
+                    active={tab}
+                    body={tabBody}
+                    barAccessoriesInBar={barAccessoriesInBar}
+                    // Ask an agent closes every Resources tab's root (plan 60 AGW-11), never a page the tab pushes; Overview places it before its machine sections.
+                    footer={<MachineResourcesAskBlock serverId={serverId} machineId={machineId} machineName={target.machineSentenceName} />}
+                    footerShown={tab.entry.id !== 'overview' && isMachinePageTabRoot(tab.params)}
                 />
-                {/* Ask an agent closes every Resources tab's root (plan 60 AGW-11), never a page the tab pushes; Overview places it before its machine sections. */}
-                {tab.entry.id !== 'overview' && isMachinePageTabRoot(tab.params) ? (
-                    <MachineResourcesAskBlock serverId={serverId} machineId={machineId} machineName={target.machineName} />
-                ) : null}
             </ItemList>
         </MachinePageStateContext.Provider>
     );

@@ -15,7 +15,8 @@ const MACHINES_PAGE_CONTEXT: WidgetSurfaceContext = Object.freeze({});
 /**
  * The All machines dashboard area (AGW-19): a core-page area `machines` / `main` through the platform's one
  * core-page binding (named views, revisions, Reset/Undo stay platform-owned). The preset's machine is pinned
- * once, the first time the page offers one — never recomputed from live state while the person looks (D5).
+ * once, after the preset selector offers an online machine or a fallback from the loaded fleet — never recomputed from live state while
+ * the person looks (D5). Loading/fallback eligibility belongs to that selector, not a second rule here.
  */
 export function useMachinesWidgetAreaBinding(
   input: Readonly<{

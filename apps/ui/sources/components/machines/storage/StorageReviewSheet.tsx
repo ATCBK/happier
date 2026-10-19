@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   happierPageTextMetrics,
@@ -127,6 +127,12 @@ function StorageReviewBody(props: ReviewProps) {
   const [mode, setMode] = React.useState<StorageReviewMode>('trash');
   const [applying, setApplying] = React.useState(false);
   const [applyFailed, setApplyFailed] = React.useState<null | 'failed' | 'approval' | 'stopFailed'>(null);
+  // The sheet hugs its content, then keeps the tallest height it reached while open (a re-check never shrinks it).
+  const [heldHeight, setHeldHeight] = React.useState(0);
+  const holdHeight = React.useCallback((event: LayoutChangeEvent) => {
+    const height = event.nativeEvent.layout.height;
+    setHeldHeight((held) => (height > held ? height : held));
+  }, []);
   const load = React.useCallback(() => {
     setFailed(false);
     onChecking({
@@ -260,7 +266,7 @@ function StorageReviewBody(props: ReviewProps) {
 
   if (!review) {
     return (
-      <View testID="machine-storage-review" style={styles.body}>
+      <View testID="machine-storage-review" style={[styles.body, { minHeight: heldHeight }]} onLayout={holdHeight}>
         <Text style={styles.paragraph}>
           {t('machineStorage.review.subtitle', { machine: props.machineName })}
         </Text>
@@ -294,7 +300,7 @@ function StorageReviewBody(props: ReviewProps) {
     );
   }
   return (
-    <View testID="machine-storage-review" style={styles.body}>
+    <View testID="machine-storage-review" style={[styles.body, { minHeight: heldHeight }]} onLayout={holdHeight}>
       <Text style={styles.paragraph}>
         {t('machineStorage.review.subtitle', { machine: props.machineName })}
       </Text>
@@ -530,8 +536,8 @@ export function showStorageReviewSheet(input: StorageReviewSheetInput): void {
       title: t('machineStorage.review.title', { count: input.refs.length }),
       testID: 'machine-storage-review-modal',
       phonePresentation: 'sheet',
-      // One size from checking to loaded; the body scrolls between the header and the pinned footer.
-      scrollHost: 'body',
+      // As tall as its content up to the bound, then the body scrolls between the header and the pinned footer.
+      scrollHost: 'bounded',
       bodyScroll: 'auto',
       dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' },
     },

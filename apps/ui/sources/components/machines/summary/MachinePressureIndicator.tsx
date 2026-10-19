@@ -151,11 +151,12 @@ function Pip(props: Readonly<{ color: string }>) {
   const pair = React.useRef({ from: props.color, to: props.color });
   if (pair.current.to !== props.color) {
     pair.current = { from: pair.current.to, to: props.color };
-    progress.setValue(reducedMotion ? 1 : 0);
   }
   const { from, to } = pair.current;
   React.useEffect(() => {
     if (reducedMotion || from === to) { progress.setValue(1); return; }
+    // Animated.View is already subscribed: reset only after this render commits.
+    progress.setValue(0);
     const animation = Animated.timing(progress, { toValue: 1, duration: motionTokens.durationMs.slow,
       easing: Easing.bezier(...HAPPIER_MOTION_V1.standardBezier), useNativeDriver: false });
     animation.start();

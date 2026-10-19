@@ -83,7 +83,9 @@ export function GuardSelectRow<T extends string | number | null>(props: Readonly
     } : undefined, [custom, onChange]);
     const current = idOf(props.value);
     return (
+        // A select follows the shared row rule: beside its label on a wide row, beneath it on a phone.
         <Item testID={props.testID} title={props.title} subtitle={props.failed ?? props.awaiting ?? props.subtitle} mode="info" showDivider={props.showDivider}
+            accessoryLayout="adaptive"
             subtitleStyle={props.failed ? { color: theme.colors.state.danger.textForeground } : undefined}
             rightElement={props.editable || props.failed ? (
                 <PolicyValueSelect testID={`${props.testID}-select`} label={props.label} value={props.format(props.value)} choices={choices}

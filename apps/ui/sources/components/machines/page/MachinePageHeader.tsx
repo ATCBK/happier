@@ -8,6 +8,8 @@ import { beginMachinePageTabIntent } from './machinePageIntent';
 import { machinePageTabRouteParams } from './machinePageTabQuery';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { MachineReplacementOutputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { MachineReplacementPickerModal, type MachineReplacementPickerCandidate } from '@/components/machines/MachineReplacementPickerModal';
 import { useAccountEncryptionMode } from '@/components/settings/account/useAccountEncryptionMode';
 import type { ManagedMachineHeaderIdentity } from '@/components/settings/machines/managed/ManagedMachineSections';
@@ -25,6 +27,7 @@ import { useMachineListByServerId } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 
+import { readMachineTerminalHomeDir, showMachineTerminalSheet } from '@/components/machines/terminal/MachineTerminalSheet';
 import { useMachineStartSession } from './useMachineStartSession';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
@@ -96,11 +99,12 @@ export function composeMachinePageHeaderFacts(input: Readonly<{
     nowMs?: number;
 }>): PageHeaderMetaFact[] {
     const { machine } = input;
-    // "Running 3 h" already says a created machine is up: presence is named only when it adds something.
+    // Presence is named only when it adds something: "Running 3 h" already says a created machine is up, and an
+    // offline machine's sentence above the facts already reads "Offline · last seen …".
     const powerSaysOnline = input.online && (input.managedMeta ?? []).some((fact) => fact.key === 'managed-power');
-    const facts: PageHeaderMetaFact[] = [...(powerSaysOnline ? [] : [{
+    const facts: PageHeaderMetaFact[] = [...(powerSaysOnline || !input.online ? [] : [{
         key: 'presence',
-        text: input.online ? t('machineDetailPage.online') : t('machineDetailPage.offline'),
+        text: t('machineDetailPage.online'),
         testID: 'machine-detail-presence',
     }]), ...(input.managedMeta ?? [])];
     const platform = formatOSPlatform(machine.metadata?.platform);
@@ -174,6 +178,15 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
     // machine's recent paths, so the page hands off with the machine and its Home seeded rather than
     // keeping a second launcher of its own.
     const handleStartSession = useMachineStartSession(target);
+    // A shell on the machine opens through the terminal Action's own admission (agent parity); only the person
+    // who manages the machine is offered one, only while it is online and its home folder is known (its details are
+    // decrypted on this device); the sheet opens in that folder.
+    const machineId = machine?.id;
+    const machineName = target.machineName;
+    const handleOpenTerminal = React.useCallback(() => {
+        if (machineId) showMachineTerminalSheet({ serverId: target.serverId, machineId, machineName });
+    }, [machineId, machineName, target.serverId]);
+    const canOpenTerminal = target.online && machine?.isShared === false && readMachineTerminalHomeDir(machine) !== null;
 
     const meta = React.useMemo(() => machine ? composeMachinePageHeaderFacts({
         machine,
@@ -198,12 +211,13 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
             title: t('machinePresets.environment.apply'),
             onSelect: () => showMachineEnvironmentApplySheet({ serverId: target.serverId, machineId: machine.id, machineName: target.machineName }),
         }] : [];
-        // "Share <machine>": the machine's one share sheet, full, with search and Done (lab m-share S).
+        // "Share…" opens the machine's one share sheet, full, with search and Done (lab m-share S); the
+        // sheet's title names the machine, so the menu item doesn't repeat (and truncate) it.
         const share: PageHeaderMenuAction[] = activeAccountScope && target.serverId
             && areServerProfileIdentifiersEquivalent(activeAccountScope.serverId, target.serverId) ? [{
             id: 'share',
             testID: 'machine-detail-menu-share',
-            title: t('shareSheet.documents.shareTitle', { name: target.machineName }),
+            title: t('shareSheet.documents.shareMenu'),
             onSelect: () => showMachineShareSheet({ machineId: machine.id, machineName: target.machineName,
                 scope: activeAccountScope, online: target.online, subtitle: meta.map(fact => fact.text).join(' · ') || undefined }),
         }] : [];
@@ -250,11 +264,22 @@ export const MachinePageHeader = React.memo(function MachinePageHeader(props: Re
                     <RoundButton
                         testID="machine-detail-start-session"
                         size="small"
-                        display={needsYouAction ? 'secondary' : undefined}
+                        // An offline machine keeps the action's place but not its weight: a disabled filled button would be the page's loudest thing.
+                        display={needsYouAction || !target.online ? 'secondary' : undefined}
                         title={t('machineDetailPage.startAction')}
                         disabled={!machineCanSpawn}
                         onPress={handleStartSession}
                     />
+                    {canOpenTerminal ? (
+                        <RoundButton
+                            testID="machine-detail-open-terminal"
+                            size="small"
+                            display="secondary"
+                            title={t('machineDetailPage.openTerminalAction')}
+                            leading={<Icon name="terminal" size={16} color={theme.colors.text.primary} />}
+                            onPress={handleOpenTerminal}
+                        />
+                    ) : null}
                     <PageHeaderMenu testID="machine-detail-menu" actions={menuActions} />
                 </View>
             ) : undefined}
@@ -336,9 +361,10 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
                     replacementMachineId,
                     confirmActiveOldMachine: machine?.active === true,
                 });
+                if (!outcome.ok && (outcome.errorCode === 'cancelled' || isActionApprovalDeclinedErrorCode(outcome.errorCode))) return;
                 const result = outcome.ok ? MachineReplacementOutputSchema.parse(outcome.result) : null;
                 if (!result?.ok) {
-                    await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));
+                    await Modal.alertAsync(t('common.error'), resolveActionExecutionFailureMessage(outcome, t('machine.replacementRepair.error')) ?? t('machine.replacementRepair.error'));
                     return;
                 }
                 await sync.refreshMachinesThrottled({ staleMs: 0, force: true });
@@ -373,9 +399,10 @@ function useMachineReplacementActions(target: MachinePageTarget, accountScope: M
                 const outcome = await execution.execute('machines.replacement.clear', {
                     serverId: target.serverId, machineId,
                 });
+                if (!outcome.ok && (outcome.errorCode === 'cancelled' || isActionApprovalDeclinedErrorCode(outcome.errorCode))) return;
                 const result = outcome.ok ? MachineReplacementOutputSchema.parse(outcome.result) : null;
                 if (!result?.ok) {
-                    await Modal.alertAsync(t('common.error'), t('machine.replacementRepair.error'));
+                    await Modal.alertAsync(t('common.error'), resolveActionExecutionFailureMessage(outcome, t('machine.replacementRepair.error')) ?? t('machine.replacementRepair.error'));
                     return;
                 }
                 await sync.refreshMachinesThrottled({ staleMs: 0, force: true });

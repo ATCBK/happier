@@ -192,6 +192,8 @@ async function mount(
     });
     await measureMountedCollections(screen, { width: 354 });
   }
+  // Seed the real Account policy, not only an HTTP answer the focused Account may already have read.
+  if (options.askBeforeStop) await act(async () => { await home.requireUiApproval(serverId, 'machines.processes.stop'); });
   return { screen, serverId };
 }
 
@@ -208,25 +210,33 @@ afterEach(async () => {
 });
 
 describe('Using the most widget', () => {
-  it('uses the working-session inline presentation as shared policy confirmation', async () => {
+  it('keeps a working session running until its explicit Ask-first Stop is approved', async () => {
     const calls: Rpc[] = [];
-    const { screen } = await mount({ Body: MachineTopConsumersWidget, workingSession: true, askBeforeStop: true,
+    const { screen, serverId } = await mount({ Body: MachineTopConsumersWidget, workingSession: true, askBeforeStop: true,
       waitFor: 'widget.stop-o:session:refactor', reply: rpc => {
         if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP) return undefined;
         calls.push(rpc);
         return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
       } });
+    const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+    const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const approvals = home.artifacts(serverId);
     vi.mocked(Modal.confirm).mockClear();
     await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
-    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('widget.confirm')).not.toBeNull()); });
-    expect(calls).toHaveLength(0);
-    await act(async () => { screen.pressByTestId('widget.confirm-cancel'); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(1));
+    const first = approvals.list()[0]!;
+    const request = () => ApprovalRequestV2Schema.parse(JSON.parse(approvals.readPlainBody(first.id)!));
+    expect(request()).toMatchObject({ status: 'open', actionId: 'machines.processes.stop',
+      actionArgs: { targets: [{ ref: 'runner', expect: { owner: { kind: 'session', sessionId: 'refactor' } } }] } });
     expect(calls).toHaveLength(0);
     expect(screen.findByTestId('widget.confirm')).toBeNull();
+    expect((await decideApprovalAsInbox(serverId, first.id, 'cancel')).ok).toBe(true);
+    expect(request().status).toBe('canceled');
+    expect(calls).toHaveLength(0);
+    expect(screen.findByTestId('widget.stop-o:session:refactor')).not.toBeNull();
     await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
-    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('widget.confirm')).not.toBeNull()); });
-    await act(async () => { screen.pressByTestId('widget.confirm-stop'); });
-    await act(async () => { await vi.waitFor(() => expect(calls).toHaveLength(1)); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(2));
+    expect(calls).toHaveLength(0);
     expect(Modal.confirm).not.toHaveBeenCalled();
   });
 

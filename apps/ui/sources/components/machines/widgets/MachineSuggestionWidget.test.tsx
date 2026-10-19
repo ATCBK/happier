@@ -225,11 +225,11 @@ function proposal(
     : signed(base);
 }
 
-async function seed(request: ApprovalRequestV2) {
+async function seed(request: ApprovalRequestV2, artifactId = 'approval-1') {
   const response = await home.artifacts(homeId).handle('/v1/artifacts', {
     method: 'POST',
     body: JSON.stringify({
-      id: 'approval-1',
+      id: artifactId,
       header: encodePlainArtifactStoredContent(
         buildApprovalRequestArtifactHeaderV1(request),
       ),
@@ -344,7 +344,7 @@ describe('MachineSuggestionWidget', () => {
     expect(screen.findByTestId('widget.approve')).toBeNull();
   });
 
-  it('keeps the mounted proposal check on unrelated Artifact updates and checks changed proposal operands', async () => {
+  it('keeps the mounted proposal check on unrelated Artifact updates and checks the operands of a new proposal', async () => {
     const request = proposal();
     const screen = await render('full', request);
     await vi.waitFor(() => expect(screen.findByTestId('widget.approve')?.props.disabled).toBe(false));
@@ -366,9 +366,19 @@ describe('MachineSuggestionWidget', () => {
         header: { ...selected.header! }, updatedAt: Date.now() } } });
     });
     expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
-    const changed = signed(ApprovalRequestV2Schema.parse({ ...request, updatedAtMs: 2,
-      actionArgs: { ...proposalArgs, items: proposalArgs.items.slice(0, 2) } }));
-    await act(async () => putArtifact(changed));
+    const changed = signed({ ...request, updatedAtMs: 2,
+      executionOriginV1: { ...request.executionOriginV1, requestId: 'request-2' },
+      actionArgs: { ...proposalArgs, items: proposalArgs.items.slice(0, 2) } });
+    // Admitted operands stay immutable: a genuine changed proposal is a new approval Artifact.
+    await seed(changed, 'approval-2');
+    await act(async () => {
+      const artifacts = storage.getState().artifacts;
+      const selected = artifacts['approval-1']!;
+      if (!selected.isDecrypted) throw new Error('Selected proposal is not readable');
+      storage.setState({ artifacts: { ...artifacts, 'approval-2': { ...selected, id: 'approval-2',
+        header: { ...selected.header!, ...buildApprovalRequestArtifactHeaderV1(changed) },
+        body: JSON.stringify(changed), createdAt: Date.now(), updatedAt: Date.now() } } });
+    });
     await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(2));
     expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)[1]?.payload).toMatchObject({ refs: proposalArgs.items.slice(0, 2).map(item => ({ itemId: item.ref.itemId, path: item.ref.path })) });
     await screen.unmount();

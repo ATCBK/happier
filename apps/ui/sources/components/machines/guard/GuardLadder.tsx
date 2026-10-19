@@ -71,7 +71,7 @@ const RUNGS: readonly GuardRung[] = ['browsers', 'devServers', 'idleSessions'];
 export const GuardLadderReserved = React.memo(function GuardLadderReserved(props: Readonly<{ lead: React.ReactNode }>) {
     const { theme } = useUnistyles();
     const layout = useMachineTabCompactLayout();
-    const figure = <HappierSkeletonBlock color={theme.colors.border.default} width={88} height={12} />;
+    const figure = <HappierSkeletonBlock color={theme.colors.surface.skeleton} width={88} height={12} />;
     return (
         <View testID="machine-guard-ladder-reserved" onLayout={layout.onLayout} accessibilityRole="list" accessibilityLabel={t('machineGuard.ladder.label')}>
             <View style={[styles.row, styles.divider]}>

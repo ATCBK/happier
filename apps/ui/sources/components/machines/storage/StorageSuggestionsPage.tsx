@@ -28,7 +28,7 @@ import {
 } from './StorageCollectToggle';
 import { StorageItemRow } from './StorageItemRow';
 import { StoragePileDock } from './StoragePileDock';
-import { describeStorageVerdict } from './storageReasonPresentation';
+import { describeStorageVerdict, storageEvidenceLabel } from './storageReasonPresentation';
 import { StorageVolumeRow } from './StorageVolumes';
 import { selectStorageHeadlineVolume } from './storageViewModel';
 
@@ -116,7 +116,8 @@ export const StorageSuggestionsPage = React.memo(
               testID="machine-storage-suggestions-offline"
               kind="unavailable"
               size="line"
-              title={t('machineStorage.states.offlineEmpty', { machine: props.machineName })}
+              title={t('machineStorage.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineStorage.states.offlineReason')}
             />
           </ItemGroup>
         ) : !ready && GROUPS.every((group) => lists[group].status !== 'error' && !lists[group].offline) ? (
@@ -193,7 +194,7 @@ function describeSuggestionEvidence(
 ): string {
   return (
     item.evidence.length > 0
-      ? item.evidence
+      ? item.evidence.map(storageEvidenceLabel)
       : [formatPathRelativeToHome(item.path, homeDir)]
   ).join(' · ');
 }

@@ -22,7 +22,7 @@ import { describeStorageCategoryFacts } from '@/components/machines/storage/stor
 import { useStorageCollect } from '@/components/machines/storage/StorageCollectToggle';
 import { StorageItemRow } from '@/components/machines/storage/StorageItemRow';
 import { StoragePileDock } from '@/components/machines/storage/StoragePileDock';
-import { describeStorageVerdict } from '@/components/machines/storage/storageReasonPresentation';
+import { describeStorageVerdict, storageEvidenceLabel } from '@/components/machines/storage/storageReasonPresentation';
 import { StorageVolumeRow } from '@/components/machines/storage/StorageVolumes';
 import {
   orderStorageCategories,
@@ -896,7 +896,7 @@ function StorageWidgetEasyRows(
           key={item.itemId}
           testID={`${props.testID}.easy.${item.itemId}`}
           title={item.title}
-          evidence={item.evidence.join(' · ')}
+          evidence={item.evidence.map(storageEvidenceLabel).join(' · ')}
           bytes={item.size.allocatedBytes}
           atLeast={item.size.atLeast}
           largest={largest}

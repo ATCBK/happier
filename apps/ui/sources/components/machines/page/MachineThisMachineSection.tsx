@@ -10,6 +10,7 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useSettings } from '@/sync/domains/state/storage';
+import { useWorkspaceRefs } from '@/sync/store/hooks';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { t } from '@/text';
@@ -17,6 +18,13 @@ import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 
 import { useMachinesDoor } from './machinesDoor';
+import {
+    describeMachineAgentsReady,
+    describeMachineDoctorSummary,
+    describeMachineSharingSummary,
+    describeMachineTerminalHost,
+    describeMachineWorkspaces,
+} from './machineThisMachineSummaries';
 import { MACHINE_THIS_MACHINE_PAGES, MACHINE_SUB_PAGE_TITLE_KEYS, type MachineThisMachinePageId } from './machineSubPages';
 
 const ROW_ICONS: Readonly<Record<MachineThisMachinePageId, IconName>> = {
@@ -29,37 +37,6 @@ const ROW_ICONS: Readonly<Record<MachineThisMachinePageId, IconName>> = {
     doctor: 'first-aid-kit',
     details: 'info',
 };
-
-/** "Claude and Codex are ready": the agents the last inventory read found ready, from what the app holds. */
-export function describeMachineAgentsReady(titles: readonly string[]): string | null {
-    if (titles.length === 0) return null;
-    if (titles.length === 1) return t('machineDetailPage.summaries.agentReady', { agent: titles[0]! });
-    if (titles.length === 2) return t('machineDetailPage.summaries.agentsReadyPair', { first: titles[0]!, second: titles[1]! });
-    return t('machineDetailPage.summaries.agentsReadyCount', { count: titles.length });
-}
-
-/** Sharing's row says who it is shared with from what the machine record holds: a machine shared with you names its owner. */
-export function describeMachineSharingSummary(machine: Readonly<{ isShared?: boolean; access?: Readonly<{ custodian: Readonly<{ displayName?: string | null }> }> | null }>): string | undefined {
-    if (machine.isShared) {
-        const owner = machine.access?.custodian.displayName?.trim();
-        return owner ? t('machineDetailPage.summaries.sharedByOwner', { owner }) : t('machineDetailPage.summaries.sharedWithYou');
-    }
-    return undefined;
-}
-
-/** "Checked <time>" from the persisted last Doctor snapshot; a machine never checked has no summary. */
-export function describeMachineDoctorSummary(snapshot: Readonly<{ cachedAt: number }> | null): string | undefined {
-    if (!snapshot) return undefined;
-    return t('machineDetailPage.summaries.doctorChecked', { time: new Date(snapshot.cachedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) });
-}
-
-/** The terminal multiplexer new sessions on this machine open in, by its own name. */
-export function describeMachineTerminalHost(host: ReturnType<typeof resolveTerminalHost>): string {
-    if (host === 'tmux') return 'tmux';
-    if (host === 'zellij') return 'Zellij';
-    if (host === 'herdr') return 'Herdr';
-    return t('machineDetailPage.summaries.terminalDirect');
-}
 
 /**
  * "This machine" (lab `R`, `DD`): the machine's own settings and diagnostics, one row each, every row
@@ -84,6 +61,8 @@ export const MachineThisMachineSection = React.memo(function MachineThisMachineS
         () => describeMachineAgentsReady(agents.agents.filter((agent) => agent.state === 'ready' || agent.state === 'updateAvailable').map((agent) => agent.title)),
         [language, agents.agents],
     );
+    const workspaceRefs = useWorkspaceRefs();
+    const workspaces = React.useMemo(() => describeMachineWorkspaces(workspaceRefs, { machineId, serverId: props.serverId }), [language, machineId, props.serverId, workspaceRefs]);
     const platform = formatOSPlatform(props.machine.metadata?.platform);
     const host = props.machine.metadata?.host?.trim();
 
@@ -106,8 +85,20 @@ export const MachineThisMachineSection = React.memo(function MachineThisMachineS
 
     return (
         <View testID="machine-page-this-machine">
+            {/* Project work leads (plan 10 MPG-8, lab `rv` O): what is worked on here, then the machine's own pages. */}
+            <ItemGroup title={t('machineDetailPage.subPages.work')}>
+                <Item
+                    testID="machine-page-row-work"
+                    // With no workspace the row says what the page holds, never "Project work" again under its own heading.
+                    title={workspaces ? t('machineDetailPage.projectWorkWorkspaces') : t('machineDetailPage.summaries.work')}
+                    subtitle={workspaces ?? undefined}
+                    icon={<Icon name={ROW_ICONS.work} />}
+                    showChevron
+                    onPress={() => open('work')}
+                />
+            </ItemGroup>
             <ItemGroup title={t('machineDetailPage.thisMachineTitle')}>
-                {MACHINE_THIS_MACHINE_PAGES.map((page) => (
+                {MACHINE_THIS_MACHINE_PAGES.filter((page) => page !== 'work').map((page) => (
                     <Item
                         key={page}
                         testID={`machine-page-row-${page}`}

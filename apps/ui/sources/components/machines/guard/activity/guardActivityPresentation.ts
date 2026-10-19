@@ -14,6 +14,11 @@ import { formatGuardClock, formatGuardDuration, guardLevelWord } from '../guardP
 
 export type GuardActivityTone = 'plain' | 'attention' | 'danger';
 
+export type GuardActivityStartFailure = Readonly<{
+    reasonKey: `machineGuard.activity.startFailure.${NonNullable<MachineGuardActivityRowV1['failure']>['reason']}`;
+    nextStepKey: `machineGuard.activity.nextStep.${NonNullable<MachineGuardActivityRowV1['nextStep']>}` | null;
+}>;
+
 export type GuardActivityRowModel = Readonly<{
     id: string;
     at: number;
@@ -22,6 +27,8 @@ export type GuardActivityRowModel = Readonly<{
     /** The bold amount: memory freed, or bytes now in Trash. */
     figure: string | null;
     reason: string | null;
+    /** Typed copy input for the shared row presenter; diagnostics never become its reason. */
+    startFailure: GuardActivityStartFailure | null;
     tone: GuardActivityTone;
     undone: boolean;
     wayBack: readonly MachineGuardActivityWayBackV1[];
@@ -73,6 +80,7 @@ const ICONS: Readonly<Record<MachineGuardActivityRowV1['kind'], IconName>> = {
 
 function reason(entry: MachineGuardActivityRowV1): string | null {
     if (entry.undoneAt !== undefined) return t('machineGuard.activity.undoneAt', { time: formatGuardClock(entry.undoneAt) });
+    if (entry.kind === 'start_failed') return null;
     const parts: string[] = [];
     if (entry.note) parts.push(entry.note);
     else if (entry.kind === 'kept_running') parts.push(t('machineGuard.activity.because.kept_running'));
@@ -108,6 +116,10 @@ export function describeGuardActivityRow(entry: MachineGuardActivityRowV1): Guar
     return {
         id: entry.id, at: entry.at, icon: ICONS[entry.kind], title: title(entry), figure: undone ? null : figure(entry),
         reason: reason(entry), tone: undone ? 'plain' : tone(entry), undone,
+        startFailure: entry.kind === 'start_failed' && entry.failure ? {
+            reasonKey: `machineGuard.activity.startFailure.${entry.failure.reason}`,
+            nextStepKey: entry.nextStep ? `machineGuard.activity.nextStep.${entry.nextStep}` : null,
+        } : null,
         // An undone receipt has no way back left to take.
         wayBack: undone ? [] : entry.wayBack ?? [],
     };
@@ -138,4 +150,27 @@ export function groupGuardActivityByDay(entries: readonly MachineGuardActivityRo
         freedMemoryBytes: dayEntries.reduce((sum, entry) => sum + (entry.undoneAt === undefined && entry.kind !== 'trash_emptied' ? entry.freedBytes ?? 0 : 0), 0),
         inTrashBytes: dayEntries.reduce((sum, entry) => sum + (entry.undoneAt === undefined ? entry.inTrashBytes ?? 0 : 0), 0),
     }));
+}
+
+/**
+ * The Activity summary's figures (lab `rg` G7): memory freed by what Happier stopped, and what is in the
+ * Trash now with its item count. Undone receipts don't count; a move the Trash has since emptied no longer
+ * counts under "In Trash".
+ */
+export function summarizeGuardActivity(entries: readonly MachineGuardActivityRowV1[]): Readonly<{
+    freedBytes: number;
+    inTrashBytes: number;
+    trashItems: number;
+}> {
+    let freedBytes = 0;
+    let inTrashBytes = 0;
+    let trashItems = 0;
+    for (const entry of entries) {
+        if (entry.undoneAt !== undefined) continue;
+        if (entry.kind !== 'trash_emptied') freedBytes += entry.freedBytes ?? 0;
+        if (entry.kind !== 'trash_moved' || (entry.inTrashBytes ?? 0) <= 0) continue;
+        inTrashBytes += entry.inTrashBytes ?? 0;
+        trashItems += entry.subject?.kind === 'trash' ? entry.subject.items : 0;
+    }
+    return { freedBytes, inTrashBytes, trashItems };
 }

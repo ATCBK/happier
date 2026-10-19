@@ -24,8 +24,10 @@ export function collectMachineAttention(groups: readonly ActiveSelectionMachineG
     entries: readonly MachineAttentionEntry[];
     reportingCount: number;
     onlineCount: number;
+    reportingMachineKeys: readonly string[];
 }> {
     const entries: MachineAttentionEntry[] = [];
+    const reportingMachineKeys: string[] = [];
     let onlineCount = 0;
     for (const group of groups) {
         const names = resolveMachineDisplayNames(group.machines);
@@ -36,6 +38,7 @@ export function collectMachineAttention(groups: readonly ActiveSelectionMachineG
             if (online) onlineCount += 1;
             const published = online ? readMachinePublishedResources(machine.daemonState) : null;
             if (!published) continue;
+            if (published.vitals.state === 'reporting') reportingMachineKeys.push(JSON.stringify([group.serverId, machine.id]));
             entries.push({
                 key: JSON.stringify([group.serverId, machine.id]),
                 serverId: group.serverId,
@@ -47,5 +50,5 @@ export function collectMachineAttention(groups: readonly ActiveSelectionMachineG
             });
         }
     }
-    return { entries, reportingCount: entries.length, onlineCount };
+    return { entries, reportingCount: entries.length, onlineCount, reportingMachineKeys };
 }

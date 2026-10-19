@@ -2,11 +2,14 @@ import * as React from 'react';
 
 import { MachineVitalsOverview } from '@/components/machines/vitals/MachineVitalsOverview';
 import { ManagedEnrolledMachineSectionsView } from '@/components/settings/machines/managed/ManagedMachineSections';
+import { managedPowerExplainsOffline } from '@/components/settings/machines/managed/managedCreationPresentation';
 import { splitHappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 
+import { MachineCapabilitiesSection } from './MachineCapabilitiesSection';
 import { MachineThisMachineSection } from './MachineThisMachineSection';
 import { MachineResourcesAskBlock } from '@/components/machines/resources/ask/MachineResourcesAskBlock';
 import { useMachinePageState } from './machinePageContext';
@@ -32,9 +35,11 @@ function offlineHelpPoints() {
 export function MachineOverview(props: MachinePageTabBodyProps) {
     const { target, managedEnrolled, reload } = useMachinePageState();
     const machine = target.machine;
+    const { binding } = useServerCredentialAccountScopeBinding(target.serverId);
+    const machineAccountScope = binding?.isCurrent() ? binding.scope : null;
     const canSpawn = React.useMemo(
-        () => canAttemptMachineSpawn({ machine: machine ?? undefined, selectedMachineId: props.machineId }),
-        [machine, props.machineId],
+        () => target.online && canAttemptMachineSpawn({ machine: machine ?? undefined, selectedMachineId: props.machineId, scope: machineAccountScope }),
+        [machine, props.machineId, machineAccountScope, target.online],
     );
     // The unavailable banner's Retry: the page's reload, with its own progress on the button. It is
     // not a pull-to-refresh, so it neither records one nor spins the list's refresh control.
@@ -47,18 +52,20 @@ export function MachineOverview(props: MachinePageTabBodyProps) {
             setRetrying(false);
         }
     }, [reload]);
+    const offlineRetry = React.useMemo(() => ({ onPress: () => void retry(), loading: retrying }), [retry, retrying]);
     const { setParams } = props;
     const openProcesses = React.useCallback(() => setParams({ id: 'processes' }), [setParams]);
 
     if (!machine) return null;
     return (
         <>
-            {!canSpawn ? (
+            {/* An offline machine is a fact, not a fault: the vitals body below says it once, in its quiet banner above
+                what the machine last reported (lab `rv` OS 3). Only a machine that is online but still cannot start
+                sessions gets the checks. */}
+            {props.online && !canSpawn ? (
                 <AttentionBanner
                     testID="machine-detail-unavailable"
-                    // An offline machine is a fact, not a fault (lab `rv` OS 3): the neutral tone; amber stays for a
-                    // machine that is online but still cannot start sessions.
-                    tone={props.online ? 'warning' : 'neutral'}
+                    tone="warning"
                     title={t('machineDetailPage.unavailableTitle')}
                     points={offlineHelpPoints()}
                     action={{ label: t('common.retry'), onPress: () => void retry(), loading: retrying, disabled: retrying }}
@@ -71,12 +78,16 @@ export function MachineOverview(props: MachinePageTabBodyProps) {
 
             {/* Plan 20's vitals body: live while this tab is shown, its history and Alerts row. */}
             <MachineVitalsOverview serverId={props.serverId} machine={machine} machineName={props.machineName} online={props.online}
-                rangeInBar={props.barAccessoryShown} onOpenProcesses={openProcesses} />
+                rangeInBar={props.barAccessoryShown} onOpenProcesses={openProcesses} offlineRetry={offlineRetry}
+                offlineExplained={managedPowerExplainsOffline(managedEnrolled.machine)} />
 
             {/* The page answers first; the agent is there when it is not enough (lab `ra` A1). */}
             <MachineResourcesAskBlock serverId={props.serverId} machineId={props.machineId} machineName={props.machineName} />
 
-            {/* Project work (workers, runs, recent sessions, terminals) is This machine's first row and page. */}
+            {/* Skills and MCP servers (Capabilities P8 U8.6): what sessions on this machine get, before This machine. */}
+            <MachineCapabilitiesSection machineId={props.machineId} machineName={props.machineName} offline={!props.online} />
+
+            {/* Project work (the workspaces held here; its page has workers, runs, recent sessions, terminals), then This machine. */}
             <MachineThisMachineSection serverId={props.serverId} machine={machine} />
         </>
     );

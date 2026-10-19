@@ -2,13 +2,13 @@ import * as React from 'react';
 
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
-import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
 import { warmMachineResourceSummaries } from '@/sync/domains/machines/resources/warmMachineResourceSummaries';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { SidebarFooterPopoverButton, type SidebarFooterPopoverContentProps, type SidebarFooterPopoverTrigger } from '../sidebarFooter/SidebarFooterPopoverButton';
@@ -16,7 +16,7 @@ import { SidebarMachinesPopoverContent } from '../sidebarFooter/SidebarMachinesP
 import { RAIL_POPOVER_ROSTER_MAX_HEIGHT_PX, RAIL_POPOVER_WIDE_WIDTH_PX } from '../sidebarFooter/sidebarFooterLayout';
 import { AppRailBadge, AppRailMenuCount } from './AppRailBadge';
 import { APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SIZE_PX } from './appRailMetrics';
-import { buildMachinesRailSeen, useMachinesRailSignal } from './useMachinesRailSignal';
+import { buildMachinesRailSeen, forgetRecoveredMachinesRailReasons, useMachinesRailSignal } from './useMachinesRailSignal';
 
 /**
  * Pointer-enter / keyboard focus on the icon: one one-shot summary read per online machine this app
@@ -29,8 +29,7 @@ function warmUnreadMachineSummaries(): void {
     const scope = selectActiveServerAccountScopeForServer(state.profileScope, serverId);
     const keys = Object.values(state.machines)
         .filter(machine => isMachineVisibleForLaunchSelection(machine) && isMachineSelectableForFleet(scope, machine))
-        .map(machine => ({ serverId, machineId: machine.id, daemonStateVersion: machine.daemonStateVersion }))
-        .filter(key => machineResourceStore.getState({ ...key, view: 'summary' }).snapshot === null);
+        .map(machine => ({ serverId, machineId: machine.id, daemonStateVersion: machine.daemonStateVersion }));
     if (keys.length > 0) fireAndForget(warmMachineResourceSummaries(keys), { tag: 'AppRailMachines.warm' });
 }
 
@@ -54,6 +53,16 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
     // "Since you last looked" compares against the opening before this one, read before this one records itself.
     const seenRef = React.useRef(seen);
     seenRef.current = seen;
+    const previousFleetRef = React.useRef(rail.fleet);
+    React.useEffect(() => {
+        const previous = previousFleetRef.current;
+        previousFleetRef.current = rail.fleet;
+        // A real reporting transition clears recovered reasons. Mounting or changing Account/Home
+        // establishes no recovery fact about the previously observed scope.
+        if (previous === rail.fleet || !areServerAccountScopesEqual(previous.accountScope, rail.fleet.accountScope)) return;
+        const next = forgetRecoveredMachinesRailReasons(rail.fleet, seenRef.current);
+        if (next !== seenRef.current) setSeen(next);
+    }, [rail.fleet, setSeen]);
     const previousGuardSeenAtRef = React.useRef(seen.guardSeenAt);
     const recordSeen = React.useCallback(() => {
         previousGuardSeenAtRef.current = seenRef.current.guardSeenAt;
@@ -80,6 +89,7 @@ export const AppRailMachines = React.memo(function AppRailMachines(props: Readon
                 renderContent={renderMachines}
                 renderTrigger={menuTrigger}
                 selected={props.selected}
+                hoverPreview
                 onOpenIntent={recordSeen}
                 onWarmIntent={warmUnreadMachineSummaries}
             />

@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+
+import { MachineTabSubHead } from '@/components/machines/page/MachineTabSubHead';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import type { IconName } from '@/components/ui/icons/iconRegistry.generated';
@@ -33,25 +35,14 @@ export function StorageSaySection(props: Readonly<{ lead?: string | null; text: 
 }
 
 /**
- * The head of a page behind the Storage tab (lab `rs` `subHead`): the way back, the page's name and its
- * sentence, in the page column. Worktrees, Suggestions, a kind's page and Protected folders share it.
+ * The head of a page behind the Storage tab (lab `rs` `subHead`): the machine tab sub-head with Storage's way back.
+ * Worktrees, Suggestions, a kind's page and Protected folders share it.
  */
 export function StoragePageHead(props: Readonly<{ title: string; onBack: () => void; children?: React.ReactNode }>) {
-    const { theme } = useUnistyles();
     return (
-        <ItemGroup surface="none" header="none">
-            <HappierPressable testID="machine-storage-page-back" accessibilityRole="link" accessibilityLabel={t('machineStorage.page.back')}
-                onPress={props.onBack} style={(state) => [styles.back, state.pressed ? styles.backPressed : null]}>
-                {(state) => (
-                    <>
-                        <Icon name="caret-left" size={14} color={state.hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
-                        <Text style={[styles.backText, state.hovered ? { color: theme.colors.text.primary } : null]}>{t('machineStorage.page.back')}</Text>
-                    </>
-                )}
-            </HappierPressable>
-            <Text accessibilityRole="header" style={styles.title}>{props.title}</Text>
+        <MachineTabSubHead title={props.title} back={{ label: t('machineStorage.page.back'), onPress: props.onBack, testID: 'machine-storage-page-back' }}>
             {props.children}
-        </ItemGroup>
+        </MachineTabSubHead>
     );
 }
 
@@ -82,28 +73,6 @@ const styles = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('meta'),
         color: theme.colors.text.tertiary,
         flex: 1,
-    },
-    back: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        alignSelf: 'flex-start',
-        gap: theme.space.s2,
-        minHeight: 28,
-        marginLeft: -2,
-    },
-    backPressed: {
-        opacity: 0.6,
-    },
-    backText: {
-        ...Typography.default('medium'),
-        ...happierPageTextMetrics('meta'),
-        color: theme.colors.text.secondary,
-    },
-    title: {
-        ...Typography.default('semiBold'),
-        ...happierPageTextMetrics('pageTitle'),
-        color: theme.colors.text.primary,
-        marginTop: theme.space.s4,
     },
     sentence: {
         ...Typography.default(),

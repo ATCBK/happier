@@ -11,7 +11,7 @@ import {
 import { preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 
-import { createMachinesWidgetPresets } from './machinesWidgetPresets';
+import { createMachinesWidgetPresets, selectMachinesPresetMachine } from './machinesWidgetPresets';
 
 const names = { overview: 'Overview', machineHealth: 'Machine health' };
 
@@ -146,5 +146,44 @@ describe('createMachinesWidgetPresets', () => {
     if (group?.kind !== 'group') throw new Error('expected the machine group');
     expect(group.context?.machine).toBeUndefined();
     expect(group.children).toHaveLength(3);
+  });
+});
+
+describe('selectMachinesPresetMachine', () => {
+  const key = (serverId: string, machineId: string) => JSON.stringify([serverId, machineId]);
+  const edge = { serverId: 'home', machineId: 'edge' };
+  const studio = { serverId: 'home', machineId: 'studio' };
+
+  it('pins the machine that needs the person, then this computer, then an online machine (never an unbound preset)', () => {
+    const nl2 = { serverId: 'home', machineId: 'nl2' };
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [nl2], thisComputerMachineId: 'mbp', reportingMachineKeys: [], fleet: { firstOnline: edge, first: studio } })).toEqual(nl2);
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: 'mbp', reportingMachineKeys: [], fleet: { firstOnline: edge, first: studio } }))
+      .toEqual({ serverId: 'home', machineId: 'mbp' });
+    // A browser is no machine. An offline machine's last publication still says "reporting": online wins over it.
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: null, reportingMachineKeys: [key('home', 'studio')], fleet: { firstOnline: edge, first: studio } }))
+      .toEqual(edge);
+    // Every machine is away: one that reported, else the fleet's first machine, still binds the group.
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: null, reportingMachineKeys: [key('home', 'nl2')], fleet: { firstOnline: null, first: studio } }))
+      .toEqual({ serverId: 'home', machineId: 'nl2' });
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: null, reportingMachineKeys: [], fleet: { firstOnline: null, first: studio } }))
+      .toEqual(studio);
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: null, reportingMachineKeys: [] })).toBeNull();
+  });
+
+  it('passes over this computer while it is offline and another machine is online', () => {
+    const fleet = { firstOnline: edge, first: studio, onlineKeys: [key('home', 'edge')] };
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: 'studio', reportingMachineKeys: [key('home', 'studio')], fleet }))
+      .toEqual(edge);
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: 'edge', reportingMachineKeys: [], fleet }))
+      .toEqual(edge);
+    // With nothing online, this computer is still the natural pin.
+    expect(selectMachinesPresetMachine({ presenceLoaded: true, serverId: 'home', needsYou: [], thisComputerMachineId: 'studio', reportingMachineKeys: [],
+      fleet: { firstOnline: null, first: edge, onlineKeys: [] } })).toEqual(studio);
+  });
+
+  it('binds a known online machine while another Home census is still loading', () => {
+    expect(selectMachinesPresetMachine({ presenceLoaded: false, serverId: 'home', needsYou: [],
+      thisComputerMachineId: 'studio', reportingMachineKeys: [key('home', 'studio')],
+      fleet: { firstOnline: edge, first: studio, onlineKeys: [key('home', 'edge')] } })).toEqual(edge);
   });
 });

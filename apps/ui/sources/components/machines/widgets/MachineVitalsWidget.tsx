@@ -38,7 +38,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useMachineVitalsAttribution } from '@/sync/domains/machines/resources/useMachineVitalsAttribution';
 import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
-import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { retryMachineResourceSummaries } from '@/sync/domains/machines/resources/retryMachineResourceSummaries';
 import {
   useMachineResourceSummary,
   type MachineResourceAvailability,
@@ -109,7 +109,7 @@ function VitalsBody(
     enabled: facts.online,
   });
   const availability = useMachineResourceSummary(props.target);
-  const retry = React.useCallback(() => machineResourceStore.retry({ ...props.target, view: 'summary' }), [props.target]);
+  const retry = React.useCallback(() => retryMachineResourceSummaries([props.target]), [props.target]);
   const freshness = resolveSummaryFreshness(availability, facts);
   useMachineWidgetFreshness(freshness, props.testID);
   const open = useOpenMachinePage(props.target);
@@ -593,6 +593,8 @@ function VitalsDetail(
       machineId={props.target.machineId}
       machineName={props.facts.name}
       processes={attribution.processes.answer}
+      processesStatus={attribution.processes.status}
+      offline={!props.facts.online}
       sample={sample}
       logicalCores={vitals.published?.host?.logicalCores ?? null}
       onOpenProcesses={openProcesses}

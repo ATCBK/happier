@@ -38,6 +38,7 @@ describe('machine resource suggestions', () => {
 
     it('offers three last-report prompts offline without targeting the unreachable machine', () => {
         const suggestions = deriveMachineResourceSuggestions({ ...calm, online: false,
+            hasLastReport: true, happierStorageBytes: 0,
             memoryPressure: 'critical', leftBehindCount: 3, guardEnabled: false, automationsEnabled: true });
         expect(suggestions.map((suggestion) => suggestion.kind)).toEqual(['lastReport', 'lastStorageReport', 'notifyWhenBack']);
         expect(suggestions.every((suggestion) => suggestion.fill.placement === null && !suggestion.intent)).toBe(true);
@@ -50,8 +51,21 @@ describe('machine resource suggestions', () => {
 
     it('keeps suggestion identity machine-qualified and fills only text and placement', () => {
         const first = deriveMachineResourceSuggestions(calm);
+        expect(deriveMachineResourceSuggestions({ ...calm, machine: { ...machine } }, first)).toBe(first);
         const second = deriveMachineResourceSuggestions({ ...calm, machine: { ...machine, serverId: 'other-home' } });
         expect(first.map((suggestion) => suggestion.id)).not.toEqual(second.map((suggestion) => suggestion.id));
         expect(first.every((suggestion) => Object.keys(suggestion.fill).sort().join(',') === 'placement,text')).toBe(true);
+        for (const patch of [{ serverId: 'other-home' }, { machineId: 'other-machine' }, { name: 'Laptop' }, { directory: '/other' }]) {
+            const facts = { ...calm, machine: { ...machine, ...patch } };
+            const current = deriveMachineResourceSuggestions(facts);
+            expect(deriveMachineResourceSuggestions(facts, first)).toEqual(current);
+            expect(deriveMachineResourceSuggestions(facts, first)).not.toBe(first);
+        }
+        expect(deriveMachineResourceSuggestions({ ...calm, online: false }, first).every(suggestion => suggestion.fill.placement === null)).toBe(true);
+    });
+
+    it('offers no last-report prompt offline until that report has actually been observed', () => {
+        expect(deriveMachineResourceSuggestions({ ...calm, online: false, hasLastReport: false })
+            .map(suggestion => suggestion.kind)).toEqual(['notifyWhenBack']);
     });
 });

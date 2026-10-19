@@ -62,6 +62,8 @@ it('shows the four biggest owners read-only, closes with the totals, and every w
       sample={sample}
       logicalCores={18}
       processes={answer}
+      processesStatus="ready"
+      offline={false}
       onOpenProcesses={open}
     /></ItemList>,
   );
@@ -100,7 +102,11 @@ it('shows the four biggest owners read-only, closes with the totals, and every w
   expect(open).toHaveBeenCalledTimes(2);
 });
 
-const renderWith = (processes: React.ComponentProps<typeof MachineUsingTheMost>['processes']) => renderScreen(
+const renderWith = (
+  processes: React.ComponentProps<typeof MachineUsingTheMost>['processes'],
+  processesStatus: React.ComponentProps<typeof MachineUsingTheMost>['processesStatus'] = processes ? 'ready' : 'loading',
+  offline = false,
+) => renderScreen(
   <ItemList><MachineUsingTheMost
     serverId="server"
     machineId="machine"
@@ -108,6 +114,8 @@ const renderWith = (processes: React.ComponentProps<typeof MachineUsingTheMost>[
     sample={sample}
     logicalCores={18}
     processes={processes}
+    processesStatus={processesStatus}
+    offline={offline}
     onOpenProcesses={() => {}}
   /></ItemList>,
 );
@@ -123,4 +131,20 @@ it('keeps its place with one quiet line when nothing Happier started is running,
 
   const failed = await renderWith({ ...createProcessesAnswer(), state: 'unavailable' as const });
   expect(failed.findByTestId('machine-using-the-most-unavailable')).toBeTruthy();
+});
+
+it('does not keep reading after the Processes read failed, and does not call a failed read empty', async () => {
+  for (const status of ['error', 'unavailable', 'not_supported'] as const) {
+    const failed = await renderWith(null, status);
+    expect(failed.findByTestId('machine-using-the-most-reading')).toBeNull();
+    expect(failed.findByTestId('machine-using-the-most-empty')).toBeNull();
+    expect(failed.findByTestId('machine-using-the-most-unavailable')).toBeTruthy();
+  }
+});
+
+it('says an offline machine has no census to read, instead of calling it a failed read or still reading', async () => {
+  const offline = await renderWith(null, 'unavailable', true);
+  expect(offline.findByTestId('machine-using-the-most-offline')).toBeTruthy();
+  expect(offline.findByTestId('machine-using-the-most-unavailable')).toBeNull();
+  expect(offline.findByTestId('machine-using-the-most-reading')).toBeNull();
 });

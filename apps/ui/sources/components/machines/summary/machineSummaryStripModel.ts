@@ -1,4 +1,5 @@
 import type { MachineResourceSummaryV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+import type { MachineMemoryPressureSourceV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { t } from '@/text';
@@ -57,6 +58,18 @@ function formatRate(bps: number): string {
     return t('machineSummary.rate', { value: formatHappierDataBytes(bps, { kind: 'storage' }) });
 }
 
+const MEMORY_PRESSURE_SOURCE_KEYS = {
+    kernel_level: 'machineVitals.memory.source.kernel',
+    psi: 'machineVitals.memory.source.estimated',
+    events: 'machineVitals.memory.source.estimated',
+    none: 'machineVitals.memory.source.none',
+} as const;
+
+/** The same provenance wording for the full Memory tile and every summary. Omission is unknown. */
+export function formatMachineMemoryPressureSource(source: MachineMemoryPressureSourceV1 | undefined): string | null {
+    return source === undefined ? null : t(MEMORY_PRESSURE_SOURCE_KEYS[source]);
+}
+
 /**
  * The instruments of one summary, by the value convention (R7, R9, MPG-20): CPU percent in use; memory and
  * disk free, with the pressure word when memory is not calm; bars and rings fill by used; network is the
@@ -71,6 +84,9 @@ export function buildMachineSummaryInstruments(summary: MachineResourceSummaryV1
     const pressureWord = memory.pressure === 'critical' ? t('machineSummary.pressure.critical')
         : memory.pressure === 'elevated' ? t('machineSummary.pressure.elevated') : null;
     const memoryFree = memory.availableBytes !== null ? formatHappierDataBytes(memory.availableBytes, { kind: 'memory' }) : null;
+    const memoryExact = memoryFree === null ? null : memory.availableBytes !== null && memory.totalBytes !== null
+        ? t('machineSummary.exact.memory', { free: memoryFree, used: formatHappierDataBytes(Math.max(0, memory.totalBytes - memory.availableBytes), { kind: 'memory' }) })
+        : t('machineSummary.exact.memoryFree', { free: memoryFree });
     const disk = summary.disk;
     const diskUsed = disk.availableBytes !== null && disk.totalBytes !== null && disk.totalBytes > 0
         ? Math.max(0, Math.min(1, 1 - disk.availableBytes / disk.totalBytes)) : null;
@@ -93,9 +109,7 @@ export function buildMachineSummaryInstruments(summary: MachineResourceSummaryV1
             used: memoryUsed,
             line: scaleLine(memory.series, 100),
             tone: memory.tone,
-            exact: memoryFree === null ? null : memory.availableBytes !== null && memory.totalBytes !== null
-                ? t('machineSummary.exact.memory', { free: memoryFree, used: formatHappierDataBytes(Math.max(0, memory.totalBytes - memory.availableBytes), { kind: 'memory' }) })
-                : t('machineSummary.exact.memoryFree', { free: memoryFree }),
+            exact: memoryExact === null ? null : [memoryExact, formatMachineMemoryPressureSource(memory.pressureSource)].filter(Boolean).join(', '),
         },
         disk: {
             metric: 'disk',

@@ -14,7 +14,7 @@ import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
-import type { MachinesWidgetPresetMachine } from './machinesWidgetPresets';
+import { selectMachinesPresetMachine, type MachinesWidgetPresetMachine } from './machinesWidgetPresets';
 import { useMachinesWidgetAreaBinding } from './useMachinesWidgetAreaBinding';
 
 /**
@@ -22,21 +22,26 @@ import { useMachinesWidgetAreaBinding } from './useMachinesWidgetAreaBinding';
  * "Overview · Your layout · only you see it" with the platform's one Add/Customize, the shared frame and its
  * Reset/Undo line when edited. Its default is the static preset; every edit is the platform's layout owner.
  */
-export function MachinesDashboardArea() {
+export function MachinesDashboardArea(props: Readonly<{
+  /** The fleet as the page lists it (its first online machine, its first machine): binds the preset's group. */
+  fleet: Readonly<{ firstOnline: MachinesWidgetPresetMachine | null; first: MachinesWidgetPresetMachine | null; onlineKeys: readonly string[]; presenceLoaded: boolean }>;
+}>) {
   const language = usePreferredLanguage();
   const viewer = useActiveServerAccountScope();
   const { serverId } = useActiveServerSnapshot();
   const attention = useMachineResourceFleetAttention();
   const thisComputer = useThisComputerMachineId();
-  const pinnedMachine =
-    React.useMemo((): MachinesWidgetPresetMachine | null => {
-      const first = attention.needsYou[0];
-      if (first?.serverId)
-        return { serverId: first.serverId, machineId: first.machineId };
-      return thisComputer && serverId
-        ? { serverId, machineId: thisComputer }
-        : null;
-    }, [attention.needsYou, serverId, thisComputer]);
+  const pinnedMachine = React.useMemo(
+    () => selectMachinesPresetMachine({
+      serverId: serverId ?? null,
+      presenceLoaded: props.fleet.presenceLoaded,
+      needsYou: attention.needsYou,
+      thisComputerMachineId: thisComputer ?? null,
+      reportingMachineKeys: attention.reportingMachineKeys,
+      fleet: props.fleet,
+    }),
+    [attention.needsYou, attention.reportingMachineKeys, props.fleet, serverId, thisComputer],
+  );
   const names = React.useMemo(
     () => ({
       overview: t('machines.widgets.body.presets.overview'),

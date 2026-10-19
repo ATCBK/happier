@@ -30,7 +30,8 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useMachineProcesses } from '@/sync/domains/machines/processes/useMachineProcesses';
-import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { EMPTY_MACHINE_RESOURCE_STATE, machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { useMachineDaemonReadTarget } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
 import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { t } from '@/text';
@@ -158,22 +159,22 @@ function useMachineSample(
     [machineId, serverId],
   );
   useMachineResourceLiveDemand(keys, { detail: 'summary', enabled: online });
+  const target = useMachineDaemonReadTarget({ serverId, machineId, online });
   const key = React.useMemo(
-    () => ({ machineId, serverId, view: 'summary' as const }),
-    [machineId, serverId],
+    () => ({ ...target.key, view: 'summary' as const }),
+    [target.key],
   );
   const subscribe = React.useCallback(
     (listener: () => void) => machineResourceStore.observe(key, listener),
     [key],
   );
   const getSnapshot = React.useCallback(
-    () => machineResourceStore.getState(key),
-    [key],
+    () => target.accountMatches ? machineResourceStore.getState(key) : EMPTY_MACHINE_RESOURCE_STATE,
+    [key, target.accountMatches],
   );
-  return (
-    React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot).snapshot
-      ?.sample ?? null
-  );
+  const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // CPU busy has legitimate gaps between samples; the summary retains the last measured figure.
+  return { sample: state.snapshot?.sample ?? null, cpuBusyPct: state.summary?.cpu.busyPct ?? null };
 }
 
 /**
@@ -238,7 +239,7 @@ function MachineProcessesTree(
     ...(detailRef ? { detailToken: detailRef } : {}),
   });
   const answer = processes.answer?.state === 'live' ? processes.answer : null;
-  const sample = useMachineSample(serverId, machineId, online);
+  const { sample, cpuBusyPct } = useMachineSample(serverId, machineId, online);
   const titles = useProcessOwnerTitles(answer?.owners, serverId);
   const recipient = answer?.othersWork !== undefined;
   // `filter=leftBehind` (a widget's Clean up): only Left behind, while there is any; otherwise the whole list.
@@ -772,6 +773,7 @@ function MachineProcessesTree(
   const tiles = (
     <ProcessesTiles
       sample={sample}
+      cpuBusyPct={cpuBusyPct}
       attention={published?.attention ?? null}
       happierBytes={answer?.totals.happier.memoryBytes ?? null}
       happierCount={answer?.totals.happier.processCount ?? 0}
@@ -871,6 +873,8 @@ function MachineProcessesTree(
           />
         </ItemGroup>
       ) : null}
+      {/* The table's sheet sits one toolbar gap under the blocks above it, as one composition (lab `rp` H). */}
+      <View style={styles.headerEnd} />
     </ListPresentationProvider>
   );
   const empty = allOff ? (
@@ -1005,11 +1009,14 @@ function LeavingRow(
   );
 }
 
-const PHONE_HEADER_SLOTS: CollectionHeaderSlots = { search: null, selection: null, pageActions: null };
+const PHONE_HEADER_SLOTS: CollectionHeaderSlots = { title: null, search: null, selection: null, pageActions: null };
 const LIVE = { kind: 'live' } as const;
 const PAUSED = { kind: 'paused' } as const;
 
 const styles = StyleSheet.create((theme) => ({
+  headerEnd: {
+    height: theme.space.s12,
+  },
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',

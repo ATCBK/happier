@@ -15,7 +15,8 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { MachineVitalsRange } from '@/sync/domains/machines/resources/machineRpc';
 import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
 import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
-import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { EMPTY_MACHINE_RESOURCE_STATE, machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { useMachineDaemonReadTarget } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { resolveMetricWarningTone } from '@/components/machines/vitals/machineVitalsPresentation';
 import { t } from '@/text';
 
@@ -172,9 +173,10 @@ function MetricSmall(
   const machineAvailability = useMachineResourceSummary(props.target);
   // The summary transport already retains the full sample. Selection is a passive projection of
   // those same bytes, not a second live demand or an overview/history read for a Small widget.
-  const key = React.useMemo(() => ({ ...props.target, view: 'summary' as const }), [props.target]);
+  const readTarget = useMachineDaemonReadTarget(props.target);
+  const key = React.useMemo(() => ({ ...readTarget.key, view: 'summary' as const }), [readTarget.key]);
   const subscribe = React.useCallback((listener: () => void) => machineResourceStore.observe(key, listener), [key]);
-  const getSnapshot = React.useCallback(() => machineResourceStore.getState(key), [key]);
+  const getSnapshot = React.useCallback(() => readTarget.accountMatches ? machineResourceStore.getState(key) : EMPTY_MACHINE_RESOURCE_STATE, [key, readTarget.accountMatches]);
   const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const availability = React.useMemo(() => {
     if (machineAvailability?.kind !== 'reporting' || !machineAvailability.summary) return machineAvailability;

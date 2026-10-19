@@ -44,6 +44,7 @@ const { machineStorageStore } =
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { MachineStorageWidget } = await import('./MachineStorageWidget');
 const { MachineWorktreesWidget } = await import('./MachineWorktreesWidget');
+const { t } = await import('@/text');
 
 const GB = 1_000_000_000;
 const size = (bytes: number) => ({
@@ -62,7 +63,7 @@ const suggestion = (
   kind: 'suggestion',
   categoryId: 'caches',
   title,
-  evidence: ['Downloads again'],
+  evidence: ['managed_cache_root'],
   path: `/Users/leeroy/Library/Caches/${itemId}`,
   size: size(5 * GB),
   verdict,
@@ -117,7 +118,7 @@ const worktree = (
   kind: 'worktree',
   categoryId: 'worktrees',
   title,
-  evidence: ['Merged 3 weeks ago'],
+  evidence: ['scm_registered_worktree'],
   path: `/Users/leeroy/dev/happier/.dev/worktree/${title}`,
   size: size(6 * GB),
   verdict,
@@ -271,6 +272,8 @@ describe('Machine storage widgets', () => {
     expect(text).toContain('can be deleted');
     expect(text).toContain('glass-v2');
     expect(text).not.toContain('materialized');
+    expect(text).not.toContain('scm_registered_worktree');
+    expect(text).toContain(t('machineStorage.evidence.scm_registered_worktree'));
     await act(async () => {
       screen.pressByTestId('widget.review');
     });

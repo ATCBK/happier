@@ -65,7 +65,6 @@ export const NetworkTile = React.memo(function NetworkTile(
           id: String(point.t),
           x: point.t,
           y: point.rxBps,
-          label: formatVitalsPointTime(point.t),
         })),
       },
       {
@@ -77,7 +76,6 @@ export const NetworkTile = React.memo(function NetworkTile(
           id: String(point.t),
           x: point.t,
           y: point.txBps === null ? null : -point.txBps,
-          label: formatVitalsPointTime(point.t),
         })),
       },
     ];
@@ -196,7 +194,7 @@ export const NetworkTile = React.memo(function NetworkTile(
           label={t('machineVitals.network.chartLabel')}
           timeline={props.timeline}
           series={chart.series}
-          variant="line"
+          variant="area"
           mirrored
           domain={chart.domain}
           scaleTicks={chart.ticks}

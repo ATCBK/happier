@@ -2,13 +2,39 @@ import * as React from 'react';
 import { describe, expect, it } from 'vitest';
 
 import { StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
+import { MachineResourceSummaryV1Schema, projectMachineResourceSummaryV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+import { MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 
 import { renderScreen } from '@/dev/testkit';
+import { Tooltip } from '@/components/ui/overlays/Tooltip';
+import { t } from '@/text';
 
 import { MachineSummaryStrip } from './MachineSummaryStrip';
 import { MACHINE_SUMMARY_PREVIEW } from './machineSummaryPreview';
 
 describe('MachineSummaryStrip', () => {
+    it.each([
+        { layout: 'under', source: 'kernel_level', key: 'kernel' },
+        { layout: 'inline', source: 'psi', key: 'estimated' },
+        { layout: 'cells', source: 'events', key: 'estimated' },
+        { layout: 'fact', source: 'none', key: 'none' },
+        { layout: 'tiles', source: 'kernel_level', key: 'kernel' },
+    ] as const)('carries producer pressure provenance into $layout hover and accessible text', async ({ layout, source, key }) => {
+        const snapshot = MachineVitalsSnapshotV1Schema.parse({
+            state: 'reporting', sample: { v: 1, sampledAt: 60_000, intervalMs: 15_000,
+                cpu: { reported: false, reason: 'unavailable' },
+                memory: { reported: true, totalBytes: 8 * 1024 ** 3, availableBytes: 6 * 1024 ** 3, usedBytes: 2 * 1024 ** 3,
+                    pressure: { level: source === 'none' ? 'not_reported' : 'calm', source } },
+                disk: { reported: false, reason: 'unavailable' }, network: { reported: false, reason: 'unavailable' } },
+            series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] },
+        });
+        const summary = MachineResourceSummaryV1Schema.parse(projectMachineResourceSummaryV1(snapshot));
+        const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={{ kind: 'reporting', summary, freshness: 'live' }}
+            style="bars" metrics={['memory']} layout={layout} />);
+        const provenance = t(`machineVitals.memory.source.${key}`);
+        expect(screen.findByTestId('strip')?.props.accessibilityLabel).toContain(provenance);
+        expect(screen.findAll(node => node.type === Tooltip).some(node => String(node.props.label).includes(provenance))).toBe(true);
+    });
     it('draws nothing with no metric shown: rows show the machine name only (R42.6)', async () => {
         const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={MACHINE_SUMMARY_PREVIEW.calm} style="sparklines" metrics={[]} layout="under" />);
         // The component itself carries the id; no host view is drawn for it.
@@ -23,12 +49,20 @@ describe('MachineSummaryStrip', () => {
         expect(label).toContain('310 GB');
     });
 
-    it('leaves a list row\'s name its width: on the name\'s line one instrument stands, chosen metrics beyond it yield', async () => {
-        const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={MACHINE_SUMMARY_PREVIEW.calm} style="bars" metrics={['cpu', 'memory', 'disk']} layout="inline" />);
+    it('draws every chosen instrument on the name\'s line in a list row (lab `rm` R): three small lines, no figures', async () => {
+        const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={MACHINE_SUMMARY_PREVIEW.calm} style="sparklines" metrics={['cpu', 'memory', 'disk']} layout="inline" />);
         const label = String(screen.findByTestId('strip')?.props.accessibilityLabel);
         expect(label).toContain('4%');
-        expect(label).not.toContain('19 GB');
-        expect(label).not.toContain('310 GB');
+        expect(label).toContain('19 GB');
+        expect(label).toContain('310 GB');
+        expect(screen.getTextContent()).not.toContain('GB');
+    });
+
+    it('leaves a list row\'s name its width when numbers are the style: one figure stands, the metric in trouble first', async () => {
+        const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={MACHINE_SUMMARY_PREVIEW.calm} style="numbers" metrics={['cpu', 'memory', 'disk']} layout="inline" />);
+        expect(screen.getTextContent()).toContain('4%');
+        expect(screen.getTextContent()).not.toContain('19 GB');
+        expect(screen.getTextContent()).not.toContain('310 GB');
     });
 
     it('keeps its slots without figures while the values are not held yet, never saying zero', async () => {

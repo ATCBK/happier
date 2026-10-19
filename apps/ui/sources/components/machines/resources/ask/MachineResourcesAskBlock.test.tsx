@@ -9,8 +9,9 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { t } from '@/text';
 import type { NewSessionEmbeddedHost } from '@/components/sessions/new/navigation/newSessionHost';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
-it('fills the global draft from offline last-report prompts without sending or selecting the offline machine', async () => {
+it('offers only the return notification without a last report and fills the global draft without sending', async () => {
     await prepareSessionDraftPersistenceStorage();
     const serverId = 'srv_offline_prompts';
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://offline-prompts.example.test', serverIdentityId: serverId });
@@ -22,7 +23,8 @@ it('fills the global draft from offline last-report prompts without sending or s
     const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
     expect(screen.root.findAllByType(NewSessionEmbeddedHostProvider)).toHaveLength(0);
     const scope = captureActiveServerAccountScopeLifetime()!.scope;
-    for (const kind of ['lastReport', 'lastStorageReport', 'notifyWhenBack']) {
+    expect(list().props.suggestions.map((entry: { kind: string }) => entry.kind)).toEqual(['notifyWhenBack']);
+    for (const kind of ['notifyWhenBack']) {
         const suggestion = list().props.suggestions.find((entry: { kind: string }) => entry.kind === kind);
         expect(suggestion).toBeDefined();
         const testId = `hub-composer.suggestion.${suggestion.id}`;
@@ -90,12 +92,140 @@ const { machineStorageStore } = await import('@/sync/domains/machines/storage/ma
 const { machineProcessesStore } = await import('@/sync/domains/machines/processes/machineProcessesStore');
 const { warmMachineResourceSummaries } = await import('@/sync/domains/machines/resources/warmMachineResourceSummaries');
 const { MachineResourcesAskBlock } = await import('./MachineResourcesAskBlock');
+const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { NewSessionEmbeddedHostProvider } = await import('@/components/sessions/new/navigation/newSessionHost');
 const { useNewSessionMachinePathState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionMachinePathState');
 const { useNewSessionServerTargetState } = await import('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState');
 const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+
+it('keeps the presented Ask launch model quiet across unrelated resource publications and heartbeats', async () => {
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { HappierStorageSummaryV1Schema } = await import('@happier-dev/protocol/storage/storageV1');
+    const { MachineProcessesAnswerV1Schema } = await import('@happier-dev/protocol/machines/processes/machineProcessesV1');
+    const { MachineResourcesPolicyV1Schema } = await import('@happier-dev/protocol/machines/resources/machineResourcesPolicyV1');
+    const { composeMachineResourceAttentionV1, deriveMachineVitalsAttentionV1 } = await import('@happier-dev/protocol/machines/vitals/machineVitalsAttentionV1');
+    await prepareSessionDraftPersistenceStorage();
+    const serverId = 'srv_ask_tick_locality';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://ask-tick-locality.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
+    const sampledAt = Date.now();
+    const machine = createMachineFixture({ id: 'ask-tick-locality', active: true, activeAt: sampledAt, metadata: {
+        ...createMachineFixture().metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: false } } }),
+    } });
+    storage.setState({ isDataReady: true, isSessionDraftsReady: true, machines: { [machine.id]: machine },
+        machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    let at = sampledAt;
+    let memoryPressure: 'calm' | 'elevated' = 'calm';
+    let diskAvailableBytes = 50_000_000_000;
+    let happierStorageBytes = 4_000_000_000;
+    rpc.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return HappierStorageSummaryV1Schema.parse({ revision: at, sizedAt: at, volumes: [], categories: [
+            { categoryId: 'caches', size: { allocatedBytes: happierStorageBytes, freesBytes: happierStorageBytes,
+                sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false }, count: 1, canGoBytes: happierStorageBytes, detailFacts: {} },
+        ], suggestionsTop: [],
+            pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: at },
+            wholeDisk: { enabled: false, scans: [] } })
+        if (method === RPC_METHODS.MACHINES_PROCESSES_LIST) return MachineProcessesAnswerV1Schema.parse({ v: 1, machineId: machine.id, capturedAtMs: at, state: 'live',
+            platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
+            totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 0, memoryBytes: 0 } } })
+        const sample: MachineVitalsSampleV1 = {
+        v: 1, sampledAt: at, intervalMs: 2_000, cpu: { reported: true, busyPct: at % 100 },
+        memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: memoryPressure, source: 'psi' } },
+        disk: { reported: true, homeVolumeId: 'home', volumes: [{ id: 'home', label: 'Home', mount: '/home',
+            totalBytes: 100_000_000_000, availableBytes: diskAvailableBytes }] }, network: { reported: true, rxBps: 12, txBps: 3 },
+        };
+        return { state: 'reporting', sample, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] },
+            attention: composeMachineResourceAttentionV1([deriveMachineVitalsAttentionV1({ recent: [sample], previous: [], nearlyFull: { freeFraction: 0.1 } })]) };
+    });
+    // Keep the actual store writers and passive subscriptions beneath the transport boundary.
+    const accountId = captureActiveServerAccountScopeLifetime()!.scope.accountId;
+    const storageKey = { serverId, machineId: machine.id, expectedAccountId: accountId };
+    const processKey = { serverId, machineId: machine.id, accountId, scope: 'happier' as const, view: 'tree' as const };
+    await warmMachineResourceSummaries([{ serverId, machineId: machine.id }]);
+    await machineStorageStore.read(storageKey);
+    await machineProcessesStore.read(processKey);
+    const modelModule = await import('@/components/sessions/new/hooks/useNewSessionScreenModel');
+    const model = vi.spyOn(modelModule, 'useNewSessionScreenModel'); // Calls through the real model.
+    onTestFinished(() => model.mockRestore());
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId={machine.id} machineName="Laptop" />);
+    const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
+    const suggestions = list().props.suggestions;
+    const host = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
+    const key = { serverId, machineId: machine.id, expectedAccountId: captureActiveServerAccountScopeLifetime()!.scope.accountId, view: 'summary' as const };
+    model.mockClear();
+    const start = performance.now();
+    for (let index = 0; index < 30; index++) {
+        at += 2_000;
+        diskAvailableBytes++;
+        await act(async () => { await machineResourceStore.read(key); });
+    }
+    const tickRenders = model.mock.calls.length;
+    const elapsedMs = performance.now() - start;
+    model.mockClear();
+    // Exercise production publication: the canonical writer owns heartbeat retention,
+    // while FX84/FX86's launch selectors retain unchanged launch choices.
+    for (let index = 1; index <= 5; index++) {
+        await act(async () => storage.getState().applyMachines([{ ...machine, activeAt: sampledAt + index }], false, { sourceServerId: serverId }));
+    }
+    const heartbeatRenders = model.mock.calls.length;
+    model.mockClear();
+    for (let index = 0; index < 5; index++) {
+        at += 2_000;
+        happierStorageBytes++;
+        await act(async () => { await machineStorageStore.read(storageKey); await machineProcessesStore.read(processKey); });
+    }
+    const otherResourceRenders = model.mock.calls.length;
+    console.info('FX89 presented Ask / 30 changing disk values + 5 heartbeats + 5 changing storage totals', {
+        elapsedMs, tickRenders, heartbeatRenders, otherResourceRenders,
+    });
+    expect(list().props.suggestions).toBe(suggestions);
+    expect(screen.root.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(host);
+    expect(tickRenders).toBe(0);
+    expect(heartbeatRenders).toBe(0);
+    expect(otherResourceRenders).toBe(0);
+    // A shown fact must still reach the same retained composer and its suggestion list.
+    model.mockClear();
+    memoryPressure = 'elevated';
+    at += 2_000;
+    await act(async () => { await machineResourceStore.read(key); });
+    expect(list().props.suggestions.some((entry: { kind: string }) => entry.kind === 'memory')).toBe(true);
+    expect(model.mock.calls.length).toBeGreaterThan(0);
+    expect(screen.root.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(host);
+    // A displayed amount refreshes when its formatted value changes, but not for byte-only changes.
+    model.mockClear();
+    happierStorageBytes = 5_000_000_000;
+    at += 2_000;
+    await act(async () => { await machineStorageStore.read(storageKey); });
+    expect(list().props.suggestions.find((entry: { kind: string }) => entry.kind === 'storage').reason)
+        .toBe(t('machineResources.askSuggestions.reasons.storage', { amount: '5 GB' }));
+    expect(model.mock.calls.length).toBeGreaterThan(0);
+    // Memory, disk and Guard fill the three slots: even a differently formatted Storage total is irrelevant.
+    diskAvailableBytes = 9_000_000_000;
+    at += 2_000;
+    await act(async () => { await machineResourceStore.read(key); });
+    expect(list().props.suggestions.map((entry: { kind: string }) => entry.kind)).toEqual(['memory', 'disk', 'guard']);
+    const prioritySuggestions = list().props.suggestions;
+    model.mockClear();
+    diskAvailableBytes++;
+    happierStorageBytes = 7_000_000_000;
+    at += 2_000;
+    await act(async () => { await machineResourceStore.read(key); await machineStorageStore.read(storageKey); });
+    const hiddenStorageRenders = model.mock.calls.length;
+    console.info('FX89 displayed-disk rounding / unshown Storage total', { hiddenStorageRenders });
+    expect(list().props.suggestions).toBe(prioritySuggestions);
+    expect(hiddenStorageRenders).toBe(0);
+    expect(screen.root.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(host);
+    diskAvailableBytes = 8_000_000_000;
+    at += 2_000;
+    await act(async () => { await machineResourceStore.read(key); });
+    expect(list().props.suggestions.find((entry: { kind: string }) => entry.kind === 'disk').reason)
+        .toBe(t('machineResources.askSuggestions.reasons.disk', { amount: '8 GB' }));
+    expect(model.mock.calls.length).toBeGreaterThan(0);
+    expect(screen.root.findByType(NewSessionEmbeddedHostProvider).props.host).toBe(host);
+    await screen.unmount();
+});
 
 it('recovers the mounted Ask composer from canonical presence without requiring a caller update', async () => {
     const serverId = 'srv_presence';
@@ -121,6 +251,7 @@ it('starts Ask on the page machine and home folder before intent, independently 
     const homeDir = machine.metadata?.homeDir;
     storage.setState({ machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
     const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId="machine-a" machineName="Laptop" />);
+    expect(rpc).not.toHaveBeenCalled();
     const host: NewSessionEmbeddedHost = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
     const targetServer = await renderHook((hostTargetServerId: string | undefined) => useNewSessionServerTargetState({
         settings: { ...settingsDefaults, serverSelectionActiveTargetKind: 'server', serverSelectionActiveTargetId: 'home-b' },
@@ -162,6 +293,9 @@ it('starts Ask on the page machine and home folder before intent, independently 
     expect(targetServer.getCurrent().targetServerId).toBe('unavailable-home');
     expect(targetServer.getCurrent().targetServerProfile).toBeNull();
     expect(targetServer.getCurrent().allowedTargetServerIds).toEqual(['unavailable-home']);
+    expect(rpc).not.toHaveBeenCalled();
+    await act(async () => screen.findByTestId('machine-resources-ask.composer')?.props.onPointerEnter());
+    await vi.waitFor(() => expect(rpc.mock.calls.some(([call]) => call.method === 'capabilities.detect')).toBe(true));
     await placement.unmount();
     await targetServer.unmount();
     await screen.unmount();
@@ -172,7 +306,7 @@ afterEach(() => {
     machineResourceStore.reset();
     machineStorageStore.reset();
     machineProcessesStore.reset();
-    storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
+    storage.setState({ sessions: {}, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
     rpc.mockReset();
     routePush.mockReset();
 });
@@ -189,7 +323,9 @@ it('uses warmed Storage and Processes facts without extra reads and suppresses u
     const machine = createMachineFixture({ id: 'machine-warmed', active: true, activeAt: Date.now(), metadata: {
         ...createMachineFixture().metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: true } } }),
     } });
+    const existingSession = createSessionFixture({ id: 'existing-warmed-ask', serverId });
     storage.setState({ isDataReady: true, isSessionDraftsReady: true, machines: { [machine.id]: machine },
+        sessions: { [existingSession.id]: existingSession },
         machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' },
         settings: { ...storage.getState().settings, featureToggles: { ...storage.getState().settings.featureToggles, automations: false } } });
     const accountId = captureActiveServerAccountScopeLifetime()!.scope.accountId;
@@ -208,6 +344,8 @@ it('uses warmed Storage and Processes facts without extra reads and suppresses u
     await machineStorageStore.read({ serverId, machineId: machine.id, expectedAccountId: accountId });
     await machineProcessesStore.read({ serverId, machineId: machine.id, accountId, scope: 'happier', view: 'tree' });
     rpc.mockClear();
+    const resourceMethods = new Set([RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, RPC_METHODS.DAEMON_STORAGE_WATCH,
+        RPC_METHODS.MACHINES_PROCESSES_LIST, RPC_METHODS.DAEMON_PROCESSES_WATCH]);
     const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId={machine.id} machineName="Laptop" />);
     const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
     await vi.waitFor(() => {
@@ -218,13 +356,19 @@ it('uses warmed Storage and Processes facts without extra reads and suppresses u
             .toBe(t('machineResources.askSuggestions.reasons.storage', { amount: '4 GB' }));
         expect(suggestions.some((entry: { kind: string }) => entry.kind === 'weeklyReview')).toBe(false);
     });
+    const sessionsBefore = storage.getState().sessions;
+    expect(sessionsBefore).toEqual({ [existingSession.id]: existingSession });
+    expect(screen.root.findByType(NewSessionEmbeddedHostProvider).props.host.demanded).toBe(false);
+    expect(rpc).not.toHaveBeenCalled();
     const suggestion = list().props.suggestions.find((entry: { kind: string }) => entry.kind === 'leftBehind');
     await screen.pressByTestIdAsync(`hub-composer.suggestion.${suggestion.id}`);
     const host: NewSessionEmbeddedHost = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
     expect(host.params.prompt).toBe(suggestion.fill.text);
     expect(host.params.machineId).toBe(machine.id);
-    expect(rpc).not.toHaveBeenCalled();
-    expect(storage.getState().sessions).toEqual({});
+    expect(host.demanded).toBe(true);
+    // Filling is explicit composer intent: it may load capabilities/catalogs, never resource facts or send a Session.
+    expect(rpc.mock.calls.filter(([call]) => resourceMethods.has(call.method))).toEqual([]);
+    expect(storage.getState().sessions).toBe(sessionsBefore);
     await screen.unmount();
 });
 
@@ -264,6 +408,16 @@ it('mounts Ask with a real warmed summary and reads calm from canonical attentio
             host: { logicalCores: 4, memoryTotalBytes: 100, bootedAt: 1 }, attention: { level: 'needs_you', reasons: [] } } },
     }], true, { sourceServerId: serverId }));
     expect(overviewReason()).toBe(t('machineResources.askSuggestions.reasons.currentReport'));
+    const scope = captureActiveServerAccountScopeLifetime()!.scope;
+    const { recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
+    // A target-unavailable transport result overrides the recent heartbeat through the real presence owner.
+    await act(async () => recordMachineRequestFailed({ ...scope, machineId: machine.id }));
+    const offlineList = screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
+    expect(offlineList.props.suggestions.map((entry: { kind: string }) => entry.kind)).toEqual(['lastReport', 'notifyWhenBack']);
+    const lastReport = offlineList.props.suggestions.find((entry: { kind: string }) => entry.kind === 'lastReport');
+    await screen.pressByTestIdAsync(`hub-composer.suggestion.${lastReport.id}`);
+    const route = routePush.mock.lastCall![0] as { params: { draftId: string } };
+    expect(readNewSessionDraftFromRepository({ scope, draftId: route.params.draftId })?.input).toBe(lastReport.fill.text);
     expect(consoleErrors.mock.calls.filter((args) => args.some((arg) => typeof arg === 'string'
         && /Cannot update a component.*while rendering/.test(arg)))).toEqual([]);
     await screen.unmount();

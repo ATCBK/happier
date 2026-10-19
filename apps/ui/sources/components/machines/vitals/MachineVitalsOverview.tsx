@@ -15,6 +15,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
 import { readMachinePublishedResources } from '@/components/machines/summary/machineResourceSentences';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -64,6 +65,13 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
     rangeInBar?: boolean;
     /** Opens the Processes tab (VU-7's rows and links); without it "Using the most" is left out. */
     onOpenProcesses?: () => void;
+    /**
+     * The page's reload, offered by the one offline banner this body opens with (lab `rv` OS 3): the page states
+     * offline once, here, above what the machine last reported.
+     */
+    offlineRetry?: Readonly<{ onPress: () => void; loading: boolean }>;
+    /** The page already says why it is offline (a created machine that is stopped); no second banner. */
+    offlineExplained?: boolean;
   }>,
 ) {
   const { machine } = props;
@@ -98,6 +106,9 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
       }),
     [overview.history, overview.samples, range],
   );
+  // One axis for the three history tiles, kept by reference so a render that changes nothing they draw leaves them be.
+  const axisLive = view.kind === 'ready' && view.freshness === 'live';
+  const axis = React.useMemo(() => resolveVitalsAxis(range, timeline, axisLive), [axisLive, range, timeline]);
   const { retry } = overview;
   // What Happier uses — processes (plan 30) and what it keeps on each volume (plan 40) — through the one
   // attribution owner, only while this Overview shows a reading.
@@ -107,10 +118,29 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
   const happierBytesByVolume = React.useMemo(() => storageSummary
     ? new Map(storageSummary.volumes.map((entry) => [entry.volume.volumeId, entry.happierBytes])) : null, [storageSummary]);
 
+  // Offline is said once, in a quiet banner above what the machine last reported (lab `rv` OS 3); with nothing
+  // reported this session the banner says that too, and no body follows.
+  const offlineBanner = !props.online && !props.offlineExplained ? (
+    <AttentionBanner
+      testID="machine-vitals-offline"
+      tone="neutral"
+      title={t('machineVitals.states.offlineTitle', { machine: props.machineName })}
+      description={view.kind === 'offline_empty'
+        ? t('machineVitals.states.offlineNeverReported')
+        : t('machineVitals.states.offlineLastReported', { machine: props.machineName })}
+      action={props.offlineRetry ? {
+        label: t('machineVitals.states.tryAgain'),
+        testID: 'machine-vitals-offline-retry',
+        onPress: props.offlineRetry.onPress,
+        loading: props.offlineRetry.loading,
+        disabled: props.offlineRetry.loading,
+      } : null}
+    />
+  ) : null;
+  if (view.kind === 'offline_empty') return offlineBanner;
   if (
     view.kind === 'older_happier' ||
-    view.kind === 'unavailable' ||
-    view.kind === 'offline_empty'
+    view.kind === 'unavailable'
   ) {
     return (
       <MachineVitalsStateCard
@@ -126,6 +156,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
   const freshness = resolveVitalsFreshnessChip(view, retry);
   return (
     <>
+      {offlineBanner}
       {props.rangeInBar ? null : (
         <ItemGroup header="none" surface="none">
           <MachineVitalsRangeBar freshness={freshness} showRange={view.kind === 'ready'} />
@@ -140,11 +171,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
               sample={view.sample}
               host={published?.host ?? null}
               timeline={timeline}
-              axis={resolveVitalsAxis(
-                range,
-                timeline,
-                view.freshness === 'live',
-              )}
+              axis={axis}
               freshness={view.freshness}
               live={range === '1h'}
             />
@@ -153,11 +180,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
               attention={attention}
               timeline={timeline}
               nowMs={Date.now()}
-              axis={resolveVitalsAxis(
-                range,
-                timeline,
-                view.freshness === 'live',
-              )}
+              axis={axis}
               freshness={view.freshness}
               live={range === '1h'}
             />
@@ -166,11 +189,7 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
               sample={view.sample}
               today={overview.history?.today ?? null}
               timeline={timeline}
-              axis={resolveVitalsAxis(
-                range,
-                timeline,
-                view.freshness === 'live',
-              )}
+              axis={axis}
               freshness={view.freshness}
               live={range === '1h'}
             />
@@ -183,6 +202,8 @@ export const MachineVitalsOverview = React.memo(function MachineVitalsOverview(
           machineId={machine.id}
           machineName={props.machineName}
           processes={attribution.processes.answer}
+          processesStatus={attribution.processes.status}
+          offline={!props.online}
           sample={view.sample}
           logicalCores={published?.host?.logicalCores ?? null}
           onOpenProcesses={props.onOpenProcesses}
@@ -219,7 +240,7 @@ function ArrivalFade(props: Readonly<{ enabled: boolean; children: React.ReactNo
 /** Loading (OS 1): the four tiles at their final size with reserved blocks for values and charts. */
 function VitalsLoadingSheet() {
   const { theme } = useUnistyles();
-  const color = theme.colors.border.default;
+  const color = theme.colors.surface.skeleton;
   const block = (width: number | `${number}%`, height: number) => (
     <HappierSkeletonBlock color={color} width={width} height={height} />
   );
