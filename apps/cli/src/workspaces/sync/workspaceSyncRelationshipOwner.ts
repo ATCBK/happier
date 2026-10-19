@@ -182,6 +182,14 @@ function mutationFailure(result: ProjectAccountSnapshotMutationResult): Error & 
   return ownerError('workspace_sync_settings_unavailable', `Workspace relationship settings mutation failed: ${result.status}`);
 }
 
+/** Codes by which runtime reconciliation says an endpoint is not ready yet, not that the request failed. */
+const RECONCILING_REFUSAL_CODES: ReadonlySet<string> = new Set(['peer_unavailable', 'relationship_not_ready', 'agent_unavailable']);
+
+function isReconcilingRefusal(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && typeof error.code === 'string' && RECONCILING_REFUSAL_CODES.has(error.code);
+}
+
 function isIndeterminate(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'indeterminate';
 }
@@ -313,7 +321,16 @@ export function createWorkspaceSyncRelationshipOwner(
       throw mutationFailure(result);
     }
 
-    await options.waitForProjectReconciliation(settingsVersion, signal);
+    try {
+      await options.waitForProjectReconciliation(settingsVersion, signal);
+    } catch (error) {
+      // The request is committed. While the sync agent restarts, runtime
+      // reconciliation refuses with a "not ready yet" code and converges by
+      // itself (the runtime keeps reconciliation required until it succeeds);
+      // the row follows the status projection. Reporting that refusal would tell
+      // the person a request that took effect had failed.
+      if (!isReconcilingRefusal(error)) throw error;
+    }
   };
 
   return Object.freeze({

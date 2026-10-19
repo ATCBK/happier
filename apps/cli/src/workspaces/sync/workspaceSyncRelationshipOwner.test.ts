@@ -575,6 +575,28 @@ describe('WorkspaceSyncRelationshipOwner', () => {
     expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['resume', true],
+    ['pause', false],
+  ] as const)('reports a committed %s as done while the sync agent is still reconciling', async (_label, enabled) => {
+    for (const code of ['peer_unavailable', 'relationship_not_ready', 'agent_unavailable']) {
+      const harness = createHarness();
+      const prepared = await harness.owner.prepareCreate(createInput);
+      await prepared.commit();
+      if (enabled) await harness.owner.setEnabled('relationship_1', false);
+      harness.waitForProjectReconciliation.mockClear();
+      harness.waitForProjectReconciliation
+        .mockRejectedValueOnce(Object.assign(new Error('agent restarting'), { code }));
+
+      await expect(harness.owner.setEnabled('relationship_1', enabled)).resolves.toBeUndefined();
+
+      expect(harness.read().relationships).toEqual([
+        expect.objectContaining({ relationshipId: 'relationship_1', enabled }),
+      ]);
+      expect(harness.waitForProjectReconciliation).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('keeps a settled stop intent when runtime reconciliation fails', async () => {
     const harness = createHarness();
     const prepared = await harness.owner.prepareCreate(createInput);
