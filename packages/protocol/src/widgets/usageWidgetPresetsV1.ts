@@ -4,7 +4,7 @@ import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js
 import { instantiateWidgetLayoutFragmentGroupV1, type WidgetLayoutFragmentDraftV1, type WidgetLayoutFragmentGroupV1 } from './widgetLayoutFragmentV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 import type { WidgetAreaPresetV1 } from './widgetSurfaceArtifactV1.js';
-import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, UsageSourceInventoryScopeSchema, type UsageQuery } from '../inputs/usageQuery.js';
+import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import type { UsageAnalyticsBreakdownDimension } from '../usage/usageAnalyticsContracts.js';
 import type { WidgetSizeV1 } from './widgetPresentationV1.js';
@@ -17,9 +17,9 @@ const defaultNames: Readonly<Record<UsageWidgetPresetId, string>> = {
 };
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
-const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
+const scopeSchema = () => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(lazyZodSchema(() => z.pick(UsageQuerySchema, {
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
-}))), { target: 'draft-7' }));
+})), { target: 'draft-7' }));
 
 type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: 'tokens' | 'cost';
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;
@@ -54,7 +54,7 @@ const arrangements: Readonly<Record<UsageWidgetPresetId, readonly Arrangement[]>
     coach: [{ width: 'full', widgets: [w('usage_coach', 'large')] }],
     'how-you-work': [{ width: 'full', widgets: [w('usage_rhythm', 'full'), w('usage_parallel', 'full'), w('usage_human_loop', 'medium'),
         w('usage_night_shift', 'medium'), w('usage_recap', 'large')] }],
-    sources: [{ width: 'full', widgets: [w('usage_sources', 'large')] }],
+    sources: [{ width: 'full', widgets: [w('usage_sources', 'large'), w('usage_source_coverage', 'medium'), w('usage_unpriced', 'medium')] }],
 };
 
 /** Portable fragments have no placement identities; the platform allocates each host occurrence. */
@@ -77,7 +77,7 @@ export function createUsageWidgetPresetFragments(names: Readonly<Record<UsageWid
                 } } })),
         };
         const applicableScopes = scopes.filter(field => group.children.some(child => Object.hasOwn(child.instance.bindings, field.path)));
-        return { name: names[id], inputs: { fields: applicableScopes.map(field => ({ ...field, required: true })) }, inputSchema: scopeSchema(id === 'sources'), group };
+        return { name: names[id], inputs: { fields: applicableScopes.map(field => ({ ...field, required: true })) }, inputSchema: scopeSchema(), group };
     });
     return fragments as Record<UsageWidgetPresetId, readonly WidgetLayoutFragmentDraftV1[]>;
 }
