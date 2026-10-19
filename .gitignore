@@ -86,6 +86,7 @@ __pycache__/
 # Plugin UI operation and publication staging is target-local and removed on
 # completion; an interrupted build can leave the shared staging parent behind.
 **/.happier-plugin-ui-staging/
+**/.happier-plugin-ui-build-*/
 /.happier-first-party-runner-matrix-*/
 /apps/cli/dist.probe.manual/
 /apps/ui/dist-dperf/
@@ -209,6 +210,14 @@ _.env.pipeline.production.local
 # them so cross-package source tests resolve the workspace SDK.
 /packages/plugin-sdk/.example-builds/
 /packages/protocol/src/**/*.d.ts.map
+# Native source-entry packages consume their authored TypeScript directly.
+/packages/audio-stream-native/src/*.d.ts
+/packages/sherpa-native/src/*.d.ts
+/packages/ssh-native/src/*.d.ts
+# One-off protocol compiler probes are not project configuration.
+/packages/protocol/tsconfig.w23reminders.tmp.json
+/packages/protocol/tsconfig.wilAttest.tmp.json
+/scripts/invite-ui-discovery.tmp.sh
 /packages/protocol/.released-account-scoped-reader-*/
 /apps/ui/scripts/icons/codemod*.mjs
 /apps/ui/scripts/icons/fix*.mjs
