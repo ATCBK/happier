@@ -79,20 +79,9 @@ ENV REDISMS_DISABLE_POSTINSTALL=1
 ENV YARN_CACHE_FOLDER=/tmp/.yarn-cache
 
  COPY package.json yarn.lock ./
-RUN mkdir -p apps/ui apps/server apps/cli apps/website apps/docs packages/agents packages/cli-common packages/connection-supervisor packages/protocol packages/release-runtime packages/transfers packages/audio-stream-native packages/sherpa-native scripts/pipeline/expo
- COPY apps/ui/package.json apps/ui/
- COPY apps/server/package.json apps/server/
- COPY apps/cli/package.json apps/cli/
- COPY apps/website/package.json apps/website/
- COPY apps/docs/package.json apps/docs/
- COPY packages/agents/package.json packages/agents/
- COPY packages/cli-common/package.json packages/cli-common/
- COPY packages/connection-supervisor/package.json packages/connection-supervisor/
- COPY packages/protocol/package.json packages/protocol/
- COPY packages/release-runtime/package.json packages/release-runtime/
- COPY packages/transfers/package.json packages/transfers/
- COPY packages/audio-stream-native/package.json packages/audio-stream-native/
- COPY packages/sherpa-native/package.json packages/sherpa-native/
+COPY patches ./patches
+COPY --parents apps/*/package.json packages/*/package.json packages/plugins/*/package.json ./
+COPY apps/ui/tools/postinstall ./apps/ui/tools/postinstall
 COPY scripts/pipeline/expo/eas-postinstall.mjs scripts/pipeline/expo/
 
 COPY scripts/ci/yarn-install-with-retry.sh /usr/local/bin/yarn-install-with-retry
@@ -283,26 +272,19 @@ ENV HAPPIER_BUILD_DB_PROVIDERS=$HAPPIER_BUILD_DB_PROVIDERS
 ENV HAPPIER_EMBEDDED_POLICY_ENV=$HAPPIER_EMBEDDED_POLICY_ENV
 COPY .github/feature-policy ./.github/feature-policy
 COPY apps/server ./apps/server
-COPY packages/agents ./packages/agents
-COPY packages/cli-common ./packages/cli-common
-COPY packages/protocol ./packages/protocol
-COPY packages/release-runtime ./packages/release-runtime
-RUN yarn workspace @happier-dev/protocol postinstall:real && yarn workspace @happier-dev/agents postinstall:real
-RUN yarn workspace @happier-dev/release-runtime postinstall:real
+COPY packages ./packages
+COPY apps/stack/scripts/utils ./apps/stack/scripts/utils
+RUN yarn workspace @happier-dev/server build:shared
 RUN yarn workspace @happier-dev/server postinstall:real
 RUN yarn workspace @happier-dev/server build
 
-# Compose-backed local stress runs do not need a second copy-heavy runtime stage.
-# Reusing the built workspace directly keeps local rebuilds fast enough to validate fresh code.
-FROM server-builder AS server-stress
-ENV NODE_ENV=production
-ENV PORT=3005
-ENV RUN_MIGRATIONS=1
+# Share the existing production dependency projection between server image variants.
+FROM server-builder AS server-runtime
 RUN node <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const repoRootDir = '/repo';
+const repoRootDir = process.cwd();
 const nodeModulesDir = path.join(repoRootDir, 'node_modules');
 const keepEntries = new Set(['.bin', '.prisma']);
 const visitedPackageJsonPaths = new Set();
@@ -407,6 +389,12 @@ for (const entryName of fs.readdirSync(nodeModulesDir)) {
   }
 }
 NODE
+
+# Compose-backed stress runs reuse the same prepared runtime without a second copy.
+FROM server-runtime AS server-stress
+ENV NODE_ENV=production
+ENV PORT=3005
+ENV RUN_MIGRATIONS=1
 RUN chmod +x /repo/apps/server/scripts/run-server.sh
 RUN mkdir -p /data && chown -R node:node /data
 USER node
@@ -424,13 +412,25 @@ ENV RUN_MIGRATIONS=1
 ARG SENTRY_RELEASE=""
 ENV SENTRY_RELEASE=$SENTRY_RELEASE
 ENV HAPPIER_RELEASE_SOURCE_SHA=$SENTRY_RELEASE
-COPY --from=server-builder --chown=node:node /repo/node_modules /repo/node_modules
-COPY --from=server-builder --chown=node:node /repo/packages/agents /repo/packages/agents
-COPY --from=server-builder --chown=node:node /repo/packages/cli-common /repo/packages/cli-common
-COPY --from=server-builder --chown=node:node /repo/packages/protocol /repo/packages/protocol
-COPY --from=server-builder --chown=node:node /repo/packages/release-runtime /repo/packages/release-runtime
-COPY --from=server-builder --chown=node:node /repo/apps/server /repo/apps/server
-COPY --from=server-builder /repo/apps/server/scripts/run-server.sh /usr/local/bin/run-server
+COPY --from=server-runtime --chown=node:node /repo/node_modules /repo/node_modules
+COPY --from=server-runtime --chown=node:node /repo/apps/server /repo/apps/server
+COPY --from=server-runtime --chown=node:node /repo/packages/agents /repo/packages/agents
+COPY --from=server-runtime --chown=node:node /repo/packages/brand /repo/packages/brand
+COPY --from=server-runtime --chown=node:node /repo/packages/cli-common /repo/packages/cli-common
+COPY --from=server-runtime --chown=node:node /repo/packages/iroh-native /repo/packages/iroh-native
+COPY --from=server-runtime --chown=node:node /repo/packages/peer-mediation /repo/packages/peer-mediation
+COPY --from=server-runtime --chown=node:node /repo/packages/peer-transport /repo/packages/peer-transport
+COPY --from=server-runtime --chown=node:node /repo/packages/plugin-sdk /repo/packages/plugin-sdk
+COPY --from=server-runtime --chown=node:node /repo/packages/plugin-ui /repo/packages/plugin-ui
+COPY --from=server-runtime --chown=node:node /repo/packages/plugins/kiro /repo/packages/plugins/kiro
+COPY --from=server-runtime --chown=node:node /repo/packages/plugins/review-coderabbit /repo/packages/plugins/review-coderabbit
+COPY --from=server-runtime --chown=node:node /repo/packages/plugins/review-deepsec /repo/packages/plugins/review-deepsec
+COPY --from=server-runtime --chown=node:node /repo/packages/privacy-kit /repo/packages/privacy-kit
+COPY --from=server-runtime --chown=node:node /repo/packages/protocol /repo/packages/protocol
+COPY --from=server-runtime --chown=node:node /repo/packages/release-runtime /repo/packages/release-runtime
+COPY --from=server-runtime --chown=node:node /repo/packages/session-core /repo/packages/session-core
+COPY --from=server-runtime --chown=node:node /repo/packages/transfers /repo/packages/transfers
+COPY --from=server-runtime /repo/apps/server/scripts/run-server.sh /usr/local/bin/run-server
 RUN chmod +x /usr/local/bin/run-server
 RUN mkdir -p /data && chown -R node:node /data
 USER node
