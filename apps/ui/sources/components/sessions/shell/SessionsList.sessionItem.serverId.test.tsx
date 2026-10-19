@@ -154,7 +154,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     return createSyncOpsModuleMock({
         importOriginal,
         overrides: {
-            sessionStopWithServerScope: vi.fn(async () => ({ success: true })),
+            sessionStopWithServerScope: vi.fn(async (sessionId: string) => ({ success: true, sessionId, stopped: true as const })),
             sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
             sessionRename: vi.fn(async () => ({ success: true })),
         },

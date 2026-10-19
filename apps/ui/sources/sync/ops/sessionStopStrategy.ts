@@ -14,6 +14,7 @@ import { serverFetch } from '@/sync/http/client';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { StopSessionResultSchema, type StopSessionResult } from '@happier-dev/protocol/sessionStop';
+import type { SessionStopOutcome } from '@happier-dev/protocol/sessions/control/contract';
 import { createRpcCallError, isRpcSessionMachineControlUnavailableError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { readMachineControlTargetForSession, shouldFallbackFromMachineRpc } from './sessionMachineTarget';
 import { log } from '@/log';
@@ -38,7 +39,8 @@ export type DaemonMachineSessionStopAttempt =
     | Readonly<{ type: 'failed'; message: string; errorCode?: string }>;
 
 export type SessionStopStrategyOutcome =
-    | Readonly<{ success: true; effect: 'process_stopped'; method: 'daemon_machine_rpc' | 'session_rpc' }>
+    | Readonly<{ success: true; effect: 'process_stopped'; method: 'daemon_machine_rpc' | 'session_rpc';
+        stopOutcome?: Extract<SessionStopOutcome, { status: 'already_stopped' }> }>
     | Readonly<{
         success: false;
         failedAt: 'daemon_machine_rpc' | 'session_rpc';
@@ -376,7 +378,8 @@ export async function stopSessionUsingCanonicalStrategy(params: Readonly<{
                 // Exact daemon absence plus a fresh authoritative inactive Session
                 // is the same confirmed-stop evidence used by the CLI owner.
                 if ((await readFreshSession())?.active === false) {
-                    return { success: true, effect: 'process_stopped', method: 'daemon_machine_rpc' };
+                    return { success: true, effect: 'process_stopped', method: 'daemon_machine_rpc',
+                        stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } };
                 }
             } catch (error) {
                 try { assertCurrent(); }

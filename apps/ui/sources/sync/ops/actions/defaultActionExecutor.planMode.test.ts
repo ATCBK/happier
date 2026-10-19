@@ -27,6 +27,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { SessionStopResultSchema, isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -818,6 +819,10 @@ describe('default Action executor mode and catalog contracts', () => {
     daemonAnswer = () => ({ status: 'stopped' });
     await expect(executeSessionLifecycleAction('session.stop', 'stop-session', { serverId }))
       .resolves.toEqual({ success: true });
+    const publicStop = await createDefaultActionExecutor().execute('session.stop', { sessionId: 'stop-session' }, context());
+    expect(publicStop).toMatchObject({ ok: true, result: { success: true } });
+    if (!publicStop.ok) throw new Error('Expected confirmed Stop');
+    expect(SessionStopResultSchema.parse(publicStop.result)).toMatchObject({ sessionId: 'stop-session', stopped: true });
     expect(outgoing).toContainEqual(expect.objectContaining({
       method: `machine-a:${RPC_METHODS.STOP_SESSION}`,
       params: { sessionId: 'stop-session' },
@@ -852,8 +857,15 @@ describe('default Action executor mode and catalog contracts', () => {
     };
     const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
     await expect(executeSessionLifecycleAction('session.stop', sessionId, { serverId })).resolves.toEqual({ success: true });
+    const publicStop = await createDefaultActionExecutor().execute('session.stop', { sessionId }, context());
+    expect(publicStop).toMatchObject({ ok: true, result: { success: true } });
+    if (!publicStop.ok) throw new Error('Expected already-stopped confirmation');
+    const parsed = SessionStopResultSchema.parse(publicStop.result);
+    expect(parsed).toMatchObject({ sessionId, stopped: false,
+      stopOutcome: { status: 'already_stopped', reason: 'no_runtime_session_inactive' } });
+    expect(isSessionStopConfirmed(parsed)).toBe(true);
     expect(freshReads).toBeGreaterThan(0);
-    expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`]);
+    expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`, `machine-a:${RPC_METHODS.STOP_SESSION}`]);
   });
 
   it.each(['active', 'unknown', 'unavailable', 'ambiguous'] as const)('does not confirm an absent runtime from %s Home or transport evidence', async (evidence) => {
@@ -951,6 +963,55 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(outgoing).toContainEqual(expect.objectContaining({ method: `prompt-session:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
       params: expect.objectContaining({ id: 'q1', approved: true, answers: { Question: ['One', 'Two'] },
         answeringClientCategory: 'web' }) }));
+  });
+  it.each(['ui', 'voice'] as const)('preserves question pass-up through the %s Action authority boundary', async surface => {
+    installSession('question-worker', { machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ sessions: { ...storage.getState().sessions, 'question-worker': createSessionFixture({
+      ...storage.getState().sessions['question-worker'], agentState: { requests: {
+        'question-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [{ question: 'Which revision?' }] } },
+      } },
+    }) } });
+    daemonAnswer = () => ({ ok: true });
+    const input = { sessionId: 'question-worker', requestId: 'question-1', disposition: 'pass_up', reason: 'Needs a person' };
+    const result = surface === 'ui'
+      ? await createDefaultActionExecutor().execute('session.user_action.answer', input, context())
+      : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: explicit => explicit ?? null })
+        .action_execute!({ actionId: 'session.user_action.answer', input }, { serverId }));
+    if (surface === 'voice') {
+      // Generic Voice is Account automation, not the authenticated manager exception.
+      expect(result).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(outgoing).toEqual([]);
+      return;
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(outgoing).toContainEqual({ method: `question-worker:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
+      params: { id: 'question-1', disposition: 'pass_up', reason: 'Needs a person' } });
+    daemonAnswer = () => ({ ok: false, errorCode: 'present_user_required' });
+    const refused = surface === 'ui'
+      ? await createDefaultActionExecutor().execute('session.user_action.answer', input, context())
+      : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: explicit => explicit ?? null })
+        .action_execute!({ actionId: 'session.user_action.answer', input }, { serverId }));
+    expect(refused).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+  });
+  it.each(['ui', 'voice'] as const)('publishes exact answer and pass through the %s Action and preserves publisher refusals', async surface => {
+    installSession('reply-receiver', { machineId: 'machine-a', flavor: 'claude' });
+    const invoke = async (reply: { kind: 'answer'; message: string } | { kind: 'pass' }) => {
+      const input = { sessionId: 'reply-receiver', requestLocalId: 'original-input', reply };
+      return surface === 'ui'
+        ? createDefaultActionExecutor().execute('session.message.reply', input, context())
+        : JSON.parse(await (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: () => null })
+          .action_execute!({ actionId: 'session.message.reply', input }, { serverId }));
+    };
+    const progress = { v: 1, mode: 'wait', acceptedTurnId: 'accepted-turn', disposition: 'observing', outcome: { kind: 'pass' } };
+    daemonAnswer = () => ({ v: 1, ok: true, progress });
+    for (const reply of [{ kind: 'answer', message: 'Use revision 42.' }, { kind: 'pass' }] as const) {
+      const result = await invoke(reply);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { v: 1, ok: true, progress } });
+      expect(outgoing.at(-1)).toEqual({ method: 'reply-receiver:session.message.reply',
+        params: { sessionId: 'reply-receiver', requestLocalId: 'original-input', reply } });
+    }
+    daemonAnswer = () => ({ v: 1, ok: false, error: 'conflict' });
+    expect(await invoke({ kind: 'pass' })).toMatchObject({ ok: true, result: { v: 1, ok: false, error: 'conflict' } });
   });
   it('keeps permission feedback and title state unchanged while explicit UI approval is pending', async () => {
     const read = installSession('approval-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });

@@ -41,7 +41,7 @@ describe('sessionStop', () => {
     mockResolvePreferredServerIdForSessionId.mockReturnValue('server-a');
     mockSessionRpcWithServerScope.mockRejectedValue(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
     const res = await sessionStop('sid-1');
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       success: false,
       message: 'RPC method not available',
       code: 'session_stop_control_unavailable',
@@ -59,7 +59,7 @@ describe('sessionStop', () => {
     mockResolvePreferredServerIdForSessionId.mockReturnValue('server-b');
     mockSessionRpcWithServerScope.mockRejectedValue(new Error('RPC method not available'));
     const res = await sessionStop('sid-2');
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       success: false,
       message: 'RPC method not available',
       code: 'session_stop_failed',
@@ -71,6 +71,6 @@ describe('sessionStop', () => {
     mockSessionRpcWithServerScope.mockRejectedValue(new Error('boom'));
 
     const res = await sessionStop('sid-3');
-    expect(res).toEqual({ success: false, message: 'boom', code: 'session_stop_failed' });
+    expect(res).toMatchObject({ success: false, message: 'boom', code: 'session_stop_failed' });
   });
 });

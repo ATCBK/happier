@@ -43,6 +43,7 @@ import type {
     SessionInitialGoalRequestV1,
     SessionModelSelectionV1,
     SessionPermissionRespondRpcParamsV1,
+    SessionUserActionAnswerRpcParamsV1,
     SessionForkPoint,
     SessionForkRpcResult,
     SessionForkStrategy,
@@ -53,6 +54,7 @@ import type {
 } from '@happier-dev/protocol';
 import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
 import { SessionForkRpcResultSchema } from '@happier-dev/protocol/sessions/fork';
+import type { SessionStopResult } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionRollbackRpcResultSchema } from '@happier-dev/protocol/sessions/rollback';
 import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/index';
 import { readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
@@ -1138,15 +1140,15 @@ export async function sessionAllowWithAnswers(
 /** Shared user-action response effect below canonical Action admission. */
 export async function sessionRespondToUserAction(
     sessionId: string,
-    params: SessionPermissionRespondRpcParamsV1,
+    params: SessionUserActionAnswerRpcParamsV1,
     options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<unknown> {
-    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
+    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionUserActionAnswerRpcParamsV1>({
         sessionId,
         ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_USER_ACTION_ANSWER,
         ...(options?.signal ? { signal: options.signal } : {}),
-        payload: { ...params, answeringClientCategory: readAnsweringClientCategory() },
+        payload: 'disposition' in params ? params : { ...params, answeringClientCategory: readAnsweringClientCategory() },
     });
     assertSessionInteractionResponseApplied(result);
     return result;
@@ -1293,12 +1295,12 @@ export async function sessionReadLogTail(
     }
 }
 
-export interface SessionStopResponse {
+export type SessionStopResponse = SessionStopResult & Readonly<{
     success: boolean;
     message?: string;
     code?: import('./sessionStopContract').SessionStopResponseCode;
     recovery?: import('./sessionStopContract').SessionStopRecovery;
-}
+}>;
 
 /**
  * Stop a session.
@@ -1322,12 +1324,18 @@ export async function sessionStopWithServerScope(
         sessionId,
         serverId: opts?.serverId ?? null,
     });
+    const confirmation: SessionStopResult = stopResult.success
+        ? stopResult.stopOutcome
+            ? { sessionId, stopped: false, stopOutcome: stopResult.stopOutcome }
+            : { sessionId, stopped: true }
+        : { sessionId, stopped: false };
     if (stopResult.success) {
-        return { success: true };
+        return { ...confirmation, success: true };
     }
 
     if (stopResult.reason === 'requested') {
         return {
+            ...confirmation,
             success: false,
             message: stopResult.message,
             code: 'session_stop_requested',
@@ -1336,11 +1344,12 @@ export async function sessionStopWithServerScope(
     }
 
     if (stopResult.reason === 'not_found') {
-        return { success: false, message: stopResult.message, code: 'session_stop_not_found' };
+        return { ...confirmation, success: false, message: stopResult.message, code: 'session_stop_not_found' };
     }
 
     if (stopResult.reason === 'control_unavailable') {
         return {
+            ...confirmation,
             success: false,
             message: stopResult.message,
             code: 'session_stop_control_unavailable',
@@ -1348,7 +1357,7 @@ export async function sessionStopWithServerScope(
         };
     }
 
-    return { success: false, message: stopResult.message, code: 'session_stop_failed' };
+    return { ...confirmation, success: false, message: stopResult.message, code: 'session_stop_failed' };
 }
 
 export interface SessionArchiveResponse {

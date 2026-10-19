@@ -3,12 +3,13 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { DiscussionInviteRequestV1Schema, DiscussionParticipantPolicySetRequestV1Schema, DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionMessageV1Schema, DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionModelParticipantLaunchV1Schema, projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { bindDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
@@ -16,6 +17,7 @@ import { ProfileRecordV1Schema, ProfileRowsListResponseV1Schema, PROFILE_ROWS_RO
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { SessionSpawnNewResultV1Schema, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 // The person accepts the real Action policy's UI confirmation at the presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -26,6 +28,8 @@ let spawnServerId = '';
 let spawnResultOverride: SessionSpawnNewResultV1 | null = null;
 const spawnRequests: SocketRpcRequestPayload[] = [];
 const spawnParseIssues: unknown[] = [];
+let stopAnswer: ((request: SocketRpcRequestPayload) => unknown) | null = null;
+const stopRequests: SocketRpcRequestPayload[] = [];
 // Daemon acknowledgements are a network boundary; admission uses its actual
 // strict RPC binding, also exercised by the CLI registered-handler suite.
 installDisconnectedServerSocketBoundary(socket => {
@@ -39,6 +43,10 @@ installDisconnectedServerSocketBoundary(socket => {
         if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
         if (request.method === `machine-a:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
             return { ok: true, result: createExistingSessionDirectoryPreflightResult(request.params) };
+        }
+        if (stopAnswer && (request.method === `machine-a:${RPC_METHODS.STOP_SESSION}` || request.method.endsWith(':killSession'))) {
+            stopRequests.push(request);
+            return { ok: true, result: await stopAnswer(request) };
         }
         if (request.method !== `machine-a:${RPC_METHODS.SESSION_SPAWN_NEW}`) throw new Error(`Unexpected daemon request: ${request.method}`);
         spawnRequests.push(request);
@@ -61,7 +69,8 @@ const { buildExecutableModelParticipantSelectionFromAuthoringDraft, buildExecuta
 const { buildNewSessionAuthoringDraftFromTempData } = await import('@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters');
 const initial = getStorage().getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
-beforeEach(async () => { await homes.reset(); spawnRequests.length = 0; spawnParseIssues.length = 0; spawnResultOverride = null; });
+beforeEach(async () => { await homes.reset(); spawnRequests.length = 0; spawnParseIssues.length = 0; spawnResultOverride = null;
+    stopAnswer = null; stopRequests.length = 0; });
 afterEach(async () => {
     await connection?.dispose();
     connection = undefined;
@@ -192,6 +201,128 @@ it('reconciles an unknown model reservation with the retained explicit slot befo
     expect(requests).toHaveLength(2);
     expect(requests.map(request => DiscussionInviteRequestV1Schema.parse(request.input)))
         .toEqual(Array.from({ length: 2 }, () => ({ participant: { kind: 'model', participantSlotId: 'retained-slot', launch } })));
+});
+
+it.each(['stopped', 'already_stopped', 'active', 'unknown', 'not_found', 'unreadable', 'requested', 'ambiguous', 'detached', 'archive_conflict', 'archive_unavailable', 'account_retired'] as const)(
+    'uses ordinary Stop confirmation for participant removal (%s)', async confirmation => {
+    await loadSyncSingletonForTests();
+    const serverUrl = 'https://model-removal.test';
+    const serverId = await homes.addHome({ name: 'Model removal', serverUrl, accountId: 'alice', currentAccount: true });
+    const token = homes.findByServerUrl(serverUrl)?.token;
+    if (!token) throw new Error('Missing fixture Account token');
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', credentials: { token }, request: homes.request });
+    const machineRow = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'alice' });
+    homes.answer(serverId, '/v1/machines', { body: { machines: [machineRow] } });
+    homes.answer(serverId, '/v1/machines/machine-a', { body: { machine: machineRow } });
+    homes.answer(serverId, '/v1/machines/machine-a/access', { body: MachineAccessGrantsListResponseV1Schema.parse({
+        machineId: machineRow.id, custodian: machineRow.access!.custodian, access: machineRow.access,
+        canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+    }) });
+    const sessionId = 'owned-model-session';
+    const session = createSessionFixture({ id: sessionId, serverId, active: true,
+        metadata: { path: '/workspace', host: 'model-machine', machineId: 'machine-a' } });
+    const machine = createMachineFixture({ id: 'machine-a', activeAt: machineRow.activeAt });
+    getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine },
+        machineListByServerId: { [serverId]: [machine] } });
+    const effects: string[] = [];
+    let stopped = false;
+    let archivedAt: number | null = null;
+    let freshInactiveReads = 0;
+    const sessionAnswer = { select: () => {
+        if (stopped) freshInactiveReads++;
+        if (stopped && confirmation === 'not_found') return { status: 404, body: { error: 'Session not found' } };
+        if (stopped && confirmation === 'unreadable') return { status: 403, body: { error: 'Forbidden' } };
+        const body = createPlainSessionByIdResponseFixture({ ...session, active: !stopped || confirmation === 'active' });
+        return { body: { session: { ...body.session, archivedAt,
+            ...(stopped && confirmation === 'unknown' ? { active: undefined } : {}) } } };
+    } };
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, sessionAnswer);
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, sessionAnswer);
+    stopAnswer = async request => {
+        if (request.method === `${sessionId}:killSession`) {
+            effects.push('runner-stop');
+            return { status: 'not_found' };
+        }
+        expect(request.method).toBe(`machine-a:${RPC_METHODS.STOP_SESSION}`);
+        expect(request.params).toEqual({ sessionId });
+        stopped = true;
+        effects.push('stop');
+        if (confirmation === 'account_retired') {
+            await homes.switchAccount(serverId, 'bob', { currentAccount: true });
+            return { status: 'stopped' };
+        }
+        if (confirmation === 'ambiguous') throw Object.assign(new Error('Stop acknowledgement lost'), { rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        if (confirmation === 'requested') return { status: 'requested' };
+        return { status: confirmation === 'stopped' || confirmation.startsWith('archive_') ? 'stopped' : 'not_found' };
+    };
+    const removal = { discussionId: 'discussion-a', participant: confirmation === 'detached'
+        ? { kind: 'session' as const, sessionId } : { kind: 'model' as const, participantSlotId: 'retained-slot' } };
+    const { path, method } = bindDiscussionActionHttpRequestV1('discussion.participant.remove', removal);
+    answerDiscussionRead(serverId);
+    homes.answer(serverId, `${method} ${path}`, { select: input => {
+        expect(input).toEqual({ participant: removal.participant });
+        effects.push('remove');
+        return { body: { discussionId: 'discussion-a', ownerAccountId: 'alice', access: 'owner', grants: [], changed: true,
+            ...(confirmation === 'detached' ? {} : { ownedSession: { discussionId: 'discussion-a', participantSlotId: 'retained-slot', sessionId } }) } };
+    } });
+    homes.answer(serverId, `POST /v2/sessions/${sessionId}/archive`, { select: () => {
+        effects.push('archive');
+        if (confirmation === 'archive_conflict') return { status: 409, body: { error: 'session_active' } };
+        if (confirmation === 'archive_unavailable') return { status: 503, body: { error: 'service_unavailable' } };
+        archivedAt = 123;
+        return { body: { archivedAt } };
+    } });
+    const client = createDiscussionClient({ scope: { serverId, accountId: 'alice' }, availability: 'available' });
+    const repository = createDiscussionRepository({ scope: { serverId, accountId: 'alice' }, address: { serverId }, client });
+    const outcome = await repository.removeParticipant(removal);
+    if (confirmation === 'account_retired') {
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed' });
+        expect(effects).toEqual(['remove', 'stop']);
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    if (confirmation === 'detached') {
+        expect(outcome).toMatchObject({ kind: 'succeeded' });
+        expect(effects).toEqual(['remove']);
+        expect(stopRequests).toEqual([]);
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    expect(stopRequests[0], JSON.stringify({ outcome, effects })).toMatchObject({ method: `machine-a:${RPC_METHODS.STOP_SESSION}` });
+    if (confirmation === 'archive_conflict' || confirmation === 'archive_unavailable') {
+        const code = confirmation === 'archive_conflict' ? 'session_active' : 'unknown_error';
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed', errorCode: code });
+        expect(effects).toEqual(['remove', 'stop', 'archive']);
+        expect(archivedAt).toBeNull();
+        const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+        expect(await executeSessionLifecycleAction('session.archive', sessionId, { serverId }))
+            .toMatchObject({ success: false, code, message: expect.any(String) });
+        expect(archivedAt).toBeNull();
+        return;
+    }
+    if (confirmation !== 'stopped' && confirmation !== 'already_stopped') {
+        expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'failed' });
+        expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`)).toEqual([]);
+        expect(archivedAt).toBeNull();
+        expect(getStorage().getState().sessions[sessionId]?.archivedAt).not.toBe(123);
+        return;
+    }
+    expect(outcome, JSON.stringify({ outcome, effects })).toMatchObject({ kind: 'succeeded', value: { changed: true } });
+    expect(effects).toEqual(['remove', 'stop', 'archive']);
+    if (confirmation === 'already_stopped') expect(freshInactiveReads).toBeGreaterThan(0);
+    expect(stopRequests).toHaveLength(1);
+    expect(homes.requestsFor(`/v2/sessions/${sessionId}/archive`).map(request => request.serverId)).toEqual([serverId]);
+    expect(getStorage().getState().sessions[sessionId]?.archivedAt).toBe(123);
+    expect(archivedAt).toBe(123);
+    if (confirmation === 'already_stopped') {
+        expect(await repository.removeParticipant(removal)).toMatchObject({ kind: 'succeeded' });
+        expect(effects).toEqual(['remove', 'stop', 'archive', 'remove', 'stop', 'archive']);
+        expect(homes.requestsFor(path).map(request => request.input)).toEqual([
+            { participant: removal.participant }, { participant: removal.participant },
+        ]);
+    }
 });
 
 it.each([{ enriched: false, failure: false, pending: false }, { enriched: true, failure: false, pending: false },
