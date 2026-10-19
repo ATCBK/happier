@@ -54,7 +54,7 @@ type PluginChangeApplyOrBusyResult =
 export type DaemonPluginChangeService = Readonly<{
   requestPluginChange: (
     request: PluginChangeRequest,
-    options?: Readonly<{ retainReview?: boolean }>,
+    options?: Readonly<{ retainReview?: boolean; signal?: AbortSignal }>,
   ) => Promise<PluginChangeRequestResult>;
   decidePluginChange: (decision: PluginChangeDecision) => Promise<PluginChangeDecisionResult>;
   statusPluginChange: (request: PluginChangeStatusRequest) => Promise<PluginChangeStatusResult>;
@@ -322,6 +322,7 @@ export function createDaemonPluginChangeService(params: Readonly<{
       return findPendingDevelopmentSourceChange(registeredRootId) !== undefined;
     },
     async requestPluginChange(request, options) {
+      if (options?.signal?.aborted) return { kind: 'cancelled' };
       if (!acceptsChanges()) return { kind: 'unavailable', code: 'daemon_shutting_down' };
       const finishActiveRequest = beginActiveRequest();
       try {
@@ -329,6 +330,7 @@ export function createDaemonPluginChangeService(params: Readonly<{
         // New observations still carry their revision and use normal admission.
         if (request.kind === 'development' && request.observedRevision === undefined) {
           const root = await realpath(request.sourceRootPath).catch(() => null);
+          if (options?.signal?.aborted) return { kind: 'cancelled' };
           const retained = root === null ? undefined : findPendingDevelopmentSourceChange(root);
           if (retained) {
             const outstanding = projectOutstandingPendingChange(retained);
@@ -352,6 +354,10 @@ export function createDaemonPluginChangeService(params: Readonly<{
           );
         }
 
+        if (options?.signal?.aborted) {
+          await cleanupPrepared(prepared);
+          return { kind: 'cancelled' };
+        }
         if (!acceptsChanges()) {
           await cleanupPrepared(prepared);
           return { kind: 'unavailable', code: 'daemon_shutting_down' };

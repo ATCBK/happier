@@ -17,6 +17,7 @@ import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSna
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createMarketplaceIndexService, resolveExactMarketplaceSourceBinding } from './service';
 import { requestExactMarketplaceInstall, resolveExactMarketplaceListingForInstall, projectExpectedMarketplaceListing, marketplaceListingMatchesExpected } from './exactInstall';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 // DNS and HTTP are genuine system boundaries. Account hydration/read, parsing,
 // source targeting, acquisition, strict output and install review stay real.
@@ -112,7 +113,7 @@ describe('Account marketplace sources and exact install seam', () => {
     let pluginSources = [source];
     const readRegistrySources = async () => listRegistrySourcesV1({ record: { v: 2, sources: [], disabledSourceIds: [] }, pluginSources });
     const body = catalog();
-    vi.mocked(undici.fetch).mockImplementation(async (_url, options) => new Headers(options?.headers).has('if-none-match')
+    vi.mocked(undici.fetch).mockImplementation(async (_url, options) => new undici.Headers(options?.headers).has('if-none-match')
       ? new undici.Response(null, { status: 304 })
       : new undici.Response(JSON.stringify(body), { status: 200, headers: { etag: 'bound-catalog' } }));
     const service = createMarketplaceIndexService({ happyHomeDir: home, readRegistrySources });
@@ -135,8 +136,8 @@ describe('Account marketplace sources and exact install seam', () => {
     accountSources([]);
     const packageName = '@acme/community';
     const metadata = (version: string) => {
-      const compatibility = createPluginCompatibilityProjectionV1({ manifest: { schemaVersion: 2, id: 'acme.community', version,
-        displayName: 'Community', runtime: { apiVersion: 1 }, entrypoints: { daemon: './index.js' }, hostAccess: { required: [], optional: [] }, contributes: {} },
+      const compatibility = createPluginCompatibilityProjectionV1({ manifest: normalizePluginManifestV2({ schemaVersion: 2, id: 'acme.community', version,
+        displayName: 'Community', runtime: { apiVersion: 1 }, entrypoints: { daemon: './index.js' }, hostAccess: { required: [], optional: [] }, contributes: {} }),
         uiArtifacts: { version: 2, entries: [] } });
       return { name: packageName, version, dist: { integrity: catalog().entries[0]!.distribution.integrity,
         tarball: `https://registry.npmjs.org/community-${version}.tgz` }, happier: { compatibilityProjection: compatibility,
@@ -150,14 +151,14 @@ describe('Account marketplace sources and exact install seam', () => {
           { statusCode: 200, headers: { 'content-type': 'application/json' } });
         // Native HTTP boundary fixture: only consumed IncomingMessage fields.
         queueMicrotask(() => callback(stream as unknown as IncomingMessage));
-      }, destroy(error?: Error) { if (error) this.emit('error', error); } });
+      }, destroy(error?: Error) { if (error) request.emit('error', error); } });
       // Native HTTP boundary fixture: only consumed ClientRequest methods.
       return request as unknown as ClientRequest;
     };
     vi.mocked(https.request).mockImplementation(nativeRequest as typeof https.request);
     vi.mocked(undici.fetch).mockImplementation(async (input, options) => {
       if (String(input).includes('/-/v1/search')) {
-        const conditional = new Headers(options?.headers).has('if-none-match'); searchConditions.push(conditional);
+        const conditional = new undici.Headers(options?.headers).has('if-none-match'); searchConditions.push(conditional);
         return conditional ? new undici.Response(null, { status: 304 }) : new undici.Response(JSON.stringify({ total: 1,
           objects: [{ package: { name: packageName, version: '2.0.0', publisher: { username: 'acme' } } }] }), { status: 200, headers: { etag: 'search-page' } });
       }

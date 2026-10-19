@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile, chmod, copyFile, mkdir, cp } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile, mkdir, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import { evaluatePluginAuthorSource } from '../authoring/sourceModule';
 import { PLUGIN_DAEMON_OUTPUT_MANIFEST_RELATIVE_PATH } from '../authoring/daemonOutputManifest';
 import { cleanupStagedNpmArtifactCandidate, stageDownloadedNpmArtifactCandidate } from '../distribution/npm/stage';
 import { sriSha512 } from '../distribution/testkit/npmTarball';
+import { writeManagedJavaScriptRuntimeFixture } from '@/testkit/process/managedJavaScriptRuntimeFixture';
 
 async function writeSelectedPackage(root: string): Promise<void> {
   const scaffold = await scaffoldLocalPlugin({
@@ -48,26 +49,6 @@ async function writeSelectedPackage(root: string): Promise<void> {
 }
 
 const execFileAsync = promisify(execFile);
-
-async function writeManagedRuntimeFixture(homeDir: string): Promise<string> {
-  const binDir = join(homeDir, 'tools', 'js-runtime', 'current', 'bin');
-  const runtimeDir = join(homeDir, 'tools', 'js-runtime', 'current', 'runtime');
-  const wrapperPath = join(binDir, process.platform === 'win32' ? 'happier-js-runtime.cmd' : 'happier-js-runtime');
-  const runtimePath = process.platform === 'win32'
-    ? join(runtimeDir, 'node.exe')
-    : join(runtimeDir, 'bin', 'node');
-  await mkdir(binDir, { recursive: true });
-  await mkdir(join(runtimePath, '..'), { recursive: true });
-  if (process.platform === 'win32') {
-    await copyFile(process.execPath, runtimePath);
-    await writeFile(wrapperPath, '@echo off\r\n"%~dp0..\\runtime\\node.exe" %*\r\n', 'utf8');
-  } else {
-    await symlink(process.execPath, runtimePath);
-    await writeFile(wrapperPath, '#!/bin/sh\nexec "${0%/*}/../runtime/bin/node" "$@"\n', 'utf8');
-    await chmod(wrapperPath, 0o755);
-  }
-  return wrapperPath;
-}
 
 async function writeSdkRegistryPackFixture(
   root: string,
@@ -570,7 +551,7 @@ describe('packLocalPlugin', () => {
         .rejects.toMatchObject({ code: 'ENOENT' });
 
       const managedHome = join(parent, 'managed-home');
-      const expectedRuntime = await writeManagedRuntimeFixture(managedHome);
+      const expectedRuntime = await writeManagedJavaScriptRuntimeFixture(managedHome);
       const runtimeEnv: NodeJS.ProcessEnv = {
         ...process.env,
         HAPPIER_HOME_DIR: managedHome,

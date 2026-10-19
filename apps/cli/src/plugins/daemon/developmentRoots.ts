@@ -189,6 +189,11 @@ export type DaemonPluginDevelopmentRootsOwner = Readonly<{
   recordSourceCommit(commit: DevelopmentSourceCommit): void;
   /** Workspace discoveries still awaiting one remembered project decision. */
   readPendingProjectTrusts(): readonly PendingWorkspaceProjectTrust[];
+  /** Current watcher generation for a directly addressed registered source. */
+  resolveRegisteredSourceObservation(rootPath: string): Readonly<{
+    registeredRootId: string;
+    observedRevision: number;
+  }> | null;
   resolveDevelopmentSourceAuthority(input: Readonly<{
     pluginId: string;
     rootPath: string;
@@ -848,6 +853,13 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
     recordSourceCommit,
     readPendingProjectTrusts() {
       return Object.freeze([...pendingProjectTrustByProjectRoot.values()]);
+    },
+    resolveRegisteredSourceObservation(rootPath) {
+      const registeredRootId = resolve(rootPath);
+      const source = sources.get(registeredRootId);
+      const observedRevision = observedRevisionBySource.get(registeredRootId);
+      if (!source?.admitted || observedRevision === undefined) return null;
+      return Object.freeze({ registeredRootId, observedRevision });
     },
     resolveDevelopmentSourceAuthority(input) {
       const registeredRootId = resolve(input.rootPath);

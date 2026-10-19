@@ -10,11 +10,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
-import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createPluginActionCallerMaterializationFixture } from '@/plugins/runtime/invocation/services/actionCaller.testkit';
 import { createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
 import { createBackgroundServiceRunnerHost } from '@/plugins/runtime/lifecycle/contributions/backgroundServices';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
+import { bindDeclaredEventSubscriptions, createPluginInvocationPluginEventsService, createStablePluginEventsBroker } from '@/plugins/runtime/invocation/services/events';
 
 /**
  * The Discord Channels plugin is loaded from its own source module by URL, the
@@ -229,17 +231,18 @@ describe('Discord Channels as a first-class Automation Event source', () => {
         provenance: 'first_party',
       }),
       immutableGenerationIdsByPluginId: { [PLUGIN_ID]: IMMUTABLE_GENERATION_ID },
+      occurrenceIdsByPluginId: { [PLUGIN_ID]: createPluginRuntimeOccurrenceId(PLUGIN_ID) },
     });
     expect(registry.automationEligibleEvents).toEqual([
       expect.objectContaining({
         event: expect.objectContaining({
           id: `${PLUGIN_ID}/${EVENT_LOCAL_ID}`,
           identity: { pluginId: PLUGIN_ID, localId: EVENT_LOCAL_ID },
-          immutableGenerationId: IMMUTABLE_GENERATION_ID,
+          occurrenceId: registry.occurrenceIdsByPluginId?.[PLUGIN_ID],
         }),
         setupAction: expect.objectContaining({
           identity: { pluginId: PLUGIN_ID, localId: SETUP_ACTION_ID },
-          immutableGenerationId: IMMUTABLE_GENERATION_ID,
+          occurrenceId: registry.occurrenceIdsByPluginId?.[PLUGIN_ID],
         }),
       }),
     ]);
@@ -336,6 +339,42 @@ describe('Discord Channels as a first-class Automation Event source', () => {
       services: { http, connectedAccounts, actions: testkitActions } as never,
     });
     const invocationController = new AbortController();
+    const channelsManifest = getResolvedContributionRegistry().activationTargets
+      .find((target) => target.pluginId === CHANNELS_CORE_PLUGIN_ID)?.manifest;
+    if (!channelsManifest) throw new Error('Channels core declaration is required for the real event subscription');
+    const eventErrors: unknown[] = [];
+    const eventHost = {
+      broker: createStablePluginEventsBroker({ onListenerError: (error) => { eventErrors.push(error); } }),
+      activePluginIds: new Set([PLUGIN_ID, CHANNELS_CORE_PLUGIN_ID]),
+      declarationsByPluginId: new Map([
+        [PLUGIN_ID, parsed.manifest.contributes.events],
+        [CHANNELS_CORE_PLUGIN_ID, channelsManifest.contributes.events],
+      ]),
+    };
+    const events = {
+      plugin: createPluginInvocationPluginEventsService({
+        seed: {
+          plugin: { id: PLUGIN_ID, version: '0.0.0' },
+          contribution: { id: BACKGROUND_SERVICE_ID, qualifiedId: `${PLUGIN_ID}/backgroundServices/${BACKGROUND_SERVICE_ID}` },
+          occurrenceId: 'discord-occurrence',
+          correlationId: 'discord-fixture',
+          surface: 'background',
+          signal: invocationController.signal,
+          isOccurrenceCurrent: () => !invocationController.signal.aborted,
+        },
+        ...eventHost,
+      }),
+    };
+    const coreEvents = createPluginInvocationPluginEventsService({
+      ...eventHost,
+      seed: {
+        plugin: { id: CHANNELS_CORE_PLUGIN_ID, version: '0.0.0' },
+        contribution: { id: 'connection-supervisor', qualifiedId: `${CHANNELS_CORE_PLUGIN_ID}/backgroundServices/connection-supervisor` },
+        occurrenceId: 'channels-occurrence', correlationId: 'channels-fixture',
+        surface: 'background', signal: invocationController.signal,
+        isOccurrenceCurrent: () => !invocationController.signal.aborted,
+      },
+    });
 
     let pluginActions: ReturnType<typeof createPluginInvocationActionsService>;
     pluginActions = createPluginInvocationActionsService({
@@ -391,7 +430,7 @@ describe('Discord Channels as a first-class Automation Event source', () => {
             caller,
             surface: 'plugin',
             signal,
-            services: { http, connectedAccounts, actions: pluginActions },
+            services: { http, connectedAccounts, actions: pluginActions, events },
           } as never));
         }
         throw new Error(`Unexpected contributed Action ${action.pluginId}/${action.localId}`);
@@ -424,6 +463,7 @@ describe('Discord Channels as a first-class Automation Event source', () => {
           signal,
           services: Object.freeze({
             actions: pluginActions,
+            events,
             connectedAccounts,
             http,
             logger: Object.freeze({
@@ -438,6 +478,29 @@ describe('Discord Channels as a first-class Automation Event source', () => {
         complete: () => {},
       }),
       onDiagnostic: (event) => { serviceDiagnostics.push(event); },
+    });
+    const invalidationHandler = testkit.registration('events', 'connections-invalidated-v1');
+    if (!invalidationHandler) throw new Error('Discord must register its manifest-owned connection invalidation handler');
+    let deliveredInvalidations = 0;
+    const eventBinding = bindDeclaredEventSubscriptions({
+      host: eventHost,
+      registrations: [{
+        pluginId: PLUGIN_ID, pluginVersion: '0.0.0', occurrenceId: 'discord-occurrence',
+        localId: 'connections-invalidated-v1',
+        handler: async (payload, context) => {
+          await invalidationHandler(payload, context);
+          deliveredInvalidations += 1;
+        },
+      }],
+      isOccurrenceCurrent: () => !invocationController.signal.aborted,
+      createContext: ({ localId, signal }) => ({
+        context: {
+          plugin: { id: PLUGIN_ID, version: '0.0.0' },
+          contribution: { id: localId, qualifiedId: `${PLUGIN_ID}/events/${localId}` },
+          surface: 'background', signal, services: { actions: pluginActions, events, connectedAccounts, http },
+        } as never,
+        complete() {},
+      }),
     });
 
     try {
@@ -455,9 +518,16 @@ describe('Discord Channels as a first-class Automation Event source', () => {
         displayLabel: '#deploys',
       });
 
+      // A declared hint before startup must leave the initial census intact.
+      await coreEvents.emit('connections-invalidated-v1', {});
+      await vi.waitFor(() => expect(deliveredInvalidations).toBe(1));
+      expect(http.openWebSocket).not.toHaveBeenCalled();
       serviceHost.start();
       await vi.waitFor(() => expect(coreActionIds).toContain('provider/connections-list-v1'), { timeout: 15_000 });
-      await vi.waitFor(() => expect(observationIngests).toHaveLength(1), { timeout: 15_000 });
+      await vi.waitFor(() => {
+        expect(serviceDiagnostics).toEqual([]);
+        expect(observationIngests).toHaveLength(1);
+      }, { timeout: 15_000 });
 
       // Deliver one Automation result back into the watched endpoint through
       // the provider's real delivery Action, invoked with the exact Channels
@@ -472,7 +542,7 @@ describe('Discord Channels as a first-class Automation Event source', () => {
         providerConfig: { applicationId: APPLICATION_ID, botUserId: BOT_USER_ID },
         credentialRef,
         endpoint: { kind: 'shared', audience: 'shared', id: `discord:channel:${CHANNEL_ID}` },
-        content: DELIVERED_RESULT_TEXT,
+        content: { text: DELIVERED_RESULT_TEXT },
         deliveryKey: 'automation-result-delivery-1',
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'providerDefault',
@@ -526,12 +596,18 @@ describe('Discord Channels as a first-class Automation Event source', () => {
       });
       await vi.waitFor(() => expect(observationIngests).toHaveLength(2), { timeout: 15_000 });
     } finally {
-      invocationController.abort(new Error('Discord fixture complete.'));
       await serviceHost.dispose();
+      // The same active public handler remains harmless after its run stops.
+      const deliveredBeforeStop = deliveredInvalidations;
+      await coreEvents.emit('connections-invalidated-v1', {});
+      await vi.waitFor(() => expect(deliveredInvalidations).toBe(deliveredBeforeStop + 1));
+      await eventBinding.dispose();
+      invocationController.abort(new Error('Discord fixture complete.'));
       await testkit.dispose();
     }
 
     expect(serviceDiagnostics).toEqual([]);
+    expect(eventErrors).toEqual([]);
     expect(coreActionIds).toEqual(expect.arrayContaining([
       'provider/connections-list-v1',
       'provider/connection-read-v1',

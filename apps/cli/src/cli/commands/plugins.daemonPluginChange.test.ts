@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
-import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { buildActionExecuteResultFromRecordedApprovalExecution, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import type { ActionCliExecutionDeps } from '@/cli/actions/executeCommand';
 import { executePluginDevLoopAction } from '@/plugins/devLoop/actions';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const daemon = vi.hoisted(() => ({
   ensureRunning: vi.fn(async () => undefined),
@@ -85,10 +86,11 @@ function authenticatedActionDeps(options: Readonly<{ approve?: boolean }> = {}):
           serverId: 'cloud',
           serverIdentityId: 'server-identity-1',
         });
-        if (options.approve === false || !result.ok || !result.result || typeof result.result !== 'object'
-          || !('kind' in result.result) || result.result.kind !== 'approval_request_created') return result;
+        if (options.approve === false || !result.ok) return result;
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+        if (!approval.success) return result;
         const decided = await executor.execute('approval.request.decide', {
-          artifactId: result.result.artifactId,
+          artifactId: approval.data.artifactId,
           decision: 'approve',
         }, {
           surface: 'ui',
@@ -100,7 +102,10 @@ function authenticatedActionDeps(options: Readonly<{ approve?: boolean }> = {}):
         });
         if (!decided.ok || !decided.result || typeof decided.result !== 'object'
           || !('execution' in decided.result) || !decided.result.execution) return decided;
-        return decided.result.execution;
+        if (!storedRequest) throw new Error('Expected the recorded approval request');
+        const execution = buildActionExecuteResultFromRecordedApprovalExecution(storedRequest);
+        if (!execution) throw new Error('Expected the recorded approval execution');
+        return execution;
       },
       async resolveSessionTarget() {
         throw new Error('Unexpected Session target');
@@ -145,9 +150,14 @@ describe('plugins command daemon mutations', () => {
     daemon.requestChange.mockResolvedValue({ kind: 'committed', pluginId: 'acme.sample', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] });
     const output = captureStdoutJsonOutput();
     try {
-      await handlePluginsCommand([command, 'acme.sample', '--json'], { actionExecutionDeps: authenticatedActionDeps({ approve: false }) });
+      await handlePluginsCommand([command, 'acme.sample', '--json'], {
+        isInteractiveTerminal: () => false,
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
+      });
       expect(output.json()).toMatchObject({ ok: true, data: { kind: 'approval_request_created' } });
       expect(daemon.requestChange).not.toHaveBeenCalled();
+      expect(daemon.confirm).not.toHaveBeenCalled();
+      expect(daemon.decideChange).not.toHaveBeenCalled();
     } finally { output.restore(); }
   });
 
@@ -740,7 +750,7 @@ describe('plugins command daemon mutations', () => {
     expect(daemon.decideChange).not.toHaveBeenCalled();
   });
 
-  it.each(['enable', 'disable', 'uninstall', 'rollback'] as const)(
+  it.each(['enable', 'disable', 'uninstall', 'rollback', 'update'] as const)(
     'routes %s through the daemon with no ad-hoc review or reload',
     async (kind) => {
       // `daemon_unavailable` is the control client's real ambiguous transport

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { z as zMini } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
@@ -18,59 +18,59 @@ export type PluginCompatibilityStatus = z.infer<typeof PluginCompatibilityStatus
 export const PluginInstallModeSchema = z.enum(['link', 'managed_install']);
 export type PluginInstallMode = z.infer<typeof PluginInstallModeSchema>;
 
-export const PluginStateSourceRecordSchema = zMini.catchall(zMini.safeExtend(PluginSourceSpecV1Schema, {
-  resolvedPath: z.string().min(1),
-  manifestPath: z.string().min(1),
-  devWatch: z.boolean().optional(),
-}), zMini.never());
+export const PluginStateSourceRecordSchema = (<T extends z.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(zMini.safeExtend(PluginSourceSpecV1Schema, {
+  resolvedPath: z.string().check(z.minLength(1)),
+  manifestPath: z.string().check(z.minLength(1)),
+  devWatch: z.optional(z.boolean()),
+}));
 export type PluginStateSourceRecord = z.infer<typeof PluginStateSourceRecordSchema>;
 
-export const PluginStateCompatibilityRecordSchema = z.object({
+export const PluginStateCompatibilityRecordSchema = z.strictObject({
   status: PluginCompatibilityStatusSchema,
-  checkedAtMs: z.number().int().nonnegative().optional(),
-  diagnostics: z.array(PluginCompatibilityDiagnosticSchema).default([]),
-}).strict();
+  checkedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  diagnostics: z._default(z.array(PluginCompatibilityDiagnosticSchema), []),
+});
 export type PluginStateCompatibilityRecord = z.infer<typeof PluginStateCompatibilityRecordSchema>;
 
-export const PluginStateInstallRecordSchema = z.object({
+export const PluginStateInstallRecordSchema = z.strictObject({
   mode: PluginInstallModeSchema,
-  manifestVersion: z.string().min(1),
-  installedPath: z.string().min(1).nullable().optional(),
-  trust: PluginTrustRecordSchema.optional(),
+  manifestVersion: z.string().check(z.minLength(1)),
+  installedPath: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  trust: z.optional(PluginTrustRecordSchema),
   updatePolicy: z.optional(PluginUpdatePolicyV1Schema),
-  optionalAccess: z.array(PluginAccessSelectionSchema).optional(),
-}).strict();
+  optionalAccess: z.optional(z.array(PluginAccessSelectionSchema)),
+});
 export type PluginStateInstallRecord = z.infer<typeof PluginStateInstallRecordSchema>;
 
-export const PluginStateLifecycleRecordSchema = z.object({
+export const PluginStateLifecycleRecordSchema = z.strictObject({
   enabled: z.boolean(),
-  lastLoadedAtMs: z.number().int().nonnegative().optional(),
-  lastError: z.string().min(1).nullable().optional(),
-}).strict();
+  lastLoadedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  lastError: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+});
 export type PluginStateLifecycleRecord = z.infer<typeof PluginStateLifecycleRecordSchema>;
 
-export const PluginStateRecordSchema = z.object({
+export const PluginStateRecordSchema = z.strictObject({
   source: PluginStateSourceRecordSchema,
   compatibility: PluginStateCompatibilityRecordSchema,
   install: PluginStateInstallRecordSchema,
   state: PluginStateLifecycleRecordSchema,
-}).strict();
+});
 export type PluginStateRecord = z.infer<typeof PluginStateRecordSchema>;
 
-const PluginStateFileV1BaseSchema = z.object({
+const PluginStateFileV1BaseSchema = z.strictObject({
   t: z.literal('happier_plugin_state_v1'),
   schemaVersion: z.literal(1),
-  plugins: z.record(z.string().superRefine((value, context) => {
+  plugins: z.record(z.string().check(z.superRefine((value, context) => {
     const parsed = PluginIdSchema.safeParse(value);
     if (!parsed.success || parsed.data !== value) {
       context.addIssue({ code: 'custom', message: 'Expected a canonical plugin id' });
     }
-  }), PluginStateRecordSchema),
-}).strict();
+  })), PluginStateRecordSchema),
+});
 
 const pluginAccessScopeRegistry = createDefaultPluginAccessScopeRegistry();
 
-export const PluginStateFileV1Schema = PluginStateFileV1BaseSchema.superRefine((state, context) => {
+export const PluginStateFileV1Schema = PluginStateFileV1BaseSchema.check(z.superRefine((state, context) => {
   for (const [pluginId, record] of Object.entries(state.plugins)) {
     if (record.install.trust && record.install.trust.pluginId !== pluginId) {
       context.addIssue({
@@ -98,7 +98,7 @@ export const PluginStateFileV1Schema = PluginStateFileV1BaseSchema.superRefine((
       accessIds.add(selection.accessId);
     }
   }
-});
+}));
 export type PluginStateFileV1 = z.infer<typeof PluginStateFileV1Schema>;
 
 export { resolvePluginStorePaths } from './paths';

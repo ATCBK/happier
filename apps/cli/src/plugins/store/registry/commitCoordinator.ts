@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile } from 'node:fs/promises';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
@@ -18,13 +18,13 @@ import {
 } from './commitRecord';
 import { verifyPluginRegistryCommitGenerationReferences } from './generationStore';
 
-const LockRecordSchema = z.object({
+const LockRecordSchema = z.strictObject({
   t: z.literal('happier_plugin_registry_commit_lock_v1'),
-  token: z.string().uuid(),
-  pid: z.number().int().positive(),
-  instanceId: z.string().min(1).max(160),
-  createdAtMs: z.number().int().nonnegative(),
-}).strict();
+  token: z.string().check(z.uuid()),
+  pid: z.number().check(z.int(), z.positive()),
+  instanceId: z.string().check(z.minLength(1), z.maxLength(160)),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 type LockRecord = z.infer<typeof LockRecordSchema>;
 const LockRecordStoredReadSchema = createStoredReadSchema(LockRecordSchema);
 

@@ -1,3 +1,4 @@
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -96,23 +97,7 @@ function registryWithFixedPurpose(): ResolvedContributionRegistry {
 }
 
 function emptyRegistry(): ResolvedContributionRegistry {
-  return {
-    agents: [],
-        providers: [],
-    actions: [],
-    tools: [],
-    commands: [],
-    resources: [],
-    activationTargets: [],
-    actionsById: new Map(),
-    toolsById: new Map(),
-    commandsById: new Map(),
-    resourcesById: new Map(),
-        catalogEntriesById: {},
-    agentDefinitionsById: new Map(),
-        providersByContributionKey: new Map(),
-    pluginDiagnosticsByPluginId: {},
-  };
+    return createResolvedContributionRegistry({});
 }
 
 afterEach(async () => {

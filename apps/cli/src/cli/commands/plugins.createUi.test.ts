@@ -14,6 +14,7 @@ describe('plugins create UI mode', () => {
     const targetDir = join(parentDir, 'equals-ui-plugin');
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
+    let uiEntryPath = '';
 
     try {
       const output = captureConsoleJsonOutput();
@@ -41,11 +42,12 @@ describe('plugins create UI mode', () => {
           },
         });
         expect(process.exitCode).not.toBe(1);
+        uiEntryPath = output.json<{ data: { scaffold: { uiEntryPath: string } } }>().data.scaffold.uiEntryPath;
       } finally {
         output.restore();
       }
 
-      await expect(lstat(join(targetDir, 'pluginUiBuild.ts'))).resolves.toMatchObject({});
+      await expect(lstat(uiEntryPath)).resolves.toMatchObject({});
       const packageJson = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf8')) as {
         dependencies?: Record<string, string>;
       };

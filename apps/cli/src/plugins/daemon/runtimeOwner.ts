@@ -574,6 +574,22 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
   }
   const changeService: DaemonPluginChangeOwner = Object.freeze({
     ...baseChangeService,
+    async requestPluginChange(request, options) {
+      if (request.kind === 'development' && request.observedRevision === undefined) {
+        const registeredRootId = await realpath(request.sourceRootPath).catch(() => null);
+        if (registeredRootId && !baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
+          const observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+          if (observation) {
+            return await baseChangeService.requestPluginChange({
+              ...request,
+              sourceRootPath: observation.registeredRootId,
+              observedRevision: observation.observedRevision,
+            }, options);
+          }
+        }
+      }
+      return await baseChangeService.requestPluginChange(request, options);
+    },
     async controlPluginDevelopment(request) {
       const sourceRootPath = request.kind === 'registerExplicit' || request.kind === 'reload' || request.kind === 'invalidate'
         ? await realpath(request.rootPath).catch(() => null) : null;
@@ -640,7 +656,8 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     const failures = error instanceof AggregateError
       ? error.errors.flatMap((failure: unknown) => {
         if (!isPluginError(failure) || !failure.details || typeof failure.details !== 'object'
-          || Array.isArray(failure.details) || typeof failure.details.pluginId !== 'string') return [];
+          || Array.isArray(failure.details) || !('pluginId' in failure.details)
+          || typeof failure.details.pluginId !== 'string') return [];
         return [{ pluginId: failure.details.pluginId, code: failure.code }];
       })
       : [];

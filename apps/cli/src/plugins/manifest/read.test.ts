@@ -16,6 +16,7 @@ vi.mock('node:crypto', () => crypto);
 import { readPluginManifest } from './read';
 import { ingestCanonicalPluginManifest } from './ingest';
 import { serializeCanonicalPluginManifest } from './serialize';
+import { CHANNEL_STATE_COLLECTION } from '../../../../../packages/plugins/channels/src/collections';
 
 const roots: string[] = [];
 const requireFromCli = createRequire(import.meta.url);
@@ -70,17 +71,11 @@ describe('readPluginManifest target route', () => {
     );
     expect(channelStateCollection).toMatchObject({
       id: 'channel-state',
-      schemaVersion: 3,
-      readableSchemaVersions: [1, 2],
-      migrations: [{
-        id: 'channel-state-v1-to-v2',
-        fromSchemaVersion: 1,
-        toSchemaVersion: 2,
-      }, {
-        id: 'channel-state-v2-to-v3',
-        fromSchemaVersion: 2,
-        toSchemaVersion: 3,
-      }],
+      schemaVersion: CHANNEL_STATE_COLLECTION.schemaVersion,
+      readableSchemaVersions: CHANNEL_STATE_COLLECTION.readableSchemaVersions,
+      migrations: CHANNEL_STATE_COLLECTION.migrations.map(({ id, fromSchemaVersion, toSchemaVersion }) => ({
+        id, fromSchemaVersion, toSchemaVersion,
+      })),
     });
     expect(Object.hasOwn(channelStateCollection?.migrations?.[0] ?? {}, 'migrate')).toBe(false);
 

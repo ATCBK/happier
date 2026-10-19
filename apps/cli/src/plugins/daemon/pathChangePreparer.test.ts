@@ -605,7 +605,7 @@ describe('createDaemonPathPluginChangePreparer', () => {
     await candidate.cleanup();
   });
 
-  it('never reopens review for a development change after restart, even when it widens required access', async () => {
+  it('keeps watcher changes review-free while retaining disclosure for an enclosing install approval after restart', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-development-authority-restart-'));
     roots.push(happyHomeDir);
     const pluginRoot = await createDescriptorPlugin({ development: true, developmentEntryPath: 'src/activate.ts' });
@@ -656,8 +656,28 @@ describe('createDaemonPathPluginChangePreparer', () => {
       kind: 'preparedDevelopmentCandidate',
       requiresReview: false,
       authorityExpansion: [],
+      review: { pluginId: first.pluginId },
     });
     await neutralAfterRestart.cleanup();
+
+    const actionService = createDaemonPluginChangeService({
+      prepare: createPrepare(),
+      createPendingChangeId: () => 'pending-trusted-development-install',
+    });
+    const retainedForAction = await actionService.requestPluginChange({
+      kind: 'development',
+      sourceRootPath: pluginRoot,
+    }, { retainReview: true });
+    expect(retainedForAction).toMatchObject({
+      kind: 'reviewRequired',
+      pendingChangeId: 'pending-trusted-development-install',
+      review: { pluginId: first.pluginId },
+    });
+    await expect(actionService.requestPluginChange({
+      kind: 'development',
+      sourceRootPath: pluginRoot,
+    }, { retainReview: true })).resolves.toEqual(retainedForAction);
+    await actionService.shutdown();
 
     const manifestPath = join(pluginRoot, '.happier-plugin', 'plugin.json');
     const widenedManifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
@@ -1223,7 +1243,10 @@ describe('createDaemonPathPluginChangePreparer', () => {
       observer.stop();
     }
     await new Promise<void>((resolveStopped) => setTimeout(resolveStopped, 100));
-    expect(preservedReviewResults).toEqual(Array.from({ length: 10 }, () => undefined));
+    expect(preservedReviewResults).toHaveLength(10);
+    for (const review of preservedReviewResults) {
+      expect(review).toMatchObject({ pluginId: 'acme.repeated-development' });
+    }
     if (process.env.HAPPIER_REPORT_PLUGIN_DEV_TIMING === '1') {
       const sorted = [...editToInvocationDurationsMs].sort((left, right) => left - right);
       const median = (sorted[4]! + sorted[5]!) / 2;

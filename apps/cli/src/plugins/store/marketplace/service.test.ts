@@ -32,6 +32,7 @@ function snapshot(sourceUrl: string, pluginId: string): MarketplaceIndexSourceSn
   return {
     source: { id: `marketplace:${pluginId}`, title: pluginId, kind: 'curated', sourceUrl },
     freshness: { state: 'fresh', fetchedAtMs: 1 },
+    picks: [],
     entries: [{
       pluginId,
       publisher: { id: 'acme', displayName: 'Acme' },
@@ -164,6 +165,22 @@ describe('createMarketplaceIndexService', () => {
       [{ ...credentialFreeProfile, availability: 'sign_in_required' as const }],
       source,
     ).artifactAccess).toEqual({ state: 'auth-unavailable', registryProfileId: 'host-bound' });
+  });
+
+  it.each([
+    { allowPrivateNetwork: false, profileOrigin: 'https://127.0.0.1:41261' },
+    { allowPrivateNetwork: true, profileOrigin: 'https://other-registry.test' },
+  ])('does not admit a private catalog without exact-origin profile permission: %j', async ({allowPrivateNetwork, profileOrigin}) => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-marketplace-private-'));
+    homes.push(home);
+    const persisted = accountMarketplaceUserSourceFixture({sourceUrl:'https://127.0.0.1:41261/catalog.json',registryProfileId:'private'});
+    publishAccountRegistrySourcesFixture([persisted]);
+    const profiles = createNpmRegistryProfileService({happyHomeDir:home});
+    await profiles.mutate({action:'add',machineId:'machine-1',expectedRevision:0,mutationId:'add',profileId:'private',
+      profile:{displayName:'Private',origin:profileOrigin,scopes:[],useAsDefault:false,allowPrivateNetwork}});
+    const result = await createMarketplaceIndexService({happyHomeDir:home}).queryExactListing({sourceId:persisted.id,pluginId:'acme.private'});
+    expect(result).toMatchObject({ok:false,code:'install_unavailable'});
+    expect(undici.fetch).not.toHaveBeenCalled();
   });
 
   it('resolves an exact install against a bound registry profile that never stored a credential', async () => {

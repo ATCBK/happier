@@ -350,29 +350,45 @@ async function createCanonicalWorkspaceImportResolver(
   };
 }
 
+type VirtualEsbuildInput = Readonly<{ namespace: string; path: string; suffix: string }>;
+
 async function validateContainedPackSourceImports(params: Readonly<{
   sourceRoot: string;
   resolutionRoot: string;
   metafile: EsbuildMetafile;
+  virtualInputs: ReadonlyMap<string, VirtualEsbuildInput>;
 }>): Promise<void> {
   const physicalInputs = new Map<string, string>();
   for (const inputPath of Object.keys(params.metafile.inputs)) {
-    if (inputPath.startsWith('<')) continue;
+    if (inputPath.startsWith('<') || params.virtualInputs.has(inputPath)) continue;
     const logicalInputPath = resolve(params.resolutionRoot, inputPath);
-    physicalInputs.set(logicalInputPath, await realpath(logicalInputPath));
+    physicalInputs.set(inputPath, await realpath(logicalInputPath));
   }
 
   for (const [inputPath, input] of Object.entries(params.metafile.inputs)) {
-    if (inputPath.startsWith('<')) continue;
-    const physicalInputPath = physicalInputs.get(resolve(params.resolutionRoot, inputPath));
+    const physicalInputPath = physicalInputs.get(inputPath);
     if (!physicalInputPath) continue;
     if (!isPathInsideRoot(params.sourceRoot, physicalInputPath)) continue;
 
-    for (const imported of input.imports) {
+    const imports = [...input.imports];
+    const visitedVirtualInputs = new Set<string>();
+    for (let index = 0; index < imports.length; index += 1) {
+      const imported = imports[index]!;
       if (imported.external) continue;
-      const physicalImportedPath = physicalInputs.get(resolve(params.resolutionRoot, imported.path));
+      const physicalImportedPath = physicalInputs.get(imported.path);
       if (physicalImportedPath && isPathInsideRoot(params.sourceRoot, physicalImportedPath)) continue;
       if (imported.original && !isRelativeOrAbsoluteImportSpecifier(imported.original)) continue;
+      if (params.virtualInputs.has(imported.path)) {
+        if (visitedVirtualInputs.has(imported.path)) continue;
+        visitedVirtualInputs.add(imported.path);
+        const virtualInput = params.metafile.inputs[imported.path];
+        if (virtualInput) {
+          // A generated wrapper has no file to realpath, but it must not hide
+          // an escaping physical dependency behind a relative author import.
+          imports.push(...virtualInput.imports);
+          continue;
+        }
+      }
 
       throw new Error(
         `Plugin author source import '${imported.original ?? imported.path}' resolves outside the package root`,
@@ -886,6 +902,24 @@ export async function stagePluginDaemonRuntime(
         : sourcePath,
     ] as const),
   ]);
+  // esbuild owns module namespaces. Observe them before any loader handles a
+  // module instead of guessing whether a colon is a namespace or a drive path.
+  const virtualInputs = new Map<string, VirtualEsbuildInput>();
+  const inputNamespacesPlugin: EsbuildPlugin = {
+    name: 'happier-plugin-daemon-input-namespaces',
+    setup(pluginBuild) {
+      pluginBuild.onLoad({ filter: /.*/ }, (args) => {
+        if (args.namespace && args.namespace !== 'file') {
+          virtualInputs.set(`${args.namespace}:${args.path}${args.suffix}`, {
+            namespace: args.namespace,
+            path: args.path,
+            suffix: args.suffix,
+          });
+        }
+        return undefined;
+      });
+    },
+  };
   try {
     const buildResult = await build({
       entryPoints,
@@ -897,6 +931,7 @@ export async function stagePluginDaemonRuntime(
       banner: { js: BUNDLED_PLUGIN_DAEMON_ESM_REQUIRE_BANNER },
       inject: [BUNDLED_PLUGIN_DAEMON_REQUIRE_INJECTION],
       plugins: [
+        inputNamespacesPlugin,
         createZodMiniEnglishLocaleCompilerPlugin(),
         bundledPluginDaemonRequirePlugin,
         ...(canonicalWorkspaceImportResolver ? [canonicalWorkspaceImportResolver.plugin] : []),
@@ -930,6 +965,7 @@ export async function stagePluginDaemonRuntime(
       sourceRoot,
       resolutionRoot: buildWorkingDirectory,
       metafile,
+      virtualInputs,
     });
 
     const emittedOutputs = Object.keys(metafile.outputs).map((outputKey) => {
@@ -942,10 +978,13 @@ export async function stagePluginDaemonRuntime(
 
     const portableLabelsByInputKey = new Map(
       Object.keys(metafile.inputs)
-        .map((inputKey) => [
-          inputKey,
-          portableModulePathLabel(inputKey, { buildWorkingDirectory, portableRoot }),
-        ] as const)
+        .map((inputKey) => {
+          const virtualInput = virtualInputs.get(inputKey);
+          const portablePath = portableModulePathLabel(virtualInput?.path ?? inputKey, {
+            buildWorkingDirectory, portableRoot,
+          });
+          return [inputKey, virtualInput ? `${virtualInput.namespace}:${portablePath}${virtualInput.suffix}` : portablePath] as const;
+        })
         .filter(([inputKey, portableLabel]) => inputKey !== portableLabel),
     );
 

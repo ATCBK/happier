@@ -46,8 +46,9 @@ const INDEX_SOURCE_ERROR_LABEL = 'Marketplace index source';
 /**
  * A configured index source is a published catalog: it must be reachable over
  * HTTPS, stay on the origin the operator configured, and never resolve into a
- * private, loopback or reserved network. The shared acquisition owner enforces
- * all three and pins each hop to the addresses it assessed.
+ * private, loopback or reserved network unless the host supplied its bound
+ * exact-origin registry profile's opt-in. The shared acquisition owner enforces
+ * that policy and pins each hop to the addresses it assessed.
  */
 const INDEX_SOURCE_ACQUISITION_POLICY: RemoteAcquisitionDestinationPolicy = Object.freeze({
   scheme: 'https',
@@ -241,8 +242,8 @@ function sourceCachePath(happyHomeDir: string | undefined, sourceUrl: string, sl
   return resolve(paths.cacheDir, 'marketplace-index', slot === 'discovery' ? `${digest}.json` : `${digest}.exact.json`);
 }
 
-function validateSourceUrl(sourceUrl: string): string {
-  return assertRemoteAcquisitionUrl(sourceUrl, INDEX_SOURCE_ACQUISITION_POLICY, INDEX_SOURCE_ERROR_LABEL).toString();
+function validateSourceUrl(sourceUrl: string, policy: RemoteAcquisitionDestinationPolicy): string {
+  return assertRemoteAcquisitionUrl(sourceUrl, policy, INDEX_SOURCE_ERROR_LABEL).toString();
 }
 
 async function readCache(
@@ -285,6 +286,8 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   source: { id: string; title: string; sourceUrl: string; kind: MarketplaceIndexSourceKindV1 };
   happyHomeDir?: string;
   registrySource?: RegistrySourceDescriptorV1;
+  /** Host-owned, exact-origin source/profile binding; never a catalog field. */
+  allowPrivateNetwork?: boolean;
   /** The discovery query; community npm search requests are built from it. */
   query?: MarketplaceIndexSourceQuery;
   now?: () => number;
@@ -292,7 +295,10 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   resolveAddresses?: RemoteAcquisitionAddressResolver;
   communityNpmClient?: NpmRegistryJsonClient;
 }>): Promise<LoadedMarketplaceIndexSource> {
-  const sourceUrl = validateSourceUrl(params.source.sourceUrl);
+  const policy: RemoteAcquisitionDestinationPolicy = params.allowPrivateNetwork === true
+    ? { ...INDEX_SOURCE_ACQUISITION_POLICY, privateNetwork: 'followCallerDestination' }
+    : INDEX_SOURCE_ACQUISITION_POLICY;
+  const sourceUrl = validateSourceUrl(params.source.sourceUrl, policy);
   const registrySource: RegistrySourceV1 = params.registrySource ?? {
     id: params.source.id, title: params.source.title, url: sourceUrl, format: 'happier-catalog',
     kinds: ['plugin'], enabled: true, addedAt: 0,
@@ -301,7 +307,7 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   // metadata; neither may supply an invalid descriptor's source authority.
   if (params.source.kind !== 'community-npm') assertRegistryMarketplaceCatalogSourceV1(registrySource);
   const requestUrl = params.source.kind === 'community-npm'
-    ? validateSourceUrl(buildCommunityNpmSearchUrl(sourceUrl, params.query))
+    ? validateSourceUrl(buildCommunityNpmSearchUrl(sourceUrl, params.query), policy)
     : sourceUrl;
   // The exact lookup gets its own slot only where its request URL differs
   // structurally from discovery (community npm): one shared slot would let
@@ -314,7 +320,7 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
   // The slot path no longer distinguishes queries, so the request identity
   // joins the in-flight key: two concurrent searches for one source must
   // never merge into one fetch and hand one query's snapshot to the other.
-  const key = `${cachePath}\u0000${requestUrl}\u0000${params.source.id}\u0000${JSON.stringify(exactVersion ?? null)}`;
+  const key = `${cachePath}\u0000${requestUrl}\u0000${params.source.id}\u0000${JSON.stringify(exactVersion ?? null)}\u0000${policy.privateNetwork}`;
   const existing = inFlight.get(key);
   if (existing) return await existing;
   const operation: Promise<MarketplaceIndexSourceSnapshotV1> = (async (): Promise<MarketplaceIndexSourceSnapshotV1> => {
@@ -329,7 +335,7 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
       const opened = await openRemoteAcquisition({
         url: requestUrl,
         headers: { accept: 'application/json', ...(revalidatable?.etag ? { 'if-none-match': revalidatable.etag } : {}), ...(revalidatable?.lastModified ? { 'if-modified-since': revalidatable.lastModified } : {}) },
-        policy: INDEX_SOURCE_ACQUISITION_POLICY,
+        policy,
         timeoutMs: resolvePluginRemoteFetchTimeoutMs(),
         errorLabel: INDEX_SOURCE_ERROR_LABEL,
         ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
@@ -386,6 +392,7 @@ export async function loadMarketplaceIndexSource(params: Readonly<{
         source: params.source,
         freshness: { state: cacheRead.corrupt ? 'corrupt' : 'unavailable', fetchedAtMs: null },
         entries: [],
+        picks: [],
         diagnostics: [{ code: cacheRead.corrupt ? 'marketplace_cache_corrupt' : 'marketplace_source_unavailable', message }],
       };
     }

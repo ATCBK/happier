@@ -56,7 +56,7 @@
                   "type": "object"
                 },
                 "action": {
-                  "surface": "plugin",
+                  "surfaces": ["plugin"],
                   "dangerLevel": "safe"
                 }
               }

@@ -565,10 +565,9 @@ describe('packed external Voice provider author contract', () => {
   });
 
   it('runs one public source activation on every declared client platform and selects only published fixture output', async () => {
-    const [manifestSource, packageSource, buildConfigModule, clientModule] = await Promise.all([
+    const [manifestSource, packageSource, clientModule] = await Promise.all([
       readFile(join(fixtureRoot, '.happier-plugin', 'plugin.json'), 'utf8'),
       readFile(join(fixtureRoot, 'package.json'), 'utf8'),
-      import(pathToFileURL(join(fixtureRoot, 'pluginUiBuild.ts')).href),
       import(pathToFileURL(join(fixtureRoot, 'src', 'voiceRuntime.tsx')).href) as Promise<SourceClientModule>,
     ]);
     const manifest = JSON.parse(manifestSource) as Readonly<{
@@ -589,6 +588,7 @@ describe('packed external Voice provider author contract', () => {
       }>;
     }>;
     const packageJson = JSON.parse(packageSource) as Readonly<{
+      exports: Readonly<Record<string, string>>;
       files: readonly string[];
       scripts: Readonly<Record<string, string>>;
     }>;
@@ -628,17 +628,7 @@ describe('packed external Voice provider author contract', () => {
       .filter(({ kind }) => kind === 'conversation')
       .map(({ id, platforms }) => ({ id, platforms })))
       .toEqual(conversationLocalIds.map((id) => ({ id, platforms: clientPlatforms })));
-    expect(buildConfigModule.pluginUiBuildConfig.targets).toEqual([expect.objectContaining({
-      rendererId: 'voice-runtime-web',
-      entry: 'src/voiceRuntime.tsx',
-      kind: 'reactNative',
-      platforms: clientPlatforms,
-      module: {
-        containerName: 'happier_plugin_acme_packed_voice_voice_runtime_web',
-        modulePath: './voiceRuntime',
-        exportName: 'activate',
-      },
-    })]);
+    expect(packageJson.exports['./happier-plugin-ui/voice-runtime-web']).toBe('./src/voiceRuntime.tsx');
     expect(packageJson.files).toEqual([
       '.happier-plugin',
       'dist/agentRuntime.js',

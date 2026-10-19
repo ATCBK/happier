@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,6 +83,7 @@ describe('whole-plugin installation trust identity', () => {
   });
 
   it('uses the canonical home-expansion owner for both separator spellings', async () => {
+    await mkdir(homedir(), { recursive: true });
     const expected = { kind: 'localPath', canonicalPath: await realpath(homedir()) };
     await expect(createLocalPathPluginDistributionIdentity('~/')).resolves.toEqual(expected);
     await expect(createLocalPathPluginDistributionIdentity('~\\')).resolves.toEqual(expected);

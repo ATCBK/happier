@@ -1,47 +1,47 @@
 import { readFile } from 'node:fs/promises';
 
 import { NpmRegistryOriginV1Schema, NpmRegistryProfileIdV1Schema, NpmRegistryScopeV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { NPM_REGISTRY_PROFILES_LOCK_NAME, withPluginStoreLock } from '@/plugins/store/lock';
 import { ensurePluginStoreDirectories, resolvePluginStorePaths, type PluginStorePaths } from '@/plugins/store/paths';
 
-const PersistedProfileSchema = z.object({
+const PersistedProfileSchema = z.strictObject({
   profileId: NpmRegistryProfileIdV1Schema,
-  displayName: z.string().trim().min(1),
+  displayName: z.string().check(z.trim(), z.minLength(1)),
   origin: NpmRegistryOriginV1Schema,
   scopes: z.array(NpmRegistryScopeV1Schema),
   useAsDefault: z.boolean(),
   allowPrivateNetwork: z.boolean(),
-  credentialSecretRef: z.string().trim().min(1).nullable(),
-  credentialRevision: z.number().int().nonnegative(),
+  credentialSecretRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  credentialRevision: z.number().check(z.int(), z.nonnegative()),
   availability: z.enum(['unknown', 'available', 'sign_in_required', 'offline']),
-  lastSuccessfulCheckAtMs: z.number().int().nonnegative().nullable(),
-  updatedAtMs: z.number().int().nonnegative(),
-}).strict();
+  lastSuccessfulCheckAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  updatedAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 
-const PausedSourceSchema = z.object({
+const PausedSourceSchema = z.strictObject({
   origin: NpmRegistryOriginV1Schema,
   reason: z.enum(['credentials_missing', 'authentication_failed', 'profile_removed', 'offline']),
-  updatedAtMs: z.number().int().nonnegative(),
-}).strict();
+  updatedAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 
-const MutationReceiptSchema = z.object({
-  mutationId: z.string().trim().min(1),
-  fingerprint: z.string().min(1),
-  revision: z.number().int().nonnegative(),
-}).strict();
+const MutationReceiptSchema = z.strictObject({
+  mutationId: z.string().check(z.trim(), z.minLength(1)),
+  fingerprint: z.string().check(z.minLength(1)),
+  revision: z.number().check(z.int(), z.nonnegative()),
+});
 
-const RegistryFileSchema = z.object({
+const RegistryFileSchema = z.strictObject({
   t: z.literal('happier_npm_registry_profiles_v1'),
   version: z.literal(1),
-  revision: z.number().int().nonnegative(),
+  revision: z.number().check(z.int(), z.nonnegative()),
   profiles: z.array(PersistedProfileSchema),
   pausedSources: z.array(PausedSourceSchema),
   mutations: z.array(MutationReceiptSchema),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   const ids = new Set<string>();
   const origins = new Set<string>();
   for (const [index, profile] of value.profiles.entries()) {
@@ -50,7 +50,7 @@ const RegistryFileSchema = z.object({
     ids.add(profile.profileId);
     origins.add(profile.origin);
   }
-});
+}));
 
 export type PersistedNpmRegistryProfile = z.infer<typeof PersistedProfileSchema>;
 export type NpmRegistryPausedSource = z.infer<typeof PausedSourceSchema>;

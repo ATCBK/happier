@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
@@ -15,10 +15,10 @@ import { resolvePluginStorePaths, type PluginStorePaths } from '@/plugins/store/
 const HOST_NAMESPACE = 'happier.npm.registry.credentials';
 const LEGACY_KEY_FILE_NAME = 'plugin-secrets-key.v1';
 const LEGACY_KEY_TYPE = 'happier_plugin_secret_key_v1';
-const LegacyKeyStoredReadSchema = createStoredReadSchema(z.object({
+const LegacyKeyStoredReadSchema = createStoredReadSchema(z.strictObject({
   t: z.literal(LEGACY_KEY_TYPE),
   key: z.string(),
-}).strict());
+}));
 
 type NpmCredentialSecretStore = ReturnType<typeof createPluginSecretStore>;
 type StoreReadability = Readonly<

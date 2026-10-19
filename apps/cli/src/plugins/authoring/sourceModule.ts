@@ -1,5 +1,5 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 import { formatPluginManifestIngestionDiagnostics, ingestPluginManifestV2, validatePublicPluginManifestPolicy } from '@happier-dev/protocol/plugins/manifest/ingest';
 import type { ParsedPluginManifestV2 } from '@happier-dev/protocol';
@@ -198,10 +198,6 @@ export async function resolvePluginAuthoringSource(
 
   const isCodeFile = metadata.isFile()
     && isSupportedPluginAuthorSourceExtension(absoluteLocator);
-  const hasCanonicalManifest = metadata.isDirectory()
-    && (await regularFileExists(join(absoluteLocator, '.happier-plugin', 'plugin.json'))
-      || basename(absoluteLocator) === '.happier-plugin'
-        && await regularFileExists(join(absoluteLocator, 'plugin.json')));
   if (isCodeFile) {
     return {
       ok: true,
@@ -209,7 +205,10 @@ export async function resolvePluginAuthoringSource(
       entry: await resolvePluginAuthorSourceEntrypoint(absoluteLocator),
     };
   }
-  if (metadata.isDirectory() && !hasCanonicalManifest) {
+  // Explicit author operations keep the package source authoritative after a
+  // build emits its cold manifest projection. Descriptor-only packages and
+  // explicit manifest locators still use the static discovery owner below.
+  if (metadata.isDirectory()) {
     try {
       return {
         ok: true,

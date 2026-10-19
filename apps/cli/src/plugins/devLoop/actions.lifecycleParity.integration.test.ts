@@ -114,7 +114,8 @@ it('discovers semantic lifecycle tools through MCP and changes actual daemon-own
     const inventory = createHappierToolInventory({ surface: 'mcp', actionsSettings });
     registerHappierMcpBuiltInTools(server, { sessionId: 'lifecycle-session', surface: 'mcp',
       toolInventory: prepareHappierMcpToolInventory({ inventory, sessionId: 'lifecycle-session' }),
-      deps: { ...bridge, changeTitle: async () => ({ success: true }) } });
+      deps: { ...bridge, changeTitle: async () => ({ success: true }),
+        resolveActionOptions: args => bridge.resolveActionOptions(args, 'lifecycle-session') } });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport); await client.connect(clientTransport);
     const discovered = await client.listTools();

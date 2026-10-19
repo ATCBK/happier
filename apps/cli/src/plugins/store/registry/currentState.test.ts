@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -100,21 +102,11 @@ async function installPreparedCandidate(
   }
 }
 
-function createRevisionTaggedRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
+async function createRevisionTaggedRuntimeRegistry(): Promise<ResolvedExecutablePluginRuntimeRegistry> {
   return {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
     claimReleaseLessDeclarations: async () => undefined,
-    contributes: {
-      agents: Object.freeze([]),
-            actions: Object.freeze([]),
-      resources: Object.freeze([]),
-      uiViewsV2: Object.freeze([]),
-      uiRenderersV2: Object.freeze([]),
-      uiTranslationsV2: Object.freeze([]),
-      activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-      agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-    },
+    contributes: createResolvedContributionRegistry({}),
     hookHandlersByHookId: new Map(),
     agentRuntimesByAgentId: new Map(),
     scmHostingProvidersById: new Map(),
@@ -707,7 +699,7 @@ describe('PluginRegistryStateStore', () => {
     const registriesByRevision = new Map<number, ResolvedExecutablePluginRuntimeRegistry>();
     const runtimeLifecycle: PluginRegistryRuntimeLifecycle = {
       async prepare(candidate) {
-        const registry = createRevisionTaggedRuntimeRegistry();
+        const registry = (await createRevisionTaggedRuntimeRegistry());
         return {
           abort: async () => undefined,
           async adopt(record) {

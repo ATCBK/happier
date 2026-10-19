@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -250,7 +250,7 @@ describe('PluginAccessScopeRegistry', () => {
   });
 
   it('rejects non-idempotent, mutating, or non-JSON canonicalizers', () => {
-    const schema = z.object({ value: z.string() }).strict();
+    const schema = z.strictObject({ value: z.string() });
     const nonIdempotent = createPluginAccessScopeRegistry([{
       capability: 'non-idempotent',
       scopeSchema: schema,
@@ -285,7 +285,7 @@ describe('PluginAccessScopeRegistry', () => {
   });
 
   it('snapshots registrations and deeply freezes canonical selections', () => {
-    const schema = z.object({ values: z.array(z.string()).min(1) }).strict();
+    const schema = z.strictObject({ values: z.array(z.string()).check(z.minLength(1)) });
     const registration = {
       capability: 'stable',
       scopeSchema: schema,
@@ -336,7 +336,7 @@ describe('PluginAccessScopeRegistry', () => {
   });
 
   it('rejects duplicate or non-canonical capability registrations', () => {
-    const schema = z.object({ value: z.string() }).strict();
+    const schema = z.strictObject({ value: z.string() });
     expect(() => createPluginAccessScopeRegistry([
       { capability: 'same', scopeSchema: schema, canonicalize: (scope) => scope },
       { capability: 'same', scopeSchema: schema, canonicalize: (scope) => scope },

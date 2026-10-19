@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { resolvePluginAuthoringSource } from '@/plugins/authoring/sourceModule';
 import { projectPluginInstallationReviewHostAccess } from '@/plugins/daemon/installationReview';
 import { resolveLocalPluginInstallTrust } from '@/plugins/store/install/trustPolicy';
+import type { PluginChangePendingReviewResult } from '@happier-dev/protocol/marketplace/internal';
 
 type PluginInstallApprovalInput = Readonly<Record<string, unknown>>;
 
@@ -10,6 +11,7 @@ type PluginInstallApprovalPreviewParams = Readonly<{
   input: unknown;
   defaultPreview: unknown;
   workspaceRoot?: string;
+  daemonEvaluation?: PluginChangePendingReviewResult;
 }>;
 
 function readInput(input: unknown): PluginInstallApprovalInput {
@@ -33,31 +35,63 @@ function withDefaultPreview(defaultPreview: unknown, pluginInstall: unknown): un
   };
 }
 
+function daemonDisclosure(evaluation: PluginChangePendingReviewResult | undefined): Readonly<Record<string, unknown>> {
+  return evaluation?.reviewKind === 'installation'
+    ? { permissionsDisclosure: 'daemonEvaluated', pendingReview: evaluation }
+    : { permissionsDisclosure: 'pendingDaemonEvaluation' };
+}
+
 /**
- * The Agent-facing `plugins.install` approval preview. It resolves the author
- * source through the same canonical resolver the install itself uses, so an
- * ordinary code-defined author root — the shape `plugins.scaffold` produces —
- * previews as a real project-source approval instead of failing on a legacy
- * descriptor it was never supposed to have.
+ * The Agent-facing `plugins.install` approval preview. A daemon-evaluated
+ * candidate is the exact disclosure and later apply authority. Before that
+ * evaluation exists, local sources use the canonical author-source resolver
+ * so code-defined roots still preview as real project sources.
  */
 export async function buildPluginInstallApprovalPreview(params: PluginInstallApprovalPreviewParams): Promise<unknown> {
   const input = readInput(params.input);
   const requestedSourceInput = readInput(input.source);
-  if (readString(requestedSourceInput, 'kind') === 'marketplace') {
+  if (readString(requestedSourceInput, 'kind') === 'marketplace' || readString(requestedSourceInput, 'kind') === 'installed') {
     return withDefaultPreview(params.defaultPreview, {
       ok: true,
       source: requestedSourceInput,
       machineId: readString(input, 'machineId'),
-      // These are requested operands, not acquired manifest or permission facts.
-      // The exact daemon candidate owns the later Install and Trust disclosure.
-      permissionsDisclosure: 'pendingDaemonEvaluation',
+      ...daemonDisclosure(params.daemonEvaluation),
     });
   }
   const locator = readString(input, 'path');
+  const explicitSourceKind = readString(input, 'kind');
   const dev = readBoolean(input, 'dev');
   const force = readBoolean(input, 'force');
   const dryRun = readBoolean(input, 'dryRun');
+  if (explicitSourceKind === 'archive' || explicitSourceKind === 'npm') {
+    return withDefaultPreview(params.defaultPreview, {
+      ok: true,
+      source: {
+        kind: explicitSourceKind,
+        locator,
+        ...(explicitSourceKind === 'archive' && readString(input, 'integrity')
+          ? { integrity: readString(input, 'integrity') }
+          : {}),
+        ...(explicitSourceKind === 'npm' && readString(input, 'selector')
+          ? { selector: readString(input, 'selector') }
+          : {}),
+        force,
+        dryRun,
+      },
+      ...daemonDisclosure(params.daemonEvaluation),
+    });
+  }
   const requestedSource = { kind: 'path' as const, locator, dev, force, dryRun };
+  if (params.daemonEvaluation?.reviewKind === 'installation') {
+    // The daemon retained this exact evaluated generation for the later decision/apply.
+    // Re-reading the mutable author source here can only be slower or disclose bytes
+    // other than the candidate the human is actually deciding.
+    return withDefaultPreview(params.defaultPreview, {
+      ok: true,
+      source: requestedSource,
+      ...daemonDisclosure(params.daemonEvaluation),
+    });
+  }
   const resolved = await resolvePluginAuthoringSource(locator);
 
   if (!resolved.ok) {
@@ -65,6 +99,7 @@ export async function buildPluginInstallApprovalPreview(params: PluginInstallApp
       ok: false,
       source: requestedSource,
       diagnostics: resolved.diagnostics,
+      ...daemonDisclosure(params.daemonEvaluation),
     });
   }
 
@@ -92,11 +127,7 @@ export async function buildPluginInstallApprovalPreview(params: PluginInstallApp
         resolvedLocator: resolve(locator),
         entryPath: resolved.entry.entryPath,
       },
-      // Identity and declared host access exist only once the daemon has
-      // evaluated this source inside an owned immutable generation. Emitting
-      // an empty permission set here would read as "requires nothing", so the
-      // preview states the disclosure is still pending instead.
-      permissionsDisclosure: 'pendingDaemonEvaluation',
+      ...daemonDisclosure(params.daemonEvaluation),
     });
   }
 
@@ -147,5 +178,6 @@ export async function buildPluginInstallApprovalPreview(params: PluginInstallApp
         requests: source.manifest.hostAccess.optional,
       }),
     },
+    ...daemonDisclosure(params.daemonEvaluation),
   });
 }

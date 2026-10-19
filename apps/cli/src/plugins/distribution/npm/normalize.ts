@@ -105,7 +105,7 @@ export function normalizeNpmArtifactRequest(input: NormalizeNpmArtifactRequestIn
   const requestedOrigin = normalizeNpmRegistryOrigin(input.curatedExactOrigin ?? input.registryOrigin ?? inferredProfile?.origin ?? PUBLIC_NPM_REGISTRY_ORIGIN);
   if (explicit && explicit.origin !== requestedOrigin) throw new Error(`Npm registry profile '${explicit.id}' does not match the requested registry origin`);
   if (explicit && scope && !explicit.scopes.includes(scope)) throw new Error(`Npm registry profile '${explicit.id}' does not match the requested package scope`);
-  if (explicit && !scope && !explicit.useAsDefault) throw new Error(`Npm registry profile '${explicit.id}' is not allowed for unscoped packages`);
+  // useAsDefault controls inference, not an explicit same-origin selection.
 
   const scopedMatches = scope ? profiles.filter((profile) => profile.origin === requestedOrigin && profile.scopes.includes(scope)) : [];
   const defaultMatches = profiles.filter((profile) => profile.origin === requestedOrigin && profile.useAsDefault);

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
@@ -13,43 +13,43 @@ import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapte
 export const PACKED_TEST_TARGETED_ADMISSION_READ_PATH =
   '/plugins/packed-test/targeted-admission/read';
 
-const ProtocolIdSchema = z.string().trim().min(1).max(256);
-const ProtocolSchema = z.object({
+const ProtocolIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
+const ProtocolSchema = z.strictObject({
   id: ProtocolIdSchema,
-  version: z.number().int().positive().safe(),
-}).strict();
-const OccurrenceIdSchema = z.string().trim().min(1).max(512);
+  version: z.number().check(z.int(), z.positive(), z.int()),
+});
+const OccurrenceIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
 const HostPluginIdSchema = asHostProtocolZod(PluginIdSchema);
 const HostPluginContributionLocalIdSchema = asHostProtocolZod(
   PluginContributionLocalIdSchema,
 );
 
-export const PackedTestTargetedAdmissionReadRequestSchema = z.object({
+export const PackedTestTargetedAdmissionReadRequestSchema = z.strictObject({
   targetPluginId: HostPluginIdSchema,
   pointId: HostPluginContributionLocalIdSchema,
   protocol: ProtocolSchema,
-}).strict();
+});
 
 export type PackedTestTargetedAdmissionReadRequest = z.infer<
   typeof PackedTestTargetedAdmissionReadRequestSchema
 >;
 
 export const PackedTestTargetedAdmissionReadResponseSchema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('available'),
-    target: z.object({
+    target: z.strictObject({
       pluginId: HostPluginIdSchema,
       pointId: HostPluginContributionLocalIdSchema,
       occurrenceId: OccurrenceIdSchema,
-    }).strict(),
+    }),
     protocol: ProtocolSchema,
-    contributors: z.array(z.object({
+    contributors: z.array(z.strictObject({
       pluginId: HostPluginIdSchema,
       contributionId: HostPluginContributionLocalIdSchema,
       occurrenceId: OccurrenceIdSchema,
-    }).strict()).max(256),
-  }).strict(),
-  z.object({
+    })).check(z.maxLength(256)),
+  }),
+  z.strictObject({
     kind: z.literal('unavailable'),
     code: z.enum([
       'plugin_packed_targeted_admission_invalid_request',
@@ -59,7 +59,7 @@ export const PackedTestTargetedAdmissionReadResponseSchema = z.discriminatedUnio
       'plugin_packed_targeted_admission_snapshot_mismatch',
       'plugin_packed_targeted_admission_stale',
     ]),
-  }).strict(),
+  }),
 ]);
 
 export type PackedTestTargetedAdmissionReadResponse = z.infer<

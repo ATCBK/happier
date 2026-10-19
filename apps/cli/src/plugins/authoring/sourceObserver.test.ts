@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -62,7 +62,6 @@ describe('plugin development source observation', () => {
         ok: true,
         request: {
           kind: 'development',
-          pluginId: 'acme.observer',
           projectRoot: canonicalProjectRoot,
           sdkRegistryOrigin: 'https://registry.example.test',
         },
@@ -83,10 +82,8 @@ describe('plugin development source observation', () => {
   });
 
   it('observes a built manifest root whose dev entry is its TypeScript source', async () => {
-    // A root carrying BOTH a built `.happier-plugin/plugin.json` and TypeScript
-    // source is the shape every bundled plugin has. The daemon change preparer
-    // accepts it; the watch owner must agree rather than demanding an
-    // `entrypoints.development` the single-producer manifest never emits.
+    // A generated manifest is a projection of the package's author source,
+    // so the observer keeps that source authoritative after a build.
     const projectRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-source-built-manifest-'));
     try {
       await writeProject(projectRoot);
@@ -102,9 +99,9 @@ describe('plugin development source observation', () => {
 
       expect(observation).toMatchObject({
         ok: true,
-        authoringKind: 'manifest',
+        authoringKind: 'code',
         sourceRootPath: canonicalProjectRoot,
-        request: { kind: 'development', pluginId: 'acme.observer', projectRoot: canonicalProjectRoot },
+        request: { kind: 'development', projectRoot: canonicalProjectRoot },
       });
       if (!observation.ok) return;
       expect(observation.observedRelativePaths).toEqual(expect.arrayContaining([
@@ -120,6 +117,7 @@ describe('plugin development source observation', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-source-escaping-dev-entry-'));
     try {
       await writeProject(projectRoot);
+      await rename(join(projectRoot, 'src', 'index.ts'), join(projectRoot, 'src', 'plugin.ts'));
       const manifestPath = join(projectRoot, '.happier-plugin', 'plugin.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
       manifest.entrypoints = { daemon: './dist/index.js', development: '../outside/index.ts' };
@@ -201,17 +199,18 @@ describe('plugin development source observation', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-source-portable-entry-'));
     try {
       await writeProject(projectRoot);
+      await rename(join(projectRoot, 'src', 'index.ts'), join(projectRoot, 'src', 'plugin.ts'));
       const manifestPath = join(projectRoot, '.happier-plugin', 'plugin.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
         entrypoints: { daemon: string; development: string };
       };
-      manifest.entrypoints.development = '.\\src\\index.ts';
+      manifest.entrypoints.development = '.\\src\\plugin.ts';
       await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
 
       const canonicalProjectRoot = await realpath(projectRoot);
       await expect(inspectPluginDevelopmentSource({ projectRoot })).resolves.toMatchObject({
         ok: true,
-        developmentEntryPath: join(canonicalProjectRoot, 'src', 'index.ts'),
+        developmentEntryPath: join(canonicalProjectRoot, 'src', 'plugin.ts'),
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

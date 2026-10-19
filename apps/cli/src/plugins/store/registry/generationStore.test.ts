@@ -14,7 +14,8 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 const packagedRuntime = vi.hoisted(() => ({ root: '' }));
 
 vi.mock('../../../configuration', () => ({ configuration: { happyHomeDir: join(tmpdir(), 'unused-registry-home') } }));
-vi.mock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', () => ({
+vi.mock('@/packagedRuntime/assets/resolveCliRuntimeAssetPath', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/packagedRuntime/assets/resolveCliRuntimeAssetPath')>(),
   resolveCliRuntimeRootPath: () => packagedRuntime.root,
 }));
 

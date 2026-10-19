@@ -14,6 +14,7 @@ import { buildCommunityNpmSearchUrl, loadMarketplaceIndexSource, parseCommunityN
 import type { NpmRegistryJsonClient } from '@/plugins/distribution/npm/resolver';
 import { createNpmRegistryHttpsClient } from '@/plugins/distribution/npm/httpsClient';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
+import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, deriveMarketplaceSourceId } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 
 const homes: string[] = [];
 // DNS is the one system boundary the acquisition owner touches; every fixture
@@ -21,7 +22,7 @@ const homes: string[] = [];
 const testResolveAddresses = async (): Promise<readonly Readonly<{ address: string; family: 4 | 6 }>[]> => (
   [{ address: '93.184.216.34', family: 4 as const }]
 );
-const source = { id: 'marketplace:curated', title: 'Curated', kind: 'curated' as const, sourceUrl: 'https://marketplace.example.test/catalog.json' };
+const source = { id: deriveMarketplaceSourceId(DEFAULT_CURATED_MARKETPLACE_SOURCE_URL), title: 'Curated', kind: 'curated' as const, sourceUrl: DEFAULT_CURATED_MARKETPLACE_SOURCE_URL };
 const communitySource = { id: 'marketplace:community-npm', title: 'Community npm', kind: 'community-npm' as const, sourceUrl: 'https://registry.npmjs.org/-/v1/search' };
 const COMMUNITY_INTEGRITY = 'sha512-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==';
 
@@ -110,6 +111,7 @@ function snapshot(): MarketplaceIndexSourceSnapshotV1 {
     source,
     freshness: { state: 'fresh', fetchedAtMs: 1 },
     entries: [],
+    picks: [],
     diagnostics: [],
   };
 }
@@ -306,7 +308,8 @@ describe('loadMarketplaceIndexSource', () => {
       client: communityNpmMetadataClient(communityHappierMetadata()),
     });
     const entry = community.entries[0]!;
-    const catalogSource = { ...source, kind };
+    const sourceUrl = kind === 'curated' ? source.sourceUrl : 'https://catalog.example.test/catalog.json';
+    const catalogSource = { ...source, id: deriveMarketplaceSourceId(sourceUrl), sourceUrl, kind };
     const review = kind === 'curated'
       ? { status: 'approved', reviewedAt: '2026-09-05T00:00:00.000Z' }
       : { status: 'unreviewed', reviewedAt: null };
@@ -646,6 +649,7 @@ describe('loadMarketplaceIndexSource', () => {
     await writeFile(cachePath, '{not-json', 'utf8');
     const result = await loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source, happyHomeDir: home, fetchImpl: async () => { throw new Error('offline'); } });
     expect(result.freshness.state).toBe('corrupt');
+    expect(result.picks).toEqual([]);
     expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'marketplace_cache_corrupt' })]);
   });
 
@@ -693,9 +697,8 @@ describe('loadMarketplaceIndexSource', () => {
     homes.push(home);
     await loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source, happyHomeDir: home, fetchImpl: async () => new Response(JSON.stringify(snapshot()), { status: 200 }), now: () => 100 });
     const rebound = { ...source, id: 'marketplace:other' };
-    const result = await loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source: rebound, happyHomeDir: home, fetchImpl: async () => { throw new Error('offline'); }, now: () => 200 });
-    expect(result.entries).toEqual([]);
-    expect(result.freshness.state).toBe('corrupt');
+    await expect(loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source: rebound, happyHomeDir: home, fetchImpl: async () => { throw new Error('offline'); }, now: () => 200 }))
+      .rejects.toMatchObject({ code: 'invalid_source' });
   });
 
   it('retains every cached diagnostic and the current refresh failure', async () => {

@@ -8,12 +8,16 @@ import { createPluginStateStore } from '@/plugins/store/state.testkit';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import { executePluginDevLoopAction } from './actions';
 
 const daemonControl = vi.hoisted(() => ({
   request: vi.fn(),
   decide: vi.fn(),
+  status: vi.fn(),
   development: vi.fn(),
   ensure: vi.fn(async () => {}),
 }));
@@ -21,6 +25,7 @@ const daemonControl = vi.hoisted(() => ({
 vi.mock('@/daemon/controlClient', () => ({
   requestDaemonPluginChange: daemonControl.request,
   decideDaemonPluginChange: daemonControl.decide,
+  readDaemonPluginChangeStatus: daemonControl.status,
   controlDaemonPluginDevelopment: daemonControl.development,
 }));
 
@@ -56,6 +61,7 @@ describe('executePluginDevLoopAction', () => {
   beforeEach(() => {
     daemonControl.request.mockReset();
     daemonControl.decide.mockReset();
+    daemonControl.status.mockReset();
     daemonControl.ensure.mockClear();
     daemonControl.development.mockReset();
   });
@@ -147,14 +153,17 @@ describe('executePluginDevLoopAction', () => {
     }
   });
 
-  it('registers a development install with the daemon root owner', async () => {
+  it('prepares a development install through the daemon change owner', async () => {
     const home = await createTempDir('happier-plugin-dev-loop-action-');
     const workspaceRoot = await createTempDir('happier-plugin-dev-loop-workspace-');
     const pluginRoot = await createTempDir('happier-plugin-dev-loop-source-', workspaceRoot);
     await materializeDevPlugin(pluginRoot);
-    daemonControl.development.mockResolvedValue({
-      kind: 'status',
-      status: { roots: [], plugins: [] },
+    daemonControl.request.mockResolvedValue({
+      kind: 'committed',
+      pluginId: 'acme.dev-loop',
+      desiredGeneration: 'generation-1',
+      appliedGeneration: 'generation-1',
+      pendingSurfaces: [],
     });
 
     try {
@@ -167,13 +176,13 @@ describe('executePluginDevLoopAction', () => {
 
       expect(install).toMatchObject({
         ok: true,
-        kind: 'plugins_dev_submit',
-        status: { roots: [], plugins: [] },
+        kind: 'plugins_install',
+        outcome: 'applied',
       });
-      expect(daemonControl.request).not.toHaveBeenCalled();
-      expect(daemonControl.development).toHaveBeenCalledWith({
-        kind: 'registerExplicit', rootPath: pluginRoot,
-      }, {});
+      expect(daemonControl.request).toHaveBeenCalledWith({
+        kind: 'development', sourceRootPath: pluginRoot,
+      });
+      expect(daemonControl.development).not.toHaveBeenCalled();
       expect(daemonControl.decide).not.toHaveBeenCalled();
       expect((await createPluginStateStore({ happyHomeDir: home }).read()).plugins).toEqual({});
     } finally {
@@ -230,6 +239,145 @@ describe('executePluginDevLoopAction', () => {
       await removeTempDir(workspaceRoot);
       await removeTempDir(home);
     }
+  });
+
+  it('settles a daemon install review once with approval-owner proof', async () => {
+    const integrity = `sha256-${Buffer.alloc(32, 7).toString('base64')}`;
+    const review = createPluginInstallationReviewFixture({
+      pluginId: 'acme.reviewed',
+      source: { kind: 'archive', locator: '/tmp/acme-reviewed.tgz', integrity, integrityBasis: 'observed' },
+      updateChannel: { kind: 'archive', locator: '/tmp/acme-reviewed.tgz' },
+    });
+    const pending = {
+      kind: 'reviewRequired' as const,
+      reviewKind: 'installation' as const,
+      pendingChangeId: 'pending-approved-install',
+      reason: 'firstInstall' as const,
+      currentVersion: null,
+      authorityExpansion: [],
+      review,
+    };
+    daemonControl.status.mockResolvedValue(pending);
+    daemonControl.decide.mockResolvedValue({
+      kind: 'committed',
+      pluginId: 'acme.reviewed',
+      desiredGeneration: 'generation-1',
+      appliedGeneration: 'generation-1',
+      pendingSurfaces: [],
+    });
+
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.install',
+      input: { path: '/tmp/acme-reviewed.tgz', kind: 'archive', integrity },
+      context: {
+        presentUserApproval: {
+          artifactId: 'approval-1',
+          actionId: 'plugins.install',
+          requestId: 'agent-install-1',
+          inputDigest: 'digest-1',
+        },
+      },
+    }, { approvedInstallReview: pending })).resolves.toMatchObject({
+      ok: true,
+      kind: 'plugins_install',
+      outcome: 'applied',
+      change: { kind: 'committed', pluginId: 'acme.reviewed' },
+    });
+    expect(daemonControl.request).not.toHaveBeenCalled();
+    expect(daemonControl.decide).toHaveBeenCalledTimes(1);
+    expect(daemonControl.decide).toHaveBeenCalledWith({
+      pendingChangeId: 'pending-approved-install',
+      decision: 'installAndTrust',
+      optionalSelections: [],
+    });
+  });
+
+  it('returns a typed failure when the approved Artifact names an expired daemon review', async () => {
+    const pending = {
+      kind: 'reviewRequired' as const,
+      reviewKind: 'installation' as const,
+      pendingChangeId: 'pending-expired-install',
+      reason: 'firstInstall' as const,
+      currentVersion: null,
+      authorityExpansion: [],
+      review: createPluginInstallationReviewFixture({ pluginId: 'acme.expired' }),
+    };
+    daemonControl.status.mockResolvedValue({ kind: 'expired' });
+
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.install',
+      input: { path: '/tmp/acme-expired', dev: true },
+      context: { presentUserApproval: { artifactId: 'approval-expired', actionId: 'plugins.install',
+        requestId: 'agent-install-expired', inputDigest: 'digest-expired' } },
+    }, { approvedInstallReview: pending })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'plugin_change_expired',
+      error: 'plugin_change_expired',
+    });
+    expect(daemonControl.decide).not.toHaveBeenCalled();
+  });
+
+  it('recovers an exact committed terminal daemon result without deciding it again', async () => {
+    const pending = {
+      kind: 'reviewRequired' as const,
+      reviewKind: 'installation' as const,
+      pendingChangeId: 'pending-committed-install',
+      reason: 'firstInstall' as const,
+      currentVersion: null,
+      authorityExpansion: [],
+      review: createPluginInstallationReviewFixture({ pluginId: 'acme.committed' }),
+    };
+    daemonControl.status.mockResolvedValue({
+      kind: 'terminal',
+      pendingChangeId: pending.pendingChangeId,
+      result: {
+        kind: 'committed',
+        pluginId: 'acme.committed',
+        desiredGeneration: 'generation-1',
+        appliedGeneration: 'generation-1',
+        pendingSurfaces: [],
+      },
+    });
+
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.install',
+      input: { path: '/tmp/acme-committed', dev: true },
+      context: { presentUserApproval: { artifactId: 'approval-committed', actionId: 'plugins.install',
+        requestId: 'agent-install-committed', inputDigest: 'digest-committed' } },
+    }, { approvedInstallReview: pending })).resolves.toMatchObject({
+      ok: true,
+      kind: 'plugins_install',
+      outcome: 'applied',
+      change: { kind: 'committed', pluginId: 'acme.committed' },
+    });
+    expect(daemonControl.decide).not.toHaveBeenCalled();
+  });
+
+  it('does not approve a second daemon review that was not carried by the approval Artifact', async () => {
+    const review = createPluginInstallationReviewFixture({ pluginId: 'acme.reviewed' });
+    const approved = {
+      kind: 'reviewRequired' as const, reviewKind: 'installation' as const,
+      pendingChangeId: 'pending-approved-install', reason: 'firstInstall' as const,
+      currentVersion: null, authorityExpansion: [], review,
+    };
+    const next = { ...approved, pendingChangeId: 'pending-unreviewed-install', reason: 'permissionsChanged' as const };
+    daemonControl.status.mockResolvedValue(approved);
+    daemonControl.decide
+      .mockResolvedValueOnce(next)
+      .mockResolvedValueOnce({ kind: 'committed', pluginId: 'acme.reviewed', desiredGeneration: 'generation-1',
+        appliedGeneration: 'generation-1', pendingSurfaces: [] });
+
+    await expect(executePluginDevLoopAction({
+      actionId: 'plugins.install', input: { path: '/tmp/acme-reviewed.tgz', kind: 'archive' },
+      context: { presentUserApproval: { artifactId: 'approval-1', actionId: 'plugins.install',
+        requestId: 'agent-install-1', inputDigest: 'digest-1' } },
+    }, { approvedInstallReview: approved })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'plugin_change_superseded',
+      error: 'plugin_change_superseded',
+      details: { change: { kind: 'reviewRequired', pendingChangeId: 'pending-unreviewed-install' } },
+    });
+    expect(daemonControl.decide).toHaveBeenCalledTimes(1);
   });
 
   it('does not silently trust arbitrary local dev installs outside the workspace', async () => {
@@ -357,109 +505,22 @@ describe('executePluginDevLoopAction', () => {
     }
   });
 
-  it('uninstalls through the canonical daemon change without a second reload', async () => {
-    const home = await createTempDir('happier-plugin-dev-loop-action-');
-    const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-dev-loop-source-'));
-    await materializeDevPlugin(pluginRoot);
-    try {
-      await createPluginStateStore({ happyHomeDir: home }).write({
-        t: 'happier_plugin_state_v1',
-        schemaVersion: 1,
-        plugins: {
-          'acme.dev-loop': {
-            source: {
-              kind: 'path',
-              locator: pluginRoot,
-              resolvedPath: pluginRoot,
-              manifestPath: join(pluginRoot, '.happier-plugin', 'plugin.json'),
-              trustPolicy: 'prompt',
-              installPolicy: 'link',
-              devWatch: true,
-            },
-            compatibility: { status: 'compatible', diagnostics: [] },
-            install: { mode: 'link', manifestVersion: '1.0.0' },
-            state: { enabled: true },
-          },
-        },
-      });
-      daemonControl.request.mockResolvedValue({
-        kind: 'committed',
-        pluginId: 'acme.dev-loop',
-        desiredGeneration: null,
-        appliedGeneration: null,
-        pendingSurfaces: [],
-      });
-
-      const result = await executePluginDevLoopAction({
-        actionId: 'plugins.uninstall' as any,
-        input: {
-          pluginId: 'acme.dev-loop',
-        },
-        happyHomeDir: home,
-      });
-
-      expect(result).toMatchObject({
-        ok: true,
-        kind: 'plugins_uninstall',
-        plugin: {
-          pluginId: 'acme.dev-loop',
-          source: {
-            kind: 'path',
-            devWatch: true,
-          },
-        },
-      });
-      expect(result).not.toHaveProperty('reload');
-      expect(daemonControl.request).toHaveBeenCalledWith({
-        kind: 'uninstall',
-        pluginId: 'acme.dev-loop',
-      });
-    } finally {
-      await removeTempDir(home);
-    }
+  it('validates uninstall input before dispatch and retains the daemon rejection for an unknown target', async () => {
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), pluginsDevLoopAction: executePluginDevLoopAction });
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+      approvalWaivedSurfaces: { 'plugins.uninstall': ['ui'] } }) };
+    expect(await executor.execute('plugins.uninstall', {}, context)).toMatchObject({ ok: false });
+    expect(daemonControl.request).not.toHaveBeenCalled();
+    daemonControl.request.mockResolvedValue({ kind: 'failed', code: 'plugin_change_preparation_failed', message: 'Unknown plugin id: acme.missing' });
+    const unknownTarget = await executor.execute('plugins.uninstall', { pluginId: 'acme.missing' }, context);
+    expect(unknownTarget, JSON.stringify(unknownTarget)).toMatchObject({
+      ok: true, result: { ok: false, kind: 'plugins_uninstall',
+        change: { kind: 'failed', code: 'plugin_change_preparation_failed' } },
+    });
+    expect(daemonControl.request).toHaveBeenCalledWith({ kind: 'uninstall', pluginId: 'acme.missing' });
   });
 
-  it('returns structured diagnostics when uninstall is missing a plugin id or target', async () => {
-    const home = await createTempDir('happier-plugin-dev-loop-action-');
-    try {
-      await expect(executePluginDevLoopAction({
-        actionId: 'plugins.uninstall' as any,
-        input: {},
-        happyHomeDir: home,
-      })).resolves.toMatchObject({
-        ok: false,
-        kind: 'plugins_uninstall',
-        diagnostics: [
-          {
-            code: 'plugin_manifest_semantic_invalid',
-            message: expect.stringMatching(/pluginId/i),
-          },
-        ],
-      });
-
-      await expect(executePluginDevLoopAction({
-        actionId: 'plugins.uninstall' as any,
-        input: {
-          pluginId: 'acme.missing',
-        },
-        happyHomeDir: home,
-      })).resolves.toMatchObject({
-        ok: false,
-        kind: 'plugins_uninstall',
-        diagnostics: [
-          {
-            code: 'plugin_source_missing',
-            message: expect.stringMatching(/acme\.missing/),
-          },
-        ],
-      });
-      expect(daemonControl.request).not.toHaveBeenCalled();
-    } finally {
-      await removeTempDir(home);
-    }
-  });
-
-  it('routes development reload through the daemon change owner without self-approval', async () => {
+  it('routes UI reload directly through the real owner while retaining waivable automation review and explicit Ask', async () => {
     const home = await createTempDir('happier-plugin-dev-loop-action-');
     const sourceRoot = await createTempDir('happier-plugin-dev-loop-source-');
     await materializeDevPlugin(sourceRoot, 'acme.broken');
@@ -489,18 +550,22 @@ describe('executePluginDevLoopAction', () => {
     });
 
     try {
-      await expect(executePluginDevLoopAction({
-        actionId: 'plugins.reload',
-        input: { pluginId: 'acme.broken' },
-        happyHomeDir: home,
-      })).resolves.toMatchObject({
-        ok: false,
-        kind: 'plugins_reload',
-        diagnostics: [{
-          code: 'plugin_change_failed',
-          message: "Development entrypoint './src/daemon.ts' failed to compile: Unexpected token",
-        }],
-      });
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), pluginsDevLoopAction: async args => executePluginDevLoopAction({ ...args, happyHomeDir: home }) });
+      const input = { pluginId: 'acme.broken' };
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(await executor.execute('plugins.reload', input, { surface })).toMatchObject({ ok: false });
+      }
+      const ask = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'plugins.reload': { approvalRequiredSurfaces: ['ui'] } } });
+      expect(await executor.execute('plugins.reload', input, { surface: 'ui', authority: 'present_user', actionsSettings: ask })).toMatchObject({ ok: false });
+      expect(daemonControl.development).not.toHaveBeenCalled();
+      for (const surface of ['ui', 'agent', 'mcp'] as const) {
+        const actionsSettings = surface === 'ui' ? undefined : ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'plugins.reload': [surface] } });
+        await expect(executor.execute('plugins.reload', input, { surface, actionsSettings,
+          ...(surface === 'ui' ? { authority: 'present_user' as const } : {}) })).resolves.toMatchObject({
+          ok: true, result: { ok: false, kind: 'plugins_reload', diagnostics: [{ code: 'plugin_change_failed',
+            message: "Development entrypoint './src/daemon.ts' failed to compile: Unexpected token" }] },
+        });
+      }
       expect(daemonControl.development).toHaveBeenCalledWith({
         kind: 'reload', rootPath: sourceRoot,
       }, {});

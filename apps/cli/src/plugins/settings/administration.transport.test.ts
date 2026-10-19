@@ -7,6 +7,7 @@ import { createRpcCallError, readRpcErrorCode } from '@happier-dev/protocol/rpcE
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createActionExecutor, type ActionExecutorDeps, type ApprovalRequest } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import type { Credentials } from '@/persistence';
 import { createApiSessionSocketStub, type ApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { fetchServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
@@ -17,6 +18,14 @@ import { configuration } from '@/configuration';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { handlePluginsSettingsCommand } from '@/cli/commands/pluginsSettings';
+import { captureConsoleText } from '@/testkit/logger/captureOutput';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 
 const {
   daemonReply,
@@ -574,7 +583,7 @@ describe('Plugin Settings Account administration explicit binding', () => {
       const intercepted: unknown[] = [];
       const observations: unknown[] = [];
       const secretValue = 'synthetic-private-credential';
-      const executor = createActionExecutor({ pluginSettingsAdministrationAction: actionPort(),
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), pluginSettingsAdministrationAction: actionPort(),
         isActionApprovalRequired: id => id === 'plugins.settings.set',
         approvalsCreate: async ({ request }) => { artifacts.push(request); return { artifactId: 'settings-approval' }; },
         interceptActionExecution: async ({ input: operand }) => {
@@ -582,7 +591,7 @@ describe('Plugin Settings Account administration explicit binding', () => {
           return { status: 'continue', input: transformToSecret ? { ...input, localId: 'token', value: secretValue } : operand };
         },
         observeActionExecution: observation => { observations.push(observation); },
-      } as ActionExecutorDeps);
+      });
       await expect(executor.execute('plugins.settings.set', { ...input,
         localId: transformToSecret ? 'other' : 'token', value: transformToSecret ? false : secretValue },
       { surface: 'cli', authority: 'present_user', serverId: 'server-1', actionCaller: { kind: 'host' }, actionRequestId: `private-write-${transformToSecret}` }))
@@ -596,24 +605,77 @@ describe('Plugin Settings Account administration explicit binding', () => {
     }
   });
 
-  it('retains an ordinary declared write for deferred approval and approved replay', async () => {
+  it.each([false, true])('retains an ordinary declared write for deferred approval and approved replay (signed CLI=%s)', async signed => {
     let request: ApprovalRequest | null = null;
-    const executor = createActionExecutor({ pluginSettingsAdministrationAction: actionPort(),
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), pluginSettingsAdministrationAction: actionPort(),
       isActionApprovalRequired: id => id === 'plugins.settings.set',
       approvalsCreate: async args => { request = args.request; return { artifactId: 'settings-approval' }; },
       approvalsGet: async () => request,
       approvalsUpdate: async args => { request = args.request; return { ok: true }; },
       isApprovalExecutionOriginCurrent: async () => true,
-    } as ActionExecutorDeps);
+    });
     const operand = { ...input, localId: 'other', value: false, expectedRevision: '7' };
-    await expect(executor.execute('plugins.settings.set', operand, { surface: 'cli', authority: 'present_user', serverId: 'server-1',
-      actionCaller: { kind: 'host' }, actionRequestId: 'ordinary-write' })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    const proposal = await executor.execute('plugins.settings.set', operand, { surface: 'cli', authority: 'present_user', serverId: 'server-1',
+      actionCaller: { kind: 'host' }, actionRequestId: 'ordinary-write',
+      ...(signed ? { runtimeAccountId: 'account-1', externalActionTarget: { kind: 'machine' as const, machineId: 'machine-1' },
+        externalActionExecutionAuthorization: { v: 1 as const, token: 'signed-terminal-invocation', binding: {
+          accountId: 'account-1', authentication: { kind: 'terminal' as const, tokenEpoch: 1 },
+          serverIdentityId: 'srv_home', machineId: 'machine-1', custodianAccountId: 'account-1', installationId: 'installation-1',
+          actionId: 'plugins.settings.set' as const, requestId: 'ordinary-write', requestEnvelopeDigest: 'a'.repeat(43),
+          target: { kind: 'machine' as const, machineId: 'machine-1' },
+        } }, signExternalActionApprovalInput: () => 'a'.repeat(86) } : {}),
+    });
+    expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(request).toMatchObject({ actionArgs: operand, approval: { flow: 'deferred' } });
     expect(values.other).toBe(true);
     await expect(executor.execute('approval.request.decide', { artifactId: 'settings-approval', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', serverId: 'server-1', actionCaller: { kind: 'host' }, actionRequestId: 'ordinary-decision' })).resolves.toMatchObject({ ok: true });
     expect(values.other).toBe(false);
     expect(revision).toBe(8);
+  });
+
+  it('captures a standalone Settings command as an approval through the credentialed executor', async () => {
+    const previousHome = configuration.happyHomeDir;
+    Object.assign(configuration, { happyHomeDir });
+    const credentials = { token: 'plain-settings-token', encryption: null, credentialProvenance: 'stored_session' as const };
+    const actionsSettingsProvider = createActionSettingsProvider({ accountSettings: accountSettingsParse({
+      actionsSettingsV1: { v: 1, actions: { 'plugins.settings.set': { approvalRequiredSurfaces: ['cli'] } } },
+    }) });
+    let approvalArtifact: { header: string; body: string } | undefined;
+    const post = axiosPost.getMockImplementation()!;
+    axiosPost.mockImplementation(async (url: string, body: { id: string; header: string; body: string }) => {
+      if (new URL(url).pathname === '/v1/artifacts') {
+        approvalArtifact = body;
+        return { status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 } };
+      }
+      return await post(url, body);
+    });
+    const output = captureConsoleText();
+    try {
+      await handlePluginsSettingsCommand([
+        'set', 'acme.settings', 'other', '--scope', 'account', '--value', 'false', '--expected-revision', '7', '--json',
+      ], {
+        readCredentialsFn: async () => credentials,
+        createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params, actionsSettingsProvider,
+          serverIdentityId: target.serverIdentityId,
+        }),
+      });
+      expect(JSON.parse(output.text()), output.text()).toMatchObject({ ok: true, data: { kind: 'approval_request_created' } });
+      expect(approvalArtifact).toBeDefined();
+      const header = ArtifactHeaderMetadataV1Schema.parse(decodePlainArtifactStoredContent(approvalArtifact!.header));
+      const body = decodePlainArtifactStoredContent(approvalArtifact!.body);
+      const approval = approvalArtifactBodyMatchesHeaderV1(header, body && typeof body === 'object' && 'body' in body && typeof body.body === 'string' ? body.body : null);
+      expect(approval).toMatchObject({ family: 'built_in', request: {
+        actionId: 'plugins.settings.set', status: 'open', approval: { flow: 'deferred' },
+        executionOriginV1: { surface: 'cli', requestId: expect.any(String) },
+      } });
+      expect(values.other).toBe(true);
+      expect(revision).toBe(7);
+    } finally {
+      output.restore();
+      Object.assign(configuration, { happyHomeDir: previousHome });
+      process.exitCode = undefined;
+    }
   });
 
   it('reads an exact server binding, explicit fallback, and omitted legacy fallback distinctly', async () => {

@@ -26,7 +26,7 @@ import { createStablePluginEventsBroker } from '@/plugins/runtime/invocation/ser
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveNotificationChannelSettingsContributions } from '@/plugins/settings/notificationChannelSettings';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import {
   callMachineRpc,
   readMachineRpcRequestDisposition,

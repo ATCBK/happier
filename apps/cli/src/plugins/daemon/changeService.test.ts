@@ -113,7 +113,6 @@ describe('createDaemonPluginChangeService', () => {
     const retained = await service.requestPluginChange({
       kind: 'installPath',
       locator: '/plugins/acme.trusted',
-      development: true,
     }, { retainReview: true });
     expect(retained).toMatchObject({
       kind: 'reviewRequired',

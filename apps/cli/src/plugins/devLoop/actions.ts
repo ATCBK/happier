@@ -60,7 +60,7 @@ export type ExecutePluginDevLoopActionParams = Readonly<{
    * Narrow canonical Action context. The executor remains the sole caller
    * policy owner; the development cycle consumes only its cancellation signal.
    */
-  context?: Pick<ActionExecutorContext, 'actionCaller' | 'signal' | 'presentUserApproval'>;
+  context?: Pick<ActionExecutorContext, 'actionCaller' | 'signal' | 'presentUserApproval' | 'actionRequestId'>;
 }>;
 
 function readInput(input: unknown): PluginDevLoopActionInput {
@@ -159,18 +159,21 @@ async function settleApprovedInstallReview(
     decision: 'approve',
     ...(params.context?.signal ? { signal: params.context.signal } : {}),
   });
-  return outcome.kind === 'committed'
-    ? { ok: true, kind: 'plugins_install', outcome: 'applied', change: outcome }
-    : {
-        ok: false,
-        kind: 'plugins_install',
-        outcome: 'failed',
-        change: outcome,
-        diagnostics: [{
-          code: `plugin_change_${outcome.kind}`,
-          message: 'The daemon did not apply the approved plugin install.',
-        }],
-      };
+  const settled = outcome.kind === 'terminal' ? outcome.result : outcome;
+  if (settled.kind === 'committed') {
+    return { ok: true, kind: 'plugins_install', outcome: 'applied', change: settled };
+  }
+  const errorCode = outcome.kind === 'terminal' || outcome.kind === 'reviewRequired'
+    ? 'plugin_change_superseded'
+    : outcome.kind === 'daemonUnavailable'
+      ? 'plugin_change_daemon_unavailable'
+      : `plugin_change_${outcome.kind}`;
+  return {
+    ok: false,
+    errorCode,
+    error: errorCode,
+    details: { change: outcome },
+  };
 }
 
 async function runPluginDevelopmentAction(params: Readonly<{

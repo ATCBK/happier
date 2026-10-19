@@ -250,7 +250,7 @@ function createPluginAuthoringSkillSource(invokerName: string, ui?: PluginScaffo
     '',
     '## Reviews and reconnecting',
     '',
-    `A local-path install carries code trust only. A separate authority decision still returns a daemon-issued pending ID for a present user to decide. Preserve that ID and rejoin the same change with \`${invokerName} plugins change status <pendingChangeId> --json\`; a present user decides it with \`${invokerName} plugins change approve <pendingChangeId> --json\` or \`${invokerName} plugins change reject <pendingChangeId> --json\`, or from Settings -> Plugins on that machine. Do not submit a second change request while a review or apply is pending. Optional host resources and secrets always stay with their canonical authority owner.`,
+    `A local-path install can create an ordinary \`plugins.install\` approval Artifact. A present user inspects the daemon-evaluated manifest, permissions, and host access in the Happier Inbox and decides there; an Artifact that is still awaiting daemon evaluation cannot be approved. Preserve any daemon-issued pending ID for status inspection with \`${invokerName} plugins change status <pendingChangeId> --json\`, and do not submit a second change request while a review or apply is pending. Optional host resources and secrets always stay with their canonical authority owner.`,
     'A pending ID can be rejoined only during the same daemon lifetime. If status reports `expired` after a daemon restart, rerun the original development or install request and review its newly prepared facts; do not reuse the old pending ID. `outcome_unknown` is different: inspect installed state before replaying a mutation.',
     '',
   ].join('\n');

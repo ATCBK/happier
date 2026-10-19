@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 
 import { evaluatePluginAuthorRuntimeStagingSource } from './runtimeStagingSource';
 import { evaluatePluginDevelopmentCandidate } from './sourceModule';
@@ -13,6 +14,10 @@ import { createPluginActivationSourceResolver } from '../runtime/pluginActivatio
 import { createBundledActivationSourceResolver } from '../runtime/bundledActivationSource';
 import { bindPluginRuntimeSourceAuthority } from '../runtime/sourceAuthority';
 import { activateContributionModule } from '../runtime/lifecycle/activation/activateContributionModule';
+import { createPluginRuntimeOccurrenceId } from '../runtime/runtimeSlots';
+import { projectLoadedPluginContributes } from '../projection/registry/resolvePluginContributions';
+import { createResolvedContributionRegistry } from '../projection/registry/createResolvedContributionRegistry';
+import { buildPluginProjectionV2 } from '../projection/registry/projection/v2';
 
 function bundledPluginRoot(packageName: string): string {
   return resolve(
@@ -101,6 +106,43 @@ async function createSessionRunnerFixture(input: Readonly<{
 }
 
 describe('plugin author runtime staging authority', () => {
+  it('stages the external public capability fixture with its registered Session runner', async () => {
+    const rootPath = resolve(dirname(fileURLToPath(import.meta.url)),
+      '../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-capabilities');
+    const staged = await evaluatePluginAuthorRuntimeStagingSource({ locator: rootPath, rootPath });
+    expect(staged.evaluated.manifest.id).toBe('qa.capabilities');
+    expect(staged.evaluated.manifest.contributes?.skills).toEqual([
+      { id: 'check-capabilities', directory: './resources/skills/check-capabilities' },
+    ]);
+    const { manifest, entry } = staged.evaluated;
+    const pluginRootPath = await realpath(rootPath);
+    const occurrenceId = createPluginRuntimeOccurrenceId(manifest.id);
+    const registry = createResolvedContributionRegistry({
+      ...projectLoadedPluginContributes({
+        provenance: 'external',
+        loadResult: {
+          loadedPlugins: [{
+            pluginId: manifest.id, pluginRootPath, manifestPath: entry.entryPath,
+            daemonEntryPath: null, devDaemonEntryPath: entry.entryPath, manifest,
+            sourceSpec: { kind: 'path', locator: pluginRootPath, trustPolicy: 'local_trusted', installPolicy: 'link' },
+          }],
+          diagnosticsByPluginId: {},
+        },
+      }),
+      occurrenceIdsByPluginId: { [manifest.id]: occurrenceId },
+    });
+    const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
+    expect(projection.familiesById.skills?.entriesById['qa.capabilities/check-capabilities']).toMatchObject({
+      pluginId: manifest.id, occurrenceId,
+      definition: { id: 'check-capabilities', directory: './resources/skills/check-capabilities' },
+    });
+    expect(staged.sessionRunnerFactories).toEqual([expect.objectContaining({
+      localAgentId: 'session-agent', normalizedModulePath: 'src/agent/sessionAgent.ts', loadMode: 'source-ts',
+    })]);
+    expect(staged.evaluated.manifest.contributes?.mcp?.servers).toEqual([
+      expect.objectContaining({ id: 'fixture-tools', kind: 'dynamic' }),
+    ]);
+  });
   it('activates a development Session runner from the same admitted candidate scope', async () => {
     const pluginId = 'example.development-agent';
     const fixture = await createSessionRunnerFixture({ pluginId });
@@ -149,7 +191,7 @@ describe('plugin author runtime staging authority', () => {
     }
   });
 
-  it('stages the real Antigravity source graph through the source importer when its installed SDK dist lacks the OAuth profile', async () => {
+  it('stages the real Antigravity source graph through the source importer when its installed SDK dist lacks the OAuth profile', async ({ onTestFailed }) => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-antigravity-source-staging-'));
     const sdkRoot = resolve(ANTIGRAVITY_PLUGIN_ROOT, '../../plugin-sdk');
     const installedSdkRoot = join(rootPath, 'node_modules', '@happier-dev', 'plugin-sdk');
@@ -172,28 +214,41 @@ describe('plugin author runtime staging authority', () => {
       const generatorTsconfigPath = fileURLToPath(new URL('../../../scripts/build-owned/tsconfig.generator-runtime.json', import.meta.url));
       const sourceRuntimePath = resolve(sdkRoot, '../cli-common/registerSourceRuntime.mjs');
       const inspectionOwnerPath = fileURLToPath(new URL('../../../scripts/build-owned/bundledPlugins/typescriptModuleInspection.ts', import.meta.url));
-      const { stdout } = await execFileAsync(process.execPath, [
+      const phases: string[] = [];
+      onTestFailed(() => {
+        console.error('Antigravity source child phases:', phases.join('\n'));
+      });
+      const child = execFileAsync(process.execPath, [
         '--conditions=happier-source', '--import', sourceRuntimePath, '--input-type=module', '-e',
         [
           'import { register } from "tsx/esm/api";',
           'const [ownerPath, tsconfig, rootPath, inspectionOwnerPath] = process.argv.slice(1);',
+          'const phase = name => console.error(JSON.stringify({ phase: name, atMs: Date.now() }));',
           'const loader = register({ namespace: "antigravity-source-staging", tsconfig });',
           'try {',
+          '  phase("source owner import");',
           '  const { evaluatePluginAuthorRuntimeStagingSource } = await loader.import(ownerPath, import.meta.url);',
+          '  phase("SDK OAuth profile import");',
           '  const { ANTIGRAVITY_OAUTH_PROFILE } = await loader.import("@happier-dev/plugin-sdk/first-party/connected-accounts", `${rootPath}/src/index.ts`);',
+          '  phase("inspection owner import");',
           '  const { inspectTypescriptModule } = await loader.import(inspectionOwnerPath, import.meta.url);',
           '  const { readAgentNativeHomeEnvironmentKeys } = await loader.import(ownerPath.replace("runtimeStagingSource.ts", "agentNativeHomeEnvironmentKeys.ts"), import.meta.url);',
+          '  phase("static definition inspection");',
           '  const staticDefinition = await inspectTypescriptModule(`${rootPath}/src/agent/definition.ts`);',
+          '  phase("source activation");',
           '  const staged = await evaluatePluginAuthorRuntimeStagingSource({',
           '    locator: `${rootPath}/src/index.ts`, rootPath,',
           '    authority: { kind: "bundled_first_party", pluginId: "happier.agent.antigravity", packageRootPath: rootPath },',
           '    loadModule: entryPath => loader.import(entryPath, import.meta.url),',
           '  });',
+          '  phase("complete");',
           '  console.log(JSON.stringify({ pluginId: staged.evaluated.manifest.id, runnerCount: staged.sessionRunnerFactories.length, allowRawAuthorizationCode: ANTIGRAVITY_OAUTH_PROFILE.allowRawAuthorizationCode, staticHomeKeys: readAgentNativeHomeEnvironmentKeys(staticDefinition.AGENT_STATE_SHARING_DESCRIPTOR), runtimeHomeKeys: staged.agentNativeHomeEnvironmentKeys }));',
           '} catch (error) { console.error(error.message); process.exitCode = 1; } finally { loader(); }',
         ].join('\n'),
       ownerPath, generatorTsconfigPath, rootPath, inspectionOwnerPath,
       ]);
+      child.child.stderr?.on('data', (chunk: Buffer) => { phases.push(chunk.toString('utf8')); });
+      const { stdout } = await child;
       expect(JSON.parse(stdout.trim())).toEqual({
         pluginId: 'happier.agent.antigravity', runnerCount: 0, allowRawAuthorizationCode: true,
         staticHomeKeys: ['GEMINI_HOME'], runtimeHomeKeys: ['GEMINI_HOME'],

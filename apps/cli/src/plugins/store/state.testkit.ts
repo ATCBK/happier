@@ -252,11 +252,15 @@ export async function writeCommittedLocalPathPluginFixture(params: Readonly<{
   });
   const currentPlugin = currentInstallationState.plugins[params.pluginId];
   if (!currentPlugin) throw new Error('Committed local-path fixture is absent from installation state');
+  const retainedRuntimePlugins = params.preserveExistingPlugins
+    ? currentInstallationState.runtimeCatalog?.plugins
+    : {};
+  if (!retainedRuntimePlugins) throw new Error('Committed local-path fixture has no runtime catalog to preserve');
   const runtimeCatalog = PluginStateFileV1Schema.parse({
     t: 'happier_plugin_state_v1',
     schemaVersion: 1,
     plugins: {
-      ...(params.preserveExistingPlugins ? currentInstallationState.runtimeCatalog.plugins : {}),
+      ...retainedRuntimePlugins,
       [params.pluginId]: {
         ...params.plugin,
         source: {

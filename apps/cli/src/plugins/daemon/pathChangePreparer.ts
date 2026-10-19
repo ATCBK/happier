@@ -390,7 +390,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
           ...(existing ? { currentVersion: existing.install.manifestVersion } : {}),
           authorityExpansion,
           requiresReview,
-          ...(requiresReview ? { review } : {}),
+          review,
           cleanup: preparedRoot.cleanup,
         });
         return candidate;
