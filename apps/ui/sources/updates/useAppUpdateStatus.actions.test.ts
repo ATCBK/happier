@@ -7,6 +7,8 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { useAppUpdateStatus } from './useAppUpdateStatus';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { installLocalStorageMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
     .createSocketIoClientBoundary(importOriginal));
@@ -15,6 +17,9 @@ vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
 });
+// This journey accepts the app update confirmation through the human-input boundary.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal'))
+    .createModalModuleMock({ confirmResult: true }).module);
 // Tauri IPC/events and Expo's native SDK are genuine platform boundaries. No updater is mocked.
 vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
 vi.mock('expo-updates', () => ({
@@ -32,18 +37,18 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
 });
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let browserStorage: LocalStorageMockHandle | undefined;
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'app-account', encryptionMode: 'plain' });
-afterEach(async () => { await connection?.dispose(); connection = undefined; artifacts.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+afterEach(async () => { await connection?.dispose(); connection = undefined; artifacts.clear(); browserStorage?.restore(); browserStorage = undefined; vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 it('executes desktop skip, check, update, retry and restart through the mounted canonical app owner', async () => {
     vi.stubEnv('EXPO_PUBLIC_HAPPIER_DESKTOP_UPDATES_ENABLED', '1');
     vi.stubGlobal('__DEV__', false);
-    const saved = new Map<string, string>();
-    vi.stubGlobal('localStorage', { getItem: (key: string) => saved.get(key) ?? null,
-        setItem: (key: string, value: string) => { saved.set(key, value); } });
     let offeredVersion = '1.2.0';
     let downloads = 0;
-    const invoke = vi.fn(async (command: string) => {
+    const secureStorage = createDesktopSecureStorageBoundary();
+    const invoke = vi.fn(async (command: string, args?: Readonly<Record<string, unknown>>) => {
+        if (command.startsWith('desktop_secure_storage_')) return await secureStorage.invoke(command, args);
         if (command === 'desktop_fetch_update') return { version: offeredVersion, currentVersion: '1.0.0', downloaded: false };
         if (command === 'desktop_download_update') {
             downloads += 1;
@@ -56,6 +61,8 @@ it('executes desktop skip, check, update, retry and restart through the mounted 
     const internals = { invoke };
     vi.stubGlobal('__TAURI_INTERNALS__', internals);
     vi.stubGlobal('window', { __TAURI_INTERNALS__: internals, addEventListener: () => {}, removeEventListener: () => {} });
+    browserStorage = installLocalStorageMock();
+    const saved = browserStorage.store;
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(createRootLayoutFeaturesResponse({
         features: { updates: { ota: { enabled: false } } },
     }))));

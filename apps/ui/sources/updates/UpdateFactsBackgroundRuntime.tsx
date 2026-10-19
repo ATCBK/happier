@@ -6,6 +6,7 @@ import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/stat
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 /**
  * Keeps the Updates summary's coverage: asks each online machine for its tools' update facts
@@ -27,7 +28,13 @@ export function UpdateFactsBackgroundRuntime(props: Readonly<{ enabled: boolean 
     );
     React.useEffect(() => {
         if (!props.enabled || !onlineKey) return;
-        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey.split('\u0000') });
-    }, [onlineKey, props.enabled, serverId]);
+        const controller = new AbortController();
+        const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => controller.abort());
+        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey.split('\u0000'), signal: controller.signal });
+        return () => {
+            controller.abort();
+            retirement?.dispose();
+        };
+    }, [accountScope?.accountId, onlineKey, props.enabled, serverId]);
     return null;
 }

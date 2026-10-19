@@ -15,7 +15,7 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { registerUpdatesActionOwner, type UpdatesActionOwner } from './updatesActionRuntime';
 import { isUpdateItemActionable } from './items/updateItem';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
-import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 
 import { buildMachineUpdateGroups, readUpdatableInstallables, type UpdatesGroup } from './buildMachineUpdateGroups';
 import { buildUpdatesSummary, type UpdatesSummary } from './items/buildUpdatesSummary';
@@ -100,8 +100,14 @@ export function useUpdatesContentModel(): UpdatesContentModel {
     const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds);
     // Opening the surface asks each online machine through the cache's existing freshness policy.
     React.useEffect(() => {
-        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey ? onlineKey.split('\u0000') : [] });
-    }, [onlineKey, serverId]);
+        const controller = new AbortController();
+        const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => controller.abort());
+        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey ? onlineKey.split('\u0000') : [], signal: controller.signal });
+        return () => {
+            controller.abort();
+            retirement?.dispose();
+        };
+    }, [activeHomeScope?.accountId, onlineKey, serverId]);
 
     const { groups, remotes, uncheckedMachineCount, factsCheckedAt } = React.useMemo(() => {
         const built = buildMachineUpdateGroups({
@@ -182,16 +188,16 @@ export function useUpdatesContentModel(): UpdatesContentModel {
     const stopAfterCurrent = React.useCallback(() => { void executeAction('updates.batch.stop', {}); }, [executeAction]);
 
     const check = React.useCallback(async () => {
-        if (!isCurrent()) return;
+        if (!updateScope || !isCurrent()) return;
         const appCheck = app.checkNow();
         // Explicit Check is also recovery: its reply can clear a failed request observation.
         for (const machine of machines) {
             if (isMachineVisibleForLaunchSelection(machine) && machine.availability?.kind !== 'locked') {
-                refreshMachineUpdateFacts(serverId, machine.id);
+                refreshMachineUpdateFacts(serverId, machine.id, { accountScope: updateScope });
             }
         }
         await appCheck;
-    }, [app, isCurrent, machines, serverId]);
+    }, [app, isCurrent, machines, serverId, updateScope]);
     const checkNow = React.useCallback(() => { void executeAction('updates.check', {}); }, [executeAction]);
     const skipAppVersion = React.useCallback(() => {
         if (appItem.latestVersion) void executeAction('app.updates.skip', { version: appItem.latestVersion });
