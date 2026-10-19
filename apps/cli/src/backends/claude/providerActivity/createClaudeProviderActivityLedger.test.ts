@@ -606,7 +606,19 @@ describe('createClaudeProviderActivityLedger', () => {
         apply({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
         expect(ledger.getActiveProviderTaskCount()).toBe(1);
 
+        const subagentStop = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'SubagentStop',
+            session_id: 's1',
+            agent_id: 'agent-1',
+        });
+        expect(subagentStop).not.toBeNull();
+        if (subagentStop) ledger.apply(subagentStop);
+        expect(ledger.getActiveProviderTaskCount()).toBe(1);
+
         apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+        // An Agent that never wakes holds nothing open once its children settle.
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+        if (subagentStop) ledger.apply(subagentStop);
         expect(ledger.getActiveProviderTaskCount()).toBe(0);
 
         apply({ subtype: 'task_progress', task_id: 'agent-1' });
@@ -616,6 +628,26 @@ describe('createClaudeProviderActivityLedger', () => {
         expect(ledger.getActiveProviderTaskCount()).toBe(0);
         apply({ subtype: 'task_progress', task_id: 'agent-1' });
         expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    });
+
+    it.each([
+        ['failed', { subtype: 'task_notification', task_id: 'agent-1', status: 'failed' }],
+        ['killed', { subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'killed' } }],
+    ])('does not let a %s Agent with live children wake on later progress', (_status, terminalRow) => {
+        const ledger = createClaudeProviderActivityLedger();
+        const apply = sdkRowApplier(ledger);
+        apply({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
+        apply({
+            subtype: 'task_started',
+            task_id: 'bash-1',
+            task_type: 'local_bash',
+            is_backgrounded: true,
+            owned_by_subagent: true,
+            parent_task_id: 'agent-1',
+        });
+        apply(terminalRow);
+        apply({ subtype: 'task_progress', task_id: 'agent-1' });
+        expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'agent-1' })).toBe(false);
     });
 
     it('keeps an agent resumable while a nested agent it owns still waits on or resumes its own work', () => {

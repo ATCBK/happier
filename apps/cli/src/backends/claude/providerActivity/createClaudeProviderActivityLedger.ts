@@ -409,11 +409,13 @@ export function createClaudeProviderActivityLedger() {
             if (activity.type === 'terminal') {
                 if (current?.phase === 'active') {
                     const identity = { sessionId: activity.sessionId, taskId: activity.taskId };
+                    // Only a completed stop can be interim; a failed or stopped Agent never wakes.
+                    const awaitsChildren = activity.terminalStatus === 'completed' && hasActiveChild(identity);
                     tasks.set(key, {
                         phase: 'terminal-before-confirmation',
                         identity,
                         backgroundConfirmed: true,
-                        ...(hasActiveChild(identity) ? { awaitingChildren: true as const } : {}),
+                        ...(awaitsChildren ? { awaitingChildren: true as const } : {}),
                         ...withParent(current.parentTaskId),
                     });
                     return true;
