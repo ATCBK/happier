@@ -20,6 +20,69 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
 
     afterAll(async () => { if (connected) await db.$disconnect(); });
 
+    it("recovers an expired callback after Prisma evicts its closed-transaction diagnostic", async () => {
+        const config = readDatabaseTransactionConfigFromEnv(process.env, "postgres");
+        const account = await db.account.create({ data: { publicKey: randomUUID() } });
+        const transaction = db.$transaction;
+        let attempts = 0;
+        let expiredError: unknown;
+        let evictedError: unknown;
+        const publications: number[] = [];
+        try {
+            // Prisma6.19.2 ItxManager retains the last100 closed transactions.
+            // Expiry first proves rollback; churn then removes only its message,
+            // reproducing a live callback whose next SQL receives P2028 NotFound.
+            // This adapter owns the native fault; inTx and its callback stay real.
+            db.$transaction = new Proxy(transaction, {
+                apply(target, receiver, args: unknown[]) {
+                    const callback = args[0];
+                    if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                    return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                        if (attempts === 0) {
+                            await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
+                            try { await tx.$queryRaw`SELECT 1::int AS value`; }
+                            catch (error) { expiredError = error; }
+                            for (let i = 0; i < 101; i += 1) {
+                                await Reflect.apply(target, receiver, [
+                                    async (other: Tx) => { await other.$queryRaw`SELECT 1::int AS value`; },
+                                    { timeout: config.timeoutMs, maxWait: config.maxWaitMs },
+                                ]);
+                            }
+                            // The native manager moves closed entries into its
+                            // diagnostic cache when their own timeout task fires.
+                            await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
+                            attempts += 1;
+                            try { return await callback(tx); }
+                            catch (error) { evictedError = error; throw error; }
+                        }
+                        attempts += 1;
+                        return await callback(tx);
+                    }, ...args.slice(1)]);
+                },
+            });
+            const result = await inTx(async tx => {
+                const receipt = await tx.account.update({ where: { id: account.id },
+                    data: { seq: { increment: 1 } }, select: { seq: true } });
+                afterTx(tx, () => { publications.push(attempts); });
+                return receipt;
+            }, { transactionClass: "test-evicted-expired-callback" });
+            expect(expiredError).toMatchObject({ code: "P2028", meta: {
+                error: expect.stringContaining("expired transaction"),
+            } });
+            expect(evictedError).toMatchObject({ code: "P2028", meta: {
+                error: expect.stringContaining("Transaction not found"),
+            } });
+            expect(result).toEqual({ seq: 1 });
+            expect(attempts).toBe(2);
+            expect(publications).toEqual([2]);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
+                .toEqual({ seq: 1 });
+        } finally {
+            db.$transaction = transaction;
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
     it("retries an expired P2028 publication within the existing budget without repeating its committed effect", async () => {
         const config = readDatabaseTransactionConfigFromEnv(process.env, "postgres");
         expect(config.maxRetries).toBeGreaterThan(0);

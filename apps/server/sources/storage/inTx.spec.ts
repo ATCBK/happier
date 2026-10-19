@@ -4,6 +4,7 @@ import { PrismaClientKnownRequestError, PrismaClientUnknownRequestError } from "
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
 import { installDbModuleMock, inTxPostgresControlStatementMock } from "../app/api/testkit/dbMocks";
 import { withWebLatencyTrace } from "@/utils/webLatencyTrace";
+import { prismaRuntime } from "@/storage/prisma";
 import type { Tx } from "./inTx";
 
 // PostgreSQL command execution is the database boundary, including LOCAL settings.
@@ -504,7 +505,7 @@ describe("inTx", () => {
         expect(delayMock.mock.calls).toEqual([[200], [400], [800], [1600], [3200], [5000], [5000], [5000]]);
     });
 
-    it.each(["postgres", "mysql"])("retries transaction acquisition P2028 before the callback starts on %s", async (provider) => {
+    it.each(["postgres", "mysql", "sqlite"].flatMap(provider => ["P2028", "P2024"].map(code => ({ provider, code }))))("retries transaction acquisition $code before the callback starts on $provider", async ({ provider, code }) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -512,7 +513,7 @@ describe("inTx", () => {
         });
         const acquisitionError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         transaction
             .mockRejectedValueOnce(acquisitionError)
@@ -526,7 +527,7 @@ describe("inTx", () => {
         expect(delayMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reports exhausted transaction acquisition as typed unavailability with the original cause", async () => {
+    it.each(["P2028", "P2024"])("reports exhausted transaction acquisition %s as typed unavailability with the original cause", async (code) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -535,7 +536,7 @@ describe("inTx", () => {
         });
         const acquisitionError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         transaction.mockRejectedValue(acquisitionError);
         const transactionBody = vi.fn(async () => 791);
@@ -547,7 +548,7 @@ describe("inTx", () => {
         expect(transactionBody).not.toHaveBeenCalled();
     });
 
-    it("does not classify an acquisition-shaped P2028 thrown after the callback starts as transaction acquisition", async () => {
+    it.each(["P2028", "P2024"])("does not classify %s thrown after the callback starts as transaction acquisition", async (code) => {
         restoreEnv(envSnapshot);
         applyEnvValues({
             HAPPY_DB_PROVIDER: undefined,
@@ -555,7 +556,7 @@ describe("inTx", () => {
         });
         const operationError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         const transactionBody = vi.fn(async () => {
             throw operationError;
@@ -588,6 +589,40 @@ describe("inTx", () => {
         await expect(inTx(async () => { throw failure; })).rejects.toBe(failure);
         expect(transaction).toHaveBeenCalledTimes(1);
         expect(delayMock).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])("keeps native missing-transaction recovery inside its unfinished callback (callback completed: %s)", async completed => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "1" });
+        const failure = new prismaRuntime.PrismaClientKnownRequestError("Transaction API error", {
+            code: "P2028", clientVersion: "6.19.2",
+            meta: { error: "Transaction not found. Transaction ID is invalid, refers to an old closed transaction Prisma doesn't have information about anymore, or was obtained before disconnecting." },
+        });
+        const published: number[] = [];
+        let attempts = 0;
+        transaction.mockImplementation(async fn => {
+            attempts += 1;
+            if (completed) {
+                await fn({ ...transactionBoundary(), $queryRawUnsafe: async () => [] });
+                throw failure;
+            }
+            return fn({ ...transactionBoundary(),
+                $queryRawUnsafe: async () => { if (attempts === 1) throw failure; return []; },
+            });
+        });
+        const result = inTx(async tx => {
+            afterTx(tx, () => { published.push(attempts); });
+            await tx.$queryRawUnsafe("callback read");
+            return "committed";
+        });
+        if (completed) {
+            await expect(result).rejects.toBe(failure);
+            expect(attempts).toBe(1);
+            expect(published).toEqual([]);
+        } else {
+            await expect(result).resolves.toBe("committed");
+            expect(attempts).toBe(2);
+            expect(published).toEqual([2]);
+        }
     });
 
     it("retries raw postgres serialization aborts that are not wrapped as P2034", async () => {
@@ -640,6 +675,7 @@ describe("inTx", () => {
     it.each([
         { code: "P2034", message: "Transaction rolled back after a write conflict" },
         { code: "P2028", message: "Unable to start a transaction in the given time." },
+        { code: "P2024", message: "Timed out fetching a new connection from the connection pool." },
         { code: "P2028", message: "A query cannot be executed on an expired transaction." },
     ])("does not claim definite no-effect after an earlier ambiguous SQLite attempt ($code)", async ({ code, message }) => {
         restoreEnv(envSnapshot);

@@ -160,6 +160,12 @@ function isExpiredTransactionError(error: unknown): boolean {
             .includes("a query cannot be executed on an expired transaction");
 }
 
+function isMissingPrismaTransactionError(error: unknown): boolean {
+    return error instanceof prismaRuntime.PrismaClientKnownRequestError
+        && error.code === "P2028"
+        && readTransactionErrorMessage(error).startsWith("Transaction not found.");
+}
+
 export function isTransactionAcquisitionTimeout(error: unknown): boolean {
     return isPrismaErrorCode(error, "P2028")
         && readTransactionErrorMessage(error).toLowerCase().includes("unable to start a transaction");
@@ -300,6 +306,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
     const startedAtMs = Date.now();
     let ambiguousAttemptFailure: { error: unknown } | undefined;
     let transactionCallbackEntered = false;
+    let transactionCallbackCompleted = false;
     let wrapped = async (tx: Tx, timeoutMs: number, fence?: (tx: Tx) => Promise<void>) => {
         const attemptStartedAtMs = Date.now();
         transactionCallbackEntered = true;
@@ -322,10 +329,12 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
         if (fence) await fence(tx);
         let result = await timeWebLatencyPhase('db.transaction.callback', () => fn(tx), options?.transactionClass);
         let callbacks = (tx as any)[symbol] as (() => void)[];
+        transactionCallbackCompleted = true;
         return { result, callbacks };
     }
     while (true) {
         transactionCallbackEntered = false;
+        transactionCallbackCompleted = false;
         try {
             const fence = options?.prepare
                 ? await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass)
@@ -380,12 +389,24 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             }
             return result.result;
         } catch (e) {
-            const acquisitionTimeout = isTransactionAcquisitionTimeout(e) && !transactionCallbackEntered;
+            // P2024 is the pool-acquisition form of the same pre-callback
+            // failure. Reuse this owner's recovery budget and no-effect result;
+            // a failure after callback entry must retain its outcome certainty.
+            const acquisitionTimeout = !transactionCallbackEntered
+                && (isTransactionAcquisitionTimeout(e) || isPrismaErrorCode(e, "P2024"));
             const sqlState = provider === "postgres" ? readPostgresTransactionSqlState(e) : undefined;
+            // Prisma evicts old closed-transaction diagnostics under churn. A
+            // missing native transaction before our callback completes cannot
+            // have committed: only $transaction may commit after that return.
+            // After the return, the same error remains an unknown outcome.
+            const missingBeforeCommit = transactionCallbackEntered && !transactionCallbackCompleted
+                && isMissingPrismaTransactionError(e);
             const retryable = acquisitionTimeout
+                || missingBeforeCommit
                 || (transactionCallbackEntered && e instanceof TransactionReplayRequiredError)
                 || isRetryableTransactionError({ provider, err: e });
             const confirmedRollback = (transactionCallbackEntered && e instanceof TransactionReplayRequiredError)
+                || missingBeforeCommit
                 || (transactionCallbackEntered && e instanceof TransactionAttemptDeadlineExceededError)
                 || isPrismaErrorCode(e, "P2034")
                 // Prisma has already rolled back an expired interactive

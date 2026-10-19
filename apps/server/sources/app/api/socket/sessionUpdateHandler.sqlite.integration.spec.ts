@@ -1302,7 +1302,10 @@ describe("session update handler on SQLite", () => {
         });
     });
 
-    it("returns a typed retry ACK when provider acceptance cannot acquire a transaction", async () => {
+    it.each([
+        { event: 'pending-delivery-accepted-v1', code: 'P2028' },
+        { event: 'pending-materialize-next', code: 'P2024' },
+    ])("returns a typed retry ACK when $event cannot acquire a transaction ($code)", async ({ event, code }) => {
         const owner = await db.account.create({
             // A Session-owning Account is current: terminal turn settlement
             // takes the canonical Account transition fence.
@@ -1330,7 +1333,7 @@ describe("session update handler on SQLite", () => {
 
         const presence = createSessionPublisherPresence();
         const socket = createAuthenticatedFakeSocket();
-        sessionUpdateHandler(
+        if (event !== 'pending-materialize-next') sessionUpdateHandler(
             owner.id,
             socket as never,
             {
@@ -1354,7 +1357,7 @@ describe("session update handler on SQLite", () => {
         process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
         const acquisitionError = Object.assign(
             new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+            { code, meta: { error: "Unable to start a transaction in the given time." } },
         );
         const originalTransaction = db.$transaction;
         const transaction = vi.fn().mockRejectedValueOnce(acquisitionError);
@@ -1362,11 +1365,10 @@ describe("session update handler on SQLite", () => {
         db.$transaction = transaction as unknown as typeof db.$transaction;
         const unavailableAcknowledgements: unknown[] = [];
         try {
-            await getSocketHandler(socket, "pending-delivery-accepted-v1")({
-                v: 1,
-                sessionId: session.id,
-                localId: "pending-1",
-            }, (value: unknown) => unavailableAcknowledgements.push(value));
+            await getSocketHandler(socket, event)(event === 'pending-materialize-next'
+                ? { sid: session.id, deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }
+                : { v: 1, sessionId: session.id, localId: 'pending-1' },
+            (value: unknown) => unavailableAcknowledgements.push(value));
         } finally {
             db.$transaction = originalTransaction;
             if (previousMaxRetries === undefined) {
@@ -1380,7 +1382,7 @@ describe("session update handler on SQLite", () => {
             ok: false,
             error: "transaction-unavailable",
             retryAfterMs: 1_000,
-            correlationId: expect.stringMatching(/^[A-Za-z0-9_.:-]{1,160}$/u),
+            ...(event === 'pending-delivery-accepted-v1' ? { correlationId: expect.stringMatching(/^[A-Za-z0-9_.:-]{1,160}$/u) } : {}),
         }]);
         await expect(db.sessionMessage.count({ where: { sessionId: session.id } })).resolves.toBe(0);
 
