@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -363,7 +364,7 @@ describe('core e2e: usage-limit recovery operation result roundtrip', () => {
       if (!parsed.success) {
         throw new Error(`Expected raw RPC result to satisfy SessionUsageLimitRecoveryOperationResultV1: ${JSON.stringify({
           rawResult,
-          error: parsed.error.format(),
+          error: z.formatError(parsed.error),
         })}`);
       }
       expect(normalizeSessionUsageLimitRecoveryOperationResultV1(rawResult, { sessionId })).toEqual(parsed.data);
@@ -446,7 +447,7 @@ describe('core e2e: usage-limit recovery operation result roundtrip', () => {
       if (!parsed.success) {
         throw new Error(`Expected stale-machine wait-resume result to satisfy SessionUsageLimitRecoveryOperationResultV1: ${JSON.stringify({
           rawResult,
-          error: parsed.error.format(),
+          error: z.formatError(parsed.error),
         })}`);
       }
       expect(parsed.data).toMatchObject({

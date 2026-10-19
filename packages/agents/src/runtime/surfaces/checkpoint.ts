@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import en from 'zod/v4/locales/en.js';
 
 import type { AgentSurfaceAvailabilityV1 } from '@happier-dev/protocol';
 
@@ -143,7 +144,7 @@ export type CheckpointSurfaceV1 = Readonly<{
   restore?: (request: RestoreCheckpointRequestV1) => MaybePromise<RestoreCheckpointResultV1>;
 }>;
 
-const NonEmptyStringSchema = z.string().trim().min(1);
+const NonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const CheckpointRestoreScopeV1Schema = z.enum(['conversation', 'workspace']);
 const CheckpointTimingV1Schema = z.enum(['idle', 'activeTurn']);
 
@@ -157,41 +158,41 @@ const AbortSignalLikeSchema = z.custom<AbortSignal>((value) => {
     && typeof (value as { aborted?: unknown }).aborted === 'boolean';
 });
 
-export const CheckpointRestoreAnchorEvidenceV1Schema = z.object({
-  turnId: NonEmptyStringSchema.optional(),
-  messageSeq: z.number().int().nonnegative().optional(),
-  seqRange: z.object({
-    startSeqInclusive: z.number().int().nonnegative(),
-    endSeqInclusive: z.number().int().nonnegative(),
-  }).strict().readonly().optional(),
-}).strict();
+export const CheckpointRestoreAnchorEvidenceV1Schema = z.strictObject({
+  turnId: z.optional(NonEmptyStringSchema),
+  messageSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  seqRange: z.optional(z.readonly(z.strictObject({
+    startSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+    endSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+  }))),
+});
 
-export const CheckpointRestoreAnchorV1Schema = z.object({
+export const CheckpointRestoreAnchorV1Schema = z.strictObject({
   kind: z.literal('before_user_message'),
   messageId: NonEmptyStringSchema,
-  evidence: CheckpointRestoreAnchorEvidenceV1Schema.optional(),
-}).strict();
+  evidence: z.optional(CheckpointRestoreAnchorEvidenceV1Schema),
+});
 
 export const CheckpointProviderTargetRefV1Schema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('provider_checkpoint'),
     checkpointId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_message'),
     messageId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_turn'),
     turnId: NonEmptyStringSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider_restore_token'),
     token: NonEmptyStringSchema,
-  }).strict(),
+  }),
 ]);
 
-const CheckpointScopesSchema = z.array(CheckpointRestoreScopeV1Schema).nonempty().superRefine((scopes, ctx) => {
+const CheckpointScopesSchema = z.readonly(z.array(CheckpointRestoreScopeV1Schema).check(z.minLength(1), z.superRefine((scopes, ctx) => {
   const seen = new Set<CheckpointRestoreScopeV1>();
   scopes.forEach((scope, index) => {
     if (seen.has(scope)) {
@@ -204,16 +205,16 @@ const CheckpointScopesSchema = z.array(CheckpointRestoreScopeV1Schema).nonempty(
     }
     seen.add(scope);
   });
-}).readonly();
+})));
 
-export const CheckpointAvailabilityRequestV1Schema = z.object({
+export const CheckpointAvailabilityRequestV1Schema = z.strictObject({
   operation: z.enum(['list', 'resolveRestoreTarget', 'checkpoint', 'restore']),
   sessionId: NonEmptyStringSchema,
-  anchor: CheckpointRestoreAnchorV1Schema.optional(),
-  target: CheckpointProviderTargetRefV1Schema.optional(),
-  scopes: CheckpointScopesSchema.optional(),
-  timing: CheckpointTimingV1Schema.optional(),
-}).strict().superRefine((request, ctx) => {
+  anchor: z.optional(CheckpointRestoreAnchorV1Schema),
+  target: z.optional(CheckpointProviderTargetRefV1Schema),
+  scopes: z.optional(CheckpointScopesSchema),
+  timing: z.optional(CheckpointTimingV1Schema),
+}).check(z.superRefine((request, ctx) => {
   if (request.operation === 'resolveRestoreTarget' && !request.anchor) {
     ctx.addIssue({
       code: 'custom',
@@ -231,31 +232,31 @@ export const CheckpointAvailabilityRequestV1Schema = z.object({
       });
     }
   }
-});
+}));
 
-export const ResolveCheckpointRestoreTargetRequestV1Schema = z.object({
+export const ResolveCheckpointRestoreTargetRequestV1Schema = z.strictObject({
   sessionId: NonEmptyStringSchema,
   anchor: CheckpointRestoreAnchorV1Schema,
   scopes: CheckpointScopesSchema,
-}).strict();
+});
 
-export const CreateCheckpointRequestV1Schema = z.object({
-  operationId: NonEmptyStringSchema.optional(),
+export const CreateCheckpointRequestV1Schema = z.strictObject({
+  operationId: z.optional(NonEmptyStringSchema),
   sessionId: NonEmptyStringSchema,
   scopes: CheckpointScopesSchema,
   timing: CheckpointTimingV1Schema,
-  label: NonEmptyStringSchema.optional(),
-  signal: AbortSignalLikeSchema.optional(),
-}).strict();
+  label: z.optional(NonEmptyStringSchema),
+  signal: z.optional(AbortSignalLikeSchema),
+});
 
-export const RestoreCheckpointRequestV1Schema = z.object({
-  operationId: NonEmptyStringSchema.optional(),
+export const RestoreCheckpointRequestV1Schema = z.strictObject({
+  operationId: z.optional(NonEmptyStringSchema),
   sessionId: NonEmptyStringSchema,
-  anchor: CheckpointRestoreAnchorV1Schema.optional(),
-  target: CheckpointProviderTargetRefV1Schema.optional(),
+  anchor: z.optional(CheckpointRestoreAnchorV1Schema),
+  target: z.optional(CheckpointProviderTargetRefV1Schema),
   scopes: CheckpointScopesSchema,
-  signal: AbortSignalLikeSchema.optional(),
-}).strict().superRefine((request, ctx) => {
+  signal: z.optional(AbortSignalLikeSchema),
+}).check(z.superRefine((request, ctx) => {
   const semanticSources = Number(request.anchor !== undefined) + Number(request.target !== undefined);
   if (semanticSources !== 1) {
     ctx.addIssue({
@@ -264,9 +265,9 @@ export const RestoreCheckpointRequestV1Schema = z.object({
       path: ['anchor'],
     });
   }
-});
+}));
 
-function formatCheckpointSchemaIssues(issues: readonly z.ZodIssue[]): string {
+function formatCheckpointSchemaIssues(issues: readonly z.core.$ZodIssue[]): string {
   return issues
     .map((issue) => {
       const path = issue.path.length > 0 ? issue.path.join('.') : 'request';
@@ -277,10 +278,10 @@ function formatCheckpointSchemaIssues(issues: readonly z.ZodIssue[]): string {
 
 function parseCheckpointRequest<T>(params: Readonly<{
   label: string;
-  schema: z.ZodType<T>;
+  schema: z.ZodMiniType<T>;
   input: unknown;
 }>): T {
-  const parsed = params.schema.safeParse(params.input);
+  const parsed = params.schema.safeParse(params.input, { error: en().localeError });
   if (parsed.success) {
     return parsed.data;
   }
@@ -316,7 +317,7 @@ export function parseCreateCheckpointRequestV1(input: unknown): CreateCheckpoint
 export function parseRestoreCheckpointRequestV1(input: unknown): RestoreCheckpointRequestV1 {
   return parseCheckpointRequest({
     label: 'RestoreCheckpointRequestV1',
-    schema: RestoreCheckpointRequestV1Schema as z.ZodType<RestoreCheckpointRequestV1>,
+    schema: RestoreCheckpointRequestV1Schema as z.ZodMiniType<RestoreCheckpointRequestV1>,
     input,
   });
 }
