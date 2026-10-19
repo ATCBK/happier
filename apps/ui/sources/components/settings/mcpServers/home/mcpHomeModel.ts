@@ -15,6 +15,8 @@ export type McpHomeServer = Readonly<{
   id: string;
   title: string;
   server: McpServerCatalogEntryV1;
+  /** The reach rules that put it on machines: the legend says where a local server runs from them. */
+  bindings: McpServerCollectionRow['bindings'];
   /** Legend group: held by the Account (remote, signed in or keyed once) or run on the machines (stdio). */
   group: 'account' | 'machine';
   tether: HomeOrbitTether;
@@ -88,6 +90,7 @@ export function buildMcpHome(
       id: server.id,
       title: row.title,
       server,
+      bindings: row.bindings,
       group,
       tether: off ? 'none' : status ? 'attention' : group,
       status,

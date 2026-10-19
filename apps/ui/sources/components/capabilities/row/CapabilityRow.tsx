@@ -23,6 +23,8 @@ export type CapabilityRowProps = Readonly<{
   description?: string | null;
   /** The where-summary from `shortWhereItsOn` (or a session scope word); never truncated (R1). */
   whereSummary?: React.ReactNode;
+  /** A quiet qualifier right after the name on the title line (a legend's "uvx · Everywhere"), in place of the end-aligned where-summary. */
+  qualifier?: string;
   facts?: CapabilityFactsProps;
   /** When present and not silent, replaces the facts line (status takes the facts line). */
   status?: CapabilityStatus | null;
@@ -160,6 +162,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
           : props.description == null ? {} : { subtitle: props.description })}
         subtitleLines={descriptionLines}
         {...(menu || summary === null ? {} : { titleMeta: summary })}
+        {...(props.qualifier === undefined ? {} : { titleQualifier: props.qualifier })}
         {...(props.checked !== undefined
           ? {
               icon: <SelectionCheckGlyph state={props.checked ? 'checked' : 'unchecked'} />,

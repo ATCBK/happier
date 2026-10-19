@@ -36,7 +36,9 @@ import { McpFoundBlock } from './McpFoundBlock';
 import { McpRegistryShelf } from './McpRegistryShelf';
 import { setPreviewedMcpServer, usePreviewedMcpServer } from './mcpServerPreview';
 import { useMcpHome } from './useMcpHome';
+import { useMcpAddPlaces } from '../add/useMcpAddPlaces';
 import { useOpenMcpAddModal } from '../add/useOpenMcpAddModal';
+import { shortWhereItsOn, type WhereItsOnNames } from '@/components/capabilities/where/whereItsOnPresentation';
 
 /** The tether map beside its legend (lab hm-A §12: ring radius 104 around a 36 px planet; the box is the ring and its marks, so the legend keeps the room). */
 const MAP_BOX = {
@@ -447,6 +449,7 @@ function Legend(
     onOpen: (serverId: string) => void;
   }>,
 ) {
+  const { names } = useMcpAddPlaces();
   const groups = (['account', 'machine'] as const).filter(
     (kind) => props.home.legend[kind].length > 0,
   );
@@ -460,6 +463,7 @@ function Legend(
             <LegendRow
               key={server.id}
               server={server}
+              names={names}
               onPreview={props.onPreview}
               onOpen={props.onOpen}
             />
@@ -470,9 +474,15 @@ function Legend(
   );
 }
 
-function legendFact(server: McpHomeServer): string | undefined {
+/**
+ * What a legend row says after the name (lab hm-A2): a local server's command and where it runs, how the
+ * Account signed in to a remote one. A server that needs the person says it in its chip instead.
+ */
+function legendFact(server: McpHomeServer, names: WhereItsOnNames): string | undefined {
   if (server.status) return undefined;
-  if (server.group === 'machine') return server.server.stdio?.command;
+  if (server.group === 'machine') {
+    return [server.server.stdio?.command, shortWhereItsOn(server.bindings, names)].filter(Boolean).join(' · ') || undefined;
+  }
   if (server.server.remote?.auth?.kind === 'oauth') {
     return server.identity
       ? t('capabilities.mcpHome.factAs', { identity: server.identity })
@@ -481,19 +491,18 @@ function legendFact(server: McpHomeServer): string | undefined {
   const keyed = Object.values(server.server.remote?.headers ?? {}).some(
     (ref) => ref.t === 'savedSecret' || ref.t === 'template',
   );
-  return keyed
-    ? t('capabilities.mcpHome.factKey')
-    : t('capabilities.mcpHome.factRemote');
+  return keyed ? t('capabilities.mcpHome.factKey') : undefined;
 }
 
 const LegendRow = React.memo(function LegendRow(
   props: Readonly<{
     server: McpHomeServer;
+    names: WhereItsOnNames;
     onPreview: (serverId: string | null) => void;
     onOpen: (serverId: string) => void;
   }>,
 ) {
-  const { server, onPreview, onOpen } = props;
+  const { server, names, onPreview, onOpen } = props;
   // Each fix lives on the server's page (its Sign-in section, its key row): the homepage leads there.
   const fix = React.useCallback(() => onOpen(server.id), [onOpen, server.id]);
   const { status } = server;
@@ -518,15 +527,15 @@ const LegendRow = React.memo(function LegendRow(
     </View>
   ) : server.toolCount === null ? undefined : (
     <Text variant="meta" style={styles.tools}>
-      {t('capabilities.mcpHome.tools', { count: server.toolCount })}
+      {toolCountText(server.toolCount)}
     </Text>
   );
-  const fact = legendFact(server);
+  const fact = legendFact(server, names);
   return (
     <CapabilityRow
       testID={`mcp.home.legend.${server.id}`}
       title={server.title}
-      {...(fact ? { whereSummary: fact } : {})}
+      {...(fact ? { qualifier: fact } : {})}
       mark={<McpServerMark transport={server.server.transport} size={16} />}
       {...(action ? { action } : {})}
       density="rail"
@@ -587,6 +596,11 @@ function PresentLine(props: Readonly<{ home: McpHome }>) {
   );
 }
 
+/** The one tool-count wording every list shares (the facts line's). */
+function toolCountText(count: number): string {
+  return t('capabilities.facts.toolCount', { count, shown: formatCapabilityCount(count) });
+}
+
 function previewLine(server: McpHomeServer): string {
   if (server.off) return t('capabilities.mcpHome.previewOff');
   if (server.status?.kind === 'key')
@@ -598,7 +612,7 @@ function previewLine(server: McpHomeServer): string {
   const tools =
     server.toolCount === null
       ? ''
-      : ` · ${t('capabilities.mcpHome.tools', { count: server.toolCount })}`;
+      : ` · ${toolCountText(server.toolCount)}`;
   if (server.group === 'machine')
     return `${t('capabilities.mcpHome.previewMachine')}${tools}`;
   if (server.server.remote?.auth?.kind === 'oauth') {
