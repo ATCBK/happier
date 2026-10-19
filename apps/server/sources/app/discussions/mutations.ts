@@ -323,11 +323,7 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
 }>): Promise<DiscussionResult<DiscussionPostResponseV1>> {
     const parsed = DiscussionPostRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure('discussion_invalid_content');
-    const sourceIdentity = await resolveDiscussionDocTargetInTx(tx, { discussionId: input.discussionId, replyTarget: parsed.data.replyTarget });
-    await acquireDiscussionMutationAccountsInTx(tx, { ...input, includeParticipantSessions: true,
-        additionalAccountIds: await readDiscussionDocSourceAuthorityAccountIdsInTx(tx, sourceIdentity.ok ? sourceIdentity.value : null),
-        additionalSessionIds: [input.producer?.sessionId, input.authentication.sessionRuntimePrincipal?.sessionId,
-            ...(parsed.data.mentionedSessionIds ?? [])].filter((id): id is string => typeof id === 'string') });
+    await acquireDiscussionMutationAccountsInTx(tx, discussionPostMutationAudience({ ...input, request: parsed.data }));
     const returned = input.replyReturn === undefined ? undefined : SessionMessageDiscussionReplyReturnV1Schema.safeParse(input.replyReturn);
     const runtime = input.authentication.sessionRuntimePrincipal;
     const candidateProducer = input.producer ?? (runtime ? { v: 1 as const, kind: 'agent' as const, sessionId: runtime.sessionId } : undefined);
@@ -422,8 +418,19 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null), messageSeq: allocated.messageSeq });
 }
 
+function discussionPostMutationAudience(input: Parameters<typeof postDiscussionMessageInTx>[1]) {
+    return { ...input, includeParticipantSessions: true, append: { replyTarget: input.request.replyTarget },
+        additionalSessionIds: [input.producer?.sessionId, input.authentication.sessionRuntimePrincipal?.sessionId,
+            ...(input.request.mentionedSessionIds ?? [])].filter((id): id is string => typeof id === 'string') };
+}
+
+/** Public HTTP and trusted publication refresh the same complete cohort per attempt. */
+export function prepareDiscussionPostMutationAccounts(input: Parameters<typeof postDiscussionMessageInTx>[1]) {
+    return prepareDiscussionMutationAccounts(discussionPostMutationAudience(input));
+}
+
 export async function postDiscussionMessage(input: Parameters<typeof postDiscussionMessageInTx>[1]): Promise<DiscussionResult<DiscussionPostResponseV1>> {
-    return inTx(tx => postDiscussionMessageInTx(tx, input), { isolationLevel: 'Serializable' });
+    return inTx(tx => postDiscussionMessageInTx(tx, input), { prepare: () => prepareDiscussionPostMutationAccounts(input) });
 }
 
 /** Management depends on the Discussion grant; the source Session's lifecycle is irrelevant. */

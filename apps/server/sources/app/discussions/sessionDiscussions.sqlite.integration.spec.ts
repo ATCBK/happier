@@ -677,6 +677,30 @@ describe('First-class Discussions service (SQLite)', () => {
         expect(await getDiscussion({ authentication, actorAccountId: outsider.id, discussionId })).toEqual({ ok: false, error: 'discussion_not_found' });
         expect(await db.session.count({ where: { accountId: owner.id } })).toBe(0);
     });
+    it('rejoins concurrent trusted publisher appends and denies the same occurrence after publisher access is revoked', async () => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const { socket, machine } = await publisherSocket(owner.id, session.id);
+        const request = postRequest('One trusted occurrence');
+        const publish = async () => {
+            let response: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: session.id, discussionId, request },
+                (value: unknown) => { response = value; });
+            return DiscussionAgentPostResponseV1Schema.parse(response);
+        };
+        const replies = await Promise.all([publish(), publish()]);
+        expect(replies).toEqual([expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true })]);
+        if (!replies[0].ok || !replies[1].ok) throw new Error('Trusted append was not admitted');
+        expect(replies[1].value.message.id).toBe(replies[0].value.message.id);
+        expect(replies[0].value.message).toMatchObject({ seq: 2, localId: request.localId,
+            producerV1: { kind: 'agent', sessionId: session.id } });
+        expect(await db.discussion.findUniqueOrThrow({ where: { id: discussionId } })).toMatchObject({ messageSeq: 2 });
+        await db.accessKey.deleteMany({ where: { accountId: owner.id, machineId: machine.id, sessionId: session.id } });
+        expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+    });
     it('atomically creates an Agent first post from actual Session custody and retains producer retry equality without enrolling it', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
         const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });

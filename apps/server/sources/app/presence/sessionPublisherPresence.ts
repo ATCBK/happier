@@ -868,6 +868,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
     const runAsCurrentPublisherInTx = async <T>(params: Readonly<{
         socket: object;
         deadlineAtMs?: number;
+        prepare?: InTxOptions['prepare'];
         operation: (authority: CurrentSessionPublisherAuthority, tx: Tx) => Promise<T>;
     }> & (
         | Readonly<{ authorityMode?: "serialized"; isolationLevel?: InTxOptions["isolationLevel"] }>
@@ -883,6 +884,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 committedFence: new Date(registration.committedFence.getTime()),
             }, tx), {
                 deadlineAtMs: params.deadlineAtMs,
+                ...(params.prepare ? { prepare: params.prepare } : {}),
                 ...(params.isolationLevel === undefined ? {} : { isolationLevel: params.isolationLevel }),
             });
         };

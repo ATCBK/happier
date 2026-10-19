@@ -64,7 +64,7 @@ import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/r
 
 export type SessionInputProviderDispatchReconciliation = Readonly<{
     localId: string;
-    discussionAddressing: DiscussionAddressingV1;
+    discussionAddressing?: DiscussionAddressingV1;
     signal: AbortSignal;
 }>;
 
@@ -217,7 +217,7 @@ function readProtectedPendingInputAdmission(meta: unknown, inputAdmissionReceipt
     const request = readSessionInputRequest(meta, 'stored');
     if (request) return { request };
     const authority = readSessionInputAuthority(meta, 'stored');
-    if (!authority?.discussionAddressing) return null;
+    if (!authority) return null;
     try {
         assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt });
         // Materialization replaces the request with immutable authority. Recover
@@ -1335,10 +1335,10 @@ export function createSessionClientInteractionApi(
             const request = readProtectedPendingInputAdmission(payload?.meta, message.inputAdmissionReceipt)?.request;
             const originalAddress = request?.discussionAddressing;
             const address = input.discussionAddressing;
-            if (!originalAddress || originalAddress.discussionId !== address.discussionId
+            if (address && (!originalAddress || originalAddress.discussionId !== address.discussionId
                 || originalAddress.messageId !== address.messageId || originalAddress.throughSeq !== address.throughSeq
                 || originalAddress.participantSessionId !== address.participantSessionId
-                || address.participantSessionId !== deps.sessionId) return 'rejected';
+                || address.participantSessionId !== deps.sessionId)) return 'rejected';
             const result = await runWithServerHttpBaseUrl(serverUrl, () => reconcileProtectedPendingInput({
                 socket, sessionId: deps.sessionId, token: deps.token, message, metadata: deps.getMetadata(), crypto,
                 signal: input.signal, ...(deps.readCurrentAutonomousCheckIn

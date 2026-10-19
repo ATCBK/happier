@@ -104,7 +104,7 @@ import {
     acknowledgeAccountVoiceFollowInTx,
     observePendingAccountVoiceFollowInTx,
 } from "@/app/session/follow/accountFollowService";
-import { createDiscussionInTx, postDiscussionMessageInTx } from "@/app/discussions/mutations";
+import { createDiscussionInTx, postDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
 import { reconcileDiscussionCreationIdentityRace } from '@/app/discussions/createIdentityReconciliation';
 import type { createSessionPublisherPresence, CurrentSessionPublisherAuthority, SessionPublisherBinding } from "@/app/presence/sessionPublisherPresence";
 import type { TeamCredentialExecutionRunCurrentnessResolver } from "@/app/teams/credentials/providerBrokerAdmission";
@@ -608,10 +608,28 @@ export function sessionUpdateHandler(
                 return;
             }
             const publisher = trustedSessionPublisher;
+            const publication = request.data;
+            const actor = {
+                actorAccountId: userId,
+                producer: {
+                    v: 1 as const,
+                    kind: "agent" as const,
+                    sessionId: publication.sessionId,
+                    ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),
+                    ...(publication.runId ? { runId: publication.runId } : {}),
+                    ...(publication.toolCallId ? { toolCallId: publication.toolCallId } : {}),
+                },
+                authentication: readSessionAccessAuthenticationFromSocket(socket),
+            };
+            const append = 'discussionId' in publication ? { ...actor, discussionId: publication.discussionId,
+                request: publication.request,
+                ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
+                ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) } : null;
             const publish = () => publisher.presence.runAsCurrentPublisherInTx({
                 socket,
                 deadlineAtMs: Date.now() + 5_000,
-                isolationLevel: "Serializable", // Discussion creation composes tracked-target admission with the message write.
+                ...(append ? { prepare: () => prepareDiscussionPostMutationAccounts(append) }
+                    : { isolationLevel: "Serializable" as const }), // Creation retains its identity-race transaction.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(
                         tx,
@@ -623,23 +641,8 @@ export function sessionUpdateHandler(
                     }
                     if (request.data.sourceSession && (request.data.sourceSession.sourceSessionId !== request.data.sessionId
                         || !await isSessionInputSourceCurrentInTx(tx, userId, request.data.sourceSession))) return null;
-                    const actor = {
-                        actorAccountId: userId,
-                        producer: {
-                            v: 1 as const,
-                            kind: "agent" as const,
-                            sessionId: request.data.sessionId,
-                            ...(request.data.sourceSession ? { sourceSession: request.data.sourceSession } : {}),
-                            ...(request.data.runId ? { runId: request.data.runId } : {}),
-                            ...(request.data.toolCallId ? { toolCallId: request.data.toolCallId } : {}),
-                        },
-                        authentication: readSessionAccessAuthenticationFromSocket(socket),
-                    };
-                    const publication = request.data;
                     return 'discussionId' in publication
-                        ? await postDiscussionMessageInTx(tx, { ...actor, discussionId: publication.discussionId, request: publication.request,
-                            ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
-                            ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) })
+                        ? await postDiscussionMessageInTx(tx, append!)
                         : await createDiscussionInTx(tx, { ...actor, request: publication.request });
                 },
             });
