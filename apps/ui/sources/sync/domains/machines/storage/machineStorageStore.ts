@@ -109,6 +109,9 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             return apply(current, { kind: 'summary', summary: overlaySummary(input, result.value) });
         },
         failRefresh: state => apply(state, { kind: 'error' }), applySnapshot: apply,
+        onWatchSnapshot: (input, update, previous) => {
+            if (update.kind === 'summary' && previous.summary?.revision !== update.summary.revision) refreshCategories(input);
+        },
         watch: async ({ input, state, watchClient, signal }) => {
             const result = await watchClient({ ...input, sinceRevision: state.summary?.revision, signal });
             if (signal?.aborted) return { status: 'unavailable' };
@@ -119,8 +122,7 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             if (!result.value.changed) return { status: 'idle' };
             const current = summaries.getState(input);
             if (current.summary !== state.summary && current.summary && result.value.summary.revision < current.summary.revision) return { status: 'idle' };
-            acceptSummary(input, result.value.summary);
-            return { status: 'idle' };
+            return { status: 'changed', snapshot: { kind: 'summary', summary: overlaySummary(input, result.value.summary) } };
         },
     });
     const categories = createSharedSubscriptionStore<MachineStorageCategoryInput, MachineStorageCategoryState, MachineStorageCategoryListResultV1, MachineStorageClients['categoryClient']>({
