@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PromptLibraryCatalogSnapshotV1 } from './promptLibraryCatalogV1.js';
 import type { PromptLibraryRecordV1 } from './promptLibraryRowsV1.js';
 import { sealPromptLibraryContentV1 } from './promptLibraryRowsV1.js';
+import { MemoryDocBodyV1Schema, type MemoryFactV1 } from './memoryDocV1.js';
 import type { ArtifactFolderActionPortV1 } from './promptFolderActionsV1.js';
 
 import {
@@ -36,6 +37,110 @@ function emptyOrganizationPort(): ArtifactFolderActionPortV1 {
 }
 
 describe('prompt library action operations', () => {
+  it.each(['keep_both', 'update', 'replace'] as const)('edits A against reviewed candidate B atomically (%s)', async kind => {
+    const earlier = { id: 'A-prior', text: 'Prefer black tea', createdAtMs: 0, sourceSessionRef: null };
+    const edited = { id: 'A', text: 'Prefer green tea', createdAtMs: 1, sourceSessionRef: null, expiresAtMs: 500,
+      supersedes: earlier.id,
+      decision: { reason: 'Tea review', sourceMessageRef: { kind: 'session', session: { serverId: 'home', sessionId: 'tea' },
+        messageId: 'tea-answer' }, approvedBy: { accountId: 'tea-reviewer', atMs: 1 } } } satisfies MemoryFactV1;
+    const candidate = { id: 'B', text: 'Use PostgreSQL for storage', createdAtMs: 2, sourceSessionRef: null, expiresAtMs: 900,
+      decision: { reason: 'Storage review', sourceMessageRef: { kind: 'session', session: { serverId: 'home', sessionId: 'storage' },
+        messageId: 'storage-answer' }, approvedBy: { accountId: 'storage-reviewer', atMs: 2 } } } satisfies MemoryFactV1;
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 2, bodyVersion: 7 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [edited],
+        topics: [{ title: 'Storage', summary: 'Storage choices', facts: [candidate] },
+          { title: 'archive', summary: 'Earlier facts', facts: [earlier] }] }) };
+    let writes = 0;
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      expect(input.expectedRevision).toEqual(stored.revision);
+      writes++;
+      stored = { ...stored, body: input.body, revision: { headerVersion: 3, bodyVersion: 8 } };
+      return { revision: stored.revision };
+    } };
+    const request = { ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision,
+      factId: edited.id, text: 'Prefer PostgreSQL for storage' };
+    const params = { store, randomId: () => 'replacement', nowMs: () => 10, sourceSessionRef: null };
+    const review = await updateMemoryFactInLibrary({ ...params, request });
+    expect(review).toMatchObject({ ok: false, errorCode: 'memory_duplicate_choice_required', revision: request.expectedRevision,
+      candidates: [{ factId: candidate.id, topic: 'Storage' }] });
+    expect(writes).toBe(0);
+    const duplicateChoice = kind === 'keep_both' ? { kind, expectedRevision: request.expectedRevision }
+      : { kind, factId: candidate.id, expectedRevision: request.expectedRevision };
+    expect(await updateMemoryFactInLibrary({ ...params, request: { ...request, duplicateChoice } }))
+      .toMatchObject({ ok: true, factId: 'replacement', revision: { headerVersion: 3, bodyVersion: 8 } });
+    expect(writes).toBe(1);
+    const body = MemoryDocBodyV1Schema.parse(JSON.parse(stored.body!));
+    const active = [...body.index, ...body.topics.filter(topic => topic.title !== 'archive').flatMap(topic => topic.facts)];
+    const next = active.find(fact => fact.id === 'replacement');
+    expect(active.map(fact => fact.id).sort()).toEqual(kind === 'keep_both' ? ['B', 'replacement'] : ['replacement']);
+    expect(next).toEqual({ id: 'replacement', text: request.text, createdAtMs: 10, sourceSessionRef: null,
+      supersedes: kind === 'keep_both' ? edited.id : candidate.id, expiresAtMs: kind === 'update' ? 900 : 500,
+      ...(kind === 'replace' ? {} : { decision: { ...(kind === 'update' ? candidate.decision : edited.decision), approvedBy: null } }) });
+    if (kind === 'keep_both') expect(active.find(fact => fact.id === candidate.id)).toEqual(candidate);
+    expect(body.index).toEqual(kind === 'update' ? [] : [next]);
+    expect(body.topics.find(topic => topic.title === 'Storage')?.facts).toEqual(kind === 'update' ? [next] : kind === 'keep_both' ? [candidate] : []);
+    expect(body.topics.find(topic => topic.title === 'archive')?.facts).toEqual(kind === 'keep_both' ? [earlier, edited]
+      : kind === 'update' ? [earlier, candidate, edited] : [earlier, edited, candidate]);
+    const saved = stored;
+    await expect(updateMemoryFactInLibrary({ ...params, request: { ...request, duplicateChoice } }))
+      .rejects.toMatchObject({ code: 'version_mismatch' });
+    expect(stored).toBe(saved);
+    expect(writes).toBe(1);
+  });
+  it('reviews exact and lexical duplicates across active topics before writing, then requires a current explicit choice', async () => {
+    const old = { id: 'old', text: 'Use PostgreSQL for storage', createdAtMs: 1, expiresAtMs: 500, sourceSessionRef: null };
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 2, bodyVersion: 7 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [], topics: [
+        { title: 'Storage', summary: 'Storage choices', facts: [old] },
+        { title: 'archive', summary: 'History', facts: [{ ...old, id: 'archived' }] },
+      ] }) };
+    let writes = 0;
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      writes += 1;
+      stored = { ...stored, body: input.body, revision: { headerVersion: 3, bodyVersion: stored.revision.bodyVersion + 1 } };
+    } };
+    const request = { ref: { kind: 'doc' as const, serverId: 'home', artifactId: 'memory' }, expectedRevision: stored.revision,
+      text: '  Use  PostgreSQL for storage  ' };
+    const author = { store, nowMs: () => 10, randomId: () => 'new', sourceSessionRef: null };
+    expect(await rememberMemoryFactInLibrary({ ...author, request })).toMatchObject({ ok: false,
+      errorCode: 'memory_duplicate_choice_required', ref: request.ref, revision: stored.revision,
+      candidates: [{ factId: 'old', topic: 'Storage', match: 'exact' }] });
+    expect(writes).toBe(0);
+    expect(await rememberMemoryFactInLibrary({ ...author, request: { ...request, text: 'Prefer PostgreSQL' } }))
+      .toMatchObject({ ok: false, candidates: [{ factId: 'old', match: 'related' }] });
+    await rememberMemoryFactInLibrary({ ...author, request: { ...request,
+      duplicateChoice: { kind: 'update', factId: 'old', expectedRevision: stored.revision } } });
+    expect(writes).toBe(1);
+    expect(JSON.parse(stored.body!)).toMatchObject({ index: [{ id: 'new', supersedes: 'old', expiresAtMs: 500 }],
+      topics: [{ title: 'Storage', facts: [] }, { title: 'archive', facts: [{ id: 'archived' }, { id: 'old' }] }] });
+    await expect(rememberMemoryFactInLibrary({ ...author, request: { ...request, expectedRevision: stored.revision,
+      duplicateChoice: { kind: 'keep_both', expectedRevision: request.expectedRevision } } }))
+      .rejects.toMatchObject({ code: 'version_mismatch' });
+    const result = await rememberMemoryFactInLibrary({ ...author, randomId: () => 'both', request: { ...request,
+      expectedRevision: stored.revision, duplicateChoice: { kind: 'keep_both', expectedRevision: stored.revision } } });
+    expect(result).toMatchObject({ ok: true, factId: 'both' });
+    expect(JSON.parse(stored.body!).index.map((fact: { id: string }) => fact.id)).toEqual(['new', 'both']);
+  });
+  it('keeps prior decision provenance in history, clears human approval on changed wording and ignores expired/history duplicates', async () => {
+    const decision = { reason: 'Reviewed the alternatives', sourceMessageRef: { kind: 'session',
+      session: { serverId: 'home', sessionId: 'source' }, messageId: 'committed' }, approvedBy: { accountId: 'person', atMs: 2 } };
+    const original = { id: 'old', text: 'Use PostgreSQL', createdAtMs: 1, expiresAtMs: 500, sourceSessionRef: null, decision };
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [original], topics: [] }) };
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      stored = { ...stored, body: input.body, revision: { headerVersion: 1, bodyVersion: stored.revision.bodyVersion + 1 } };
+    } };
+    const ref = { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' };
+    await updateMemoryFactInLibrary({ store, request: { ref, expectedRevision: stored.revision, factId: 'old',
+      text: original.text, expiresAtMs: 800 }, randomId: () => 'renewed', nowMs: () => 10, sourceSessionRef: null });
+    expect(JSON.parse(stored.body!).index[0]).toMatchObject({ id: 'renewed', decision, expiresAtMs: 800 });
+    await updateMemoryFactInLibrary({ store, request: { ref, expectedRevision: stored.revision, factId: 'renewed', text: 'Use SQLite' },
+      randomId: () => 'edited', nowMs: () => 10, sourceSessionRef: null });
+    expect(JSON.parse(stored.body!)).toMatchObject({ index: [{ id: 'edited', expiresAtMs: 800,
+      decision: { ...decision, approvedBy: null } }], topics: [{ title: 'archive', facts: [original, { id: 'renewed', decision }] }] });
+    expect(await rememberMemoryFactInLibrary({ store, request: { ref, expectedRevision: stored.revision, text: 'Use PostgreSQL' },
+      randomId: () => 'fresh', nowMs: () => 800, sourceSessionRef: null })).toMatchObject({ ok: true, factId: 'fresh' });
+  });
   it('refuses direct generic-bundle authoring before persistent creation', async () => {
     const writes: unknown[] = [];
     await expect(createPromptBundleInLibrary({ store: { read: async () => null, update: async () => {},
@@ -137,7 +242,8 @@ describe('prompt library action operations', () => {
       request: { title: 'Account memory', text: 'Build rule; password=secret', topic: 'Build', expiresAtMs: 50 },
       randomId: () => 'first', nowMs: () => 10, sourceSessionRef: { serverId: 'home', sessionId: 'session' },
     });
-    expect(result).toEqual({ ok: true, artifactId: 'memory', factId: 'first' });
+    expect(result).toEqual({ ok: true, artifactId: 'memory', factId: 'first',
+      ...(receipt ? { revision: { headerVersion: 1, bodyVersion: 1 } } : {}) });
     expect(saved?.header).toEqual({ v: 1, kind: 'memory_doc.v1', title: 'Account memory' });
     expect(JSON.parse(saved!.body)).toEqual({ v: 1, index: [], topics: [{ title: 'Build', summary: 'Facts about Build.',
       facts: [{ id: 'first', text: 'Build rule; password: [REDACTED]', createdAtMs: 10,
@@ -273,6 +379,30 @@ describe('prompt library action operations', () => {
     await expect(updateMemoryFactInLibrary({ store, request: { ref: { kind: 'doc', artifactId: 'memory' },
       expectedRevision: stored.revision, factId: original.id, topic: 'archive', restore: true },
       randomId: () => 'wrong-new-id', sourceSessionRef: null })).rejects.toMatchObject({ code: 'memory_fact_superseded' });
+  });
+
+  it.each(['keep_both', 'update', 'replace'] as const)('reviews duplicate archive restorations before changing history (%s)', async kind => {
+    const original = { id: 'archived', text: 'Use PostgreSQL', createdAtMs: 1, sourceSessionRef: null };
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1,
+        index: [{ ...original, id: 'active' }], topics: [{ title: 'archive', summary: 'History', facts: [original] }] }) };
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      stored = { ...stored, body: input.body, revision: { headerVersion: 1, bodyVersion: stored.revision.bodyVersion + 1 } };
+    } };
+    const request = { ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision,
+      topic: 'archive' as const, restore: true as const, factId: original.id };
+    const params = { store, randomId: () => 'replacement', sourceSessionRef: null, nowMs: () => 10 };
+    expect(await updateMemoryFactInLibrary({ ...params, request })).toMatchObject({ ok: false,
+      errorCode: 'memory_duplicate_choice_required', candidates: [{ factId: 'active' }] });
+    expect(JSON.parse(stored.body!).index).toHaveLength(1);
+    const duplicateChoice = kind === 'keep_both' ? { kind, expectedRevision: stored.revision }
+      : { kind, expectedRevision: stored.revision, factId: 'active' };
+    expect(await updateMemoryFactInLibrary({ ...params, request: { ...request, duplicateChoice } }))
+      .toMatchObject({ ok: true, factId: kind === 'keep_both' ? original.id : 'replacement' });
+    expect(JSON.parse(stored.body!)).toMatchObject(kind === 'keep_both'
+      ? { index: [{ id: 'active' }, original], topics: [{ title: 'archive', facts: [] }] }
+      : { index: [{ id: 'replacement', text: original.text, supersedes: 'active' }],
+        topics: [{ title: 'archive', facts: [original, { id: 'active' }] }] });
   });
 
   it('does not disclose a raced memory version when the current store read loses access', async () => {

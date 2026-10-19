@@ -4,10 +4,12 @@ import { ArtifactRevisionV1Schema } from '../artifacts/artifactActionsV1.js';
 import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
 import { MemoryTopicSummaryV1Schema } from '../prompts/library/memoryDocV1.js';
 import { RPC_ERROR_CODES, readRpcErrorCode } from '../rpc/errors.js';
+import { QualifiedProjectKeyV1Schema } from '../workspaces/workspaceRefV1.js';
 
 export const MemorySearchScopeSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
   z.looseObject({ type: z.literal('global') }),
   z.looseObject({ type: z.literal('session'), sessionId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ type: z.literal('project'), projectRef: QualifiedProjectKeyV1Schema }),
 ]));
 export type MemorySearchScope = z.infer<typeof MemorySearchScopeSchema>;
 
@@ -48,6 +50,7 @@ export const MemorySearchErrorCodeSchema = lazyZodSchema(() => z.enum([
   'memory_key_unavailable',
   'memory_index_missing',
   'memory_invalid_query',
+  'memory_project_scope_unsupported',
   'memory_failed',
 ]));
 export type MemorySearchErrorCode = z.infer<typeof MemorySearchErrorCodeSchema>;
@@ -122,9 +125,14 @@ export const MemorySearchCorpusV1Schema = lazyZodSchema(() => z.enum(['sessions'
 export type MemorySearchCorpusV1 = z.infer<typeof MemorySearchCorpusV1Schema>;
 
 export const MemoryDocumentSearchCoverageV1Schema = lazyZodSchema(() => z.strictObject({
-  state: z.enum(['ready', 'pending', 'unavailable']),
+  state: z.enum(['ready', 'pending', 'partial', 'unavailable']),
 }));
 export type MemoryDocumentSearchCoverageV1 = z.infer<typeof MemoryDocumentSearchCoverageV1Schema>;
+
+export const MemoryProjectSearchCoverageV1Schema = lazyZodSchema(() => z.strictObject({
+  state: z.enum(['ready', 'partial', 'unavailable']),
+}));
+export type MemoryProjectSearchCoverageV1 = z.infer<typeof MemoryProjectSearchCoverageV1Schema>;
 
 /**
  * One shared query-length bound for every memory-search consumer (Home FTS route, daemon RPC,
@@ -147,7 +155,8 @@ export const MemorySearchQueryV1Schema = lazyZodSchema(() => z.looseObject({
   scope: MemorySearchScopeSchema,
   mode: MemorySearchModeSchema,
   /**
-   * Omission retains the released Session-only contract. Documents are never
+   * Omission retains the released Session-only contract for global/Session
+   * scope; new Project scope searches Sessions and attached documents. Documents are never
    * safely ignorable: callers first require documentSearchSupported === true
    * from this exact daemon, or report explicit unavailable document coverage.
    */
@@ -172,12 +181,23 @@ export const MemorySearchQueryV1Schema = lazyZodSchema(() => z.looseObject({
 })));
 export type MemorySearchQueryV1 = z.infer<typeof MemorySearchQueryV1Schema>;
 
+const SESSION_SEARCH_CORPORA: readonly MemorySearchCorpusV1[] = ['sessions'];
+const PROJECT_SEARCH_CORPORA: readonly MemorySearchCorpusV1[] = ['sessions', 'documents'];
+
+/** Shared by direct daemon ingress and negotiated clients; omission is scope-specific. */
+export function resolveMemorySearchCorporaV1(
+  query: Pick<MemorySearchQueryV1, 'scope' | 'corpora'>,
+): readonly MemorySearchCorpusV1[] {
+  return query.corpora ?? (query.scope.type === 'project' ? PROJECT_SEARCH_CORPORA : SESSION_SEARCH_CORPORA);
+}
+
 export const MemorySearchResultV1Schema = lazyZodSchema(() => z.union([
   z.looseObject({
     v: z.literal(1),
     ok: z.literal(true),
     hits: z.array(MemorySearchResultHitV1Schema),
     documents: z.optional(MemoryDocumentSearchCoverageV1Schema),
+    project: z.optional(MemoryProjectSearchCoverageV1Schema),
     nextCursor: z.optional(z.string().check(z.minLength(1))),
     hasMore: z.optional(z.boolean()),
   }),
@@ -194,11 +214,27 @@ export type MemorySearchResultV1 = z.infer<typeof MemorySearchResultV1Schema>;
 export async function negotiateMemorySearchV1(params: Readonly<{
   query: MemorySearchQueryV1;
   readDocumentSearchSupport: () => Promise<boolean>;
+  readProjectSearchSupport?: () => Promise<boolean>;
   search: (query: MemorySearchQueryV1) => Promise<unknown>;
   signal?: AbortSignal;
 }>): Promise<MemorySearchResultV1> {
   params.signal?.throwIfAborted();
-  const documentsRequested = params.query.corpora?.includes('documents') === true;
+  const requestedQuery: MemorySearchQueryV1 = params.query.scope.type === 'project' && params.query.corpora === undefined
+    ? { ...params.query, corpora: [...resolveMemorySearchCorporaV1(params.query)] } : params.query;
+  if (requestedQuery.scope.type === 'project') {
+    let supported = false;
+    try {
+      supported = await params.readProjectSearchSupport?.() === true;
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      const code = readRpcErrorCode(error);
+      if (code !== RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && code !== RPC_ERROR_CODES.METHOD_NOT_FOUND) throw error;
+    }
+    params.signal?.throwIfAborted();
+    if (!supported) return { v: 1, ok: false, errorCode: 'memory_project_scope_unsupported',
+      error: 'Project memory search is unsupported by this daemon.' };
+  }
+  const documentsRequested = requestedQuery.corpora?.includes('documents') === true;
   let documentSearchSupported = false;
   if (documentsRequested) {
     try {
@@ -209,22 +245,27 @@ export async function negotiateMemorySearchV1(params: Readonly<{
       if (code !== RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && code !== RPC_ERROR_CODES.METHOD_NOT_FOUND) throw error;
     }
     params.signal?.throwIfAborted();
-    if (!documentSearchSupported && !params.query.corpora?.includes('sessions')
-      && !params.query.corpora?.includes('external_transcripts')) {
-      return { v: 1, ok: true, hits: [], documents: { state: 'unavailable' } };
+    if (!documentSearchSupported && !requestedQuery.corpora?.includes('sessions')
+      && !requestedQuery.corpora?.includes('external_transcripts')) {
+      return { v: 1, ok: true, hits: [], documents: { state: 'unavailable' },
+        ...(requestedQuery.scope.type === 'project' ? { project: { state: 'unavailable' as const } } : {}) };
     }
   }
-  const { corpora, ...legacyQuery } = params.query;
+  const { corpora, ...legacyQuery } = requestedQuery;
   const query = documentsRequested && !documentSearchSupported
-    ? corpora?.includes('external_transcripts')
-      ? { ...legacyQuery, corpora: corpora.filter(corpus => corpus !== 'documents') }
+    ? requestedQuery.scope.type === 'project' || corpora?.includes('external_transcripts')
+      ? { ...legacyQuery, corpora: resolveMemorySearchCorporaV1(requestedQuery).filter(corpus => corpus !== 'documents') }
       : legacyQuery
-    : params.query;
+    : requestedQuery;
   const result = MemorySearchResultV1Schema.parse(await params.search(query));
   params.signal?.throwIfAborted();
-  if (!result.ok || !corpora) return result;
+  if (!result.ok) return result;
+  const scopedResult = requestedQuery.scope.type === 'project'
+    ? { ...result, project: result.project ?? { state: 'unavailable' as const } }
+    : result;
+  if (!corpora) return scopedResult;
   return {
-    ...result,
+    ...scopedResult,
     hits: result.hits.filter((hit) => isMemoryDocumentSearchHitV1(hit)
       ? documentSearchSupported
       : isMemoryExternalTranscriptSearchHitV1(hit)

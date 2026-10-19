@@ -4,6 +4,35 @@ import { PromptLibraryCatalogKeyV1Schema, sealPromptLibraryContentV1, type Promp
 import { retainLegacyRoleArtifactsV1, type RoleArtifactStoreV1 } from '../roles/accountRoleActions.js';
 
 describe('Prompt library destination authority', () => {
+  it('activates retained rows for a finite read without source cleanup, then respects destination deletion', async () => {
+    const rows: Extract<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] = [];
+    let sourceReads = 0;
+    const load = () => loadPromptLibraryCatalogV1({ mode: 'plain', material: null, maintainSource: false,
+      readRows: async () => ({ status: 'listed', rows }), transfer: {
+        readSourceSnapshot: async () => {
+          sourceReads++;
+          return { raw: { promptFoldersV1: { v: 1, folders: [{ id: 'retained', name: 'Retained' }] } }, version: 7 };
+        },
+        initializeRecord: async input => {
+          expect(input.sourceSettingsVersion).toBe(7);
+          rows.push({ key: input.record.key, revision: 1,
+            content: sealPromptLibraryContentV1({ record: input.record, mode: 'plain', material: null }) });
+          return { status: 'updated', revision: 1, cursor: 1 };
+        },
+        replaceSource: async () => { throw new Error('Finite read must leave source cleanup to hydration'); },
+        normalizeHistory: async () => { throw new Error('Finite read must not read history'); },
+      } });
+    expect(readPromptLibraryCatalogRecordV1({ catalog: await load(), key: 'folders' })).toMatchObject({
+      status: 'ready', revision: 1, authority: 'active', record: { value: { folders: [{ id: 'retained', name: 'Retained' }] } },
+    });
+    expect(sourceReads).toBe(1);
+    const index = rows.findIndex(row => row.key === 'folders');
+    rows[index] = { key: 'folders', revision: 2, content: null };
+    expect(readPromptLibraryCatalogRecordV1({ catalog: await load(), key: 'folders' })).toMatchObject({
+      status: 'ready', revision: 2, authority: 'active', record: { value: { folders: [] } },
+    });
+    expect(sourceReads).toBe(1);
+  });
   it('classifies retained skills before admitting rule authority, then publishes before cleanup', async () => {
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });

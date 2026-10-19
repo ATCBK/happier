@@ -1,12 +1,20 @@
 import * as z from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
+import { CoordinationMessageRefV1Schema } from '../../discussions/references.js';
+import type { PromptDocArtifactRefV1 } from './promptArtifactRefsV1.js';
 
 const identity = () => z.string().check(z.minLength(1));
 const date = () => z.number().check(z.int(), z.gte(0));
+export const MemoryDecisionV1Schema = z.strictObject({
+  reason: identity(), sourceMessageRef: CoordinationMessageRefV1Schema,
+  approvedBy: z.nullable(z.strictObject({ accountId: identity(), atMs: date() })),
+});
+export type MemoryDecisionV1 = z.infer<typeof MemoryDecisionV1Schema>;
 export const MemoryFactV1Schema = z.strictObject({
   id: identity(), text: identity(), createdAtMs: date(), expiresAtMs: z.optional(date()),
   sourceSessionRef: z.nullable(z.strictObject({ serverId: identity(), sessionId: identity() })),
   supersedes: z.optional(identity()),
+  decision: z.optional(MemoryDecisionV1Schema),
 });
 export type MemoryFactV1 = z.infer<typeof MemoryFactV1Schema>;
 export const MEMORY_ARCHIVE_TOPIC_TITLE_V1 = 'archive';
@@ -49,6 +57,24 @@ export const MemoryDocArtifactHeaderV1Schema = z.strictObject({
   v: z.literal(1), kind: z.literal('memory_doc.v1'), title: identity(),
 });
 export const MemoryDocArtifactHeaderV1StoredSchema = createStoredReadSchema(MemoryDocArtifactHeaderV1Schema);
+
+export type MemoryTargetSelectionV1 = Readonly<{
+  resolving: boolean; ref: PromptDocArtifactRefV1 | null; scope: 'session' | 'project' | 'account';
+}>;
+type MemoryTargetLayerV1 = Readonly<{ status: 'ready' | 'none' | 'pending' | 'unavailable'; ref: PromptDocArtifactRefV1 | null }>;
+
+/** One target precedence for write admission and UI projection. Layer readers own readiness and access. */
+export function selectMemoryTargetV1(input: Readonly<{
+  isBot: boolean; botRef: PromptDocArtifactRefV1 | null; project?: MemoryTargetLayerV1; account?: MemoryTargetLayerV1;
+}>): MemoryTargetSelectionV1 {
+  if (input.isBot) return { resolving: false, ref: input.botRef, scope: 'session' };
+  if (!input.project || (input.project.status !== 'ready' && input.project.status !== 'none')) {
+    return { resolving: true, ref: null, scope: 'project' };
+  }
+  if (input.project.ref) return { resolving: false, ref: input.project.ref, scope: 'project' };
+  if (input.account?.status !== 'ready') return { resolving: true, ref: null, scope: 'account' };
+  return { resolving: false, ref: input.account.ref, scope: 'account' };
+}
 
 function isExpired(fact: MemoryFactV1, nowMs: number): boolean {
   return fact.expiresAtMs !== undefined && fact.expiresAtMs <= nowMs;

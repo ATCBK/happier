@@ -117,6 +117,8 @@ export const MemoryStatusV1Schema = lazyZodSchema(() => z.looseObject({
      * a document request; omission preserves old daemon transcript operation.
      */
     documentSearchSupported: z.optional(z.boolean()),
+    /** Authority-bearing Project scope is usable only when this exact daemon advertises true. */
+    projectSearchSupported: z.optional(z.boolean()),
     /** Scoped status only. Older daemons omit this projection and ignore the scope request. */
     documents: z.optional(MemoryDocumentStatusV1Schema),
     /** Omission is an older daemon, never proof that native sources are current. */
