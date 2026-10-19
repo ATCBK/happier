@@ -98,7 +98,8 @@ describe('WebAlertModal', () => {
 
         for (const pressable of pressables) {
             const text = getTextContent(pressable);
-            expect(pressable.props.accessibilityRole).toBe('button');
+            // Web renders the shared pressable's ARIA role.
+            expect(pressable.props.role ?? pressable.props.accessibilityRole).toBe('button');
             expect(pressable.props.accessibilityLabel).toBe(text);
         }
     });
@@ -202,5 +203,29 @@ describe('WebAlertModal', () => {
         expect(onDiscard).toHaveBeenCalledOnce();
         expect(onKeepEditing).not.toHaveBeenCalled();
         expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('renders no text node inside the content view when the message is empty', async () => {
+        const { WebAlertModal } = await import('./WebAlertModal');
+
+        const screen = await renderScreen(<WebAlertModal
+                    config={{
+                        id: 'test-confirm',
+                        type: 'confirm',
+                        title: 'Delete a New Session draft',
+                        message: '',
+                        cancelText: 'Cancel',
+                        confirmText: 'OK',
+                    }}
+                    onClose={vi.fn()}
+                    onConfirm={vi.fn()}
+                />);
+
+        // A bare '' child of a View is an invalid text node on web.
+        const bareText = screen.root.findAll((node) => {
+            const children = node.props?.children;
+            return children === '' || (Array.isArray(children) && children.includes(''));
+        });
+        expect(bareText).toHaveLength(0);
     });
 });

@@ -151,15 +151,20 @@ class ModalManagerClass implements IModal {
             destructive?: boolean;
             messageParagraphs?: ConfirmModalConfig['messageParagraphs'];
             focusReturnRef?: FocusReturnRef;
+            signal?: AbortSignal;
         }
     ): Promise<boolean> {
-        if (Platform.OS === 'web' || options?.messageParagraphs) {
-            // The shared app dialog also owns structured consequences on native platforms.
+        const signal = options?.signal;
+        if (signal?.aborted) return false;
+        if (Platform.OS === 'web' || options?.messageParagraphs || signal) {
+            // Native alerts cannot be dismissed by their invocation's cancellation owner.
+            // The existing app dialog owns cancellable and structured confirmations everywhere.
             if (!this.showModalFn) {
                 console.error('ModalManager not initialized. Make sure ModalProvider is mounted.');
                 return false;
             }
 
+            const hideModal = this.hideModalFn;
             const modalId = this.showModalFn({
                 type: 'confirm',
                 title,
@@ -172,7 +177,16 @@ class ModalManagerClass implements IModal {
             } as Omit<ModalConfig, 'id'>);
 
             return new Promise<boolean>((resolve) => {
-                this.confirmResolvers.set(modalId, resolve);
+                const abort = () => {
+                    this.resolveConfirm(modalId, false);
+                    hideModal?.(modalId);
+                };
+                this.confirmResolvers.set(modalId, value => {
+                    signal?.removeEventListener('abort', abort);
+                    resolve(value);
+                });
+                signal?.addEventListener('abort', abort, { once: true });
+                if (signal?.aborted) abort();
             });
         } else {
             // Use native alert

@@ -40,9 +40,11 @@ vi.mock('react-native-keyboard-controller', () => ({
     ),
 }));
 
+// Prepare the real modal graph after its SDK boundaries, outside the behavioral budget.
+const { BaseModal } = await import('./BaseModal');
+
 describe('BaseModal (web focus)', () => {
     it('returns focus to the pre-open trigger when its portal dialog unmounts', async () => {
-        const { BaseModal } = await import('./BaseModal');
         const backgroundButton = document.createElement('button');
         backgroundButton.textContent = 'Background';
         document.body.appendChild(backgroundButton);
@@ -69,13 +71,13 @@ describe('BaseModal (web focus)', () => {
 
             expect(document.activeElement).toBe(backgroundButton);
         } finally {
+            await act(async () => { root.unmount(); });
             container.remove();
             backgroundButton.remove();
         }
     });
 
     it('keeps Tab and Shift+Tab focus traversal inside the active dialog', async () => {
-        const { BaseModal } = await import('./BaseModal');
         const backgroundButton = document.createElement('button');
         backgroundButton.textContent = 'Background';
         document.body.appendChild(backgroundButton);

@@ -300,13 +300,11 @@ describe('BaseModal (web)', () => {
         const initialRef = host?.props?.ref;
         expect(typeof initialRef).toBe('object');
 
-        act(() => {
-            screen.tree.update(React.createElement(BaseModal, {
-                visible: true,
-                showBackdrop: false,
-                children: React.createElement('Child'),
-            }));
-        });
+        await screen.update(React.createElement(BaseModal, {
+            visible: true,
+            showBackdrop: false,
+            children: React.createElement('Child'),
+        }));
 
         const hostAfterUpdate = findPortalHost() as any;
         expect(hostAfterUpdate?.props?.ref).toBe(initialRef);

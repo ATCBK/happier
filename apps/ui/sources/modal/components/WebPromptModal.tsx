@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Pressable, KeyboardTypeOptions, Platform } from 'react-native';
+import { View, KeyboardTypeOptions, Platform } from 'react-native';
 import { BaseModal } from './BaseModal';
 import { PromptModalConfig } from '../types';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text, TextInput } from '@/components/ui/text/Text';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { t } from '@/text';
 import { ModalCardFrame } from './card/ModalCardFrame';
+import { ModalChoiceRow } from './card/ModalChoiceRow';
 
 
 interface WebPromptModalProps {
@@ -36,42 +38,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         marginTop: theme.space.s4
     },
-    input: {
-        width: '100%',
-        height: 36,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        borderRadius: 8,
-        paddingHorizontal: theme.space.s10,
+    // The shared page field box spans the card under the title.
+    field: {
+        alignSelf: 'stretch',
         marginTop: theme.space.s16,
-        color: theme.colors.text.primary,
-        backgroundColor: theme.colors.input.background
     },
-    buttonContainer: {
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border.default,
-        flexDirection: 'row'
-    },
-    button: {
-        flex: 1,
-        paddingVertical: theme.space.s10,
-        alignItems: 'center',
-        justifyContent: 'center'
-    },
-    buttonPressed: {
-        backgroundColor: theme.colors.border.default
-    },
-    buttonSeparator: {
-        width: 1,
-        backgroundColor: theme.colors.border.default
-    },
-    buttonText: {
-        color: theme.colors.text.primary
-    }
 }));
 
 export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true, visible = true, zIndexBase }: WebPromptModalProps) {
-    const { theme } = useUnistyles();
+    useUnistyles();
     const styles = stylesheet;
     const [inputValue, setInputValue] = useState(config.defaultValue || '');
     const inputRef = useRef<React.ElementRef<typeof TextInput> | null>(null);
@@ -129,61 +104,33 @@ export function WebPromptModal({ config, onClose, onConfirm, showBackdrop = true
                     <Text variant="heading" style={styles.title}>
                         {config.title}
                     </Text>
-                    {config.message && (
+                    {config.message ? (
                         <Text variant="body" style={styles.message}>
                             {config.message}
                         </Text>
-                    )}
-                    <TextInput
+                    ) : null}
+                    <FieldTextInput
                         ref={inputRef}
                         testID="web-prompt-input"
-                        variant="label" emphasis="regular" style={styles.input}
+                        style={styles.field}
+                        accessibilityLabel={config.title}
                         value={inputValue}
                         onChangeText={setInputValue}
                         placeholder={config.placeholder}
-                        placeholderTextColor={theme.colors.input.placeholder}
                         keyboardType={getKeyboardType()}
                         secureTextEntry={config.inputType === 'secure-text'}
                         autoCapitalize="none"
-                        autoCorrect={false}
                         autoFocus={Platform.OS === 'web'}
                         onSubmitEditing={handleConfirm}
                         returnKeyType="done"
                     />
                 </View>
                 
-                <View style={styles.buttonContainer}>
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.button,
-                            pressed && styles.buttonPressed
-                        ]}
-                        testID="web-prompt-cancel"
-                        accessibilityRole="button"
-                        accessibilityLabel={config.cancelText || t('common.cancel')}
-                        onPress={handleCancel}
-                    >
-                        <Text variant="label" emphasis="regular" style={styles.buttonText}>
-                            {config.cancelText || t('common.cancel')}
-                        </Text>
-                    </Pressable>
-                    <View style={styles.buttonSeparator} />
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.button,
-                            pressed && styles.buttonPressed
-                        ]}
-                        testID="web-prompt-confirm"
-                        accessibilityRole="button"
-                        accessibilityLabel={config.confirmText || t('common.ok')}
-                        onPressIn={handleConfirm}
-                        onPress={handleConfirm}
-                    >
-                        <Text variant="label" emphasis="semiBold" style={styles.buttonText}>
-                            {config.confirmText || t('common.ok')}
-                        </Text>
-                    </Pressable>
-                </View>
+                <ModalChoiceRow choices={[
+                    { text: config.cancelText || t('common.cancel'), testID: 'web-prompt-cancel', role: 'cancel', onPress: handleCancel },
+                    // Confirm on press-in too: the typed value is read before a blur or close can race it.
+                    { text: config.confirmText || t('common.ok'), testID: 'web-prompt-confirm', onPressIn: handleConfirm, onPress: handleConfirm },
+                ]} />
             </ModalCardFrame>
         </BaseModal>
     );

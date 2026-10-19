@@ -332,7 +332,7 @@ export function BaseModal({
                             ref={modalPortalHostRef}
                             style={portalHostStyle}
                         />
-                        <ModalPortalTargetProvider target={modalPortalTarget}>
+                        <ModalPortalTargetProvider target={modalPortalTarget} layerZIndex={baseZ + 1}>
                             <ModalBoundaryProvider>
                                 <KeyboardAwareModalFrame
                                     pointerEvents={interactivePointerEvents.nativePointerEvents}

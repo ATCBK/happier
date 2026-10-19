@@ -1,10 +1,11 @@
 import * as React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 import { installModalComponentCommonModuleMocks } from '../modalComponentTestHelpers';
 
@@ -39,14 +40,23 @@ function readPhysicalTarget(node: ReactTestInstance): Readonly<{ width: number; 
     };
 }
 
-afterEach(() => {
-    standardCleanup();
+let restoreBrowserGlobals: (() => void) | undefined;
+beforeEach(() => {
+    // This suite asserts touch floors. A node host has no pointer hardware;
+    // explicitly model the coarse primary pointer of the web touch case.
+    restoreBrowserGlobals = withPopoverWebGlobals({ window: {
+        matchMedia: (query: string) => ({ matches: query === '(pointer: coarse)' || query === '(hover: none)' }),
+    } });
+});
+afterEach(async () => {
+    await standardCleanup();
+    restoreBrowserGlobals?.();
     runtime.platform = 'web';
 });
 
 describe('ModalCloseButton', () => {
     it.each([
-        ['web', 'web', 44],
+        ['touch web', 'web', 44],
         ['iOS', 'ios', 44],
         ['Android', 'android', 48],
     ] as const)('keeps a physical, focusable %s close target without relying on hitSlop', async (_name, platform, minimum) => {

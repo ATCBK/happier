@@ -69,3 +69,61 @@ it('puts a global modal opened from a retained popover above it and delivers poi
         container.remove();
     }
 });
+
+it('puts a body-level menu opened from inside a modal above that modal', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 100, width: 180, height: 40, top: 100, left: 100, right: 280, bottom: 140, toJSON: () => ({}),
+    });
+    function Dialog() {
+        const anchorRef = React.useRef<HTMLButtonElement>(null);
+        return <>
+            <button ref={anchorRef}>All registries</button>
+            <Popover open anchorRef={anchorRef} portal={{ web: { target: 'body' } }} onRequestClose={() => {}}>
+                {() => <button data-testid="menu-action">Manage registries</button>}
+            </Popover>
+        </>;
+    }
+    try {
+        await act(async () => root.render(<ModalProvider><span /></ModalProvider>));
+        await act(async () => { Modal.show({ component: Dialog }); });
+        const action = document.querySelector<HTMLElement>('[data-testid="menu-action"]')!;
+        const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+        const popover = action.closest<HTMLElement>('[id^="popover-"]')!;
+        expect(popover).not.toBeNull();
+        expect(dialog.contains(popover)).toBe(false);
+        expect(Number(window.getComputedStyle(popover).zIndex)).toBeGreaterThan(Number(window.getComputedStyle(dialog).zIndex));
+    } finally {
+        await act(async () => root.unmount());
+        measure.mockRestore();
+        container.remove();
+    }
+});
+
+it('keeps a notice and its Undo above an open modal', async () => {
+    const { PresentationNoticeHost } = await import('@/components/sessions/presentation/PresentationNoticeHost');
+    const { publishPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    function Dialog() {
+        return <button>Name</button>;
+    }
+    try {
+        await act(async () => root.render(<ModalProvider><PresentationNoticeHost /></ModalProvider>));
+        await act(async () => { Modal.show({ component: Dialog }); });
+        await act(async () => {
+            publishPresentationNotice({ key: 'layer-test', message: 'Renamed', severity: 'info', undo: { label: 'Undo', run: () => {} } });
+        });
+        const undo = document.querySelector<HTMLElement>('[data-testid="current-session-presentation-notice-undo"]')!;
+        const notice = undo.closest<HTMLElement>('[data-testid="current-session-presentation-notice"]')!;
+        const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+        expect(Number(window.getComputedStyle(notice).zIndex)).toBeGreaterThan(Number(window.getComputedStyle(dialog).zIndex));
+        await act(async () => { retirePresentationNotice('layer-test'); });
+    } finally {
+        await act(async () => root.unmount());
+        container.remove();
+    }
+});

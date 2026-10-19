@@ -185,6 +185,8 @@ export interface IModal {
         destructive?: boolean;
         messageParagraphs?: ConfirmModalConfig['messageParagraphs'];
         focusReturnRef?: FocusReturnRef;
+        /** Dismiss when the operation that owns this decision can no longer execute. */
+        signal?: AbortSignal;
     }): Promise<boolean>;
     prompt(title: string, message?: string, options?: {
         placeholder?: string;

@@ -227,8 +227,9 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
 
                 {framed && props.footer != null ? (
                     <View testID="modal-card-footer" style={[styles.footer, props.footerStyle]}>
-                        {/* Dialog actions are the `normal` tier: the same `label` words a WebAlert action uses. */}
-                        <RoundButtonSizeScope size="normal">{props.footer}</RoundButtonSizeScope>
+                        {/* Dialog actions are one `normal`-tier family: primary, secondary and destructive all take
+                            the same `label` words and geometry a WebAlert action uses. */}
+                        <RoundButtonSizeScope size="normal" presentation="uniform">{props.footer}</RoundButtonSizeScope>
                     </View>
                 ) : null}
                 {framed && !fullscreen ? <SurfaceRim role="floating" radius={theme.borderRadius.modalCard} border="modal" /> : null}

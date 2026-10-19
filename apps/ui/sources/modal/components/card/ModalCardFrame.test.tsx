@@ -530,13 +530,20 @@ describe('ModalCardFrame', () => {
         const { ModalCardFrame } = await import('./ModalCardFrame');
         const screen = await renderScreen(React.createElement(ModalCardFrame, {
             children: React.createElement('Child'),
-            footer: React.createElement(RoundButton, { title: 'Save' }),
+            footer: React.createElement(React.Fragment, null,
+                React.createElement(RoundButton, { title: 'Generate', display: 'secondary' }),
+                React.createElement(RoundButton, { title: 'Discard', display: 'destructive' }),
+                React.createElement(RoundButton, { title: 'Save' }),
+            ),
         }));
 
         expect(flattenStyle(screen.findByTestId('modal-card-footer')?.props.style).borderTopWidth).toBeUndefined();
-        const saveLabel = screen.findAllByType('Text').find((node) => node.props.children === 'Save');
         const { resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation');
         const { Platform } = await import('react-native');
-        expect(flattenStyle(saveLabel?.props.style).fontSize).toBe(resolveHappierTypeScale('label', Platform.OS).fontSize);
+        // One dialog action family: secondary and destructive peers use the same label words as the primary.
+        for (const title of ['Generate', 'Discard', 'Save']) {
+            const label = screen.findAllByType('Text').find((node) => node.props.children === title);
+            expect(flattenStyle(label?.props.style).fontSize).toBe(resolveHappierTypeScale('label', Platform.OS).fontSize);
+        }
     });
 });
