@@ -788,12 +788,16 @@ Request:
 }
 ```
 
+For a Session, use `"target": { "kind": "session", "sessionId": "session-id" }`.
+An Action that takes `sessionId` still receives that field inside `input`; the
+envelope target does not replace or widen the Action's operand grant.
+
 `target` may be omitted or use the machine or session form. It is
 transport routing metadata, never Action input, caller provenance, approval
 state, or host execution context. Daemon-local omission selects that daemon's
-current machine. The server origin has no default machine: a caller must first
-use the PAT-enabled `GET /v1/machines` discovery route and then provide an exact
-machine target. Omitted targets return `target_required`. A session
+current machine. The server origin has no default target: provide an exact
+Session target, or use the PAT-enabled `GET /v1/machines` discovery route to
+choose an exact Machine target. Omitted targets return `target_required`. A session
 target is valid only when canonical Session ownership derives one exact current
 machine; an unavailable session placement returns `target_unavailable`. The
 server validates the PAT and finite envelope, then relays over the target
@@ -871,7 +875,12 @@ admits Home browser requests under the token origin policy above; daemon-local
 delivery does not enable CORS. The server-to-daemon relay accepts a 33 MiB
 (34,603,008-byte) request carrier, leaving one MiB of framing headroom above
 the public body limit. V1 Action content is plaintext to the configured server;
-whole-Action V2 protects content and results without a plaintext fallback. Both
+whole-Action V2 protects content and results without a plaintext fallback.
+Ordinary PAT V1 is supported for both Plain and E2EE Accounts; it deliberately
+exposes the Action request and response to the configured Home. This does not
+grant encryption material or bypass the Account-mode checks at content readers
+and writers. Signed Account and terminal private origination on an E2EE Account
+uses protected V2. Both
 relay forms avoid requiring an inbound public daemon address; use daemon-local
 transport for direct local delivery. The transport does not
 retry or fail a mutation over to another origin.

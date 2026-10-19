@@ -236,7 +236,9 @@ export async function executeExternalAction(input: Readonly<{
     : executionAuthorization.data.binding.machineId !== input.currentMachineId ? 'authorization_machine'
     : executionAuthorization.data.binding.installationId !== input.currentInstallationId ? 'authorization_installation'
     : executionAuthorization.data.binding.actionId !== actionId.data ? 'authorization_action'
-    : (executionAuthorization.data.binding.accountEncryptionMode !== undefined
+    // Ordinary PAT V1 deliberately permits Home-readable transport. Account
+    // mode requires V2 for signed private origination, as at Home issuance.
+    : (accountPrincipal && executionAuthorization.data.binding.accountEncryptionMode !== undefined
         && !isExternalActionRequestVersionAllowedForAccountModeV1({
           accountEncryptionMode: executionAuthorization.data.binding.accountEncryptionMode, envelopeVersion: envelope.data.v,
         })) ? 'authorization_account_mode'

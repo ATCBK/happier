@@ -52,6 +52,7 @@ import { registerSessionAgentTransitionRpcHandlers } from '@/rpc/handlers/sessio
 import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testkit';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { projectSessionBoardGetResultV1, SessionBoardGetInputV1Schema } from '@happier-dev/protocol/sessions/board/actions';
 
 const principal = {
   accountId: 'account-1',
@@ -1188,6 +1189,69 @@ describe('executeExternalAction', () => {
         externalActionExecutionAuthorization: authorization,
       }),
     );
+  });
+
+  it('admits the ordinary PAT V1 Session carrier for an E2EE Account while enforcing its Session grant', async () => {
+    const target = { kind: 'session' as const, sessionId: 'session-1' };
+    const grant = { ...API_TOKEN_FULL_GRANT_V1,
+      actions: { families: [], ids: ['session.board.get'] }, targets: { sessions: [target.sessionId], machines: [] } };
+    const pat = { ...principal, grant };
+    const reads: string[] = [];
+    // Board transport is the persistence/network boundary; carrier parsing,
+    // target reconciliation, grant admission and Action execution remain real.
+    const executor = createActionExecutor({ ...createUnavailableHostActionDeps(),
+      sessionBoardAction: async ({ input }) => {
+        const sessionId = SessionBoardGetInputV1Schema.parse(input).sessionId!;
+        reads.push(sessionId);
+        return projectSessionBoardGetResultV1({ serverId: 'home-profile', sessionId, layout: null,
+          entries: [], incomplete: false, capabilities: { readTranscript: true, editSessionRecords: false },
+          page: { cursor: null, hasNext: false } });
+      },
+    });
+    const run = (sessionId: string) => {
+      const envelope = { v: 1 as const, target: { ...target, sessionId }, input: { sessionId } };
+      return executeExternalAction({ actionId: 'session.board.get', envelope, principal: pat,
+        currentMachineId: 'machine-1', currentServerId: 'home-profile', currentInstallationId: 'installation-1',
+        executionAuthorization: { v: 1, token: 'opaque-home-authorization', binding: {
+          accountId: pat.accountId, principalId: pat.principalId, credentialId: pat.credentialId, grant,
+          accountEncryptionMode: 'e2ee', serverIdentityId: 'srv_home', machineId: 'machine-1',
+          custodianAccountId: pat.accountId, installationId: 'installation-1', actionId: 'session.board.get',
+          requestId: 'home-generated-request', target: envelope.target,
+          requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+        } },
+        externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23)).secretKey,
+        verifyExecutionAuthorization: async () => true,
+        resolveTarget: async ({ target: resolved }) => resolved ?? null, executor,
+      });
+    };
+    expect(await run(target.sessionId)).toMatchObject({ kind: 'response', response: {
+      v: 1, execution: { ok: true, result: { sessionId: target.sessionId, items: [], incomplete: false } },
+    } });
+    expect(await run('outside-session')).toMatchObject({ kind: 'response', response: {
+      execution: { ok: false, errorCode: 'credential_scope_denied' },
+    } });
+    expect(reads).toEqual([target.sessionId]);
+  });
+
+  it.each(['account', 'terminal'] as const)('keeps signed %s private origination on protected V2 for an E2EE Account', async kind => {
+    const target = { kind: 'session' as const, sessionId: 'session-1' };
+    const envelope = { v: 1 as const, requestId: 'signed-private-request', target, input: { sessionId: target.sessionId } };
+    const authentication = { kind, tokenEpoch: 1 };
+    const result = await executeExternalAction({ actionId: 'session.board.get', envelope,
+      principal: { accountId: principal.accountId, authority: 'account_automation', authentication },
+      currentMachineId: 'machine-1', currentServerId: 'home-profile', currentInstallationId: 'installation-1',
+      executionAuthorization: { v: 1, token: 'opaque-home-authorization', binding: {
+        accountId: principal.accountId, authentication, accountEncryptionMode: 'e2ee',
+        serverIdentityId: 'srv_home', machineId: 'machine-1', custodianAccountId: principal.accountId,
+        installationId: 'installation-1', actionId: 'session.board.get', requestId: envelope.requestId, target,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+      } },
+      externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23)).secretKey,
+      verifyExecutionAuthorization: async () => true,
+      resolveTarget: async () => { throw new Error('Private V1 must refuse before target reads'); },
+      executor: createActionExecutor(createUnavailableHostActionDeps()),
+    });
+    expect(result).toEqual({ kind: 'invalid_request', errorCode: 'invalid_envelope', requestId: envelope.requestId });
   });
 
   it('rejects a protected Machine binding before Session reconciliation can select this daemon', async () => {
