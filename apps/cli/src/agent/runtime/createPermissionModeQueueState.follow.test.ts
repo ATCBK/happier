@@ -113,6 +113,7 @@ describe('protected Follow queue to host context', () => {
     const harness = createFollowHarness({ observePendingSessionFollow, acknowledgeSessionFollow,
       runSessionFollowSourceRequest: ({ request }) => request(),
       enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
+      reconcileSessionInputForProviderDispatch: async () => 'admitted',
       observeProviderInputSettlement: async input => { settlements.push(input); return true; },
     });
     const requestScenario = scenario.startsWith('request-');
@@ -132,7 +133,7 @@ describe('protected Follow queue to host context', () => {
     const second = scenario === 'two-originals' || scenario === 'selected-prefix-gap' || scenario === 'selected-prefix-one-fits'
       ? harness.emitFollow('important', true, 'follow-second', 5) : null;
     observePendingSessionFollow.mockImplementation(async () => ({ ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: ['source'],
-      observations: scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' ? [] : [{ localInputId: 'follow-input', delivery: follow },
+      observations: scenario === 'withdrawn' || scenario === 'run-execution-withdrawn' ? [] : [...[{ localInputId: 'follow-input', delivery: follow },
         ...(second ? [{ localInputId: 'follow-second', delivery: second }] : [])].map(({ localInputId, delivery }) => {
         if ('source' in delivery.original) return { kind: 'admitted_run_input' as const, localInputId,
           destinationSessionId: 'destination', delivery };
@@ -143,7 +144,11 @@ describe('protected Follow queue to host context', () => {
         return { kind: 'admitted_input' as const, localInputId, sourceSessionId: 'source', destinationSessionId: 'destination', delivery,
           delivered: { transcriptSeq: delivery.original.sourceMessage.seq - 1, readyEventSeq: 0, agentStateVersion: 0, turn: null },
           observed: { transcriptSeq: delivery.original.sourceMessage.seq, readyEventSeq: 0, agentStateVersion: 0, turn: null } };
-      }),
+      }), ...(scenario === 'two-originals' ? [{ sourceSessionId: 'source', destinationSessionId: 'destination',
+        relation: 'manager' as const, attachedAt: 1, policy: { preset: 'important' as const },
+        delivered: { transcriptSeq: 3, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+        observed: { transcriptSeq: 6, readyEventSeq: 0, agentStateVersion: 0, turn: { id: 'later-turn', status: 'completed' as const } },
+      }] : [])],
     }));
     if (!standalone) harness.emit({ role: 'user', content: { type: 'text', text: scenario === 'local-command' ? '/clear' : 'continue work' }, localId: 'human-input', meta: {} });
     const material = createSessionFollowSourceMaterialResolver();
@@ -168,19 +173,29 @@ describe('protected Follow queue to host context', () => {
           agentStateVersion: requestAnsweredAfterPreparation ? 8 : 7,
           pendingUserActionRequestCount: 1, pendingPermissionRequestCount: 0,
           agentState: JSON.stringify(requestAnsweredAfterPreparation ? answeredState : currentState),
-        }) }) } : {}), fetchRunnerSourceProjection: async ({ sourceSessionId, observedTranscriptSeq }) => SessionFollowSourceProjectionResponseV1Schema.parse({
+        }) }) } : {}), fetchRunnerSourceProjection: async ({ sourceSessionId, afterTranscriptSeq, observedTranscriptSeq }) => SessionFollowSourceProjectionResponseV1Schema.parse({
         v: 1, source: { id: sourceSessionId, encryptionMode: encryptedRequest ? 'e2ee' : 'plain',
           metadata: encryptedRequest ? encryptSessionPayload({ ctx: requestContext, payload: { path: '/project', host: 'source-host' } })
             : JSON.stringify({ path: '/project', host: 'source-host' }),
           archivedAt: null, createdAt: 1, updatedAt: Date.now(), active: true, activeAt: Date.now(), thinking: false, thinkingAt: null,
-          latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
+          latestTurnStatus: scenario === 'two-originals' ? 'completed' : null,
+          latestTurnId: scenario === 'two-originals' ? 'later-turn' : null,
+          latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
           meaningfulActivityAt: null, agentStateVersion: requestScenario ? 7 : 0,
           ...(requestScenario ? { agentState: encryptedRequest ? encryptSessionPayload({ ctx: requestContext, payload: currentState })
             : JSON.stringify(currentState) } : {}) },
-        messages: requestScenario ? [] : [{ seq: observedTranscriptSeq, createdAt: observedTranscriptSeq,
-          content: { t: 'plain', v: { role: 'agent', content: { type: 'text',
+        messages: requestScenario ? [] : (scenario === 'two-originals'
+          ? [4, 5, 6].filter(seq => seq > afterTranscriptSeq && seq <= observedTranscriptSeq)
+          : [observedTranscriptSeq]).map(observedTranscriptSeq => ({ seq: observedTranscriptSeq, createdAt: observedTranscriptSeq,
+          content: { t: 'plain', v: { role: 'agent', content: scenario === 'two-originals' && observedTranscriptSeq === 6
+            ? { type: 'codex', data: { type: 'message', message: 'Later terminal-only outcome' } }
+            : scenario === 'two-originals'
+            ? { type: 'event', id: `report-${observedTranscriptSeq}`, data: { type: 'worker-report',
+              summary: `retained source update ${observedTranscriptSeq}`,
+              deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: `report-${observedTranscriptSeq}.md` }] } }
+            : { type: 'text',
             text: scenario === 'selected-prefix-gap' && observedTranscriptSeq === 4
-              ? `earlier selected original ${'x'.repeat(16_384)}` : `retained source update ${observedTranscriptSeq}${scenario === 'selected-prefix-one-fits' ? 'x'.repeat(3_000) : ''}` } } } }], hasMore: false,
+              ? `earlier selected original ${'x'.repeat(16_384)}` : `retained source update ${observedTranscriptSeq}${scenario === 'selected-prefix-one-fits' ? 'x'.repeat(3_000) : ''}` } } } })), hasMore: false,
       }) },
     });
     const reconcile = createSessionFollowContextReconciler({ session: harness.session, hydrateObservation: hydrate,
@@ -255,7 +270,12 @@ describe('protected Follow queue to host context', () => {
         if (runScenario) expect(sends[0].prompt).toContain('run-original');
         else if (!requestScenario) expect(sends[0].prompt).toContain('retained source update');
         expect(sends[0].meta?.localIds).toEqual(standalone ? ['follow-input'] : ['human-input']);
-        if (scenario === 'two-originals') expect(sends[0].prompt).toContain('retained source update 5');
+        if (scenario === 'two-originals') {
+          expect(sends[0].prompt).toContain('retained source update 5');
+          expect(sends[0].prompt).toContain('report-4.md');
+          expect(sends[0].prompt).toContain('report-5.md');
+          expect(sends[0].prompt).not.toContain('Later terminal-only outcome');
+        }
         expect(harness.messageQueue.queue).toEqual([]);
         await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
           localInputId: 'follow-input',

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   SessionFollowUpdateEnvelopeV1Schema,
+  type SessionFollowUpdateEnvelopeV1,
   type SessionFollowFrontierV1,
 } from '@happier-dev/protocol';
 
@@ -29,7 +30,7 @@ const frontier = {
 
 const zeroFrontier = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };
 
-function envelopeFor(observation: { sourceSessionId: string; destinationSessionId: string; observed: typeof frontier }) {
+function envelopeFor(observation: { sourceSessionId: string; destinationSessionId: string; observed: typeof frontier }): SessionFollowUpdateEnvelopeV1 {
   return {
     v: 1 as const,
     kind: 'session_follow_update' as const,
@@ -64,7 +65,7 @@ function originalInputFixture(texts: readonly string[]) {
   const state = { publisherGeneration: '1', sourceAvailable: true, sourceError: null as Error | null, revoked: false, corruptSeq: 0,
     afterFetch: () => {} };
   const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-    runSessionFollowSourceRequest: async ({ request }) => await request(),
+    runSessionFollowSourceRequest: ({ request }) => request(),
     observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination',
       publisherGeneration: state.publisherGeneration, currentSourceSessionIds: state.revoked ? [] : ['source'],
       observations: state.revoked ? [] : deliveries.map(({ delivery, localInputId }, index) => ({
@@ -74,6 +75,7 @@ function originalInputFixture(texts: readonly string[]) {
       })),
     }),
     acknowledgeSessionFollow: async request => { acknowledgements.push(request);
+      if (!('consumed' in request)) throw new Error('Expected a Session original acknowledgement');
       return { ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: request.consumed }; },
   } });
   const material = createSessionFollowSourceMaterialResolver();
@@ -184,7 +186,7 @@ describe('Session Follow context reconciler', () => {
         attachedAt: 1, policy: { preset: 'everything' as const }, delivered: zeroFrontier, observed },
     ];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async options => ({ ok: true, v: 1, sessionId: 'destination',
         publisherGeneration: '1', currentSourceSessionIds: ['source'], observations: [...routes,
           ...(options?.inputLocalIds?.includes('accepted-follow') ? [{ kind: 'admitted_input' as const,
@@ -257,14 +259,16 @@ describe('Session Follow context reconciler', () => {
     let delivered: SessionFollowFrontierV1 = zeroFrontier;
     const acknowledgements: SessionFollowFrontierV1[] = [];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination',
         publisherGeneration: '1', currentSourceSessionIds: ['source'], observations: [{
           relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
           policy: { preset: 'important' }, delivered,
-          observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+          observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+            agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
         }] }),
       acknowledgeSessionFollow: async input => {
+        if (!('consumed' in input)) throw new Error('Expected a Session original acknowledgement');
         delivered = input.consumed;
         acknowledgements.push(delivered);
         return { ok: true, v: 1, sourceSessionId: 'source', destinationSessionId: 'destination',
@@ -280,7 +284,8 @@ describe('Session Follow context reconciler', () => {
     const waitingSource = await hydrateObservation({ signal, observation: {
       relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
       policy: { preset: 'important' }, delivered,
-      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+        agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
     } });
     expect(waitingSource?.awareness).toMatchObject({ runtime: 'waiting',
       operational: { primary: 'action_required' } });
@@ -301,7 +306,8 @@ describe('Session Follow context reconciler', () => {
     const next = await hydrateObservation({ signal, observation: {
       relation: 'manager', attachedAt: now, sourceSessionId: 'source', destinationSessionId: 'destination',
       policy: { preset: 'important' }, delivered,
-      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0 }),
+      observed: projectSessionFollowFrontierFromSourceV1({ ...source, seq: 0,
+        agentStateVersion: source.agentStateVersion, latestTurnId: source.latestTurnId }),
     } });
     expect(next?.awareness).toMatchObject({ lifecycle: 'active', runtime: 'working' });
     expect(next?.workerUpdate).toBeUndefined();
@@ -316,7 +322,7 @@ describe('Session Follow context reconciler', () => {
     const questionObserved = { ...zeroFrontier, agentStateVersion: 1 };
     const managerObserved = { ...questionObserved, turn: { id: 'waiting-turn', status: 'waiting' as const } };
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async () => ({ ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1',
         currentSourceSessionIds: ['source'], observations: [
           { sourceSessionId: 'source', destinationSessionId: 'destination', relation: 'manager', attachedAt: 1,
@@ -352,10 +358,10 @@ describe('Session Follow context reconciler', () => {
     const source = { ...envelopeFor(observation), workerUpdate: { v: 1 as const, workerKind: 'session' as const,
       workerId: 'source', ownerState: 'settled' as const, wake: 'finished' as const, headline: 'Done', canInspect: true } };
     expect(shouldWakeForSessionFollowObservation(observation, source)).toBe(false);
-    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'everything' } }, source)).toBe(true);
+    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'everything' as const } }, source)).toBe(true);
     const failed = { ...source, workerUpdate: { ...source.workerUpdate, ownerState: 'failed' as const } };
     expect(shouldWakeForSessionFollowObservation(observation, failed)).toBe(true);
-    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'quiet' } }, failed)).toBe(false);
+    expect(shouldWakeForSessionFollowObservation({ ...observation, policy: { preset: 'quiet' as const } }, failed)).toBe(false);
     expect(shouldWakeForSessionFollowObservation(observation, { ...failed, reason: 'source_unavailable' })).toBe(false);
     const humanPolicy = { preset: 'custom' as const, events: { person_wrote: { delivery: 'interrupt' as const } } };
     const ordinary = { ...observation, relation: 'follower' as const, attachedAt: undefined, policy: humanPolicy };
@@ -381,7 +387,7 @@ describe('Session Follow context reconciler', () => {
     const observations: unknown[] = [];
     const sourceRequests: unknown[] = [];
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async options => {
         observations.push(options);
         return { ok: true, v: 1, sessionId: 'destination', publisherGeneration: '1', currentSourceSessionIds: ['source'],
@@ -390,6 +396,7 @@ describe('Session Follow context reconciler', () => {
       },
       acknowledgeSessionFollow: async input => {
         acknowledgements.push(input);
+        if (!('consumed' in input)) throw new Error('Expected a Session original acknowledgement');
         return {  ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: input.consumed };
       },
     } });

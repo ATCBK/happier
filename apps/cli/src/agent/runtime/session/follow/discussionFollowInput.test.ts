@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema, createActionExecutor, encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createCliArtifactActions } from '@/session/actions/artifactActions';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { createMutableApiSessionClientFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
@@ -113,7 +114,7 @@ it('admits a human-addressed original into existing Machine Pending without inve
   const resource = await createDiscussionActionDeps({ credentials: { token: 'token', encryption: null }, serverId: binding.serverId,
     serverHttpBaseUrl: binding.serverUrl, resolveServerFeaturesSnapshot: () => features }).discussionAction!({ actionId: 'discussion.read',
     input: { discussionId: addressing.discussionId, afterSeq: 1, throughSeq: 2 }, context: {
-      surface: 'background', authority: 'account_automation', serverId: binding.serverId,
+      surface: 'cli', authority: 'account_automation', serverId: binding.serverId,
     } });
   expect(resource).toMatchObject({ messages: [{ id: addressing.messageId, addressingV1: message.addressingV1, content: message.content.v }] });
   const intake = createDiscussionFollowInputIntake({ session, credentials: { token: 'token', encryption: null } });
@@ -333,7 +334,7 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   const store = createCredentialedAccountArtifactStore(credentials);
   const artifactAction = createCliArtifactActions({ store,
     beforeDelete: async () => { throw new Error('Read-only fixture'); }, resolvePublishCaller: async () => null });
-  await expect(runWithServerHttpBaseUrl(binding.serverUrl, () => createActionExecutor({ artifactAction }).execute('doc.read', { ref: admittedRef }, {
+  await expect(runWithServerHttpBaseUrl(binding.serverUrl, () => createActionExecutor({ ...createUnavailableActionTransportDeps(), artifactAction }).execute('doc.read', { ref: admittedRef }, {
     surface: 'cli', authority: 'account_automation', serverId: binding.serverId,
   }))).resolves.toMatchObject({ ok: true, result: { ref: admittedRef, artifact: { body }, openCommentCount: null } });
 });

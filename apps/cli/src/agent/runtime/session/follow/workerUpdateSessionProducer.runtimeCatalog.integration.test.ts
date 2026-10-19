@@ -9,7 +9,7 @@ import { SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SESSION_FOLLOW_OBSERVE_PENDING_EVE
   TranscriptRawAgentEventV1Schema, TranscriptRawRecordV1Schema, WorkerUpdateV1Schema,
   type SessionUpdatePostInputV1,
   type SessionRuntimeIssueV1,
-  type SessionFollowPendingObservationV1, type WorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
+  type SessionFollowSessionPendingObservationV1, type WorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createSessionScopedSocket } from '@/api/session/sockets';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
@@ -61,13 +61,13 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
       : { kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } } });
   const runKeyEnvelope = preparedRunKey.recipientKeyEnvelopes[0]?.encryptedDataKey ?? null;
   const runAccess = { readable: review?.readable !== false };
-  const observation: SessionFollowPendingObservationV1 = {
+  const observation: SessionFollowSessionPendingObservationV1 = {
     sourceSessionId: workerId, destinationSessionId: 'lead', relation: 'manager', attachedAt: 100, policy: { preset: 'everything' as const },
     delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
     observed: { transcriptSeq: 1, readyEventSeq: 1, agentStateVersion: 0,
       turn: status === 'running' ? null : { id: 'worker-turn', status } },
   };
-  const observations: SessionFollowPendingObservationV1[] = [observation, ...(overlap ? [{
+  const observations: SessionFollowSessionPendingObservationV1[] = [observation, ...(overlap ? [{
     sourceSessionId: workerId, destinationSessionId: 'lead', relation: 'follower' as const, policy: { preset: 'quiet' as const },
     delivered: { ...observation.delivered }, observed: observation.observed,
   }] : [])];
@@ -90,7 +90,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
   }));
   app.get('/v1/auth/ping', async () => ({ ok: true }));
   const finalText = { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'Actual final result' } } };
-  const messages: RawTranscriptRow[] = [{ seq: 1, createdAt: 1,
+  const messages: (RawTranscriptRow & { seq: number })[] = [{ seq: 1, createdAt: 1,
     content: review?.keyState ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: finalText }) } : { t: 'plain', v: finalText } }];
   app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture(
     review?.keyState ? witness : { mode: 'plain' }));
@@ -204,7 +204,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
   const restore = installAxiosFastifyAdapter({ app, origin });
   const acknowledgements: unknown[] = [];
   const followObserveRequests: SessionFollowObservePendingRequestV1[] = [];
-  const leadMessages: RawTranscriptRow[] = [];
+  const leadMessages: (RawTranscriptRow & { seq: number })[] = [];
   const acknowledgementState: { accepted: boolean; failBeforeCommit: boolean; publisherGeneration: string;
     beforeAcknowledge?: (relation: 'manager' | 'follower') => Promise<void> } = {
       accepted: true, failBeforeCommit: false, publisherGeneration: '1',
@@ -243,6 +243,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
     }
     if (event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
       const request = SessionFollowAcknowledgeRequestV1Schema.parse(payload);
+      if (!('relation' in request)) throw new Error('Expected a Session relation acknowledgement');
       acknowledgements.push(request);
       const apply = () => {
         if (acknowledgementState.failBeforeCommit) throw new Error('ACK failed before progress commit');

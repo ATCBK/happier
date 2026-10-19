@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createSessionFollowOccurrenceDispatcher } from './sessionFollowOccurrenceDispatcher';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -11,10 +12,10 @@ it.each([
   ['execution_run', 'catchup'], ['workflow_run', 'catchup'],
 ] as const)('delivers one %s terminal original through existing Pending on %s, keeping mute and replay idempotent', async (kind, entry) => {
   const destinationSessionId = 'c222222222222222222222222';
-  const source = kind === 'execution_run'
-    ? { kind, sessionId: 'c111111111111111111111111', runId: 'run-one' }
-    : { kind, runId: 'workflow-one' };
-  const original = kind === 'execution_run' ? { source, terminalEventId: 'terminal-one' } : { source, revision: 4 };
+  const original: RunFollowOriginalV1 = kind === 'execution_run'
+    ? { source: { kind, sessionId: 'c111111111111111111111111', runId: 'run-one' }, terminalEventId: 'terminal-one' }
+    : { source: { kind, runId: 'workflow-one' }, revision: 4 };
+  const source = original.source;
   const occurrence = { original, event: { kind: 'finished' as const } };
   const sourceRow = { ...createSessionNotificationContextFixture(destinationSessionId), ownerAccountId: 'account-1',
     encryptionMode: 'plain', dataEncryptionKey: null, archivedAt: null, active: true,

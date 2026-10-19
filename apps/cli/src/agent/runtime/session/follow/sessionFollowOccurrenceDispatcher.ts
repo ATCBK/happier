@@ -11,7 +11,7 @@ import { deriveSessionFollowInputLocalIdV1, type SessionFollowInputV1 } from '@h
 import type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import { SessionFollowRelationWitnessesV1Schema, type SessionFollowSourceOccurrenceWitnessV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { SessionFollowRelationWitnessesV1Schema, type SessionFollowRelationWitnessV1, type SessionFollowSourceOccurrenceWitnessV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
@@ -228,7 +228,11 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           continue;
         }
         const ordinary = await readRoutes(original, receiverSessionId);
-        if (ordinary === null) { personalRequestPassComplete = false; continue; } // Unsupported/denied is pending, not an empty route set.
+        if (ordinary === null) {
+          if (receiverSessionId) return;
+          personalRequestPassComplete = false;
+          continue;
+        } // Unsupported/denied is pending, not an empty route set.
         const evaluated = evaluateSessionFollowRuleOccurrenceV1({ accountId: input.accountId, evaluator: receiverSessionId ? 'receiver' : 'source',
           production: receiverSessionId ? 'recovery' : 'source', sourceSessionId: original.sourceSessionId, evidence, currentFacts: facts,
           rules: opened.rules.filter(rule => !rule.inception || ordinary.originalCreatedAt !== undefined
@@ -238,14 +242,21 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             hasPersistentFollow: ordinary.currentAccountFacts.hasPersistentFollow } } : {}),
           ...(ordinary.currentAccountFacts ? { personalFollowSuppressed: ordinary.currentAccountFacts.personalFollowSuppressed } : {}),
         });
-        if (evaluated.status !== 'evaluated') { personalRequestPassComplete = false; continue; }
+        if (evaluated.status !== 'evaluated') {
+          if (receiverSessionId) return;
+          personalRequestPassComplete = false;
+          continue;
+        }
         const candidates = new Map<string, { policies: FollowPolicyV1[]; witnesses: SessionFollowSourceOccurrenceWitnessV1[];
-          relations: { relation: 'follower' | 'manager'; attachedAt?: number }[] }>();
+          relations: SessionFollowRelationWitnessV1[] }>();
         for (const route of ordinary.routes) {
           if (!resolveFollowDeliveryV1({ policies: [route.policy], event: evidence.event }).selected) continue;
           const candidate = candidates.get(route.destinationSessionId) ?? { policies: [], witnesses: [], relations: [] };
           candidate.policies.push(route.policy);
-          candidate.relations.push({ relation: route.relation, ...(route.attachedAt === undefined ? {} : { attachedAt: route.attachedAt }) });
+          candidate.relations.push(route.relation === 'manager'
+            // The route response schema requires this attachment for managers.
+            ? { relation: route.relation, attachedAt: route.attachedAt! }
+            : { relation: route.relation, ...(route.attachedAt === undefined ? {} : { attachedAt: route.attachedAt }) });
           candidates.set(route.destinationSessionId, candidate);
         }
         for (const route of evaluated.routes) {
@@ -256,6 +267,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             : await readSessionDeliveryMutedScopes({ token: input.credentials.token, receiver: route.receiver,
               serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal });
           if (!muted) {
+            if (receiverSessionId) return;
             if (route.receiver.kind === 'account') personalRequestPassComplete = false;
             continue;
           }
@@ -350,7 +362,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             ...(input.spawnSession ? { spawnSession: input.spawnSession } : {}),
             ...(features ? { serverFeaturesSnapshot: features } : {}), signal: input.signal,
           }));
-          if (!result.ok) logger.debug('[Session Follow] Original admission held', { code: result.code });
+          if (!result.ok) {
+            logger.debug('[Session Follow] Original admission held', { code: result.code });
+            if (receiverSessionId) return;
+          }
           else if (!result.suppressed && await current()) {
             const context = await input.resolveSourceKeyContext();
             if (context && await current()) await prepareSourceKey({ sourceSessionId: original.sourceSessionId,
@@ -445,7 +460,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       if (typeof ownerAccountId !== 'string') continue;
       const source = transport.rawSession;
       const throughSeq = range.throughSeq ?? source.seq;
-      if (source.agentStateVersion > range.afterStateVersion && source.agentStateVersion > 0 && typeof source.agentState === 'string') {
+      if (typeof source.agentStateVersion === 'number' && source.agentStateVersion > range.afterStateVersion && source.agentStateVersion > 0 && typeof source.agentState === 'string') {
         const ctx = transport.ctx;
         const openedState = await openSessionStateValue(transport.mode === 'plain' ? { mode: 'plain' } : {
           mode: 'e2ee', encryption: ctx ? {
@@ -481,8 +496,12 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             row, mode: transport.mode, ctx: transport.ctx });
           if (read.status === 'unavailable') { unavailable = true; break; }
           if (read.status === 'occurrence' && 'sourceMessage' in read.occurrence) {
-            await dispatch(read.occurrence, request.destinationSessionId);
+            const dispatched = await dispatch(read.occurrence, request.destinationSessionId);
             coveredEvents.push({ sourceSessionId, kind: read.occurrence.evidence.event.kind });
+            // A later original's accepted ACK advances this same source cursor.
+            // Leave the suffix for the next existing catch-up boundary when
+            // this original's admission is unavailable or unconfirmed.
+            if (!dispatched) { unavailable = true; break; }
           }
           if (typeof row.seq === 'number') afterSeq = row.seq;
         }

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
-import { createAutomationAccountEncryptionMaterialSnapshotV1, resolveValidatedAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
+import { createAutomationAccountEncryptionMaterialSnapshotV1, isAvailableE2eeAutomationAccountEncryptionV1, resolveValidatedAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import type { StoredCredentials } from '@/persistence';
 import { createSessionFollowRuleCache } from './sessionFollowRuleCache';
 import { SESSION_FOLLOW_HTTP_PATHS_V1, SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
@@ -36,7 +36,7 @@ export function createAccountSessionFollowRuleCache(input: Readonly<{
       const defaults = SessionAutoFollowPreferencesResponseSchema.safeParse(defaultsResponse.data);
       if (!parsed.success || !defaults.success) return null;
       return { mode: encryption.witness.mode,
-        material: encryption.witness.mode === 'e2ee' && 'material' in encryption ? encryption.material.material : null,
+        material: isAvailableE2eeAutomationAccountEncryptionV1(encryption) ? encryption.material.material : null,
         rules: parsed.data.rules, defaultPreferences: defaults.data };
     },
   });

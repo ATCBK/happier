@@ -17,7 +17,7 @@ import { createSessionPublisherPresence, expireSessionPublisherCandidates } from
 import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
 import { SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
-    SessionFollowObservePendingResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+    SessionFollowObservePendingResponseV1Schema, SessionFollowObserveSourceRoutesRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { readSessionManagerInTx, setSessionManager } from '@/app/session/follow/sessionManagerService';
 import { parseStoredSessionLatestTurnStatus } from '@/app/session/listing/rows';
 import { readCurrentSourceSessionFollowFrontier, writeSessionFollowFrontierColumns } from '@/app/session/relations/sessionEdgeFrontier';
@@ -38,8 +38,10 @@ import { resolveAcceptedPendingDelivery } from '@/app/session/pending/pendingMes
 import { readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import type { SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { buildTrustedHostSessionInputAdmissionV1, settleSessionInputRequestV1, settleSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { clearSessionExplicitStopV1FromMetadata, writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 describe('session → Follow WorkerUpdate acceptance', () => {
     let harness: LightSqliteHarness;
@@ -261,6 +263,19 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             }
             const app = createAuthenticatedTestApp({ authentication: 'real' });
             const requests: { url: string; status: number }[] = [];
+            const admissionFault = { originalSeq: null as number | null, boundary: 'admission' as 'admission' | 'routes' };
+            app.addHook('preHandler', async (request, reply) => {
+                const body = request.body;
+                const delivery = body && typeof body === 'object' && 'followDeliveryV1' in body
+                    ? SessionFollowInputV1Schema.safeParse(body.followDeliveryV1) : null;
+                const routes = admissionFault.boundary === 'routes' ? SessionFollowObserveSourceRoutesRequestV1Schema.safeParse(body) : null;
+                const seq = admissionFault.boundary === 'admission'
+                    ? delivery?.success && 'sourceMessage' in delivery.data.original ? delivery.data.original.sourceMessage.seq : undefined
+                    : routes?.success ? routes.data.sourceMessage?.seq : undefined;
+                if (seq === admissionFault.originalSeq) {
+                    return reply.code(503).send({ error: 'test_transport_unavailable' });
+                }
+            });
             app.addHook('onResponse', async (request, reply) => { requests.push({ url: request.url, status: reply.statusCode }); });
             sessionPendingRoutes(app);
             registerSessionFollowRoutes(app);
@@ -304,8 +319,11 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             // at every preparation boundary.
             let originalReconcile = makeReconciler();
             const restart = () => { originalReconcile = makeReconciler(); };
+            const dispatchPending = async () => dispatcher.dispatchReceiverRange({
+                observations: (await observe()).observations, destinationSessionId: destination.id,
+            });
             const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number) => {
-                await dispatcher.dispatchReceiverRange({ observations: (await observe()).observations, destinationSessionId: destination.id });
+                await dispatchPending();
                 {
                     const materialized = await materializeNextPendingMessage({ actorUserId: account.id, sessionId: destination.id,
                         publisherAuthority: { accountId: account.id, sessionId: destination.id, machineId: machine.id,
@@ -379,7 +397,7 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 await vi.waitFor(() => expect(acknowledgements.length).toBe(before + (prepared.representedFollowLocalInputIds?.length ?? 0)));
                 await Promise.allSettled(acknowledgements);
             };
-            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart };
+            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending, admissionFault };
         };
         const appendReply = async (text: string, turnId: string) => {
             await appendTurnInput(turnId);
@@ -727,6 +745,42 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect((await f.observe()).observations).toEqual([]);
         expect(await original.prepare('natural')).toBeNull();
         expect(await db.sessionMessage.count({ where: { sessionId: f.destination.id, acceptedTurnId: 'receiver-turn' } })).toBe(2);
+    });
+
+    it.each(['admission', 'routes'] as const)('retains the earlier held original after an %s failure instead of accepting its later suffix on Resume', async boundary => {
+        const f = await fixture();
+        await f.detachManager();
+        await f.follow({ preset: 'custom', events: { update_posted: { delivery: 'interrupt' } } });
+        const original = await f.originals();
+        const receiver = await db.session.findUniqueOrThrow({ where: { id: f.destination.id } });
+        const metadata = writeSessionExplicitStopV1ToMetadata(JSON.parse(receiver.metadata), {
+            v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 1,
+        });
+        await db.session.update({ where: { id: f.destination.id }, data: { active: false, metadata: JSON.stringify(metadata) } });
+        const firstSeq = await f.appendReport('Held reverseA');
+        const secondSeq = await f.appendReport('Held reverseB');
+        original.admissionFault.originalSeq = firstSeq;
+        original.admissionFault.boundary = boundary;
+        await original.dispatchPending();
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        expect(f.acceptedPrompts).toEqual([]);
+        expect((await f.observe()).observations).toEqual([
+            expect.objectContaining({ delivered: expect.objectContaining({ transcriptSeq: firstSeq - 1 }) }),
+        ]);
+        original.admissionFault.originalSeq = null;
+        await db.session.update({ where: { id: f.destination.id }, data: { active: true,
+            metadata: JSON.stringify(clearSessionExplicitStopV1FromMetadata(metadata, 'person-stop')) } });
+        original.restart();
+        await original.replacePublisher();
+        const first = await original.prepare('wake');
+        expect(first?.workerUpdates).toMatchObject([{ result: 'Held reverseA', transcriptPointer: { seq: firstSeq } }]);
+        await original.accept(first!);
+        const second = await original.prepare('wake');
+        expect(second?.workerUpdates).toMatchObject([{ result: 'Held reverseB', transcriptPointer: { seq: secondSeq } }]);
+        await original.accept(second!);
+        expect(f.acceptedPrompts.map(prompt => [prompt.includes('Held reverseA'), prompt.includes('Held reverseB')]))
+            .toEqual([[true, false], [false, true]]);
+        expect((await f.observe()).observations).toEqual([]);
     });
 
     it('holds a budget-omitted original and its queued suffix, then accepts the exact prefix before the later report', async () => {

@@ -45,7 +45,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
       const { addressing } = observation;
       const opened = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
         input: { discussionId: addressing.discussionId, afterSeq: addressing.throughSeq - 1, throughSeq: addressing.throughSeq },
-        context: { surface: 'background', authority: 'account_automation', serverId: binding.serverId }, signal }));
+        context: { surface: 'cli', authority: 'account_automation', serverId: binding.serverId }, signal }));
       if (!opened.success || opened.data.incomplete || opened.data.serverId !== binding.serverId
         || opened.data.discussionId !== addressing.discussionId) return false;
       const question = opened.data.messages.find(message => message.id === addressing.messageId && message.seq === addressing.throughSeq);
@@ -58,7 +58,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         ancestors.add(parentId);
         const result = await readCommittedDiscussionMessage({ kind: 'discussion', discussion: {
           serverId: binding.serverId, discussionId: addressing.discussionId }, messageId: parentId },
-        { surface: 'background', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction,
+        { surface: 'cli', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction,
         { throughSeq: addressing.throughSeq });
         if (!result.ok) return false;
         root = result.message;
@@ -92,7 +92,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         }
         if (!header || header.header.title !== undefined && typeof header.header.title !== 'string') return false;
         const openCommentCount = await countDocPassageThreadsV1(source.ref,
-          { surface: 'background', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction);
+          { surface: 'cli', authority: 'account_automation', serverId: binding.serverId, signal }, discussionAction);
         doc = { docRef: source.ref, title: typeof header.header.title === 'string' ? header.header.title : null, revision: source.revision,
           openCommentCount, threadRef: root.messageRef };
       }

@@ -604,7 +604,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     const wakeCandidates = prepared.flatMap(({ observation, update }) => 'kind' in observation ? [] : [{
           sourceSessionId: observation.sourceSessionId,
           policy: observation.policy,
-          ...(observation.relation ? { relation: observation.relation, attachedAt: observation.attachedAt } : {}),
+          relation: observation.relation,
+          attachedAt: observation.attachedAt,
           expected: observation.delivered,
           consumed: update.observed,
         }]);
@@ -724,7 +725,8 @@ export function createSessionFollowContextReconciler(input: Readonly<{
                   } : {
                     sourceSessionId: observation.sourceSessionId,
                     policy: observation.policy,
-                    ...(observation.relation ? { relation: observation.relation, attachedAt: observation.attachedAt } : {}),
+                    relation: observation.relation,
+                    attachedAt: observation.attachedAt,
                     expectedPublisherGeneration: publisherGeneration,
                     expected: observation.delivered,
                     observed: observation.observed,
@@ -737,7 +739,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
                 expectedPublisherGeneration: currentPublisherGeneration,
                 elapsedMs: Date.now() - startedAtMs, ok: result.ok,
                 ...(!result.ok ? { rejection: 'rejection' in result ? result.rejection : result.error } : {}) });
-              const rejection = result.ok ? null : 'error' in result ? result.error : result.rejection;
+              const rejection = result.ok ? null : result.error;
               if (result.ok || !(rejection === 'retryable'
                 || 'kind' in observation && rejection !== null && isUnsettledOriginalAcknowledgement(rejection))) {
                 pendingAcknowledgements.delete(request);

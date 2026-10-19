@@ -30,13 +30,14 @@ describe('Session Follow prompt composition through the canonical owner', () => 
     // Socket observation/ACK and source HTTP are boundaries; hydration,
     // selection, composition and acceptance custody execute their real owners.
     const session = createMutableApiSessionClientFixture({ sessionId: 'destination', overrides: {
-      runSessionFollowSourceRequest: async ({ request }) => request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       observePendingSessionFollow: async () => ({
         ok: true, v: 1, sessionId: 'destination', publisherGeneration: '7', currentSourceSessionIds: ['source'],
         observations: [{ kind: 'admitted_input', localInputId, sourceSessionId: 'source', destinationSessionId: 'destination',
           delivered, observed, delivery }],
       }),
       acknowledgeSessionFollow,
+      reconcileSessionInputForProviderDispatch: async () => 'admitted',
     } });
     const material = createSessionFollowSourceMaterialResolver();
     try {
