@@ -1,0 +1,85 @@
+import { DiscussionAgentPostRequestV1Schema, DiscussionAgentPostResponseV1Schema,
+  type DiscussionAgentPostResponseV1 } from '@happier-dev/protocol/discussions/api';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { StoredCredentials } from '@/persistence';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import type { DiscussionReplyReturnPublisher } from '@/session/services/sessionMessageReply';
+import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+import { logger } from '@/ui/logger';
+import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+
+/** Account composition supplies policy and resource crypto, never a second writer. */
+export function createDiscussionReplyReturnPublisher(params: Readonly<{
+  credentials: StoredCredentials;
+  machineId: string;
+  serverId: string;
+  serverHttpBaseUrl: string;
+  signal: AbortSignal;
+  isCurrent(): Promise<boolean>;
+  actionsSettingsProvider?: RuntimeActionSettingsProvider;
+}>): DiscussionReplyReturnPublisher {
+  return async (original, options) => {
+    const denied = (): DiscussionAgentPostResponseV1 => ({ v: 1, ok: false, error: 'discussion_post_denied' });
+    const signal = options?.signal && options.signal !== params.signal
+      ? AbortSignal.any([params.signal, options.signal]) : params.signal;
+    const current = async () => !signal.aborted && await params.isCurrent() && !signal.aborted;
+    if (original.serverId !== params.serverId
+      || original.discussion.participantSessionId !== original.requestSessionId || !await current()) return denied();
+    const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: original.requestSessionId,
+      localId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId });
+    const receipt: { value?: DiscussionAgentPostResponseV1 } = {};
+    let phase = 'action_admission';
+    const executor = createCliActionExecutor({ token: params.credentials.token, credentials: params.credentials,
+      sessionId: '', mode: 'plain', ctx: null, serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl,
+      isCredentialCurrent: current,
+      ...(params.actionsSettingsProvider ? { actionsSettingsProvider: params.actionsSettingsProvider } : {}),
+      postAgentDiscussionMessage: async request => {
+        phase = 'publisher_request';
+        const parsed = DiscussionAgentPostRequestV1Schema.safeParse(request);
+        if (!parsed.success || parsed.data.sessionId !== original.requestSessionId
+          || parsed.data.discussionId !== original.discussion.discussionId || parsed.data.request.localId !== localId
+          || parsed.data.request.replyTarget?.kind !== 'message'
+          || parsed.data.request.replyTarget.messageId !== original.discussion.messageId || !await current()) return denied();
+        phase = 'session_transport';
+        const transport = await resolveSessionTransportContext({ credentials: params.credentials,
+          idOrPrefix: original.requestSessionId, signal });
+        if (!transport.ok || transport.sessionId !== original.requestSessionId || !await current()) return denied();
+        const replyReturn = { serverId: params.serverId, requestLocalId: original.requestLocalId,
+          ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
+        phase = 'session_publisher';
+        receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
+          token: params.credentials.token, sessionId: transport.sessionId,
+          method: SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
+          request: { request: { ...parsed.data, replyReturn } },
+          authorityCeiling: 'account_automation', timeoutMs: null, signal,
+          ...(transport.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', ctx: transport.ctx }),
+        }));
+        return receipt.value;
+      },
+    });
+    // These are retained original-input facts, not a fabricated active witness.
+    const sessionInputSource = original.acceptedTurnId ? SessionInputSourceSessionV1Schema.parse({
+      sourceSessionId: original.requestSessionId, sourceTurnId: original.acceptedTurnId,
+      sourceInputId: original.requestLocalId, via: 'action', discussionAddressing: original.discussion,
+    }) : undefined;
+    const result = await executor.execute('discussion.reply', { discussionId: original.discussion.discussionId, localId,
+      replyTarget: { kind: 'message', messageId: original.discussion.messageId },
+      content: { v: 1, parts: [{ t: 'text', text: original.message }] },
+    }, { serverId: params.serverId, surface: 'agent', authority: 'account_automation',
+      defaultSessionId: original.requestSessionId, defaultSessionMachineId: params.machineId,
+      actionCaller: { kind: 'host' },
+      discussionReplyReturn: { serverId: params.serverId, requestLocalId: original.requestLocalId,
+        ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) },
+      actionRequestId: localId, signal, ...(sessionInputSource ? { sessionInputSource } : {}),
+      ...(original.actionRequestAttributionV1 ? { actionRequestAttributionV1: original.actionRequestAttributionV1 } : {}),
+    });
+    if (!receipt.value) logger.warnLocalFile('[Discussion reply return] Action has no publication receipt', {
+      errorCode: result.ok ? 'publication_pending' : result.errorCode, phase,
+    });
+    // Approval/denial/unavailable publication leaves the original obligation pending.
+    return receipt.value ?? denied();
+  };
+}

@@ -1,20 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SessionDiscussionOpenedMessageV1 } from '@happier-dev/protocol';
+import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol';
 
 import { buildDiscussionMentionLabels, formatDiscussionMessageForHuman } from './discussionPresentation';
 
-function message(overrides: Partial<SessionDiscussionOpenedMessageV1> = {}): SessionDiscussionOpenedMessageV1 {
+function message(overrides: Partial<DiscussionOpenedMessageV1> = {}): DiscussionOpenedMessageV1 {
   return {
     id: 'message-1',
     discussionId: 'discussion-1',
+    messageRef: { kind: 'discussion', discussion: { serverId: 'server-1', discussionId: 'discussion-1' }, messageId: 'message-1' },
     localId: null,
     seq: 1,
     authorAccountId: 'private-account-id',
     accountActor: {
       v: 1,
       accountId: 'private-account-id',
-      profile: { firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null },
+      profile: { firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null, name: null },
     },
     producerV1: null,
     content: { v: 1, parts: [{ t: 'text', text: 'Ready' }] },
@@ -25,6 +26,19 @@ function message(overrides: Partial<SessionDiscussionOpenedMessageV1> = {}): Ses
 }
 
 describe('Discussion human presentation', () => {
+  it('renders opened passage comments and proposal text through the existing transcript formatter', () => {
+    const revision = { headerVersion: 1, bodyVersion: 2 };
+    const passage = { ref: { kind: 'doc' as const, artifactId: 'doc', serverId: 'home' }, revision,
+      range: { start: 0, end: 3 }, quote: 'old' };
+    expect(formatDiscussionMessageForHuman(message({ content: {
+      kind: 'doc_passage_comment', passage, content: { v: 1, parts: [
+        { t: 'text', text: 'Please check ' }, { t: 'mention', participant: { kind: 'account', accountId: 'private-mentioned' } },
+      ] },
+    } }))).toBe('1. Alice Chen: Please check @Happier member');
+    expect(formatDiscussionMessageForHuman(message({ content: { kind: 'doc_edit_proposal', proposal: {
+      target: passage, baseRevision: revision, before: 'old', after: 'new', reason: 'clarify',
+    } } }))).toBe('1. Alice Chen: old\nnew\nclarify');
+  });
   it('renders the sanitized Account actor and Agent provenance as sibling facts', () => {
     const output = formatDiscussionMessageForHuman(message({
       producerV1: { v: 1, kind: 'agent', sessionId: 'session-1', runId: 'run-1' },
@@ -58,20 +72,20 @@ describe('Discussion human presentation', () => {
       message({ id: 'message-1', seq: 1, authorAccountId: 'account-a', accountActor: {
         v: 1,
         accountId: 'account-a',
-        profile: { firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null },
+        profile: { firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null, name: null },
       } }),
       message({ id: 'message-2', seq: 2, authorAccountId: 'account-b', accountActor: {
         v: 1,
         accountId: 'account-b',
-        profile: { firstName: null, lastName: null, username: 'bo', avatarUrl: null },
+        profile: { firstName: null, lastName: null, username: 'bo', avatarUrl: null, name: null },
       } }),
       message({
         id: 'message-3',
         seq: 3,
         content: { v: 1, parts: [
-          { t: 'mention', accountId: 'account-a' },
+          { t: 'mention', participant: { kind: 'account', accountId: 'account-a' } },
           { t: 'text', text: ' and ' },
-          { t: 'mention', accountId: 'account-b' },
+          { t: 'mention', participant: { kind: 'account', accountId: 'account-b' } },
         ] },
         mentionedAccountIds: ['account-a', 'account-b'],
       }),
@@ -91,7 +105,7 @@ describe('Discussion human presentation', () => {
         v: 1,
         parts: [
           { t: 'text', text: 'Please check ' },
-          { t: 'mention', accountId: 'private-mentioned-account-id' },
+          { t: 'mention', participant: { kind: 'account', accountId: 'private-mentioned-account-id' } },
         ],
       },
       mentionedAccountIds: ['private-mentioned-account-id'],
@@ -99,5 +113,13 @@ describe('Discussion human presentation', () => {
 
     expect(output).toBe('1. Alice Chen: Please check @Happier member');
     expect(output).not.toContain('private-mentioned-account-id');
+  });
+
+  it('keeps actual Session mentions distinct without exposing their private ids', () => {
+    const output = formatDiscussionMessageForHuman(message({ content: { v: 1, parts: [
+      { t: 'mention', participant: { kind: 'session', sessionId: 'private-agent-session' } },
+    ] } }));
+    expect(output).toBe('1. Alice Chen: @Happier Agent');
+    expect(output).not.toContain('private-agent-session');
   });
 });

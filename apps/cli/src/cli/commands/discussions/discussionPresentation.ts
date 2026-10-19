@@ -1,6 +1,7 @@
 import { definitionList, ok } from '@happier-dev/cli-common/output';
-import { SessionDiscussionCreateResultV1Schema, SessionDiscussionDetailsResultV1Schema, SessionDiscussionListResultV1Schema, SessionDiscussionPostResultV1Schema, SessionDiscussionReadResultV1Schema, SessionDiscussionReadStateResultV1Schema } from '@happier-dev/protocol/sessions/discussions/actions';
-import type { SessionDiscussionMessageContentV1, SessionDiscussionOpenedMessageV1, SessionDiscussionOpenedSummaryV1 } from '@happier-dev/protocol';
+import { DiscussionCreateResultV1Schema, DiscussionDetailsResultV1Schema, DiscussionListResultV1Schema, DiscussionPostResultV1Schema, DiscussionReadResultV1Schema, DiscussionReadStateResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import type { DiscussionMessageContentV1, DiscussionOpenedMessageV1, DiscussionOpenedSummaryV1 } from '@happier-dev/protocol';
+import { readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
 
 import type {
   ActionCliPresentation,
@@ -29,11 +30,11 @@ function successPresentation<T>(params: Readonly<{
   };
 }
 
-function titleOf(discussion: SessionDiscussionOpenedSummaryV1): string {
+function titleOf(discussion: DiscussionOpenedSummaryV1): string {
   return discussion.title ?? '[title unavailable]';
 }
 
-function stateOf(discussion: SessionDiscussionOpenedSummaryV1): string {
+function stateOf(discussion: DiscussionOpenedSummaryV1): string {
   const state = discussion.archivedAt === null ? 'active' : 'archived';
   const unread = discussion.unreadCount > 0 ? `, ${discussion.unreadCount} unread` : '';
   const mentions = discussion.unreadMentionCount > 0
@@ -42,7 +43,7 @@ function stateOf(discussion: SessionDiscussionOpenedSummaryV1): string {
   return `${state}${unread}${mentions}`;
 }
 
-function renderSummary(discussion: SessionDiscussionOpenedSummaryV1): string {
+function renderSummary(discussion: DiscussionOpenedSummaryV1): string {
   return definitionList([
     { label: titleOf(discussion), value: `${discussion.id} (${stateOf(discussion)})` },
   ]);
@@ -53,7 +54,7 @@ function renderSummary(discussion: SessionDiscussionOpenedSummaryV1): string {
  * `@` sigil: an author line spells a username `@bo` while a mention already
  * carries its own `@`.
  */
-function resolveActorName(actor: SessionDiscussionOpenedMessageV1['accountActor']): Readonly<{
+function resolveActorName(actor: DiscussionOpenedMessageV1['accountActor']): Readonly<{
   label: string;
   isUsername: boolean;
 }> | null {
@@ -78,7 +79,7 @@ function resolveActorName(actor: SessionDiscussionOpenedMessageV1['accountActor'
  * member label instead of leaking part of a private id.
  */
 export function buildDiscussionMentionLabels(
-  messages: readonly SessionDiscussionOpenedMessageV1[],
+  messages: readonly DiscussionOpenedMessageV1[],
 ): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
   for (const message of messages) {
@@ -91,15 +92,18 @@ export function buildDiscussionMentionLabels(
 }
 
 function renderContent(
-  content: SessionDiscussionMessageContentV1,
+  content: DiscussionMessageContentV1,
   mentionLabels: ReadonlyMap<string, string>,
 ): string {
-  return content.parts.map((part) => (
-    part.t === 'text' ? part.text : `@${mentionLabels.get(part.accountId) ?? 'Happier member'}`
-  )).join('');
+  return readDiscussionMessagePartsV1(content).map((part) => {
+    if (part.t === 'text') return part.text;
+    return part.participant.kind === 'session'
+      ? '@Happier Agent'
+      : `@${mentionLabels.get(part.participant.accountId) ?? 'Happier member'}`;
+  }).join('');
 }
 
-function renderAccountActor(message: SessionDiscussionOpenedMessageV1): string {
+function renderAccountActor(message: DiscussionOpenedMessageV1): string {
   const actor = message.accountActor;
   if (actor === null) return 'Unknown author';
   if (actor.profile === null) return 'Former member';
@@ -109,7 +113,7 @@ function renderAccountActor(message: SessionDiscussionOpenedMessageV1): string {
 }
 
 export function formatDiscussionMessageForHuman(
-  message: SessionDiscussionOpenedMessageV1,
+  message: DiscussionOpenedMessageV1,
   mentionLabels: ReadonlyMap<string, string> = new Map(),
 ): string {
   const actor = renderAccountActor(message);
@@ -137,8 +141,8 @@ function createFailureFields(context: ActionCliPresentationContext) {
   };
 }
 
-export const SESSION_DISCUSSION_LIST_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionListResultV1Schema.parse(payload),
+export const DISCUSSION_LIST_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionListResultV1Schema.parse(payload),
   human: (result) => {
     if (result.discussions.length === 0) {
       console.log('(no discussions)');
@@ -152,13 +156,13 @@ export const SESSION_DISCUSSION_LIST_PRESENTATION: ActionCliPresentation = succe
   },
 });
 
-export const SESSION_DISCUSSION_DETAILS_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionDetailsResultV1Schema.parse(payload),
+export const DISCUSSION_DETAILS_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionDetailsResultV1Schema.parse(payload),
   human: (result) => console.log(renderSummary(result.discussion)),
 });
 
-export const SESSION_DISCUSSION_READ_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionReadResultV1Schema.parse(payload),
+export const DISCUSSION_READ_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionReadResultV1Schema.parse(payload),
   human: (result) => {
     if (result.messages.length === 0) console.log('(no messages)');
     const mentionLabels = buildDiscussionMentionLabels(result.messages);
@@ -168,9 +172,9 @@ export const SESSION_DISCUSSION_READ_PRESENTATION: ActionCliPresentation = succe
   },
 });
 
-export const SESSION_DISCUSSION_CREATE_PRESENTATION: ActionCliPresentation = {
+export const DISCUSSION_CREATE_PRESENTATION: ActionCliPresentation = {
   ...successPresentation({
-    parse: (payload) => SessionDiscussionCreateResultV1Schema.parse(payload),
+    parse: (payload) => DiscussionCreateResultV1Schema.parse(payload),
     human: (result) => console.log(ok(`Discussion created: ${titleOf(result.discussion)} (${result.discussion.id})`)),
   }),
   failureFields: (_failure, context) => createFailureFields(context),
@@ -182,9 +186,9 @@ export const SESSION_DISCUSSION_CREATE_PRESENTATION: ActionCliPresentation = {
   },
 };
 
-export const SESSION_DISCUSSION_POST_PRESENTATION: ActionCliPresentation = {
+export const DISCUSSION_POST_PRESENTATION: ActionCliPresentation = {
   ...successPresentation({
-    parse: (payload) => SessionDiscussionPostResultV1Schema.parse(payload),
+    parse: (payload) => DiscussionPostResultV1Schema.parse(payload),
     human: (result) => console.log(ok(`Message posted (sequence ${result.messageSeq}, local id ${result.message.localId ?? 'unavailable'})`)),
   }),
   failureFields: (_failure, context) => {
@@ -197,23 +201,23 @@ export const SESSION_DISCUSSION_POST_PRESENTATION: ActionCliPresentation = {
   },
 };
 
-export const SESSION_DISCUSSION_RENAME_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionDetailsResultV1Schema.parse(payload),
+export const DISCUSSION_RENAME_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionDetailsResultV1Schema.parse(payload),
   human: (result) => console.log(ok(`Discussion renamed: ${titleOf(result.discussion)} (${result.discussion.id})`)),
 });
 
-export const SESSION_DISCUSSION_ARCHIVE_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionDetailsResultV1Schema.parse(payload),
+export const DISCUSSION_ARCHIVE_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionDetailsResultV1Schema.parse(payload),
   human: (result) => console.log(ok(`Discussion archived: ${titleOf(result.discussion)} (${result.discussion.id})`)),
 });
 
-export const SESSION_DISCUSSION_RESTORE_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionDetailsResultV1Schema.parse(payload),
+export const DISCUSSION_RESTORE_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionDetailsResultV1Schema.parse(payload),
   human: (result) => console.log(ok(`Discussion restored: ${titleOf(result.discussion)} (${result.discussion.id})`)),
 });
 
-export const SESSION_DISCUSSION_READ_STATE_PRESENTATION: ActionCliPresentation = successPresentation({
-  parse: (payload) => SessionDiscussionReadStateResultV1Schema.parse(payload),
+export const DISCUSSION_READ_STATE_PRESENTATION: ActionCliPresentation = successPresentation({
+  parse: (payload) => DiscussionReadStateResultV1Schema.parse(payload),
   human: (result) => console.log(ok(
     result.cursor.didChange
       ? `Discussion marked read through sequence ${result.cursor.lastReadSeq}`
