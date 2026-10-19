@@ -91,6 +91,54 @@ describe('runManagedMachineEnrollment', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('publishes the guest sign-in consent while the task waits on it, and clears it once answered', async () => {
+    if (process.platform === 'win32') return; // Managed guest installation targets POSIX.
+    const root = await mkdtemp(join(tmpdir(), 'happier-native-consent-'));
+    const payloadRoot = join(root, 'payload');
+    const guestHome = join(root, 'guest');
+    try {
+      await mkdir(payloadRoot);
+      await mkdir(guestHome);
+      // The guest CLI is the process boundary: it answers `auth request` with a v3 pairing request.
+      const request = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1, publicKey: Buffer.alloc(32, 1).toString('base64'),
+        homeServerIdentityId: correlation.homeId, pairing: { secretB64Url: Buffer.alloc(32, 2).toString('base64url'), createdAtMs: Date.now(), expiresAtMs: Date.now() + 15 * 60_000 },
+        supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: 'guest-home' };
+      await writeFile(join(payloadRoot, 'happier'), `#!/bin/sh\nif [ "$1 $2" = "auth request" ]; then cat >/dev/null; printf '%s\\n' '${JSON.stringify(request)}'; fi\n`);
+      vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', payloadRoot);
+      const native: ManagedNativeBootstrapIO = {
+        exec: async ({ command, input }) => {
+          const child = execFileAsync('/bin/sh', ['-c', command], { env: { ...process.env, HOME: guestHome } });
+          child.child.stdin?.on('error', () => {}); // Commands that never read stdin close it early.
+          child.child.stdin?.end(input ?? '');
+          const result = await child;
+          return { status: 0, stdout: result.stdout, stderr: result.stderr };
+        },
+        putFile: async ({ path, bytes }) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); },
+      };
+      const prompts: unknown[] = [];
+      let taskId = '';
+      const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
+      const consent = { kind: 'auth.approveRemoteProvisioning', message: 'Sign this managed machine into your Account for Account-wide automation?' };
+      await withReleaseMirror(async () => {
+        const enrollment = runManagedMachineEnrollment({ correlation, target, carrier, channel: 'stable',
+          onTask: (task) => { taskId = task.taskId; }, onPrompt: (prompt) => { prompts.push(prompt); },
+        }, { readCurrentManagedRow: async () => machine, native });
+        enrollment.catch(() => {});
+        await vi.waitFor(async () => {
+          expect(taskId).not.toBe('');
+          expect(await getLiveSystemTasksRunnerAdapter().poll({ taskId, cursor: 0 }))
+            .toMatchObject({ pendingPrompt: { kind: consent.kind } });
+        }, { timeout: 20_000 });
+        // The waiting surface reads the question from the operation while the task holds it.
+        expect(prompts).toEqual([consent]);
+        // The user declines there, through the task's own response owner.
+        await getLiveSystemTasksRunnerAdapter().respond({ taskId, answer: { approved: false } });
+        await expect(enrollment).rejects.toMatchObject({ code: 'approval_declined' });
+      });
+      expect(prompts).toEqual([consent, null]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('rejects a bad operator payload with a typed failure before delivery or release fallback', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-native-invalid-payload-'));
     try {
@@ -125,6 +173,41 @@ describe('runManagedMachineEnrollment', () => {
       expect(releases[0]).toBe(`/repos/happier-dev/happier/releases/tags/${releaseTag}`);
     });
   });
+  it.each([0, 1] as const)('updates an enrolled service-managed native guest without pairing another Machine (service exit %s)', async serviceExit => {
+    if (process.platform === 'win32') return; // Managed guest installation targets POSIX.
+    const root = await mkdtemp(join(tmpdir(), 'happier-native-enrolled-update-'));
+    const payloadRoot = join(root, 'payload');
+    const guestHome = join(root, 'guest');
+    try {
+      await mkdir(payloadRoot);
+      await mkdir(guestHome);
+      // The guest executable is the OS boundary, recording the actual service command.
+      const executable = `#!/bin/sh\nprintf "%s\\n" "$@" >> "$HOME/invoked-args"\nexit ${serviceExit}\n`;
+      await writeFile(join(payloadRoot, 'happier'), executable);
+      vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', payloadRoot);
+      const native: ManagedNativeBootstrapIO = {
+        exec: ({ command }) => new Promise((resolve, reject) => {
+          execFile('/bin/sh', ['-c', command], { env: { ...process.env, HOME: guestHome } }, (error, stdout, stderr) => {
+            if (error && typeof error.code !== 'number') reject(error);
+            else resolve({ status: typeof error?.code === 'number' ? error.code : 0, stdout, stderr });
+          });
+        }),
+        putFile: async ({ path, bytes }) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); },
+      };
+      await withReleaseMirror(async releases => {
+        const update = runManagedMachineEnrollment({ correlation, target, carrier, channel: 'stable' }, {
+          readCurrentManagedRow: async () => ({ ...machine, enrolledMachineId: 'ordinary-machine' }), native,
+        });
+        if (serviceExit === 0) await expect(update).resolves.toEqual({ machineId: 'ordinary-machine' });
+        else await expect(update).rejects.toMatchObject({ code: 'background_service_failed' });
+        expect(releases).toEqual([]);
+      });
+      expect(await readFile(join(guestHome, '.happier/cli/current/happier'), 'utf8')).toBe(executable);
+      const args = (await readFile(join(guestHome, 'invoked-args'), 'utf8')).trim().split('\n');
+      expect(args).toEqual(['daemon', 'service', 'install', '--json']);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('retries an unconfirmed native boot update after enrollment using the same installed binary and Machine without reinstalling or pairing', async () => {
     const bootCarrier = { ...carrier, guestHome: { homeDir: '/persistent/home', happyHomeDir: '/persistent/home/.happier', daemonStartup: 'native-process' } };
     const requests: unknown[] = [];

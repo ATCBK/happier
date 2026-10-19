@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
-import { ManagedControllerIntentReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedControllerIntentReportV1Schema, ManagedControllerReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ProviderObservationV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { signMachineInstallationProof, verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import type { ManagedActivityBridgeResultV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
@@ -32,6 +32,18 @@ import { createDaemonApprovalExecutionOriginCurrentness, createDaemonExternalAct
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import * as activitySocket from '@/api/session/sockets';
+import { createLiveWorkProducerGroup, createManagedActivityInventory } from '@/daemon/lifecycle/managedActivity';
+import { createSessionLiveWorkProducer } from '@/daemon/lifecycle/sessionLiveWorkProducer';
+import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { registerManagedActivityRpcHandlers } from '@/api/machine/rpcHandlers.managedActivity';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
+import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD,
+    ManagedActivityBridgeResultV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
+import { createActionOperationStore } from '@/daemon/actionOperations/actionOperationStore';
+import { executeActionOperationActionV1 } from '@happier-dev/protocol/actions/executor/actionOperationActions';
+import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationGetV1ResponseSchema as PredecessorOperationGetSchema } from '@/daemon/actionOperations/testFixtures/predecessorActionOperationV1';
 
 const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, since: number, confirmedAt: number) {
@@ -47,7 +59,7 @@ function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, si
     }) };
 }
 function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unknown'; reasons: ['finite'] } = { kind: 'idle', since: 0 },
-    nativeResult: { kind: 'confirmed' | 'unknown' } | { kind: 'refused'; code: string } = { kind: 'confirmed' }, intent: 'start' | 'delete' | 'rebuild' = 'delete',
+    nativeResult: { kind: 'confirmed' | 'unknown' } | { kind: 'refused'; code: string } = { kind: 'confirmed' }, intent: 'start' | 'stop' | 'delete' | 'rebuild' = 'delete',
     inspectObservation?: ProviderObservationV1, onNativeEffect?: () => void,
     rebuildResult?: ReturnType<typeof MachineProvisionerRebuildResultV1Schema.parse>, recoverRebuild = false,
     cleanupObservation?: { kind: 'confirmed' | 'retryable' } | { kind: 'unknown'; code?: string }) {
@@ -75,6 +87,7 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     const reports: unknown[] = [];
     const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
         const path = String(url);
+        if (path.endsWith('/activation-failed')) return { status: 200, data: { ok: true, didFail: true } };
         if (path.endsWith('/admit-control')) return { status: 200, data: { machine, replayed: submitted } };
         if (path.endsWith('/prepare-policy')) {
             const preparation = ManagedPolicyAdmissionInputV1Schema.parse(body);
@@ -92,6 +105,10 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
         }
         if (path.endsWith('/actions/get')) return { status: 200, data: machine };
         if (path.endsWith('/context')) return { status: 200, data: { machine, requestId: 'control' } };
+        if (path.endsWith('/report')) {
+            const report = ManagedControllerReportV1Schema.parse(body);
+            if (report.result.kind === 'bound') machine = { ...machine, allocation: 'bound', resource: report.result.resource };
+        }
         if (path.endsWith('/submit-intent')) {
             const first = !machine.submittedNativeEffect; submitted = true;
             if (first) machine = { ...machine, submittedNativeEffect: { intentRevision: machine.intentRevision, requestId: 'control', intent: machine.desired, controller } };
@@ -152,6 +169,261 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     };
 }
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+describe('unused Stop through guest drain and controller operation custody', () => {
+    it('does not recreate unused Stop operations after observed settlement and resumes the policy after observed Start', async () => {
+        const test = setup(undefined, undefined, 'stop', {
+            observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained',
+        });
+        test.setMachine({ retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' },
+            observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained' } });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'owner',
+            generateOperationId: () => 'policy-stop' });
+        const failures: unknown[] = [];
+        let reads = 0;
+        const runtime = createDaemonManagedMachinePolicyRuntime({
+            // Census and the fixture's guest/native transports are the only replaced boundaries.
+            readCensus: async () => { reads++; return { machines: [test.readMachine()], targets: [] }; },
+            executePolicy: async request => operations.observeExecution({ actionId: 'machines.managed.power.set', input: {},
+                actionRequestId: 'policy-stop', execute: async operation => ({ ok: true,
+                    result: await test.driver.executePolicy(request.machine, request.purpose, {
+                        requestId: 'policy-stop', context: operation, signal: request.signal,
+                    }) }) }),
+            onUnavailable: error => { failures.push(error); },
+        });
+        try {
+            for (let expected = 1; expected <= 3; expected++) {
+                runtime.notifyChanged();
+                await vi.waitFor(() => expect(reads).toBe(expected));
+            }
+            expect(await operations.handlers.getV2({ operationId: 'policy-stop' })).toMatchObject({ kind: 'not_found' });
+            expect(test.effects).toEqual([]);
+            expect(failures).toEqual([]);
+            test.setMachine({ desired: 'start', observation: {
+                observedAt: 20, availability: 'present', power: 'running', storage: 'retained',
+            } });
+            runtime.notifyChanged();
+            await vi.waitFor(async () => expect(await operations.handlers.getV2({ operationId: 'policy-stop' }))
+                .toMatchObject({ kind: 'found' }));
+        } finally { await runtime.stop(); }
+    });
+    it.each(['idle', 'busy', 'unknown', 'missing-confirmation', 'approval-held', 'approval-approved', 'approval-rejected', 'approval-observation-failed'] as const)(
+        'settles unused Stop only with confirmed idle (%s)', async disposition => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(1_790_000_000_000);
+        const test = setup(undefined, undefined, 'stop');
+        test.setMachine({ desired: 'start', retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' } });
+        const machine = test.readMachine();
+        const home = test.post.getMockImplementation()!;
+        test.post.mockImplementation(async (url, body, config) => {
+            if (String(url).endsWith('/prepare-policy')) return { status: 200, data: {
+                machine: { ...test.readMachine(), desired: 'stop', desiredWhen: 'now' },
+            } };
+            if (String(url).endsWith('/admit-policy')) test.setMachine({ desired: 'stop' });
+            return await home(url, body, config);
+        });
+        const drain = createDaemonAdmissionDrain();
+        const guestOperations = createActionOperationStore();
+        let missingCoverage = false;
+        const guestOperationProducer = { read: guestOperations.readLiveWork, subscribe: guestOperations.subscribe };
+        const guestWork = createLiveWorkProducerGroup(() => missingCoverage ? null
+            : [guestOperationProducer]);
+        const sessions = createSessionLiveWorkProducer({ readSessions: () => [], readActivity: async () => {
+            throw new Error('An inactive retained Session has no local runner to query');
+        } });
+        const inventory = createManagedActivityInventory({ producers: [sessions, guestWork] });
+        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const context: RpcHandlerContext = { signal: new AbortController().signal,
+            machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'guest',
+                installationId: 'guest-installation', role: 'manage', encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true };
+        registerManagedActivityRpcHandlers({ activity: inventory, admissionDrain: drain,
+            rpcHandlerManager: { registerHandler<TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) {
+                handlers.set(method, (raw, ingress) => handler(raw as TRequest, ingress));
+            } }, validateCurrentTarget: async target => target.managedId === machine.id
+                && target.expectedRevision === test.readMachine().intentRevision,
+            commitIdleEvidence: (_target, idle) => signedIdle(test.readMachine(), idle.since, Date.now()) });
+        const call = async (current: typeof machine, method: string, action?: 'begin' | 'resume') => {
+            const handler = handlers.get(method);
+            if (!handler) throw new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND);
+            return ManagedActivityBridgeResultV1Schema.parse(await handler({ homeId: current.homeId,
+                managedId: current.id, expectedRevision: current.intentRevision, controller: current.controller,
+                ...(action ? { action } : {}) }, context));
+        };
+        const bridge = { read: (current: typeof machine) => call(current, MANAGED_ACTIVITY_READ_RPC_METHOD),
+            confirmIdle: (current: typeof machine) => call(current, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, 'begin'),
+            reopen: (current: typeof machine) => call(current, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, 'resume'),
+            waitForChange: async (signal?: AbortSignal) => {
+                signal?.throwIfAborted();
+                await new Promise<void>((resolve, reject) => {
+                    const cleanup = () => { unsubscribe(); signal?.removeEventListener('abort', abort); };
+                    const abort = () => { cleanup(); reject(signal?.reason); };
+                    const unsubscribe = inventory.subscribe(() => { cleanup(); resolve(); });
+                    signal?.addEventListener('abort', abort, { once: true });
+                    if (signal?.aborted) abort();
+                });
+            } };
+        const driver = createManagedMachineAcquisitionDriver({ ...test.driverInput, managedGuestActivity: bridge });
+        const controller = createHostActionOperationRuntime({ machineId: machine.controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => 'unused-stop' });
+        const approvals = createBlockingApprovalCoordinator();
+        let storedApproval: ReturnType<typeof StoredApprovalRequestSchema.parse> | undefined;
+        let failApprovalObservation: ((error: unknown) => void) | undefined;
+        let work: ReturnType<typeof driver.executePolicy> | undefined;
+        let settled = false;
+        try {
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: Date.now() });
+            vi.setSystemTime(Date.now() + 3_600_000);
+            if (disposition === 'busy') {
+                guestOperations.create({ operationId: 'accepted-work', actionId: 'projects.compute.exec', title: 'Accepted work',
+                    scope: { accountId: 'owner', machineId: 'guest' }, cancellation: 'supported', inputIdentity: '{}' });
+            } else if (disposition === 'unknown') {
+                missingCoverage = true;
+                guestWork.notifyChanged();
+            }
+            if (disposition === 'missing-confirmation') handlers.delete(MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD);
+            const observed = controller.observeExecution({ actionId: 'machines.managed.power.set', input: {}, actionRequestId: 'control',
+                execute: async operation => {
+                    work = driver.executePolicy(machine, { kind: 'retention' }, { requestId: 'control',
+                        context: operation, signal: operation.signal,
+                        ...(disposition.startsWith('approval-') ? {
+                            runPolicyAction: (preview, runApproved) => executeManagedMachinePolicyAction({
+                                machine: preview, runApproved, serverId: 'home',
+                                context: { ...operation, actionRequestId: 'control', surface: 'cli', runtimeAccountId: 'owner',
+                                    serverIdentityId: machine.homeId, defaultSessionMachineId: machine.controller.machineId,
+                                    actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: {
+                                        'machines.managed.power.set': { approvalRequiredSurfaces: ['cli'] },
+                                    } }) },
+                                createExecutor: overrides => createActionExecutor({ ...createUnavailableActionTransportDeps(), ...overrides,
+                                    isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentness({
+                                        accountId: 'owner', machineId: machine.controller.machineId, serverId: 'home',
+                                        resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: machine.homeId,
+                                            machineId: machine.controller.machineId }),
+                                        resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'token', encryption: null } }),
+                                        isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
+                                    }),
+                                    // Artifact persistence is the system boundary; the real
+                                    // guest bridge, Action policy and approval wait stay composed.
+                                    approvalsCreate: async ({ request }) => {
+                                        storedApproval = StoredApprovalRequestSchema.parse(request);
+                                        return { artifactId: 'unused-stop-approval' };
+                                    },
+                                    approvalsGet: async () => storedApproval ?? null,
+                                    approvalsUpdate: async ({ request }) => {
+                                        storedApproval = StoredApprovalRequestSchema.parse(request);
+                                        return { ok: true };
+                                    },
+                                    approvalsWaitForDecision: async args => {
+                                        const decision = await approvals.waitForDecision({ ...args,
+                                            readRequest: async () => storedApproval ?? null,
+                                            subscribeChanges: (_onChange, onError) => {
+                                                failApprovalObservation = onError;
+                                                return { dispose() {} };
+                                            } });
+                                        return { ...decision, request: StoredApprovalRequestSchema.parse(decision.request) };
+                                    },
+                                }),
+                            }),
+                        } : {}) });
+                    try { return { ok: true, result: await work }; }
+                    catch (error) { return { ok: false, error: 'Drain unavailable', errorCode: operation.signal.aborted ? 'cancelled'
+                        : error instanceof RpcError ? error.rpcErrorCode : 'drain_failed' }; }
+                    finally { settled = true; }
+                } });
+            while (!settled) {
+                if (disposition.startsWith('approval-') && storedApproval) break;
+                const result = await controller.handlers.getV2({ operationId: 'unused-stop' });
+                const expected = disposition === 'busy' ? 'managed.intent.busy' : 'managed.intent.activity-unknown';
+                if (result.kind === 'found' && result.operation.progress?.kind === 'phase'
+                    && result.operation.progress.phase === expected) break;
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
+            if (disposition.startsWith('approval-')) {
+                expect(storedApproval).toMatchObject({ status: 'open', actionId: 'machines.managed.power.set',
+                    approval: { flow: 'blocking', result: 'required' },
+                    actionArgs: { managedId: machine.id, intent: 'stop', expectedRevision: machine.intentRevision },
+                    executionOriginV1: { requestId: 'control', authority: 'account_automation' } });
+                expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: Date.now() - 3_600_000 });
+                await expect(controller.handlers.getV2({ operationId: 'unused-stop' })).resolves.toMatchObject({
+                    kind: 'found', operation: { state: 'running', progress: { kind: 'phase', phase: 'waiting_for_approval',
+                        approval: { kind: 'approval_request_created', artifactId: 'unused-stop-approval', actionId: 'machines.managed.power.set' } } },
+                });
+                const current = await controller.handlers.getV2({ operationId: 'unused-stop' });
+                const reader = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+                    actionOperationAction: args => executeActionOperationActionV1({ ...args, transport: async request => {
+                        expect(request.method).toBe(ACTION_OPERATION_RPC_METHODS_V2.get);
+                        return await controller.handlers.getV2(request.payload);
+                    } }),
+                });
+                for (const surface of ['agent', 'mcp', 'cli'] as const) {
+                    expect(await reader.execute('action.operations.get', { serverId: 'home',
+                        machineId: machine.controller.machineId, operationId: 'unused-stop' }, {
+                        surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+                        serverId: 'home', actionRequestId: `read:${surface}`, defaultSessionMachineId: machine.controller.machineId,
+                    })).toEqual({ ok: true, result: current });
+                }
+                const predecessor = PredecessorOperationGetSchema.parse(await controller.handlers.get({ operationId: 'unused-stop' }));
+                expect(predecessor).toMatchObject({ kind: 'found', operation: {
+                    progress: { kind: 'phase', phase: 'waiting_for_approval' },
+                } });
+                if (predecessor.kind === 'found') expect(predecessor.operation.progress).not.toHaveProperty('approval');
+                expect(test.effects).toEqual([]);
+                expect(test.post.mock.calls.some(([url]) => String(url).endsWith('/admit-policy'))).toBe(false);
+                expect(test.readMachine()).toMatchObject({ desired: 'start', intentRevision: machine.intentRevision });
+                if (disposition === 'approval-held') await controller.handlers.cancel({ operationId: 'unused-stop' });
+                else if (disposition === 'approval-observation-failed') {
+                    if (!failApprovalObservation) throw new Error('Missing Artifact observation');
+                    failApprovalObservation(new Error('approval_feed_failed'));
+                }
+                else {
+                    if (!storedApproval) throw new Error('Missing Stop Ask');
+                    await approvals.resolveBlockingDecision({ artifactId: 'unused-stop-approval', request: storedApproval,
+                        decision: disposition === 'approval-approved' ? 'approve' : 'reject', decisionAuthority: 'present_user' });
+                }
+                await observed;
+                const terminal = await controller.handlers.getV2({ operationId: 'unused-stop', waitForTerminal: true });
+                expect(terminal).toMatchObject({ kind: 'found', operation: {
+                    state: disposition === 'approval-approved' ? 'succeeded' : disposition === 'approval-held' ? 'cancelled' : 'failed',
+                } });
+                if (terminal.kind === 'found') {
+                    expect(terminal.operation.progress).not.toHaveProperty('approval');
+                    expect(terminal.operation.progress).not.toMatchObject({ phase: 'waiting_for_approval' });
+                }
+                expect(test.effects).toEqual(disposition === 'approval-approved' ? ['power'] : []);
+                expect(drain.isQuiescing()).toBe(disposition === 'approval-approved');
+            } else if (disposition === 'busy' || disposition === 'unknown') {
+                await expect(controller.handlers.getV2({ operationId: 'unused-stop' })).resolves.toMatchObject({ kind: 'found', operation: {
+                    state: 'running', progress: { phase: disposition === 'busy' ? 'managed.intent.busy' : 'managed.intent.activity-unknown' } } });
+                expect(test.effects).toEqual([]);
+                expect(test.post.mock.calls.some(([url]) => String(url).endsWith('/admit-policy'))).toBe(false);
+                await controller.handlers.cancel({ operationId: 'unused-stop' });
+                await observed;
+            } else {
+                await observed;
+                await expect(controller.handlers.getV2({ operationId: 'unused-stop', waitForTerminal: true })).resolves.toMatchObject({ kind: 'found', operation: {
+                    state: disposition === 'idle' ? 'succeeded' : 'failed' } });
+                expect(test.effects).toEqual(disposition === 'idle' ? ['power'] : []);
+                if (disposition === 'idle') expect(test.nativeInputs).toContainEqual({ resource: machine.resource!.value, intent: 'stop' });
+            }
+        } finally {
+            await controller.handlers.cancel({ operationId: 'unused-stop' });
+            approvals.dispose();
+            await work?.catch(() => undefined);
+            inventory.dispose();
+            guestWork.dispose();
+        }
+    });
+});
+
+it('Remove recovers an identity-free submitted allocation through ordinary read-only reconciliation before destruction', async () => {
+    const test = setup(undefined, undefined, 'delete', { observedAt: 1, availability: 'absent' }, undefined, undefined, true);
+    test.setMachine({ allocation: 'may-exist', resource: undefined, nativeOperationRef: undefined, enrolledMachineId: undefined });
+    expect(await test.run()).toMatchObject({ kind: 'accepted', managedId: 'managed' });
+    expect(test.readMachine()).toMatchObject({ allocation: 'confirmed-absent', observation: { availability: 'absent' } });
+    expect(test.effects).toEqual(['reconcile', 'destroy']);
+    expect(test.nativeInputs[0]).toMatchObject({ correlation: { managedId: 'managed', requestId: 'control', launch: {} } });
+    expect(test.nativeInputs[1]).toEqual({ resource: {} });
+});
 
 async function finScopeAuthorization(test: ReturnType<typeof setup>, isSourceCurrent: () => boolean) {
     const machine = test.readMachine();
@@ -315,6 +587,7 @@ describe('managed native intent through the accepted Action', () => {
             serverId: 'home', resolveCurrentMachineExecutionOriginContext: async () => originCurrent
                 ? { serverIdentityId: machine.homeId, machineId: machine.controller.machineId } : null,
             resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'token', encryption: null } }),
+            isAccountCurrent: async () => true,
             listAccountApiTokens: async () => ({ tokens: [] }) });
         const work = test.driver.executePolicy(machine, { kind: 'accepted-input-start', target }, { ...test.options, signal: lifetime.signal, actionOrigin,
             runPolicyAction: (policyMachine, runApproved) => executeManagedMachinePolicyAction({ machine: policyMachine,
@@ -703,6 +976,18 @@ describe('managed native intent through the accepted Action', () => {
             result: { kind: 'unknown' }, observation: { observedAt: 0, availability: 'present' } })]);
         expect(test.readMachine().submittedNativeEffect?.requestId).toBe('old-stop');
     });
+    it.each(['unknown', 'thrown'] as const)('retains waiting input when native Start is %s', async outcome => {
+        const test = setup({ kind: 'idle', since: 0 }, { kind: 'unknown' }, 'start', undefined,
+            outcome === 'thrown' ? () => { throw new Error('native_transport_lost'); } : undefined);
+        const machine = test.readMachine();
+        const target = { homeId: machine.homeId, managedId: machine.id, enrolledMachineId: 'guest',
+            expectedIntentRevision: machine.intentRevision, controller: machine.controller,
+            origin: { kind: 'session-input' as const, session: { homeId: machine.homeId, sessionId: 'session' },
+                pendingRequestId: 'pending', requestedAt: 1 }, reason: 'admitted-work' as const };
+        await expect(test.driver.executePolicy(machine, { kind: 'accepted-input-start', target }, test.options)).rejects.toThrow();
+        expect(test.reports).toMatchObject([{ result: { kind: 'unknown' } }]);
+        expect(test.post.mock.calls.filter(([url]) => String(url).endsWith('/activation-failed'))).toEqual([]);
+    });
     it('reports a definite native wake refusal through the existing pending failure owner without passing requester content', async () => {
         const test = setup({ kind: 'idle', since: 0 }, { kind: 'refused', code: 'native_denied' }, 'start');
         const machine = test.readMachine();
@@ -714,7 +999,11 @@ describe('managed native intent through the accepted Action', () => {
             .rejects.toMatchObject({ code: 'native_denied' });
         expect(test.effects).toEqual(['power']);
         expect(test.post.mock.calls.find(([url]) => String(url).endsWith('/activation-failed'))?.[1])
-            .toEqual({ target, failureCode: 'runtime_start_failed' });
+            .toEqual({ target, failureCode: 'managed_start_refused' });
+        const report = test.post.mock.calls.find(([url]) => String(url).endsWith('/activation-failed'));
+        const headers = report?.[2]?.headers;
+        const proof = decodeManagedPolicyProofV1(String(headers?.[MANAGED_POLICY_PROOF_HEADER]));
+        expect(proof?.payload.managedPolicy?.expectedIntentRevision).toBe(target.expectedIntentRevision);
     });
     it('uses the real managed policy purpose in the same native owner without an external Action envelope', async () => {
         const test = setup();
@@ -887,6 +1176,7 @@ describe('managed native intent through the accepted Action', () => {
             serverId: 'home', resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: initialMachine.homeId,
                 machineId: initialMachine.controller.machineId }),
             resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'token', encryption: null } }),
+            isAccountCurrent: async () => true,
             listAccountApiTokens: async () => ({ tokens: [] }) });
         const transport = test.post.getMockImplementation()!;
         test.post.mockImplementation(async (url, body, config) => {

@@ -339,7 +339,7 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
                         // domain refusal rather than its generic custody wrapper.
                         if (error instanceof ManagedMachineControllerError) nativeEffectGuardFailure = {
                             error: (role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin
-                                ? new ManagedMachineNativeEffectGuardRefusal(error.code) : error,
+                                ? new ManagedMachineNativeEffectGuardRefusal(error.code, error.status, error.details) : error,
                         };
                         return false;
                     }
@@ -383,6 +383,24 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
     return { contribution, occurrenceId, target, bootstrapCredentialKind, roleCredentialAuthorization, invoke };
 }
 
+/** Read the same submitted acquisition by its retained handle or immutable launch correlation. */
+export async function reconcileManagedAcquisitionIdentity(params: ManagedMachineReconciliationInput,
+    machine: ManagedMachineV1, native: ReturnType<typeof createManagedNativeInvocation>): Promise<ManagedMachineV1> {
+    const retained = machine.nativeOperationRef;
+    if (retained && (retained.contributionRef.pluginId !== machine.launch.provider.pluginId
+        || retained.contributionRef.localId !== machine.launch.provider.localId
+        || retained.schemaVersion !== machine.launch.schemaVersion)) throw new ManagedMachineControllerError('resource_mismatch');
+    if (!native.contribution.definition.reconciliation) throw new ManagedMachineControllerError('provider_unavailable');
+    const reportBound = params.action === 'machines.managed.acquire' || params.action === 'machines.managed.bootstrap.retry'
+        ? await params.client.preparePendingAcquireBoundReport(machine) : null;
+    const result = AcquireResultV1Schema.parse(await native.invoke('reconcile', retained ? { nativeOperation: retained.value }
+        : { correlation: { managedId: machine.id, requestId: params.options.requestId, launch: machine.launch.choices } }));
+    // An unavailable read never proves absence or authorizes another purchase.
+    if (result.kind === 'rejected') throw new ManagedMachineControllerError(result.code);
+    return result.kind === 'bound' && reportBound ? await reportBound(result)
+        : await params.client.row('report', { ...params.client.correlation(machine), result }, null);
+}
+
 export async function reconcileManagedMachine(params: ManagedMachineReconciliationInput): Promise<JsonValue | null> {
     let machine = params.machine;
     let bootstrapCredentialRevision: number | undefined;
@@ -395,8 +413,8 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     if (params.action !== 'machines.managed.inspect' && (machine.creationState !== 'active' || machine.allocation === 'confirmed-absent'
         || (machine.enrolledMachineId && params.action !== 'machines.managed.bootstrap.retry'))) return null;
     if (machine.enrolledMachineId && params.action === 'machines.managed.bootstrap.retry') {
-        // Ordinary enrolled resources retain their existing no-op retry. Only
-        // a native transport can declare process custody in its carrier below.
+        // Enrolled native guests can update their retained installation; SSH
+        // enrollment recovery retains its existing no-op behavior.
         if (!retainedProvisioner?.definition.bootstrapTransport) return null;
     }
     // Unknown/pending purchase is never submitted again. The durable row keeps
@@ -407,22 +425,9 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     const continueRetainedAcquisition = !machine.enrolledMachineId && machine.allocation !== 'unsubmitted'
         && contribution.definition.reconciliation?.continueAcquire === true;
     if (!machine.resource && machine.allocation === 'may-exist') {
-        const retained = machine.nativeOperationRef;
-        if (retained && (retained.contributionRef.pluginId !== machine.launch.provider.pluginId
-            || retained.contributionRef.localId !== machine.launch.provider.localId
-            || retained.schemaVersion !== machine.launch.schemaVersion)) throw new ManagedMachineControllerError('resource_mismatch');
-        if (!contribution.definition.reconciliation) throw new ManagedMachineControllerError('provider_unavailable');
-        const reportBound = params.action === 'machines.managed.inspect' ? null
-            : await params.client.preparePendingAcquireBoundReport(machine);
-        const result = AcquireResultV1Schema.parse(await invoke('reconcile', retained ? { nativeOperation: retained.value }
-            : { correlation: { managedId: machine.id, requestId: params.options.requestId, launch: machine.launch.choices } }));
-        // A refused read is not evidence that the submitted purchase is absent.
-        if (result.kind === 'rejected') throw new ManagedMachineControllerError(result.code);
-        // Preserve a known paid identity even if cancellation won during the
-        // read. Only the subsequent creation effects require fresh custody.
-        machine = result.kind === 'bound' && reportBound ? await reportBound(result)
-            : await params.client.row('report', { ...params.client.correlation(machine), result }, null);
-        if (result.kind !== 'bound') return params.action === 'machines.managed.inspect' ? { machine } : null;
+        machine = await reconcileManagedAcquisitionIdentity(params, machine,
+            { contribution, occurrenceId, target, bootstrapCredentialKind, roleCredentialAuthorization, invoke });
+        if (!machine.resource) return params.action === 'machines.managed.inspect' ? { machine } : null;
     }
     if (params.action === 'machines.managed.inspect') {
         if (!machine.resource) return { machine };
@@ -487,7 +492,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
         ...(bootstrapCredentialKind === 'ssh' && machine.bootstrapCredentialRef && bootstrapCredential ? { credentialRef: machine.bootstrapCredentialRef,
             bootstrapPublicKey: sshPublicKey(bootstrapCredential.value) } : {}),
     }));
-    if (machine.enrolledMachineId && (carrier.kind !== 'native' || !carrier.guestHome)) return null;
+    if (machine.enrolledMachineId && carrier.kind !== 'native') return null;
     const correlation = ManagedEnrollmentCorrelationV1Schema.parse({ ...params.client.correlation(machine), resource: machine.resource });
     if (!machine.enrolledMachineId) machine = await params.client.row('enrollment-context', correlation);
     const { runManagedMachineEnrollment } = await import('./enrollment');
@@ -519,10 +524,18 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     const domainRef = { kind: 'managedMachine' as const, id: machine.id,
         controller: correlation.controller, resource: correlation.resource };
     params.options.context?.operationOwnerUpdate?.update({ domainRef });
+    let bootstrapTask: Readonly<{ id: string; taskKind: 'remote.ssh.bootstrapMachine.v1' }> | undefined;
     const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
-        onTask: ({ taskId, kind }) => { params.options.context?.operationOwnerUpdate?.update({ domainRef: {
-            ...domainRef, bootstrapTask: { id: taskId, taskKind: kind },
-        } }); },
+        onTask: ({ taskId, kind }) => {
+            bootstrapTask = { id: taskId, taskKind: kind };
+            params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef, bootstrapTask } });
+        },
+        // The task's open question rides on the same operation, so the page waiting on it can ask it.
+        onPrompt: (prompt) => {
+            if (!bootstrapTask) return;
+            params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef,
+                bootstrapTask: { ...bootstrapTask, ...(prompt ? { prompt } : {}) } } });
+        },
         onEvent: (event) => {
             if (event.type !== 'progress' || !event.message) return;
             const progress = (event.stepId
