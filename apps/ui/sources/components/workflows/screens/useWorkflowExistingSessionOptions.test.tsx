@@ -5,6 +5,31 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
 
 describe('Workflow existing Session options', () => {
+    it('does not recheck Session candidacy on unrelated store publications', async () => {
+        const previous = storage.getState();
+        let eligibilityReads = 0;
+        const session = createSessionFixture({ id: 'workflow-computation', serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!,
+            flavor: 'claude', claudeSessionId: 'resume-id', claudeTranscriptPath: '/tmp/transcript.jsonl',
+            machineId: 'machine-a', path: '/repo', name: 'Original',
+        } });
+        // Observe the genuine candidacy path without replacing its domain logic.
+        Object.defineProperty(session, 'metadataUnavailable', { get: () => { eligibilityReads += 1; return false; } });
+        storage.setState({ isDataReady: true, sessions: { [session.id]: session } });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a' }));
+        try {
+            expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id }]);
+            expect(eligibilityReads).toBeGreaterThan(0);
+            const before = eligibilityReads;
+            await act(async () => {
+                for (let i = 0; i < 20; i += 1) storage.setState(state => ({
+                    localSettings: { ...state.localSettings },
+                }));
+            });
+            expect(eligibilityReads).toBe(before);
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
+
     it('ignores unrelated publications but refreshes names, candidacy and exact Machine selection', async () => {
         const previous = storage.getState();
         const session = createSessionFixture({ id: 'workflow-option', serverId: 'home-a', metadata: {

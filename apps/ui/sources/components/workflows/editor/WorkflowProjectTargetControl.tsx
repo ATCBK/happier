@@ -1,6 +1,4 @@
-import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { useAuthoringMemoryField } from '@/sync/domains/state/storage';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -38,6 +36,9 @@ import { resolveDefaultDirectoryForMachine } from '@/utils/sessions/machineDefau
 import { useStableRecentPathsResolver } from '@/utils/sessions/useStableRecentPathsForMachine';
 
 import { workflowEditorStyles } from './workflowEditorStyles';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useWorkflowEditorAccountMemory } from '../screens/useWorkflowEditorAccountMemory';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 /**
  * Where a workflow runs: one exact Machine, its project folder and the checkout
@@ -108,6 +109,7 @@ export function formatWorkflowWhereSummary(params: Readonly<{
 export type WorkflowProjectTargetControlHandle = Readonly<{ openPicker: () => void }>;
 
 type WorkflowProjectTargetControlProps = Readonly<{
+    accountLifetime?: ServerAccountScopeLifetime | null;
     purpose?: 'workflow' | 'trigger' | 'background';
     target: WorkflowAuthoringTarget | null | undefined;
     /** The display name of the target Machine; `null` stays visibly unresolved. */
@@ -172,6 +174,7 @@ export const WorkflowProjectTargetControl = React.forwardRef<
                         <View testID={`${testIDPrefix}-where-popover`} style={styles.popover}>
                             {props.machines !== undefined && props.onChange !== undefined ? (
                                 <EditableProjectTarget
+                                    accountLifetime={props.accountLifetime}
                                     purpose={props.purpose ?? 'workflow'}
                                     target={target ?? null}
                                     machines={props.machines}
@@ -192,6 +195,7 @@ export const WorkflowProjectTargetControl = React.forwardRef<
             <View testID={`${testIDPrefix}-machine-row`} style={styles.row}>
                 {editable && props.machines !== undefined && props.onChange !== undefined ? (
                     <EditableProjectTarget
+                        accountLifetime={props.accountLifetime}
                         purpose={props.purpose ?? 'workflow'}
                         target={target ?? null}
                         machines={props.machines}
@@ -239,6 +243,7 @@ export const WorkflowProjectTargetControl = React.forwardRef<
         >
             {props.machines !== undefined && props.onChange !== undefined ? (
                 <EditableProjectTarget
+                    accountLifetime={props.accountLifetime}
                     purpose={props.purpose ?? 'workflow'}
                     target={target ?? null}
                     machines={props.machines}
@@ -325,6 +330,7 @@ function WhereChipIcon(): React.ReactElement {
 }
 
 function EditableProjectTarget(props: Readonly<{
+    accountLifetime?: ServerAccountScopeLifetime | null;
     purpose: 'workflow' | 'trigger' | 'background';
     target: WorkflowAuthoringTarget | null;
     machines: readonly Machine[];
@@ -332,10 +338,10 @@ function EditableProjectTarget(props: Readonly<{
     testIDPrefix: string;
 }>): React.ReactElement {
     const { machines, onChange, target, testIDPrefix } = props;
+    const accountLifetime = useWorkflowAccountLifetime(props.accountLifetime);
     const activeScope = useActiveServerAccountScope();
-    const serverId = activeScope?.serverId ?? null;
-    const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
-    const workspaceRefsSetting = useWorkspaceRefs();
+    const serverId = accountLifetime === undefined ? activeScope?.serverId ?? null : accountLifetime?.scope.serverId ?? null;
+    const { recentMachinePaths, workspaceRefs: workspaceRefsSetting } = useWorkflowEditorAccountMemory(accountLifetime);
     const workspaceRefs = Array.isArray(workspaceRefsSetting) ? workspaceRefsSetting : EMPTY_WORKSPACE_REFS;
     const resolveRecentPathsForMachine = useStableRecentPathsResolver({
         recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
@@ -388,13 +394,14 @@ function EditableProjectTarget(props: Readonly<{
         void (async () => {
             const directory = await openMachinePathBrowserModal({
                 machineId: openedFor.machineId,
+                serverId,
                 initialPath: isWorkflowProjectTarget(openedFor) ? openedFor.directory : machineHomeDir ?? undefined,
                 selectionMode: 'directory',
                 title: t('workflows.workspace.projectCheckout'),
             });
             if (directory !== null) moveToDirectory(openedFor, directory);
         })();
-    }, [machineHomeDir, moveToDirectory, target]);
+    }, [machineHomeDir, moveToDirectory, target, serverId]);
 
     const directoryLabel = target === null ? null : isWorkflowProjectTarget(target)
         ? formatPathRelativeToHome(target.directory, machineHomeDir ?? undefined)

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { View } from 'react-native';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native-unistyles';
@@ -59,7 +60,7 @@ export function selectWorkflowTestStep(invocations: WorkflowRunInvocations | und
 type StepProps = Readonly<{ runId: string; blockId: string; definition: WorkflowDefinitionV1 }>;
 
 function WorkflowTestStepState(props: StepProps): React.ReactElement | null {
-    const fact = storage((state) => selectWorkflowTestStep(state.workflowRunInvocationsByRunId[props.runId], props.definition, props.blockId));
+    const fact = storage((state) => selectWorkflowTestStep(state.workflowRunInvocationsByRunId[workflowRunStoreKey(props.runId)], props.definition, props.blockId));
     if (!fact) return null;
     return <WorkflowLifecycleStatus lifecycle={fact.lifecycle} blockKind={fact.opened?.progress.blockKind}
         testID={`workflow-editor-test-${props.blockId}-status`} />;
@@ -67,7 +68,7 @@ function WorkflowTestStepState(props: StepProps): React.ReactElement | null {
 
 function WorkflowTestStepOutput(props: StepProps): React.ReactElement | null {
     const router = useRouter();
-    const fact = storage((state) => selectWorkflowTestStep(state.workflowRunInvocationsByRunId[props.runId], props.definition, props.blockId));
+    const fact = storage((state) => selectWorkflowTestStep(state.workflowRunInvocationsByRunId[workflowRunStoreKey(props.runId)], props.definition, props.blockId));
     if (!fact?.opened || fact.opened.index.contentRevision !== fact.contentRevision) return null;
     const progress = fact.opened.progress;
     const output = progress.result === undefined ? progress.reason?.message : typeof progress.result === 'string'

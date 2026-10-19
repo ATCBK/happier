@@ -63,14 +63,15 @@ function parseLiteral(value: string): JsonValue {
     try { return JSON.parse(value) as JsonValue; } catch { return value; }
 }
 
-/** One field-path parser for result bindings, including the workflow's final result. */
-function parseWorkflowResultFieldPath(value: string): (string | number)[] {
+/** One field-path parser for input and result bindings, including the workflow's final result. */
+function parseWorkflowFieldPath(value: string): (string | number)[] {
     return value.trim().length === 0 ? []
         : value.split('.').filter(Boolean).map(part => /^(0|[1-9][0-9]*)$/u.test(part) ? Number(part) : part);
 }
 
 const WHOLE_RESULT = 'whole';
 const OTHER_PATH = 'other';
+const RESULT_FIELD_PREFIX = 'field:';
 
 /**
  * A result's field path. When the producer declares named fields (04 §6.1) the
@@ -92,8 +93,8 @@ export function WorkflowResultFieldPathInput(props: Readonly<{
     const [otherPath, setOtherPath] = React.useState(false);
     const path = props.reference.path;
     const namedField = path.length === 1 && typeof path[0] === 'string' && fields.some((field) => field.name === path[0]) ? path[0] : null;
-    const selectedId = otherPath ? OTHER_PATH : path.length === 0 ? WHOLE_RESULT : namedField ?? OTHER_PATH;
-    const raw = <WorkflowResultRawPathInput {...props} />;
+    const selectedId = otherPath ? OTHER_PATH : path.length === 0 ? WHOLE_RESULT : namedField === null ? OTHER_PATH : `${RESULT_FIELD_PREFIX}${namedField}`;
+    const raw = <WorkflowReferenceRawPathInput {...props} />;
     if (fields.length === 0) return raw;
     return <>
         <WorkflowFieldSelect
@@ -101,28 +102,29 @@ export function WorkflowResultFieldPathInput(props: Readonly<{
             label={workflowResultFieldText('field')}
             items={[
                 { id: WHOLE_RESULT, testID: `${props.testID}-field-whole`, title: workflowResultFieldText('wholeResult') },
-                ...fields.map((field) => ({ id: field.name, testID: `${props.testID}-field-${field.name}`, title: field.name, subtitle: formatWorkflowResultFieldType(field) })),
+                ...fields.map((field) => ({ id: `${RESULT_FIELD_PREFIX}${field.name}`, testID: `${props.testID}-field-name-${field.name}`, title: field.name, subtitle: formatWorkflowResultFieldType(field) })),
                 { id: OTHER_PATH, testID: `${props.testID}-field-other`, title: workflowResultFieldText('otherPath') },
             ]}
             selectedId={selectedId}
             onSelect={(id) => {
                 setOtherPath(id === OTHER_PATH);
                 if (id === OTHER_PATH) return;
-                props.onChange({ ...props.reference, path: id === WHOLE_RESULT ? [] : [id] });
+                props.onChange({ ...props.reference, path: id === WHOLE_RESULT ? [] : [id.slice(RESULT_FIELD_PREFIX.length)] });
             }}
         />
         {selectedId === OTHER_PATH ? raw : null}
     </>;
 }
 
-function WorkflowResultRawPathInput(props: Readonly<{
-    reference: WorkflowAuthoredResultReference;
-    onChange: (reference: WorkflowAuthoredResultReference) => void;
+function WorkflowReferenceRawPathInput<Reference extends Extract<WorkflowValueReference, { kind: 'result' | 'input' }>>(props: Readonly<{
+    reference: Reference;
+    onChange: (reference: Reference) => void;
     testID: string;
     style?: React.ComponentProps<typeof TextInput>['style'];
 }>): React.ReactElement {
-    const source = JSON.stringify([props.reference.producer, props.reference.path]);
-    const pathText = props.reference.path.join('.');
+    const sourceIdentity = props.reference.kind === 'result' ? props.reference.producer : props.reference.name;
+    const source = JSON.stringify([sourceIdentity, props.reference.path ?? []]);
+    const pathText = (props.reference.path ?? []).join('.');
     const [buffer, setBuffer] = React.useState({ source, value: pathText });
     React.useEffect(() => {
         setBuffer(current => current.source === source ? current : { source, value: pathText });
@@ -135,8 +137,8 @@ function WorkflowResultRawPathInput(props: Readonly<{
         accessibilityLabel={t('workflows.finalOutput.fieldPath')}
         placeholder={t('workflows.finalOutput.fieldPath')}
         onChangeText={(value) => {
-            const path = parseWorkflowResultFieldPath(value);
-            setBuffer({ source: JSON.stringify([props.reference.producer, path]), value });
+            const path = parseWorkflowFieldPath(value);
+            setBuffer({ source: JSON.stringify([sourceIdentity, path]), value });
             props.onChange({ ...props.reference, path });
         }}
     />;
@@ -199,7 +201,7 @@ export function formatWorkflowValueReference(draft: WorkflowEditorDraft, referen
             }
             return formatWorkflowLiteralValue(reference.value);
         case 'input':
-            return t('workflows.input.workflowInput', { name: formatWorkflowFieldLabel(reference.name) });
+            return withPath(t('workflows.input.workflowInput', { name: formatWorkflowFieldLabel(reference.name) }), reference.path);
         case 'result':
             // A field reads as its step and field ("Check the fix · Fixed", lab E1); the whole result keeps its noun.
             return reference.path.length === 0
@@ -460,10 +462,9 @@ const ITEMS_LABEL_KEY = {
 } as const satisfies Record<WorkflowResultListItemType, string>;
 
 export function workflowResultFieldText(key: string, params?: Record<string, string | number>): string {
-  return t(
-    `workflows.page.inspector.resultFields.${key}` as never,
-    params as never,
-  );
+  // The key is chosen at runtime from one known group; `t`'s per-key parameter typing cannot follow it.
+  const translate = t as unknown as (key: string, params?: Record<string, string | number>) => string;
+  return translate(`workflows.page.inspector.resultFields.${key}`, params);
 }
 
 /** "Yes/No", "Choice", "List of text": the type a field returns, in words. */
@@ -647,9 +648,15 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
                     label={t('workflows.input.inputNameGroup')}
                     items={props.draft.inputs.map((input) => ({ id: input.name, testID: `${rowId}-input-name-${input.name}`, title: formatWorkflowFieldLabel(input.name) }))}
                     selectedId={inputName}
-                    onSelect={(name) => props.onChange({ kind: 'input', name })}
+                    onSelect={(name) => props.onChange({ ...reference, kind: 'input', name })}
                 />
             )}
+            {reference.kind === 'input' ? <WorkflowReferenceRawPathInput
+                testID={`${rowId}-path`}
+                style={[workflowEditorStyles.inlineValue, workflowEditorStyles.pathValue]}
+                reference={reference}
+                onChange={props.onChange}
+            /> : null}
             {producerReference === undefined ? null : (
                 <WorkflowFieldSelect
                     testID={`${rowId}-producer`}

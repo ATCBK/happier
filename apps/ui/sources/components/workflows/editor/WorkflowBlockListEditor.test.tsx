@@ -1,12 +1,16 @@
+// @vitest-environment jsdom
+
 import * as React from 'react';
 import { StyleSheet as NativeStyleSheet } from 'react-native';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { SelectionList, type SelectionListStep } from '@/components/ui/selectionList';
 import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -56,10 +60,16 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 let restoreExecutorLoader: (() => void) | undefined;
 let restoreAppliedHome: (() => void) | undefined;
+let restorePopoverGlobals: (() => void) | undefined;
+let portalBoundary: ReturnType<typeof installReactDomPortalBoundaryForTests> | undefined;
 
 // HTTP, credential storage and Socket.IO are boundaries; the Action executor,
 // saved-workflow reader, scoped composer and plugin resource owner run for real.
-beforeAll(async () => {
+beforeEach(async () => {
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    // Test Renderer cannot mount a ReactDOM portal into jsdom; keep its contents in this renderer.
+    portalBoundary = installReactDomPortalBoundaryForTests();
+    installHomeGovernanceBoundaries(home);
     const applied = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
     const previous = applied.getAppliedActiveServerSnapshot();
     const wasAvailable = applied.isAppliedActiveServerRuntimeAvailable();
@@ -74,12 +84,16 @@ beforeAll(async () => {
 
 afterAll(async () => {
     restoreExecutorLoader?.();
-    restoreAppliedHome?.();
-    await home.reset();
 });
 
 afterEach(async () => {
     await standardCleanup();
+    portalBoundary?.restore();
+    portalBoundary = undefined;
+    restorePopoverGlobals?.();
+    restorePopoverGlobals = undefined;
+    restoreAppliedHome?.();
+    await home.reset();
 });
 
 // Compile the real owner graph once at collection, before any case's lifecycle
@@ -191,6 +205,7 @@ async function renderList(harness: Harness, options: Readonly<{
     highlightedBlockIds?: readonly string[];
     presentation?: Record<string, unknown>;
     resolveActionFieldOptions?: ResolveSessionActionFieldOptions;
+    createNodeMock?: NonNullable<Parameters<typeof renderScreen>[1]>['createNodeMock'];
 }>) {
     const element = React.createElement(harness.WorkflowBlockListEditor, {
         ...(options.presentation === undefined ? {} : { presentation: options.presentation as never }),
@@ -208,7 +223,7 @@ async function renderList(harness: Harness, options: Readonly<{
         onSelect: options.onSelect ?? (() => {}),
         onCustomize: () => {},
     });
-    return renderScreen(element);
+    return renderScreen(element, { createNodeMock: options.createNodeMock });
 }
 
 it('shows editable names on every kind and evaluator without replacing catalog Action identity', async () => {
@@ -559,7 +574,8 @@ it('puts Step options in the step composer as one chip that names only what diff
     expect(screen.findByTestId('workflow-editor-step-review-inheritance')?.props.children).toBe('workflows.page.inspector.reviewsBeforeContinuing');
     expect(screen.getTextContent()).not.toContain('workflows.a11y.overridden');
     await screen.pressByTestIdAsync('workflow-editor-step-engine-customize');
-    expect(opened).toHaveBeenCalledWith('engine', expect.anything());
+    // The chip returns focus; the step's card region is what the options sit beside.
+    expect(opened).toHaveBeenCalledWith('engine', expect.anything(), expect.anything());
     // At rest a text step's footer says nothing ("Returns text" is authoring machinery, DESIGN-5 M1).
     expect(screen.findHostByTestId('workflow-editor-step-engine-returns')).toBeNull();
     expect(screen.getTextContent()).not.toContain('workflows.input.label');
@@ -670,10 +686,10 @@ describe('workflow block list editor', () => {
         const changes: ReturnType<typeof buildDraft>[] = [];
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
 
+        // Deliver the actual input event: the native input reports both text
+        // and selection, which the real composer uses to reconcile token ranges.
         await act(async () => {
-            findComposer(screen, harness, 'analyze').props.onChangeText(
-                'Review @src/b.ts',
-            );
+            screen.changeTextByTestId('new-session-composer-input', 'Review @src/b.ts');
         });
 
         const step = changes.at(-1)?.blocks[0];
@@ -821,6 +837,7 @@ describe('workflow block list editor', () => {
         const remainingInventoryOptions = harness.buildSessionActionFieldOptionsResolver({
             'review.engines.available': [{ value: 'acme-reviewer', label: 'Acme reviewer' }],
         });
+        restorePopoverGlobals = withPopoverWebGlobals();
         const bound = await renderList(harness, {
             draft: changes.at(-1)!,
             selectedBlockId: 'review',
@@ -828,8 +845,21 @@ describe('workflow block list editor', () => {
                 asked.push(field.optionsSourceId);
                 return remainingInventoryOptions(field);
             },
+            createNodeMock: (node) => node.type === 'View' ? {
+                measureInWindow(receive: (x: number, y: number, width: number, height: number) => void) {
+                    receive(24, 40, 160, 32);
+                },
+            } : null,
         });
         expect(asked).toContain('review.engines.available');
+        const { HappierInputField } = await import('@happier-dev/plugin-ui/presentation');
+        const engineChoices = bound.findByTestId('workflow-editor-action-review-field-engineIds')!
+            .findByType(HappierInputField)
+            .find(node => typeof node.type === 'string' && (node.props.role ?? node.props.accessibilityRole) === 'button'
+                && typeof node.props.onPress === 'function');
+        await act(async () => { await invokeTestInstanceHandler(engineChoices, 'onPress'); });
+        await act(async () => { reportPopoverContentLayout(bound, { width: 320, height: 240 }); });
+        await flushHookEffects({ cycles: 2, frames: 1 });
         expect(bound.getTextContent()).toContain('Acme reviewer');
     });
 
@@ -857,9 +887,12 @@ describe('workflow block list editor', () => {
         await act(async () => { inserter().props.onHoverOut(); });
         expect(insetStyle()?.opacity).toBe(0);
         expect(inserter().props.role ?? inserter().props.accessibilityRole).toBe('button');
+        // Keyboard modality is recorded at the document before the focused control's handler.
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => { inserter().props.onFocus({ target: { matches: () => true } }); });
         expect(insetStyle()?.opacity ?? 1).toBeGreaterThan(0);
         await act(async () => { inserter().props.onBlur(); });
+        await flushHookEffects({ cycles: 2, frames: 1 });
         expect(insetStyle()?.opacity).toBe(0);
 
         await chooseAdd(screen, 'workflow-editor-insert-after-a', ['workflow-editor-insert-after-a-wait']);
@@ -1732,6 +1765,20 @@ describe('document anatomy (DESIGN-4)', () => {
         expect(screen.findHostByTestId('workflow-editor-action-notify-field-message-issue')).not.toBeNull();
         expect(screen.getTextContent()).toContain('workflows.page.blocks.waitSubRoot');
         expect(screen.findHostByTestId('workflow-editor-step-judge-returns')?.props.children).toContain('missing evidence');
+    });
+
+    it('drops the authoring "waits until you continue" hint once a Run\'s Wait has settled, and keeps it before then', async () => {
+        const harness = await loadHarness();
+        const draft = buildDraft(harness, [
+            { kind: 'wait', id: 'pause', document: { text: 'Check', references: [], attachments: [] }, result: { kind: 'text' } },
+        ] as never);
+        const settled = await renderList(harness, { draft, presentation: { editable: false, step: () => ({
+            state: React.createElement('Text', { testID: 'slot-state' }, 'Completed'), settled: true }) } });
+        expect(settled.getTextContent()).not.toContain('workflows.page.blocks.waitSubRoot');
+        await settled.unmount();
+        const open = await renderList(harness, { draft, presentation: { editable: false, step: () => ({
+            state: React.createElement('Text', { testID: 'slot-state' }, 'Needs you') }) } });
+        expect(open.getTextContent()).toContain('workflows.page.blocks.waitSubRoot');
     });
 
     it('numbers leaves 1…n across lanes and bodies, gives containers their mark instead, and agrees with the map (M1 c ruling)', async () => {

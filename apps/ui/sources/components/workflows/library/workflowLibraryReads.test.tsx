@@ -88,6 +88,24 @@ const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') 
 const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
 
 describe('Workflow library reads through real Account Actions and HTTP', () => {
+    it('keeps an addressed trigger picker on B while the active library shows the same id from A', async () => {
+        await saved(definitionId, 'A workflow');
+        const serverB = await home.addHome({ name: 'B library', serverUrl: 'https://workflow-library-b.test',
+            accountId: 'account-b', active: false, currentAccount: true });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        home.answer(serverB, '/v3/automations', { body: { automations: [], nextCursor: null } });
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const account = await captureLazyActionAccountContext(serverB);
+        try {
+            await createWorkflowDefinition({ definitionId, definition: content, metadata: { title: 'B workflow' }, accountLifetime: account.accountLifetime });
+            const active = await renderHook(() => useWorkflowDefinitionLibrary());
+            const addressed = await renderHook(() => useWorkflowDefinitionLibrary({ accountLifetime: account.accountLifetime }));
+            await waitLoaded(active); await waitLoaded(addressed);
+            expect(active.getCurrent().definitions[0]?.metadata?.title).toBe('A workflow');
+            expect(addressed.getCurrent().definitions[0]?.metadata?.title).toBe('B workflow');
+            expect(storage.getState().profileScope).toEqual({ serverId, accountId: 'account-a' });
+        } finally { account.dispose(); }
+    });
     it('settles a missing Account destination instead of inventing a pending read', async () => {
         storage.setState({ profileScope: null });
         const hook = await renderHook(() => useWorkflowRunWindow('destination:stopped-session'));

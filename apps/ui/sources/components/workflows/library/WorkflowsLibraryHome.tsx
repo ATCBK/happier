@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/plugin-ui';
 import { HAPPIER_PAGE_METRICS, type HappierCollectionWindow } from '@happier-dev/plugin-ui/presentation';
 import { countWorkflowStepsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { useIsFocused, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -28,6 +29,7 @@ import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { restoreFocusToBestTarget } from '@/keyboard/focusReturn';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import {
     deleteWorkflowDefinition,
     exportSavedWorkflowDocument,
@@ -450,19 +452,18 @@ function useLibraryRowCommands(summaries: ReadonlyMap<string, WorkflowLibraryRun
                         setDeleting(previous => previous.size === 0 ? previous : new Set());
                         setFocusRequest(undefined);
                     });
-                    const confirmed = await Modal.confirm(
-                        t('workflows.destination.deleteTitle'),
-                        t('workflows.page.deleteBody'),
-                        { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true },
-                    );
-                    if (!lifetime.isCurrent()) return;
-                    if (!confirmed) { setFocusRequest({ key: definitionId }); return; }
-                    if (deletedDefinitionId !== null) dismissWorkflowLibraryDeletionReceipt(deletedDefinitionId);
-                    setDeleting(previous => new Set([...previous, definitionId]));
-                    await deleteWorkflowDefinition({ definitionId });
-                } catch {
+                    await deleteWorkflowDefinition({ definitionId, onTransportIssued: () => {
+                        if (!lifetime.isCurrent()) return;
+                        if (deletedDefinitionId !== null) dismissWorkflowLibraryDeletionReceipt(deletedDefinitionId);
+                        setDeleting(previous => new Set([...previous, definitionId]));
+                    } });
+                } catch (error) {
                     // Deletion never retries by itself; the row stays and the person decides.
                     if (lifetime?.isCurrent()) {
+                        if (error instanceof WorkflowActionError && isActionApprovalDeclinedErrorCode(error.rawCode)) {
+                            setFocusRequest({ key: definitionId });
+                            return;
+                        }
                         await Modal.alertAsync(t('workflows.destination.deleteFailedTitle'), t('workflows.loadFailedBody'));
                         if (lifetime.isCurrent()) setFocusRequest({ key: definitionId });
                     }

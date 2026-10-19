@@ -14,6 +14,8 @@ export function resolveWorkflowBuiltinInputPresentation(workflowRef: string | nu
     switch (workflowRef) {
         case 'builtin:review-and-converge':
             return {
+                engines: { title: t('workflows.builtins.reviewAndConverge.inputs.engines') },
+                reviewSession: { title: t('workflows.builtins.reviewAndConverge.inputs.reviewSession') },
                 maxRounds: { title: t('workflows.builtins.reviewAndConverge.rounds') },
                 apply: { title: t('workflows.builtins.reviewAndConverge.apply'), optionLabels: {
                     fix: t('workflows.builtins.reviewAndConverge.verifyAndFix'),
@@ -25,6 +27,30 @@ export function resolveWorkflowBuiltinInputPresentation(workflowRef: string | nu
                 request: { title: t('workflows.builtins.planWithAPanel.inputs.request'),
                     placeholder: t('workflows.builtins.planWithAPanel.inputs.requestPlaceholder') },
                 engines: { title: t('workflows.builtins.planWithAPanel.inputs.engines') },
+                participants: { title: t('workflows.builtins.patternInputs.participants') },
+                previousRoundContext: { title: t('workflows.builtins.patternInputs.previousRoundContext') },
+            };
+        case 'builtin:fresh-opinions':
+            return {
+                question: { title: t('workflows.builtins.patternInputs.question') },
+                participants: { title: t('workflows.builtins.patternInputs.participants') },
+                synthesis: { title: t('workflows.builtins.patternInputs.synthesis') },
+                synthesizer: { title: t('workflows.builtins.patternInputs.synthesizer') },
+                previousRoundContext: { title: t('workflows.builtins.patternInputs.previousRoundContext') },
+            };
+        case 'builtin:answer-and-review':
+            return {
+                question: { title: t('workflows.builtins.patternInputs.question') },
+                answerer: { title: t('workflows.builtins.patternInputs.answerer') },
+                reviewer: { title: t('workflows.builtins.patternInputs.reviewer') },
+            };
+        case 'builtin:debate':
+            return {
+                question: { title: t('workflows.builtins.patternInputs.question') },
+                participants: { title: t('workflows.builtins.patternInputs.participants') },
+                rounds: { title: t('workflows.builtins.patternInputs.rounds') },
+                digestAuthor: { title: t('workflows.builtins.patternInputs.digestAuthor') },
+                previousRoundContext: { title: t('workflows.builtins.patternInputs.previousRoundContext') },
             };
         case 'builtin:open-a-pull-request':
             return {

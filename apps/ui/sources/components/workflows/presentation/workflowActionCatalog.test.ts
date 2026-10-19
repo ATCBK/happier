@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
-import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { resolveEffectiveActionInputFields } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import { listWorkflowStepActionSpecs } from './workflowActionCatalog';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
 describe('workflow executing-machine Action catalog', () => {
+    it('carries the shared trigger-list union fields into Action steps without losing required inputs', () => {
+        const step = listWorkflowStepActionSpecs().find(spec => spec.id === 'workflow.trigger.list');
+        expect(step).toBeDefined();
+        const input = { workflow: 'builtin:keep-going' };
+        const fields = resolveEffectiveActionInputFields(step!, input);
+        expect(fields.find(field => field.path === 'workflow'))
+            .toMatchObject({ required: true, optionsSourceId: 'workflows.references.available' });
+        const candidate = Object.fromEntries(fields.flatMap(field => field.path in input
+            ? [[field.path, input[field.path as keyof typeof input]]] : []));
+        expect(getActionSpec('workflow.trigger.list').inputSchema.parse(candidate)).toEqual(input);
+        expect(resolveEffectiveActionInputFields(step!, { scope: 'account_all' })
+            .find(field => field.path === 'workflow')?.required).toBe(false);
+    });
     it('localizes declared host setup prompts without rewriting plugin-authored questions or noun titles', async () => {
         const previousLanguage = getPreferredLanguage();
         await preloadTranslations('fr');

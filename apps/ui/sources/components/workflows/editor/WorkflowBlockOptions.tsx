@@ -1,6 +1,6 @@
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import * as React from 'react';
-import { View } from 'react-native';
+import { ScrollView, StyleSheet as RNStyleSheet, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 
@@ -89,6 +89,15 @@ type OptionsPage = 'main' | 'result' | 'condition';
 type RunsInChoice = 'default' | WorkflowLeafExecutionTargetV1['kind'];
 
 const styles = StyleSheet.create((theme) => ({
+    /** The host bounds the surface's height; the header stays put and only the page scrolls. */
+    root: {
+        flexShrink: 1,
+        minHeight: 0,
+    },
+    page: {
+        flexShrink: 1,
+        minHeight: 0,
+    },
     subjectHeader: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -96,6 +105,12 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s16,
         paddingTop: theme.space.s12,
         paddingBottom: theme.space.s8,
+        borderBottomWidth: RNStyleSheet.hairlineWidth,
+        borderBottomColor: 'transparent',
+    },
+    /** Content has scrolled beneath the pinned header: the header gains its divider. */
+    subjectHeaderScrolled: {
+        borderBottomColor: theme.colors.border.default,
     },
     subjectTitle: {
         ...Typography.variant('heading'),
@@ -135,6 +150,12 @@ function blockTitle(block: WorkflowBlock): string {
     return workflowBlockReferenceLabel(block);
 }
 
+function subPageTitle(page: OptionsPage, block: WorkflowBlock): string | null {
+    if (page === 'result') return t('workflows.page.inspector.resultTitle');
+    if (page === 'condition' && block.kind !== 'if') return t('workflows.condition.onlyWhen');
+    return null;
+}
+
 /** An Agent step differs from the workflow when it sets anything of its own. */
 function stepDiffers(step: WorkflowStep): boolean {
     return listWorkflowStepOverriddenFields(step).length > 0
@@ -150,17 +171,23 @@ function blockCondition(block: WorkflowBlock): WorkflowCondition | undefined {
 
 export function WorkflowBlockOptions(props: WorkflowInspectorProps & Readonly<{ block: WorkflowBlock }>): React.ReactElement {
     const { block, draft, onChange, testIDPrefix } = props;
-    const [page, setPage] = React.useState<OptionsPage>('main');
+    const [page, setPageState] = React.useState<OptionsPage>('main');
     const showBack = page !== 'main';
+    const [scrolled, setScrolled] = React.useState(false);
+    // Each page opens at its top, so the header starts without its divider.
+    const setPage = React.useCallback((next: OptionsPage) => { setScrolled(false); setPageState(next); }, []);
 
     return (
-        <View testID={`${testIDPrefix}-options`}>
-            <View style={styles.subjectHeader}>
+        <View testID={`${testIDPrefix}-options`} style={styles.root}>
+            <View style={[styles.subjectHeader, scrolled ? styles.subjectHeaderScrolled : null]}>
                 {showBack ? (
                     <HeaderAction label={t('workflows.page.inspector.back')} onPress={() => setPage('main')} testID={`${testIDPrefix}-back`} />
                 ) : null}
-                <Text style={styles.subjectTitle} numberOfLines={1}>{blockTitle(block)}</Text>
-                {block.kind === 'step' ? (
+                {/* A sub-page leads with what it edits; the block it belongs to becomes its location. */}
+                <Text style={styles.subjectTitle} numberOfLines={1}>{subPageTitle(page, block) ?? blockTitle(block)}</Text>
+                {subPageTitle(page, block) !== null ? (
+                    <Text style={styles.subjectLocation} numberOfLines={1}>{`· ${blockTitle(block)}`}</Text>
+                ) : block.kind === 'step' ? (
                     <Text style={styles.subjectLocation} numberOfLines={1}>
                         {`· ${stepDiffers(block) ? t('workflows.page.inspector.differsFromWorkflow') : t('workflows.page.inspector.followsWorkflow')}`}
                     </Text>
@@ -170,6 +197,15 @@ export function WorkflowBlockOptions(props: WorkflowInspectorProps & Readonly<{ 
                 ) : null}
             </View>
 
+            <ScrollView
+                key={page}
+                testID={`${testIDPrefix}-options-page`}
+                style={styles.page}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                scrollEventThrottle={64}
+                onScroll={(event) => setScrolled(event.nativeEvent.contentOffset.y > 0)}
+            >
             {page === 'condition' ? (
                 <ItemGroup>
                     <SectionContentRow testID={`${testIDPrefix}-condition-row`}>
@@ -199,6 +235,7 @@ export function WorkflowBlockOptions(props: WorkflowInspectorProps & Readonly<{ 
             ) : (
                 <MainPage {...props} onOpenPage={setPage} />
             )}
+            </ScrollView>
         </View>
     );
 }

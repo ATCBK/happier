@@ -290,7 +290,10 @@ export function WorkflowFlowView(props: Readonly<{
             rootLayout={props.projection.source === 'definition' ? 'sequence' : 'separate'}
             renderLeading={(node) => {
                 if (!FLOW_MARKED_KINDS.has(node.kind)) return null;
-                const glyph = FLOW_KIND_GLYPH[node.kind];
+                // On a Run the lifecycle owns the Wait's one state mark. Its authored
+                // hand belongs in the editor; beside a completion check it contradicts it.
+                const glyph = node.kind === 'wait' && props.runStates !== undefined
+                    ? undefined : FLOW_KIND_GLYPH[node.kind];
                 const ordinal = quiet || node.observed || node.stepOrdinal === undefined ? null : (
                     <View testID={`${testIDPrefix}-node-${node.nodeId}-ordinal`} style={styles.ordinal}>
                         <Text style={styles.ordinalText}>{node.stepOrdinal}</Text>
@@ -302,7 +305,8 @@ export function WorkflowFlowView(props: Readonly<{
                         {ordinal}
                         {glyph !== undefined
                             ? <Icon name={glyph} size={compact ? ICON_SIZE.xs : ICON_SIZE.sm} color={theme.colors.text.secondary} />
-                            : props.agentMarkForNode?.(node) ?? <ExecutionRunAgentMark agentId={null} size={compact ? 22 : 28} />}
+                            : node.kind === 'wait' ? null
+                                : props.agentMarkForNode?.(node) ?? <ExecutionRunAgentMark agentId={null} size={compact ? 22 : 28} />}
                     </View>
                 );
             }}

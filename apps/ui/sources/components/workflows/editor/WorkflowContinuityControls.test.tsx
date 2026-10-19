@@ -44,6 +44,17 @@ function stepBlock(id: string, prompt: string) {
     };
 }
 
+it('keeps the named Workflow input visible in a conversation summary', async () => {
+    const { createWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowEditorDraft');
+    const { formatWorkflowConversationLabel } = await import('./WorkflowContinuityControls');
+    const label = formatWorkflowConversationLabel({
+        draft: createWorkflowEditorDraft({ draftId: 'continuity-input', name: 'Review', blocks: [] }),
+        conversation: { kind: 'input', name: 'reviewSession' },
+    });
+    expect(label).toEqual(expect.any(String));
+    expect(label).toContain('reviewSession');
+});
+
 async function renderControls(conversation: WorkflowConversationSelection) {
     const draftModule = await import('@/sync/domains/workflows/workflowEditorDraft');
     const draft = draftModule.createWorkflowEditorDraft({

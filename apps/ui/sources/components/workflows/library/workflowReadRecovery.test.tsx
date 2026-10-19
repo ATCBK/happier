@@ -12,6 +12,7 @@ import { sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnv
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();
@@ -104,12 +105,12 @@ describe('Workflow sibling read recovery', () => {
         await waitForHomeGovernance(() => expect(home.requestsFor(route)).toHaveLength(1));
         home.answer(serverId, route, { body: invocationPage(invocation, 1) });
         await act(async () => retireActiveServerAccountScopeLifetime());
-        await waitForHomeGovernance(() => expect(storage.getState().workflowRunInvocationsByRunId[runId]?.factsById[invocation.id]?.lifecycle).toBe('running'));
+        await waitForHomeGovernance(() => expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey(runId)]?.factsById[invocation.id]?.lifecycle).toBe('running'));
         const completed = createWorkflowInvocationIndexFixture({ ...invocation, lifecycle: 'completed', sequence: '2', contentRevision: '2' });
         home.answer(serverId, route, { body: invocationPage(completed, 2) });
         await act(async () => publishHomeAccountChange(serverId, [`workflow-run:${runId}`]));
-        await waitForHomeGovernance(() => expect(storage.getState().workflowRunInvocationsByRunId[runId]?.factsById[invocation.id]?.lifecycle).toBe('completed'));
+        await waitForHomeGovernance(() => expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey(runId)]?.factsById[invocation.id]?.lifecycle).toBe('completed'));
         await act(async () => retired.resolve());
-        expect(storage.getState().workflowRunInvocationsByRunId[runId]?.factsById[invocation.id]?.lifecycle).toBe('completed');
+        expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey(runId)]?.factsById[invocation.id]?.lifecycle).toBe('completed');
     });
 });

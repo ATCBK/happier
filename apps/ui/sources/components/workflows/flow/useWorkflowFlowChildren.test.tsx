@@ -7,8 +7,9 @@ import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/prot
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { useWorkflowDefinitionLibrary } from '@/components/workflows/library/workflowLibraryReads';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -16,10 +17,12 @@ import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, 
 import { useWorkflowFlowChildren } from './useWorkflowFlowChildren';
 
 const machineRpc = vi.hoisted(() => vi.fn());
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 // The daemon's contribution projection enters through its external Machine RPC boundary.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 let boundary: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>> | undefined;
-let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let previousStorageState = storage.getState();
 let previousApplied = getAppliedActiveServerSnapshot();
 let previousAvailable = isAppliedActiveServerRuntimeAvailable();
@@ -44,21 +47,21 @@ const pluginProjection = (...contributions: Readonly<{ id: string; title: string
 });
 const projection = () => pluginProjection({ id: 'check', title: plugin.title, definition: child });
 
+await initializeRealAppRuntimeForTests();
+
 beforeEach(async () => {
     previousStorageState = storage.getState();
     previousApplied = getAppliedActiveServerSnapshot();
     previousAvailable = isAppliedActiveServerRuntimeAvailable();
-    boundary = await installWorkflowActionHttpBoundary({ accountId: () => 'flow-account', fixtureResponse: async (actionId) => {
+    const runtime = await import('@/sync/domains/server/serverRuntime');
+    await runtime.upsertAndActivateServer({ serverUrl: 'http://workflow-flow.test', name: 'Flow' });
+    const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'flow-account' });
+    boundary = await installWorkflowActionHttpBoundary({ accountId: () => 'flow-account', machineRows: () => [machine], fixtureResponse: async (actionId) => {
         if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [] } };
         throw new Error(`Unexpected workflow HTTP fixture request: ${actionId}`);
     } });
-    const runtime = await import('@/sync/domains/server/serverRuntime');
-    appliedSnapshot = runtime.getActiveServerSnapshot;
-    const profile = await runtime.upsertAndActivateServer({ serverUrl: 'http://workflow-flow.test', name: 'Flow' });
-    publishAppliedActiveServerSnapshot(appliedSnapshot());
-    const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
-    storage.setState({ profileScope: { serverId: profile.id, accountId: 'flow-account' },
-        machines: { [machine.id]: machine }, machineListByServerId: { [profile.id]: [machine] } });
+    await (await import('@/sync/runtime/orchestration/connectionManager')).restoreConnectionToActiveServer(boundary.credentials);
+    await (await import('@/sync/sync')).sync.refreshMachines();
     boundary.prime();
     machineRpc.mockImplementation(async (request: { method: string }) => {
         if (request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
@@ -73,7 +76,7 @@ afterEach(async () => {
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
     machineRpc.mockReset();
     clearDaemonMergedProjectionCacheForTests();
-    boundary?.dispose();
+    await boundary?.dispose();
     boundary = undefined;
     storage.setState(previousStorageState);
     publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);

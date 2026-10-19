@@ -14,6 +14,7 @@ import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflow
 import { t, tLoose } from '@/text';
 import { useWorkflowExistingSessionOptions } from '../screens/useWorkflowExistingSessionOptions';
 import { WorkflowPurposeGlyph } from '../presentation/WorkflowPurposeGlyph';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 /**
  * Built-in rows are projections of Protocol's catalog, never Account library records. Each is a quiet
@@ -43,7 +44,9 @@ function BuiltinRow({ entry, showDivider }: Readonly<{ entry: BuiltinWorkflowCat
 /** Uses the same Session candidacy and Home identity as continuation and trigger pickers. */
 export function WorkflowBuiltinSessionButton(props: Readonly<{ entry: BuiltinWorkflowCatalogEntryV1; testID?: string; primary?: boolean }>) {
     const router = useRouter();
-    const scope = useActiveServerAccountScope();
+    const focusedScope = useActiveServerAccountScope();
+    const accountLifetime = useWorkflowAccountLifetime();
+    const scope = accountLifetime === undefined ? focusedScope : accountLifetime?.scope;
     const [open, setOpen] = React.useState(false);
     const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null });
     return <DropdownMenu open={open} onOpenChange={setOpen} search
@@ -51,7 +54,8 @@ export function WorkflowBuiltinSessionButton(props: Readonly<{ entry: BuiltinWor
         trigger={({ toggle }) => <RoundButton testID={props.testID} size="small" display={props.primary ? 'default' : 'secondary'} title={t('workflows.examples.chooseSession')} onPress={toggle} />}
         selectedId={null}
         onSelect={(sessionId) => {
-            if (!scope || !existingSessions.some((session) => session.sessionId === sessionId)) return;
+            if (!scope || accountLifetime === null || accountLifetime && !accountLifetime.isCurrent()
+                || !existingSessions.some((session) => session.sessionId === sessionId)) return;
             setOpen(false);
             if (props.entry.id === 'builtin:keep-going') {
                 openSessionGoalControl({ serverId: scope.serverId, sessionId });

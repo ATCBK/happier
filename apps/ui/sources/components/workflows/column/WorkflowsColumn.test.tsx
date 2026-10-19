@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
@@ -20,11 +21,12 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
 import type { WorkflowDefinitionListResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-installDisconnectedServerSocketBoundary();
+installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
 vi.mock('@/sync/domains/state/browserRecordStorage', async () =>
     (await import('@/dev/testkit/mocks/browserRecordStorage')).createBrowserRecordStorageModuleMock());
 
@@ -84,10 +86,12 @@ function answerLists() {
 let previousStorageState = storage.getState();
 let boundary: Awaited<ReturnType<typeof installWorkflowActionHttpBoundary>> | undefined;
 let singleton: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
+let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 beforeEach(async () => {
     routeState.pathname = '/workflows';
     routeState.params = {};
     previousStorageState = storage.getState();
+    webLocks = installWebLockManagerMock();
     singleton = await loadSyncSingletonForTests();
     const runtime = await import('@/sync/domains/server/serverRuntime');
     await runtime.upsertAndActivateServer({ serverUrl: 'http://unified-column.test', scope: 'tab' });
@@ -119,6 +123,8 @@ afterEach(async () => {
     executeMock.mockReset();
     routerPush.mockReset();
     storage.setState(previousStorageState);
+    webLocks?.restore();
+    webLocks = undefined;
 });
 
 describe('WorkflowsColumn', () => {
@@ -226,16 +232,27 @@ describe('WorkflowsColumn', () => {
         const http = boundary!;
         setRuntimeFetch(async (url, init) => {
             const target = new URL(String(url));
-            if (target.pathname === '/v1/artifacts') {
+            if (target.pathname === '/v1/artifacts' && target.searchParams.get('includeBody') === 'true') {
                 artifactRequests.push(target.href);
-                return Response.json({ error: 'Access denied' }, { status: 403 });
+                // Fail the requested bodies while metadata bootstrap stays healthy.
+                // Breaking both would correctly show the shared Home recovery line.
+                return Response.json({ artifacts: 'invalid-page' });
             }
             return http.request(url, init);
         });
         const screen = await renderScreen(<WorkflowsColumn />, { wrapper: TestAuth });
         await vi.waitFor(async () => {
             await act(async () => {});
-            expect(screen.findHostByTestId('workflows-column:library:failed:retry')).not.toBeNull();
+            const observation = {
+                bodyReads: artifactRequests.length,
+                endpoint: storage.getState().endpointStatus,
+                endpointReason: storage.getState().endpointReason,
+                endpointError: storage.getState().endpointLastErrorMessage,
+                homeUnavailable: screen.findHostByTestId('home-unreachable') !== null,
+                failed: screen.findHostByTestId('workflows-column:library:failed') !== null,
+                retry: screen.findHostByTestId('workflows-column:library:failed:retry') !== null,
+            };
+            expect(observation.retry, JSON.stringify(observation)).toBe(true);
         });
         const target = () => screen.tree.findHostByTestId('workflows-column:library:failed:retry')!;
         const flattened = () => StyleSheet.flatten(typeof target().props.style === 'function'
@@ -243,6 +260,7 @@ describe('WorkflowsColumn', () => {
         expect(target().props.role ?? target().props.accessibilityRole).toBe('button');
         const restingOutline = flattened()?.outlineColor;
         expect(flattened()?.outlineWidth ?? 0).toBe(0);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => { target().props.onFocus({ target: { matches: () => true } }); });
         expect(flattened()?.outlineStyle).toBe('solid');
         expect(flattened()?.outlineWidth).toBeGreaterThan(0);

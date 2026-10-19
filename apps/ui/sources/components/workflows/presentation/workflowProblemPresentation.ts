@@ -79,7 +79,7 @@ const WORKFLOW_PROBLEM_SHAPES = {
     missing_reference: { messageKey: 'workflows.problem.needsRepair', repair: 'none', accessibilitySemantics: 'alert' },
     invalid_reference_scope: { messageKey: 'workflows.problem.needsRepair', repair: 'none', accessibilitySemantics: 'alert' },
     target_unavailable: { messageKey: 'workflows.problem.targetUnavailable', repair: 'retry', accessibilitySemantics: 'alert' },
-    run_not_found: { messageKey: 'workflows.problem.notFound', repair: 'none', accessibilitySemantics: 'alert' },
+    run_not_found: { titleKey: 'workflows.problem.notFoundTitle', messageKey: 'workflows.problem.notFound', repair: 'none', accessibilitySemantics: 'alert' },
     run_access_denied: { messageKey: 'workflows.problem.accessDenied', repair: 'none', accessibilitySemantics: 'alert' },
     currentness_conflict: { messageKey: 'workflows.problem.conflict', repair: 'refresh', accessibilitySemantics: 'alert' },
     workflow_input_too_large: { messageKey: 'workflows.problem.inputTooLarge', repair: 'none', accessibilitySemantics: 'alert' },
@@ -87,6 +87,7 @@ const WORKFLOW_PROBLEM_SHAPES = {
     // acknowledgement anywhere may bypass it, so the copy has to say what is
     // being waited on rather than name the condition.
     workflow_outcome_unresolved: { messageKey: 'workflows.problem.unresolvedOutcome', repair: 'refresh', accessibilitySemantics: 'status' },
+    workflow_http_error: { messageKey: 'workflows.problem.generic', repair: 'retry', accessibilitySemantics: 'alert' },
     workflow_interaction_capacity_exceeded: { messageKey: 'workflows.problem.interactionCapacity', repair: 'retry', accessibilitySemantics: 'status' },
     workflow_conversation_unavailable: { messageKey: 'workflows.problem.conversationUnavailable', repair: 'none', accessibilitySemantics: 'alert' },
     continuation_unavailable: { messageKey: 'workflows.problem.conversationUnavailable', repair: 'none', accessibilitySemantics: 'alert' },

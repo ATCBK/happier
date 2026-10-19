@@ -79,6 +79,12 @@ function InspectorHarness(props: Readonly<{
     });
 }
 
+/** The shared field row (`Item`) a control renders for a field: the element that holds its title. */
+function fieldRow(screen: Awaited<ReturnType<typeof renderScreen>>, field: string) {
+    return screen.root.findAll((node) => node.props.testID === `workflow-inspector-control-${field}-row`
+        && node.props.title !== undefined)[0];
+}
+
 describe('workflow step inspector field controls', () => {
     it('renders the default inspector through real field controls while retaining execution tool policy', async () => {
         const harness = await loadHarness();
@@ -104,6 +110,21 @@ describe('workflow step inspector field controls', () => {
         await screen.unmount();
     });
 
+    /**
+     * The shared field row names the field; the inspector adds only the inheritance state and the
+     * reset beside that one name, never a second line repeating it above the control.
+     */
+    it('names each field once and carries its inheritance state on the shared field row', async () => {
+        const harness = await loadHarness();
+        const screen = await renderScreen(<InspectorHarness harness={harness} fields={['permissionMode']}
+            draft={buildDraft(harness)} onChangeField={() => {}} />);
+        const text = screen.getTextContent();
+        expect(text.split('settingsSession.permissions.title')).toHaveLength(2);
+        expect(fieldRow(screen, 'permissionMode')?.props.titleMeta).toBeTruthy();
+        expect(screen.findByTestId('workflow-inspector-permissionMode')).toBeNull();
+        await screen.unmount();
+    });
+
     it('presents an authored engine once and resets its whole arm to the workflow default', async () => {
         const draft = draftModule.createWorkflowEditorDraft({ draftId: 'engine', name: 'Review' });
         const step = draft.blocks[0]!;
@@ -111,7 +132,7 @@ describe('workflow step inspector field controls', () => {
         const reset = vi.fn();
         const screen = await renderScreen(<inspector.WorkflowStepInspector draft={draft}
             step={{ ...step, execution: { engine: { role: 'reviewer' } } }}
-            renderFieldControl={params => React.createElement('Control', { field: params.field })}
+            renderFieldControl={params => React.createElement('Control', { field: params.field }, params.stateAccessory)}
             onChangeFields={() => {}} onChangeEngine={() => {}} onResetEngine={reset}
             onResetField={() => {}} onChangeField={() => {}} />);
         expect(screen.root.findAllByType('Control').filter(node => ['agentTarget', 'modelSelection', 'acpSessionModeId', 'sessionConfigOptionOverrides'].includes(node.props.field))).toHaveLength(1);
@@ -207,14 +228,11 @@ describe('workflow step inspector field controls', () => {
             />,
         );
 
-        expect(screen.findByTestId('workflow-inspector-permissionMode')?.props.children)
-            .toBe('settingsSession.permissions.title');
-        expect(screen.findByTestId('workflow-inspector-connectedServices')?.props.children)
-            .toBe('connectedServices.authChip.label');
-        expect(screen.findByTestId('workflow-inspector-terminal')?.props.children)
-            .toBe('profiles.tmux.spawnSessionsTitle');
-        expect(screen.findByTestId('workflow-inspector-runtimeDescriptorV1')?.props.children)
-            .toBe('workflows.editor.agentRuntime');
+        const rowTitle = (field: string) => fieldRow(screen, field)?.props.title;
+        expect(rowTitle('permissionMode')).toBe('settingsSession.permissions.title');
+        expect(rowTitle('connectedServices')).toBe('connectedServices.authChip.label');
+        expect(rowTitle('terminal')).toBe('profiles.tmux.spawnSessionsTitle');
+        expect(rowTitle('runtimeDescriptorV1')).toBe('workflows.editor.agentRuntime');
         expect(screen.getTextContent()).not.toContain('runtimeDescriptorV1');
         await screen.unmount();
     });

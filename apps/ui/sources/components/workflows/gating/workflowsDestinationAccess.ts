@@ -57,10 +57,12 @@ export function resolveWorkflowsDestinationAccess(input: Readonly<{
  * The destination's access, each decision at the scope its own owner reads it: Workflows at the
  * runtime scope `WorkflowsGate` uses, Automations at the scope `useAutomationsSupport` uses.
  */
-export function useWorkflowsDestinationAccess(): WorkflowsDestinationAccess {
-    const workflows = useFeatureDecision('workflows', { scopeKind: 'runtime' });
-    const automations = useFeatureDecision('automations');
-    const serverId = useActiveServerSnapshot().serverId;
+export function useWorkflowsDestinationAccess(exactServerId?: string | null): WorkflowsDestinationAccess {
+    const activeServerId = useActiveServerSnapshot().serverId;
+    const serverId = exactServerId ?? activeServerId;
+    const scope = exactServerId ? { scopeKind: 'spawn' as const, serverId } : undefined;
+    const workflows = useFeatureDecision('workflows', scope ?? { scopeKind: 'runtime' });
+    const automations = useFeatureDecision('automations', scope);
     // Each arm is a frozen constant, so the result keeps its identity while the arm holds.
     const access = resolveWorkflowsDestinationAccess({ workflows, automations });
     // A decision that re-resolves for the same server (its snapshot reloading under a slow or

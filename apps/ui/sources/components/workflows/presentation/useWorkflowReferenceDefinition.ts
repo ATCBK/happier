@@ -6,19 +6,23 @@ import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storag
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useWorkflowPluginSource } from '../library/workflowLibraryReads';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 /** Accessible definition content, shared by child bindings and trigger inputs. Saved/shared
  * references always use Get: list metadata is not content-disclosure authority. */
-export function useWorkflowReferenceDefinition(ref: string | null, libraryEnabled = true): Readonly<{
+export function useWorkflowReferenceDefinition(ref: string | null, libraryEnabled = true, accountLifetime?: ServerAccountScopeLifetime | null): Readonly<{
     definition: WorkflowDefinitionV1 | null;
     status: 'idle' | 'loading' | 'failed' | 'ready';
     retry: () => void;
 }> {
-    const lifetime = useActiveServerAccountScopeLifetime();
+    accountLifetime = useWorkflowAccountLifetime(accountLifetime);
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const lifetime = accountLifetime === undefined ? activeLifetime : accountLifetime;
     const scope = lifetime?.scope ?? null;
     const scopeKey = scope ? serverAccountScopeKeySuffix(scope) : null;
     const reference = parseWorkflowDefinitionRefV1(ref);
-    const plugin = useWorkflowPluginSource(reference?.kind === 'plugin' ? ref : null, libraryEnabled);
+    const plugin = useWorkflowPluginSource(reference?.kind === 'plugin' ? ref : null, libraryEnabled, accountLifetime);
     const artifactId = reference?.kind === 'artifact' ? reference.artifactId : null;
     const [attempt, setAttempt] = React.useState(0);
     const [read, setRead] = React.useState<Readonly<{
@@ -29,7 +33,8 @@ export function useWorkflowReferenceDefinition(ref: string | null, libraryEnable
         if (!libraryEnabled || artifactId === null || scopeKey === null || lifetime === null) return;
         const controller = new AbortController();
         setRead(null);
-        void getWorkflowDefinition({ definitionId: artifactId, signal: controller.signal }).then((result) => {
+        void getWorkflowDefinition({ definitionId: artifactId, signal: controller.signal,
+            ...(accountLifetime === undefined ? {} : { accountLifetime }) }).then((result) => {
             if (!controller.signal.aborted && lifetime?.isCurrent()) {
                 setRead({ ref: artifactId, scopeKey, definition: result.definition, failed: false, lifetime });
             }
@@ -39,7 +44,7 @@ export function useWorkflowReferenceDefinition(ref: string | null, libraryEnable
             }
         });
         return () => controller.abort();
-    }, [artifactId, attempt, libraryEnabled, lifetime, scopeKey]);
+    }, [artifactId, attempt, libraryEnabled, lifetime, scopeKey, accountLifetime]);
     const retry = React.useCallback(() => setAttempt((current) => current + 1), []);
     if (ref === null) return { definition: null, status: 'idle', retry };
     if (reference?.kind === 'builtin') {

@@ -24,11 +24,23 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
     // This hook owns the displayed options, not the Session/settings containers.
     // Keep the selected projection stable without retaining a second data source.
     let previous: WorkflowSessionOptions = { existingSessions: [], sessionDropCandidates: [] };
+    let candidateInputs: Pick<StorageState, 'sessions' | 'settings' | 'isDataReady'> | null = null;
+    let candidates: StorageState['sessions'][string][] = [];
     return (state: StorageState): WorkflowSessionOptions => {
+        // Eligibility parses Agent/backend policy. Unrelated store publications
+        // must not repeat it for every Session. Keep target attribution below
+        // live: Machine, project and list-row changes can alter that answer
+        // without changing a Session's eligibility.
+        if (candidateInputs === null || candidateInputs.sessions !== state.sessions
+            || candidateInputs.settings !== state.settings || candidateInputs.isDataReady !== state.isDataReady) {
+            candidates = state.isDataReady ? Object.values(state.sessions).filter(session => (
+                (serverId === null || session.serverId === serverId)
+                && isAutomationSessionCandidate(session, state.settings)
+            )) : [];
+            candidateInputs = { sessions: state.sessions, settings: state.settings, isDataReady: state.isDataReady };
+        }
         const options: WorkflowExistingSessionOption[] = [];
-        if (state.isDataReady) for (const session of Object.values(state.sessions)) {
-            if (serverId !== null && session.serverId !== serverId) continue;
-            if (!isAutomationSessionCandidate(session, state.settings)) continue;
+        for (const session of candidates) {
             const sessionMachineId = resolveDisplayMachineIdForSessionFromState({
                 state, sessionId: session.id, metadata: session.metadata,
             });
