@@ -3685,7 +3685,9 @@ Artifact ID rather than the daemon pending change ID. The daemon retains
 candidate custody and revalidates the evaluated facts before applying trust.
 Failed install preparation returns its domain error before creating an approval
 Artifact; a source operand alone cannot stand in for the evaluated disclosure.
-Observer-created development reviews publish through this same owner; an
+Direct development install first registers its exact source through the same
+daemon development-root owner before retaining a review. Observer-created
+development reviews publish through this same owner; an
 explicit `plugins install <exact-source> --dev --json` rejoins the retained
 candidate and same Artifact. `plugins change status` only inspects pending
 daemon custody. Restart expires that custody, so the original source flow must
