@@ -382,7 +382,10 @@ import {
     getModelOptionsForSession,
     isModelSelectableForSession,
     resolveCanonicalNativeModelSelectionRef,
+    resolveSessionModelLabel,
 } from '@/sync/domains/models/modelOptions';
+import { isArmedModelOnlySessionChange } from '@/providers/session/resolveSessionRoutePresentation';
+import { readArmedRouteContinuationLabel } from '@/components/sessions/agentInput/components/agentContinuationSubmitPresentation';
 import { resolveSessionModelSelectionDisposition } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
 import {
     computeAcpConfigOptionControlsFromOverride,
@@ -8243,13 +8246,32 @@ function SessionViewLoadedContent({
         // D15: a route or model picked while the session runs is armed for the next message, exactly
         // like an Agent switch — the send control names it and the send applies it before dispatch.
         // The arm IS the session's pending model selection; its explicit cancel is the un-arm Action below.
-        const armedRouteSourceLabel = effectiveModelTransitionActionRequired && session.active === true
+        const routeChangeArmed = Boolean(effectiveModelTransitionActionRequired) && session.active === true;
+        // A model picked from the source the session already runs through changes only the model:
+        // the send control names that model, never the unchanged source as if it were switching.
+        const armedRequestedSelection = effectiveModelTransitionActionRequired?.requestedSelection ?? null;
+        const armedModelOnly = routeChangeArmed
+            && sessionConnectedServicesAuthSwitch.routePresentation != null
+            && isArmedModelOnlySessionChange(sessionConnectedServicesAuthSwitch.routePresentation);
+        const armedModelLabel = React.useMemo(() => {
+            if (!armedModelOnly || !armedRequestedSelection) return null;
+            const modelId = armedRequestedSelection.modelId;
+            if (isTeamCredentialProviderModelPickerValue(armedRequestedSelection)) return modelId;
+            if (armedRequestedSelection.providerConnectionId !== null) {
+                return providerModelProjection.data?.groups
+                    .find(group => group.connectionId === armedRequestedSelection.providerConnectionId)
+                    ?.rows.find(row => row.ref.modelId === modelId)?.descriptor.name || modelId;
+            }
+            return (agentId ? resolveSessionModelLabel(agentId, composerOptionsInput, modelId) : null) ?? modelId;
+        }, [agentId, armedModelOnly, armedRequestedSelection, composerOptionsInput, providerModelProjection.data?.groups]);
+        const armedRouteSourceLabel = routeChangeArmed && !armedModelOnly
             ? sessionConnectedServicesAuthSwitch.armedRouteSourceLabel
                 ?? (providerBindingBanner?.kind === 'changed' ? providerBindingBanner.providerName : null)
             : null;
         const armedRouteContinuation = React.useMemo(
-            () => armedRouteSourceLabel ? { sourceLabel: armedRouteSourceLabel } : null,
-            [armedRouteSourceLabel],
+            () => armedModelLabel ? { modelLabel: armedModelLabel }
+                : armedRouteSourceLabel ? { sourceLabel: armedRouteSourceLabel } : null,
+            [armedModelLabel, armedRouteSourceLabel],
         );
         // D15's explicit cancel: the Session's own un-arm Action restores the applied route and model;
         // nothing is sent and the draft stays. A refusal is said, never swallowed.
@@ -9378,7 +9400,7 @@ function SessionViewLoadedContent({
                                 : null;
 
                         const armedContinuationTargetLabel = armedContinuationTarget?.label
-                            ?? armedRouteContinuation?.sourceLabel
+                            ?? (armedRouteContinuation ? readArmedRouteContinuationLabel(armedRouteContinuation) : null)
                             ?? '';
                         const resolveSendDestination = (
                             route: SessionComposerSendRoute,

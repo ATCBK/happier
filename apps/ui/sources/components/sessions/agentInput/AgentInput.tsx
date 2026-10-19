@@ -146,7 +146,7 @@ import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
 import { AgentInputExpansionToggle } from './components/AgentInputExpansionToggle';
 import { AgentInputPermissionRequests } from './components/AgentInputPermissionRequests';
 import { useOptionalSessionTranscriptSource, useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
-import { resolveArmedComposerContinuation } from './components/agentContinuationSubmitPresentation';
+import { resolveArmedComposerContinuation, type ArmedRouteContinuation } from './components/agentContinuationSubmitPresentation';
 import { AgentInputSubmitButton } from './components/AgentInputSubmitButton';
 import { useAgentInputActionMenuControls } from './controls/useAgentInputActionMenuControls';
 import { AGENT_INPUT_COMPACT_CONTROL_IDS } from './controls/agentInputControlRegistry';
@@ -257,7 +257,7 @@ import {
     shouldReserveAgentInputExpansionToggleSpace,
 } from './inputExpansionToggleVisibility';
 import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
-import { AgentInputPopoverClearanceContext } from './selection/useAgentInputPopoverLayout';
+import { AgentInputDocumentPanelContext, AgentInputPopoverClearanceContext } from './selection/useAgentInputPopoverLayout';
 import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } from './components/AgentInputFieldAccessories';
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
@@ -612,7 +612,7 @@ interface AgentInputProps {
      * A route or model change for the running Agent, armed for the next message
      * (D15). The send control names it; the session's send owner applies it.
      */
-    armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
+    armedRouteContinuation?: ArmedRouteContinuation | null;
     /** Cancels the armed route change (D15); see `AgentInputSubmitButton`. */
     onUnarmRoute?: (() => void) | null;
     unarmRoutePending?: boolean;
@@ -1060,14 +1060,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      */
     trailingAccessoryInline: {
         flexDirection: 'row',
-        // An armed continuation names its destination in words and can be wider than
-        // the card. The cluster gives way beyond a share of the row, and the label
-        // inside ellipsizes, so the chip rail keeps its share and its scroll rather
-        // than being covered. Every other occupant of the cluster is fixed-width and
-        // never reaches the cap.
+        // An armed continuation names its destination in words ("Continue with
+        // GPT-6-Sol") and is wider than any other occupant of the cluster, which are
+        // all fixed-width and never reach the cap. On a phone that sentence, the
+        // cancel beside it and the Voice accessory need most of the card: the rail
+        // yields to them, because the sentence is what the reader is about to press
+        // and must read whole. The cap still leaves the rail a share of the row and
+        // its scroll, and an unusually long name ellipsizes inside the label rather
+        // than covering the rail.
         flexShrink: 1,
         minWidth: 0,
-        maxWidth: '60%',
+        maxWidth: '85%',
         alignItems: 'center',
         gap: theme.space.s8,
     },
@@ -2565,8 +2568,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (typeof props.agentPickerSelectedOptionId === 'string' && props.agentPickerSelectedOptionId.length > 0) {
             return props.agentPickerSelectedOptionId;
         }
+        // With nothing chosen, the chip names the running Agent's model, so the popover opens on that
+        // Agent — not on whatever row a caller leads the rail with (the Roles rail).
+        const runningAgentOptionId = currentAgentPickerRow?.id ?? null;
+        if (runningAgentOptionId && agentPickerOptions.some((option) => option.id === runningAgentOptionId)) {
+            return runningAgentOptionId;
+        }
         return agentPickerOptions[0]?.id ?? null;
-    }, [agentPickerOptions, props.agentPickerSelectedOptionId]);
+    }, [agentPickerOptions, currentAgentPickerRow?.id, props.agentPickerSelectedOptionId]);
 
     const hasAgentPickerOptions = agentPickerOptions.length > 0;
 
@@ -3416,6 +3425,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     return (
         <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
         <AgentInputPopoverClearanceContext.Provider value={documentPanel ? undefined : stageSpotlightRef}>
+        <AgentInputDocumentPanelContext.Provider value={documentPanel}>
         <SyncPerformanceReactProfiler id="sessions.agentInput">
             <View
                 testID="agent-input-composer"
@@ -4023,6 +4033,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </View>
             </View>
         </SyncPerformanceReactProfiler>
+        </AgentInputDocumentPanelContext.Provider>
         </AgentInputPopoverClearanceContext.Provider>
         </SessionModelSourceBrowseHandoffContext.Provider>
     );

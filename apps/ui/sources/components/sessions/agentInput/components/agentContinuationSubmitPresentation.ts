@@ -191,16 +191,29 @@ export function resolveAgentContinuationSubmitPresentation(input: Readonly<{
 }
 
 /**
- * A route or model change for the SAME Agent, armed for the next message (D15).
+ * A route or model change for the SAME Agent, armed for the next message (D15): either a new source
+ * to run through, or only another model from the source it already runs through.
+ */
+export type ArmedRouteContinuation = Readonly<{ sourceLabel: string; modelLabel?: never } | { modelLabel: string; sourceLabel?: never }>;
+
+/** The words that name what an armed route continuation changes: the new source, or the new model. */
+export function readArmedRouteContinuationLabel(armed: ArmedRouteContinuation): string {
+    return armed.sourceLabel ?? armed.modelLabel;
+}
+
+/**
+ * The send control for an armed route or model change (D15).
  *
  * The Agent does not change, so there is no mark to stand in for anything: the
- * words name the source the Session continues through, and the drawn and spoken
- * sentences are one string.
+ * words name the source the Session continues through ("Continue via …"), or, when
+ * that source stays and only the model changes, the model it continues with
+ * ("Continue with …"). The drawn and spoken sentences are one string.
  */
-export function resolveRouteContinuationSubmitPresentation(input: Readonly<{
-    sourceLabel: string;
-}>): AgentContinuationSubmitPresentation {
-    const sentence = t('session.agentContinuation.routeSendLabel', { source: input.sourceLabel });
+export function resolveRouteContinuationSubmitPresentation(input: ArmedRouteContinuation): AgentContinuationSubmitPresentation {
+    const sentence = input.sourceLabel !== undefined
+        ? t('session.agentContinuation.routeSendLabel', { source: input.sourceLabel })
+        // The same "Continue with …" sentence an Agent switch uses, naming the model that continues.
+        : t('session.agentContinuation.sendLabel', { agent: input.modelLabel });
     return {
         accessibilityLabel: sentence,
         label: sentence,
@@ -220,7 +233,7 @@ export function resolveRouteContinuationSubmitPresentation(input: Readonly<{
  */
 export function resolveArmedSubmitPresentation(params: Readonly<{
     armedContinuationTarget: Readonly<{ agentId: string; label: string }> | null | undefined;
-    armedRouteContinuation: Readonly<{ sourceLabel: string }> | null | undefined;
+    armedRouteContinuation: ArmedRouteContinuation | null | undefined;
     otherActionHoldsSubmit: boolean;
     hasIdentityMark: boolean;
 }>): Readonly<

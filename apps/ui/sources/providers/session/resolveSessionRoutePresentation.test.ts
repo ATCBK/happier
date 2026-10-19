@@ -134,4 +134,25 @@ describe('session route presentation', () => {
         expect(presentNativeRouteSourceLabel(pool)).toBe('Claude: Work pool');
         expect(presentNativeRouteSourceLabel({ label: 'Native', authSource: 'native' })).toBeNull();
     });
+    it('arms no route switch when only the model changes within the same source', () => {
+        const source = { connectionId: 'pc_a', providerName: 'DeepSeek', connectionName: 'DeepSeek',
+            connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
+        const pool = { label: 'ChatGPT · Leeroy', authSource: 'connected' as const };
+        const native = { ...pool, connectedCount: 1 };
+        // A native model change keeps the Agent's own account: the route that applies is the route that runs.
+        const nativeModel = resolveSessionRoutePresentation({ phase: 'running', transitionPending: true, native,
+            selection: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6-sol' },
+            appliedSelection: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6-luna' } });
+        expect(presentArmedSessionRouteSource(nativeModel, pool)).toBeNull();
+        expect(presentSessionRouteChip(nativeModel, pool)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: 'ChatGPT · Leeroy' }) });
+        // Another model from the same connection is still that connection.
+        const providerModel = resolveSessionRoutePresentation({ phase: 'running', transitionPending: true, native,
+            sources: [source],
+            selection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4-pro' }),
+            appliedSelection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4-flash' }) });
+        expect(presentArmedSessionRouteSource(providerModel, pool)).toBeNull();
+        expect(presentSessionRouteChip(providerModel, pool)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }) });
+    });
 });

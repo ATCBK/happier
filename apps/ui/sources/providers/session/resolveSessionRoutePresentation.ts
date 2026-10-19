@@ -103,16 +103,43 @@ function routeSourceLabel(route: SessionRoute, nativeLabel: string): string | nu
     }
 }
 
+/** Whether two routes go through the same source: the Agent's own account, one connection or one Team resource. */
+function isSameRouteSource(left: SessionRoute, right: SessionRoute): boolean {
+    switch (left.kind) {
+        case 'unknown': return false;
+        case 'native': return right.kind === 'native';
+        case 'provider': return right.kind === 'provider' && right.connectionId === left.connectionId;
+        case 'team': return right.kind === 'team' && right.teamId === left.teamId && right.resourceId === left.resourceId;
+    }
+}
+
+/** The applied route, or while it is unreadable the last reported one; never a guess from the selection. */
+function readRunningRoute(presentation: Readonly<{ applied: SessionRoute; reported?: SessionRoute }>): SessionRoute {
+    return presentation.applied.kind === 'unknown' ? presentation.reported ?? presentation.applied : presentation.applied;
+}
+
 /**
- * The source a running session continues through once the next message is sent (D15): a route or
- * model picked while it runs is armed for that message, like an Agent switch. Null when nothing is
- * armed or the armed source cannot be named.
+ * Whether the armed change keeps the source the session already runs through and changes only its
+ * model (D15). The composer then names that model, not the unchanged source.
+ */
+export function isArmedModelOnlySessionChange(
+    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }>,
+): boolean {
+    return presentation.pending !== null && isSameRouteSource(readRunningRoute(presentation), presentation.pending);
+}
+
+/**
+ * The source a running session continues through once the next message is sent (D15): a route
+ * picked while it runs is armed for that message, like an Agent switch. Null when nothing is armed,
+ * when the armed source cannot be named, or when only the model changes within the source that
+ * already runs — the route does not switch, so naming it as "next" would claim a change that isn't.
  */
 export function presentArmedSessionRouteSource(
-    presentation: Readonly<{ pending: SessionRoute | null }>,
+    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }>,
     native: Readonly<{ label: string }>,
 ): string | null {
-    return presentation.pending ? routeSourceLabel(presentation.pending, native.label) : null;
+    if (!presentation.pending || isArmedModelOnlySessionChange(presentation)) return null;
+    return routeSourceLabel(presentation.pending, native.label);
 }
 
 /**
@@ -128,8 +155,7 @@ export function presentSessionRouteChip(
 ): Readonly<{ label: string }> | null {
     const armed = presentArmedSessionRouteSource(presentation, native);
     if (armed) return { label: t('connectedServices.authChip.nextVia', { source: armed }) };
-    const applied = presentation.applied.kind === 'unknown'
-        ? presentation.reported ?? presentation.applied : presentation.applied;
+    const applied = readRunningRoute(presentation);
     if (applied.kind === 'native' && native.authSource === 'unknown') return null;
     const source = routeSourceLabel(applied, native.label);
     if (!source) return null;

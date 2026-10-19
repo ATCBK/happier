@@ -1102,6 +1102,37 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(screen.findByTestId('agent-input-chip-picker.option:engine:claude')).toBeTruthy();
     });
 
+    it('opens on the running Agent, not on a row a caller leads the rail with', async () => {
+        const { buildRolesRailPickerOption } = await import('@/components/roles/rail/buildRolesRailPickerOption');
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompleteKinds: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'claude',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'default',
+            onModelModeChange: () => {},
+            agentPickerTitle: 'Select engine',
+            // A running session has nothing armed, so it names no selected row of its own.
+            composeAgentPickerOptions: (currentAgentOptions: ReadonlyArray<{ id: string }>) => [
+                buildRolesRailPickerOption({ value: null, onChange: () => {}, roles: [] }),
+                ...currentAgentOptions,
+            ],
+        } as any));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        // The chip names the running model, so the popover opens on that Agent's model cards.
+        expect(screen.findByTestId('agent-input-chip-picker.option:engine:claude')?.props.accessibilityState)
+            .toEqual(expect.objectContaining({ selected: true }));
+        expect(screen.findByTestId('agent-input-chip-picker.option:roles')?.props.accessibilityState)
+            .toEqual(expect.objectContaining({ selected: false }));
+    });
+
     it('offers the Roles rail as a controlled value ahead of the Agent rows', async () => {
         const { buildRolesRailPickerOption } = await import('@/components/roles/rail/buildRolesRailPickerOption');
         const onChange = vi.fn();
