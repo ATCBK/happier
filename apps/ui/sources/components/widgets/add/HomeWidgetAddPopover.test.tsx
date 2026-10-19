@@ -135,12 +135,12 @@ describe('Add to Home', () => {
             ['builtins:projects', 'tabs.projects'], ['builtins:session', 'sessionBoard.companion.title'], ['builtins', 'widgetAdd.builtIn'],
             ['plugin:happier.triage', 'PRs & Issues'],
         ]);
-        const builtIn = sections.find(section => section.id === 'builtins')!.entries;
+        const companion = sections.find(section => section.id === 'builtins:session')!.entries;
         expect(sections.filter(section => section.id.startsWith('builtins')).flatMap(section => section.entries.map(entry => entry.id)).sort()).toEqual([
             ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
         ].sort());
         expect(sections.find(section => section.id === 'plugin:happier.triage')!.entries.map((entry) => entry.id)).toEqual(['plugin-happier.triage/latest']);
-        const setup = builtIn[0]!.setup!();
+        const setup = companion[0]!.setup!();
         expect(setup.provenance).toBe('widgetAdd.builtIn · widgetAdd.readsChosenSession');
         expect(setup.fields[0]!.field.optionsSourceId).toBe('sessions');
         expect(setup.resolve(setup.initial).status).toBe('selection_required');

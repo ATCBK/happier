@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useHomeWidgetCandidates } from '@/components/hub/layout/useHomeWidgetCandidates';
@@ -72,13 +72,15 @@ export type AccountWidgetAddInput = Readonly<{
  */
 /**
  * Happier's built-in families that read as one group of their own (plan 60 AGW-14, lab `rw` AD; usage
- * lab `d2edit-G`): Machines, Usage and the Project widgets. On a family's own page its group leads, so Add on Usage opens
+ * lab `d2edit-G`): Machines, Usage, the Project widgets and the Session-companion widgets (Session summary,
+ * Plan, Changes, Local services: each needs a chosen Session). On a family's own page its group leads, so Add on Usage opens
  * on the Usage widgets; elsewhere the families keep this order.
  */
 const BUILTIN_WIDGET_FAMILIES = [
     { id: 'machines', ids: new Set<string>(MACHINE_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('machines.widgets.machine_fleet') },
     { id: 'usage', ids: new Set<string>(USAGE_BUILTIN_WIDGET_IDS_V1), pageId: 'usage', title: () => t('usage.board.page.title') },
     { id: 'projects', ids: new Set<string>(PROJECT_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('tabs.projects') },
+    { id: 'session', ids: new Set<string>(SESSION_COMPANION_BUILTIN_ITEM_IDS), pageId: null, title: () => t('sessionBoard.companion.title') },
 ] as const;
 type BuiltinWidgetFamily = (typeof BUILTIN_WIDGET_FAMILIES)[number];
 function builtinWidgetFamilyOf(candidate: WidgetCandidate): BuiltinWidgetFamily | null {
