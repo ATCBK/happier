@@ -125,7 +125,7 @@ import {
     type PluginSurfacePresentationState,
 } from '@/sync/domains/surfaces/copy';
 import { getPreferredLanguage, t } from '@/text';
-import { useMachineDisplayNamesById } from '@/sync/store/hooks';
+import { useHomeHasMachines, useMachineDisplayNamesById } from '@/sync/store/hooks';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { resolvePluginDisplayString } from '@/components/plugins/surfaces/resolvePluginDisplayString';
@@ -2357,6 +2357,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         typeof machineId === 'string' && machineId.trim() ? [machineId] : []
     ), [machineId]);
     const machineDisplayNamesById = useMachineDisplayNamesById(machineDisplayIds);
+    const homeHasMachines = useHomeHasMachines();
     const machineDisplayName = typeof machineId === 'string'
         ? machineDisplayNamesById[machineId] ?? null
         : null;
@@ -2901,6 +2902,8 @@ function PluginSurfaceHostMount(props: Readonly<(
             resourceScope: surfaceScope.declared ? surfaceScope.resourceScope : [],
             machineId,
             machineDisplayName,
+            homeHasMachines,
+            pluginDisplayName: installedPackagesById?.[mountedPluginId]?.displayName ?? null,
             serverId,
             projectionGeneration,
             occurrenceId: mountedTarget?.occurrenceId ?? null,

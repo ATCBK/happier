@@ -101,6 +101,7 @@ export const english = {
         runOnAuto: 'Auto',
         runOnAutoHint: 'Picked for you',
         machineCapabilityUnavailable: ({ machine }: { machine: string }) => `This operation is unavailable on ${machine}. Reconnect it or choose another machine with Run on.`,
+        noMachineRunsPlugin: ({ plugin }: { plugin: string }) => `None of your machines runs ${plugin} yet. Install it on one to use it here.`,
         runOnNoneAvailable: 'No machine can run it yet',
         runsEverywhere: 'On every machine running Happier',
         nothingAddedTitle: 'No plugins added yet',

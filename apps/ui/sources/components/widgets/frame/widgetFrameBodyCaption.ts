@@ -43,6 +43,8 @@ export type WidgetFrameBodyNotice = Readonly<{
   sentence: string;
   /** No Machine exists to run it, so retrying cannot help: the way forward is adding one. */
   addMachine?: true;
+  /** Machines exist but none runs this plugin: retrying cannot help, so the way forward is the plugin's own page. */
+  managePluginId?: string;
 }>;
 export type WidgetFrameBodyNoticeSource = () => WidgetFrameBodyNotice | undefined;
 export const WidgetFrameBodyNoticeContext = React.createContext<

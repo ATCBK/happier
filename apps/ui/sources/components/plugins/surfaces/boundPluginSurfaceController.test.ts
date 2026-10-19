@@ -387,6 +387,20 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         await hook.unmount();
     });
 
+    it('says none of the Home’s machines runs the plugin, and leads to the plugin, when machines exist but none can', async () => {
+        const lend = vi.fn();
+        const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+            homeHasMachines: true, pluginDisplayName: 'PRs & Issues',
+        } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+        const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+        await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }), managePluginId: FACTS.pluginId });
+        await hook.unmount();
+    });
+
     it.each(['selectionRequired', 'conflict'] as const)('asks for a target only when Administration reports %s', async executionOriginSelectionKind => {
         const controller = createBoundPluginSurfaceController({ facts: {
             ...FACTS, machineId: null, executionOrigin: null, daemonInteractionEnabled: false,

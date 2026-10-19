@@ -2308,10 +2308,17 @@ export function useMachinePresenceCounts(): MachinePresenceCounts {
   return React.useMemo(() => ({ online, offline: total - online }), [online, total]);
 }
 
+/** Whether this Home has any machine at all, online or offline; a boolean, so presence churn stays quiet. */
+export function useHomeHasMachines(): boolean {
+  const scope = useActiveServerAccountScope();
+  return getStorage()((state) => resolveVisibleMachinesForActiveServerFromState(state, { serverId: scope?.serverId })
+    .some(isMachineVisibleForLaunchSelection));
+}
+
 /** Park presentation-only inventory while retaining the draft's selection.
  * Account withdrawal/replacement still refreshes the snapshot while hidden.
  */
-function usePresentedMachineInventory<T>(select: (state: StorageState) => T, presented: boolean, reconcile?: (previous: T | undefined, next: T) => T): T {
+function usePresentedMachineInventory<T>(select: (state: StorageState) => T, presented: boolean, reconcile?: (previous: T | undefined, next: T, state: StorageState) => T): T {
   const selector = React.useMemo(() => {
     let held: { value: T; serverId: string | undefined; accountId: string | undefined } | null = null;
     return (state: StorageState): T => {
@@ -2319,7 +2326,7 @@ function usePresentedMachineInventory<T>(select: (state: StorageState) => T, pre
       const sameScope = held !== null && held.serverId === scope?.serverId && held.accountId === scope?.accountId;
       if (presented || !sameScope) {
         const next = select(state);
-        held = { value: reconcile ? reconcile(sameScope && held ? held.value : undefined, next) : next,
+        held = { value: reconcile ? reconcile(sameScope && held ? held.value : undefined, next, state) : next,
           serverId: scope?.serverId, accountId: scope?.accountId };
       }
       return held!.value;
@@ -2334,18 +2341,22 @@ export function useLaunchSelectionMachines(presented = true): Machine[] {
 }
 
 function createLaunchSelectionReconciler() {
-  const sources = new WeakMap<Machine, { current: Machine }>();
-  return (previous: Machine[] | undefined, next: Machine[]): Machine[] => {
+  const sources = new WeakMap<Machine, { current: Machine; presence: StorageState['machinePresenceById'][string] | undefined }>();
+  return (previous: Machine[] | undefined, next: Machine[], state: StorageState, serverId?: string): Machine[] => {
     const reconciled = next.map((machine, index) => {
       const held = previous?.[index];
       const source = held && sources.get(held);
-      if (held && source && areMachineLaunchInputsEqual(held, machine)) {
+      // Presence owns recovery edges even when the raw row's timestamps mutate
+      // in place. Ordinary online heartbeats retain this same presence object.
+      const presence = serverId ? state.machinePresenceByServerId[serverId]?.[machine.id] : state.machinePresenceById[machine.id];
+      if (held && source && (!source.presence || source.presence === presence) && areMachineLaunchInputsEqual(held, machine)) {
         source.current = machine;
+        source.presence = presence;
         return held;
       }
       // Semantic launch inputs are retained, while presence follows the writer's
       // current row, including heartbeat mutations after a resource replacement.
-      const current = { current: machine };
+      const current = { current: machine, presence };
       const projected: Machine = { ...machine,
         get activeAt() { return current.current.activeAt; },
         get updatedAt() { return current.current.updatedAt; },
@@ -2359,9 +2370,9 @@ function createLaunchSelectionReconciler() {
 
 function createLaunchMachineListsReconciler() {
   const reconcileMachines = createLaunchSelectionReconciler();
-  return (previous: Record<string, Machine[] | null> | undefined, next: Record<string, Machine[] | null>): Record<string, Machine[] | null> => {
+  return (previous: Record<string, Machine[] | null> | undefined, next: Record<string, Machine[] | null>, state: StorageState): Record<string, Machine[] | null> => {
     const entries = Object.entries(next).map(([key, machines]) => [key, machines
-      ? reconcileMachines(previous?.[key] ?? undefined, machines) : machines] as const);
+      ? reconcileMachines(previous?.[key] ?? undefined, machines, state, key) : machines] as const);
     return previous && entries.length === Object.keys(previous).length && entries.every(([key, machines]) => Object.hasOwn(previous, key) && machines === previous[key])
       ? previous : Object.fromEntries(entries);
   };

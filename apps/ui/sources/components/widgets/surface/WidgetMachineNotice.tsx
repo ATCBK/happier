@@ -6,6 +6,7 @@ import { PluginUiSurfaceNoticeContext } from '@happier-dev/plugin-ui/advanced';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
+import { buildPluginDetailRoute } from '@/components/settings/plugins/model/pluginsSurfaceRoutes';
 import { MACHINES_ADD_ROUTE } from '@/components/settings/machines/collection/machineCollectionModel';
 import { storage } from '@/sync/domains/state/storageStore';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
@@ -20,7 +21,7 @@ import { t } from '@/text';
  * claims the sentence and says it in its own place with its own action, so only the part that needed
  * the Machine changes; while nothing claims it (an optional part failed quietly), the host says it as
  * one line above the body, with one action, Retry, which asks the body afresh. When no Machine exists at
- * all, retrying cannot help, so the one action is the way forward — adding a machine — in either place.
+ * all, retrying cannot help, so the one action is the way forward — adding a machine, or opening the plugin when machines exist but none runs it — in either place.
  */
 export function WidgetMachineNoticeBoundary(props: Readonly<{ testID: string; children: React.ReactNode }>): React.ReactElement {
     const [source, setSource] = React.useState<WidgetFrameBodyNoticeSource | null>(null);
@@ -44,9 +45,12 @@ export function WidgetMachineNoticeBoundary(props: Readonly<{ testID: string; ch
     // Primitive selections keep each snapshot stable by value while the stores change.
     const sentence = useStore(storage, () => source?.()?.sentence ?? null);
     const addMachine = useStore(storage, () => source?.()?.addMachine === true);
+    const managePluginId = useStore(storage, () => source?.()?.managePluginId ?? null);
     const action = React.useMemo(() => addMachine
         ? { label: t('settings.addMachine'), onPress: () => { runGuardedNavigation(() => router.push(MACHINES_ADD_ROUTE as never)); } }
-        : undefined, [addMachine, router]);
+        : managePluginId
+            ? { label: t('settingsPlugins.managePlugin'), onPress: () => { runGuardedNavigation(() => router.push(buildPluginDetailRoute('settings', managePluginId) as never)); } }
+            : undefined, [addMachine, managePluginId, router]);
     const surfaceNotice = React.useMemo(
         () => (sentence === null ? null : { sentence, claim, ...(action ? { action } : {}) }),
         [sentence, claim, action],

@@ -12215,12 +12215,24 @@ describe('Composer physical surface mount', () => {
         }), undefined);
     });
 
-    it('keeps equivalent Composer requests on one physical RN controller, ignores aggregate projection changes, and retires on occurrence replacement', async () => {
+    it.each(['standalone', 'overview', 'footer'] as const)('keeps equivalent %s Composer requests on one physical RN controller across Machine Ask hide/reveal and retires on occurrence replacement', async placement => {
         reactNativeSurfaceProps.length = 0;
+        let mounts = 0;
+        let unmounts = 0;
+        function AskPluginRegion() {
+            React.useEffect(() => { mounts += 1; return () => { unmounts += 1; }; }, []);
+            return React.createElement('View', { testID: 'machine-ask-plugin-region' });
+        }
+        reactNativeSurfaceRuntime.enabled = true;
+        reactNativeSurfaceRuntime.module = { renderSurface: () => <AskPluginRegion /> };
         const contribution = Object.freeze({ pluginId: 'acme.browser', localId: 'summary' });
         const rendererIdentity = Object.freeze({ pluginId: 'acme.browser', localId: 'native-panel' });
-        const composerRef = Object.freeze({ kind: 'session' as const, sessionId: 'session-composer-stability' });
-        const physicalTarget = Object.freeze({ kind: 'session' as const, sessionId: composerRef.sessionId });
+        const composerRef = placement === 'standalone'
+            ? Object.freeze({ kind: 'session' as const, sessionId: 'session-composer-stability' })
+            : Object.freeze({ kind: 'newSession' as const, instanceId: 'machine-ask-composer-stability' });
+        const physicalTarget = composerRef.kind === 'session'
+            ? Object.freeze({ kind: 'session' as const, sessionId: composerRef.sessionId })
+            : Object.freeze({ kind: 'app' as const });
         const parentLifetime = Object.freeze({
             isCurrent: () => true,
             onRetire: () => Object.freeze({ dispose() {} }),
@@ -12269,6 +12281,19 @@ describe('Composer physical surface mount', () => {
             throw new Error('expected generated Composer RN artifact runtime');
         }
         const { ComposerPluginSurface } = await import('@/components/sessions/presentation/ComposerPluginSurface');
+        const { MachinePageTabBodies } = await import('@/components/machines/page/MachinePageTabBodies');
+        type TabEntry = import('@/components/machines/page/machinePageTabs').MachinePageTabEntry;
+        // These are the two existing Ask placements. Keep the real Composer and
+        // host/controller below the Machine retention owner; only the renderer
+        // module loader is the suite's existing platform boundary.
+        const AskRegionContext = React.createContext<React.ReactNode>(null);
+        function OverviewAskRegion() { return React.useContext(AskRegionContext); }
+        function EmptyBody() { return null; }
+        const tabs: readonly TabEntry[] = [
+            { id: 'overview', titleKey: 'machineDetailPage.tabs.overview', Body: placement === 'overview' ? OverviewAskRegion : EmptyBody, parseParams: () => ({ id: 'overview' }) },
+            { id: 'processes', titleKey: 'machineProcesses.tab', Body: EmptyBody, parseParams: () => ({ id: 'processes' }) },
+        ];
+        const body = { serverId: 'server-a', machineId: 'machine-compose', machineName: 'Studio', online: true, setParams() {} };
         const requestFor = (occurrenceId: string) => Object.freeze({
             contribution: Object.freeze({ ...contribution }),
             occurrenceId,
@@ -12322,20 +12347,30 @@ describe('Composer physical surface mount', () => {
             occurrenceId: string,
             projectionGeneration: number,
             catalogEntry = catalogEntryFor(occurrenceId, projectionGeneration),
-        ) => (
-            <ComposerPluginSurface
-                request={requestFor(occurrenceId)}
-                physicalTarget={physicalTarget}
-                projectionGeneration={projectionGeneration}
-                catalogEntries={[catalogEntry]}
-                pluginProjectionById={{}}
-                pluginProjectionV2={rawProjectionFor(projectionGeneration)}
-                machineId="machine-compose"
-                serverId="server-a"
-                parentLifetime={parentLifetime}
-                transactionApplier={transactionApplier as never}
-            />
-        );
+            active = true,
+        ) => {
+            const composer = (
+                <ComposerPluginSurface
+                    request={requestFor(occurrenceId)}
+                    physicalTarget={physicalTarget}
+                    projectionGeneration={projectionGeneration}
+                    catalogEntries={[catalogEntry]}
+                    pluginProjectionById={{}}
+                    pluginProjectionV2={rawProjectionFor(projectionGeneration)}
+                    machineId="machine-compose"
+                    serverId="server-a"
+                    parentLifetime={parentLifetime}
+                    transactionApplier={transactionApplier as never}
+                />
+            );
+            if (placement === 'standalone') return composer;
+            const id = (placement === 'overview') === active ? 'overview' : 'processes';
+            return <AskRegionContext.Provider value={composer}>
+                <MachinePageTabBodies tabs={tabs} active={{ entry: tabs.find(tab => tab.id === id)!, params: { id } }}
+                    body={body} barAccessoriesInBar={false}
+                    footer={placement === 'footer' ? composer : null} footerShown={id !== 'overview'} />
+            </AskRegionContext.Provider>;
+        };
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         let observation: Readonly<{ dispose(): void }> | undefined;
         try {
@@ -12351,8 +12386,25 @@ describe('Composer physical surface mount', () => {
 
             const observed = vi.fn();
             observation = await initialHostApi.watchComposer(composerRef, observed);
-            const observationsBeforeEquivalentRefresh = observed.mock.calls.length;
             const rendersBeforeEquivalentRefresh = reactNativeSurfaceProps.length;
+
+            if (placement !== 'standalone') {
+                await vi.waitFor(() => expect(screen!.findByTestId('machine-ask-plugin-region')).not.toBeNull());
+                const region = screen.findHostByTestId('machine-ask-plugin-region');
+                await screen.update(renderComposer('composer-generation-a', 44, undefined, false));
+                expect(initialSignal.aborted).toBe(false);
+                snapshot = Object.freeze({ ...snapshot, revision: 2, text: 'Machine Ask changed while hidden' });
+                await act(async () => { notifyComposerPresentationTargetChanged(composerRef); });
+                await vi.waitFor(() => expect(observed).toHaveBeenLastCalledWith(snapshot));
+                await screen.update(renderComposer('composer-generation-a', 44));
+                const revealed = reactNativeSurfaceProps.at(-1) as typeof initialProps;
+                expect(revealed.renderContext?.signal).toBe(initialSignal);
+                expect(revealed.renderContext?.hostApi).toBe(initialHostApi);
+                await expect(initialHostApi.readComposer(composerRef)).resolves.toEqual({ status: 'ready', snapshot });
+                expect(screen.findHostByTestId('machine-ask-plugin-region')).toBe(region);
+                expect({ mounts, unmounts }).toEqual({ mounts: 1, unmounts: 0 });
+            }
+            const observationsBeforeRefresh = observed.mock.calls.length;
 
             // Scope renderers rebuild request and catalog object graphs on an
             // ordinary parent render. Their equal semantic facts must retain
@@ -12365,12 +12417,12 @@ describe('Composer physical surface mount', () => {
             expect(equivalentProps.renderContext?.signal).toBe(initialSignal);
             expect(initialSignal.aborted).toBe(false);
 
-            snapshot = Object.freeze({ ...snapshot, revision: 2, text: 'equivalent request stayed subscribed' });
+            snapshot = Object.freeze({ ...snapshot, revision: snapshot.revision + 1, text: 'equivalent request stayed subscribed' });
             await act(async () => {
                 notifyComposerPresentationTargetChanged(composerRef);
                 await Promise.resolve();
             });
-            await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(observationsBeforeEquivalentRefresh + 1));
+            await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(observationsBeforeRefresh + 1));
             expect(observed).toHaveBeenLastCalledWith(snapshot);
 
             // Catalog payloads include artifact/runtime graphs. A parent layout
@@ -12422,6 +12474,10 @@ describe('Composer physical surface mount', () => {
             expect(projectionReplacementProps.renderContext?.hostApi).toBe(generationReplacementHostApi);
             expect(projectionReplacementProps.renderContext?.signal).toBe(generationReplacementSignal);
             expect(generationReplacementSignal?.aborted).toBe(false);
+            await screen.unmount();
+            screen = undefined;
+            expect(generationReplacementSignal?.aborted).toBe(true);
+            expect(unmounts).toBe(mounts);
         } finally {
             observation?.dispose();
             await screen?.unmount();

@@ -186,6 +186,10 @@ export type BoundPluginSurfaceFacts = Readonly<{
     machineId?: string | null;
     /** Presentation-only label from the existing machine display projection. */
     machineDisplayName?: string | null;
+    /** Whether this Home has any machine at all, so "none can run it" is not worded as "add a machine". */
+    homeHasMachines?: boolean;
+    /** The plugin's display name, for sentences that name it. */
+    pluginDisplayName?: string | null;
     /** Presentation consumes Administration's decision; absence of a pin is not a decision. */
     executionOriginSelectionKind?: PluginMachineExecutionOriginStateV1['kind'];
     serverId?: string | null;
@@ -1185,6 +1189,11 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         if (!machineId) {
             const kind = input.facts.executionOriginSelectionKind;
             if (kind === 'selectionRequired' || kind === 'conflict') return { sentence: t('settingsPlugins.targetSelection.selectionRequired') };
+            // Machines exist but none runs this plugin: name that and lead to the plugin, not to adding a machine.
+            const plugin = input.facts.pluginDisplayName?.trim();
+            if (kind === 'unavailable' && input.facts.homeHasMachines === true && plugin) {
+                return { sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin }), managePluginId: input.facts.pluginId };
+            }
             // No Machine can run it at all: say what to do, and lead to doing it, not "this machine" cannot.
             if (kind === 'unavailable') return { sentence: t('settingsPlugins.targetSelection.noMachine'), addMachine: true };
         }
