@@ -82,6 +82,13 @@ validation. A pending replacement retains launch ownership; the replacement
 consumes the canonical Pending row under its existing local-id deduplication.
 This adds no input queue, retry, timer or restart state.
 
+The foreground Pending consumer honours the materialization owner's retry delay
+for the same retained claim until settlement or caller cancellation. Repeated
+uncertain acknowledgements do not exhaust a separate consumer retry allowance
+or require a new Pending event. Results without a retry hint still wait for the
+existing queue, metadata or connection wake; input is never enqueued again to
+recover a lost settlement receipt. This is 0.3 development-source behavior.
+
 In 0.3 development source, Role, prompt Artifact and Session Project association
 preparation classify Home read failures through the shared endpoint policy.
 Network, timeout and retryable HTTP failures publish the existing
@@ -1560,6 +1567,14 @@ work-state publisher as later controls; no pending-objective store is added.
 A missing native thread retains the unavailable result and names the
 `native_effect` failure phase.
 
+On native Codex resume, the Goal source reads `thread/goal/get` before accepting
+empty-state notifications. The resume response has no Goal field, and initial
+absence before that read cannot clear a retained Goal. An explicit `goal: null`
+read or a subsequent native clear publishes an empty source snapshot through
+the same SDK work-state publisher. Missing or malformed Goal payloads leave the
+retained projection intact. This is development-source behavior; the composed
+Stop/Resume replay remains required on the loaded runner.
+
 In 0.3 development source, the Session metadata publication owner and the
 inactive daemon's work-state delivery compare the effective Goal before and after
 the successful work-state commit, including a clear. Both use the same effective-Goal
@@ -1694,7 +1709,17 @@ deadline or unavailable transaction returns the typed `retryable` refusal. The
 existing reconciler retains the accepted request and retries its ACK at the next
 preparation boundary, suppressing another delivery of that accepted context while
 the refusal persists. Successful or terminally refused requests retire this local
-custody; transport loss retains the existing at-least-once recovery behavior.
+custody. For admitted originals, the provider-outcome normalizer passes its existing
+Pending acceptance promise to the correlated Follow effect. Native replay custody
+retires immediately; the reconciler joins that write before ACKing. The
+reconciler re-observes the exact admitted receipt for the current publisher
+generation after reconnect or Resume; it keeps the accepted original's represented
+prefix rather than replacing it with newer source progress. A stale generation,
+unverified acceptance or transport loss retains that original's request for the
+next preparation boundary, without another native send. No-original context-only
+wakes retain their existing at-least-once transport recovery behavior. Typed
+semantic refusals and exceptions share the server's structured ACK phase/cause
+diagnostic, without input content.
 This adds no timer or durable delivery history across a host restart.
 
 The approval reviewer is a request-scoped client of the existing permission

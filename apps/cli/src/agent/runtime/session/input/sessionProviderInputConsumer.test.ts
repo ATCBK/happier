@@ -1638,40 +1638,6 @@ describe('createSessionProviderInputConsumer', () => {
     }
   });
 
-  it('caps timer-driven ambiguous materialization rejoin at one attempt until another wake', async () => {
-    vi.useFakeTimers();
-    try {
-      const abortController = new AbortController();
-      type Mode = { id: string };
-      const materializeNextPendingMessageSafely = vi
-        .fn()
-        .mockResolvedValue({ type: 'retryable_transport' as const, retryAfterMs: 1_000 });
-      const consumer = createSessionProviderInputConsumer({
-        messageQueue: new MessageQueue2<Mode>(() => 'hash'),
-        session: {
-          waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
-          materializeNextPendingMessageSafely,
-        },
-        reconcileWhenEmpty: 'skip',
-      });
-
-      const waiting = consumer.waitForNextInput({ abortSignal: abortController.signal });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
-
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(materializeNextPendingMessageSafely).toHaveBeenCalledTimes(2);
-
-      abortController.abort();
-      await expect(waiting).resolves.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('drains through structured materialization without invoking the boolean compatibility surface', async () => {
     const popPendingMessage = vi.fn(async () => {
       throw new Error('boolean compatibility materialization must not own durable retries');
