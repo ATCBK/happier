@@ -1,4 +1,4 @@
-import { on } from 'node:events';
+import { EventEmitter, on } from 'node:events';
 import { statSync, watch } from 'node:fs';
 import { lstat, stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
@@ -73,6 +73,70 @@ async function isFileSymlink(file: string): Promise<boolean> {
     }
 }
 
+type DirectoryObservation = {
+    identity: string | null;
+    watcher: ReturnType<typeof watch>;
+    subscribers: Map<string | null, Set<EventEmitter>>;
+};
+
+const directoryObservations = new Map<string, DirectoryObservation>();
+
+/** Native transcript files share parent observation, not delivery or recovery. */
+function observeDirectory(directory: string, directoryVersion: string, targetName: string | null) {
+    let observation = directoryObservations.get(directory);
+    if (!observation || observation.identity !== identity(directoryVersion)) {
+        const next: DirectoryObservation = {
+            identity: identity(directoryVersion),
+            watcher: watch(directory, { persistent: true }),
+            subscribers: new Map(),
+        };
+        directoryObservations.set(directory, next);
+        const forget = () => {
+            if (directoryObservations.get(directory) === next) directoryObservations.delete(directory);
+        };
+        next.watcher.on('change', (eventType, filename) => {
+            // A parent rename can replace the directory itself, so all logical
+            // watchers must revalidate its identity. Ordinary appends dispatch
+            // only to the named file and directory observers, not the corpus.
+            const name = typeof filename === 'string' && filename ? filename : null;
+            const groups = eventType === 'rename' || name === null
+                ? next.subscribers.values()
+                : [next.subscribers.get(name), next.subscribers.get(null)];
+            for (const group of groups) for (const events of group ?? []) events.emit('change', eventType, filename);
+        });
+        next.watcher.on('error', error => {
+            forget();
+            for (const group of next.subscribers.values()) for (const events of group) events.emit('error', error);
+        });
+        next.watcher.on('close', () => {
+            forget();
+            for (const group of next.subscribers.values()) for (const events of group) events.emit('close');
+        });
+        logger.debug('[FILE_WATCHER] Starting watcher');
+        observation = next;
+    }
+    const current = observation;
+    const events = new EventEmitter();
+    const group = current.subscribers.get(targetName) ?? new Set<EventEmitter>();
+    group.add(events);
+    current.subscribers.set(targetName, group);
+    let active = true;
+    return {
+        events,
+        close() {
+            if (!active) return;
+            active = false;
+            group.delete(events);
+            if (group.size === 0) current.subscribers.delete(targetName);
+            events.emit('close');
+            if (current.subscribers.size === 0) {
+                if (directoryObservations.get(directory) === current) directoryObservations.delete(directory);
+                current.watcher.close();
+            }
+        },
+    };
+}
+
 export function startFileWatcher(
     file: string,
     onFileChange: (file: string) => void | Promise<void>,
@@ -109,8 +173,9 @@ export function startFileWatcher(
                 // Watch the parent of a file so replacement/deletion keeps the
                 // same native observation. fs.watch attaches synchronously;
                 // readiness must not be reported before native attachment.
-                const watcher = watch(watchedDirectory, { persistent: true });
-                closeWatcher = () => watcher.close();
+                const parent = observeDirectory(watchedDirectory, directoryVersion, isDirectory ? null : targetName);
+                const watcher = parent.events;
+                closeWatcher = () => parent.close();
                 const events = on(watcher, 'change', {
                     signal: abortController.signal,
                     close: ['close'],
@@ -123,7 +188,7 @@ export function startFileWatcher(
                 closeWatcher = () => {
                     closing = true;
                     targetWatcher?.close();
-                    watcher.close();
+                    parent.close();
                 };
                 targetWatcher?.on('change', (eventType) => {
                     if (!closing) watcher.emit('change', eventType, targetName);
@@ -136,10 +201,9 @@ export function startFileWatcher(
                 });
                 abortController.signal.addEventListener('abort', closeWatcher, { once: true });
                 if (abortController.signal.aborted) {
-                    watcher.close();
+                    closeWatcher();
                     return;
                 }
-                logger.debug('[FILE_WATCHER] Starting watcher');
                 const attachedEntry = await readEntry(file);
                 if (abortController.signal.aborted) return;
                 const currentVersion = attachedEntry ? version(attachedEntry) : null;
