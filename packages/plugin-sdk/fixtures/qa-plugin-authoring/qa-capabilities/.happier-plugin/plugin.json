@@ -1,0 +1,109 @@
+{
+  "contributes": {
+    "accountCollections": [],
+    "actions": [],
+    "agents": [
+      {
+        "capabilities": {
+          "sessions": {
+            "cancel": true,
+            "delivery": [
+              "newTurn"
+            ],
+            "open": [
+              "create",
+              "resume"
+            ]
+          }
+        },
+        "id": "session-agent",
+        "primary": "sessions",
+        "runtime": {
+          "kind": "custom"
+        },
+        "title": "QA capabilities"
+      }
+    ],
+    "atmospherePictures": [],
+    "backgroundServices": [],
+    "browserActions": [],
+    "browserTargets": [],
+    "captureSources": [],
+    "commands": [],
+    "composerAttachments": [],
+    "composerControls": [],
+    "composerReferences": [],
+    "composerRegions": [],
+    "connectedAccountDescriptors": [],
+    "daemonDatabases": [],
+    "dragSources": [],
+    "dropTargets": [],
+    "events": [],
+    "executionRunProfiles": [],
+    "hooks": [],
+    "inputTypes": [],
+    "machineProvisioners": [],
+    "managedDependencies": [],
+    "mcp": {
+      "discoverySources": [],
+      "servers": [
+        {
+          "description": "A deterministic read-only tool for external plugin QA.",
+          "id": "fixture-tools",
+          "kind": "dynamic",
+          "sessionScope": "global",
+          "title": "Capability fixture tools"
+        }
+      ]
+    },
+    "notificationChannels": [],
+    "notifications": [],
+    "openableContentViewers": [],
+    "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
+    "promptAssets": [],
+    "providers": [],
+    "registrySources": [],
+    "requestInterceptors": [],
+    "resources": [],
+    "roles": [],
+    "scmBackends": [],
+    "scmHostingProviders": [],
+    "searchProviders": [],
+    "sessionHeaderActions": [],
+    "sessionInfoSections": [],
+    "settings": [],
+    "systemTools": [],
+    "targetedPluginContributions": [],
+    "tools": [],
+    "transcriptActivities": [],
+    "ui": {
+      "renderers": [],
+      "settingsGroups": [],
+      "settingsPages": [],
+      "translations": [],
+      "views": []
+    },
+    "voiceModelPacks": [],
+    "voiceProviders": [],
+    "webhooks": [],
+    "workflows": []
+  },
+  "description": "QA capabilities custom Session Agent.",
+  "displayName": "QA capabilities",
+  "entrypoints": {
+    "daemon": "./dist/index.js",
+    "development": "./src/index.ts"
+  },
+  "hostAccess": {
+    "optional": [],
+    "required": []
+  },
+  "id": "qa.capabilities",
+  "runtime": {
+    "apiVersion": 1
+  },
+  "schemaVersion": 2,
+  "secrets": [],
+  "version": "0.1.0"
+}
