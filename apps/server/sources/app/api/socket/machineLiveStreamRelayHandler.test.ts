@@ -150,6 +150,54 @@ describe('machineLiveStreamRelayHandler observability', () => {
     vi.resetModules();
   });
 
+  it.each(['plain', 'e2ee'] as const)('delivers static-page metadata after its media cadence is full (%s)', async mode => {
+    const { machineLiveStreamRelayHandler } = await import('./machineLiveStreamRelayHandler');
+    const source = createFakeSocket({ id: 'metadata-source' });
+    source.data = { clientType: 'machine-scoped', verifiedMachineInstallationId: TEST_MACHINE_INSTALLATION_ID,
+      machineId: 'machine-source' };
+    const viewer = createFakeSocket({ id: 'metadata-viewer' });
+    viewer.data = { clientType: 'machine-scoped', verifiedMachineInstallationId: TEST_MACHINE_INSTALLATION_ID,
+      machineId: 'machine-target' };
+    const emitted: MachineLiveStreamFrameV1[] = [];
+    const caps = liveStreamCaps({ maxFramesPerSecond: 1, maxTotalBytes: 128_000 });
+    const context = { io: { to: () => ({ emit: (_event: string, raw: unknown) => {
+      const envelope = raw as { message: { kind: string; frame?: MachineLiveStreamFrameV1 } };
+      if (envelope.message.kind === 'frame' && envelope.message.frame) emitted.push(envelope.message.frame);
+    } }) }, resolveAccountEncryptionMode: async () => mode,
+      serverRoutedLiveStreamEnabled: true, relayCaps: { ...relayCaps, ...caps }, relayAuthorizationTrustRoots, nowMs: () => 1_000 };
+    machineLiveStreamRelayHandler('user-1', source as unknown as LiveStreamRelaySocket, context);
+    machineLiveStreamRelayHandler('user-1', viewer as unknown as LiveStreamRelaySocket, context);
+    const send = getSocketHandler(source, MACHINE_LIVE_STREAM_SOCKET_EVENT);
+    const receive = getSocketHandler(viewer, MACHINE_LIVE_STREAM_SOCKET_EVENT);
+    const envelope = (message: unknown) => ({ v: 1, sourceMachineId: 'machine-source', targetMachineId: 'machine-target', message });
+    try {
+      await send(startMessage('stream_1', undefined, caps));
+      // One page picture exhausts the configured image cadence. All later observations
+      // are controller metadata on the existing frame carrier, with no repaint.
+      for (let sequence = 1; sequence <= 10; sequence += 1) {
+        await send(envelope({ kind: 'frame', frame: frame({ sequence,
+          payloadKind: sequence === 1 ? 'image_keyframe' : 'metadata',
+          ...(mode === 'e2ee' ? { payload: { t: 'encrypted', c: payloadBase64ForBytes(3) } } : {}) }) }));
+      }
+      // The same picture remains in flight: status delivery cannot wait for video
+      // credit or cause a metadata-only burst to request another keyframe.
+      expect(emitted.map(value => [value.sequence, value.payloadKind])).toEqual([
+        [1, 'image_keyframe'], ...Array.from({ length: 9 }, (_, index) => [index + 2, 'metadata']),
+      ]);
+      expect(source.emit).not.toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR,
+        expect.objectContaining({ error: 'max_frames_per_second_exceeded' }));
+      await receive(envelope({ kind: 'control', control: { v: 1, streamId: 'stream_1', kind: 'ack', nextSequence: 11 } }));
+      // Metadata does not consume image cadence, but a second picture still does.
+      await send(envelope({ kind: 'frame', frame: frame({ sequence: 11,
+        ...(mode === 'e2ee' ? { payload: { t: 'encrypted', c: payloadBase64ForBytes(3) } } : {}) }) }));
+      expect(source.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR,
+        expect.objectContaining({ error: 'max_frames_per_second_exceeded' }));
+    } finally {
+      await getSocketHandler(source, 'disconnect')();
+      await getSocketHandler(viewer, 'disconnect')();
+    }
+  });
+
   it('refuses an invalid receipt before reading its routing data', async () => {
     const { machineLiveStreamRelayHandler } = await import('./machineLiveStreamRelayHandler');
     const socket = createFakeSocket({ emit: vi.fn(), id: 'invalid-receipt-source' });
