@@ -13,6 +13,14 @@ const binding: SessionProviderBindingMetadataV1 = {
 };
 
 describe('presentSessionProviderBinding', () => {
+    it.each([
+        ['agent_timeout', 'settingsProviders.errors.machineTimeoutTitle'],
+        ['provider_catalog_unavailable', 'settingsProviders.errors.genericTitle'],
+        ['provider_endpoint_unavailable', 'settingsProviders.errors.unreachableTitle'],
+    ] as const)('keeps a binding-status %s distinct from an inference outage', (code, titleKey) => {
+        expect(presentSessionProviderBinding({ binding, status: null, error: createProviderErrorV1(code) }).banner)
+            .toMatchObject({ kind: 'status-error', action: 'retry', errorPresentation: { titleKey } });
+    });
     it('names a same-name source once from the applied snapshot', () => {
         expect(presentSessionProviderBinding({ binding: { ...binding, displaySnapshot: {
             ...binding.displaySnapshot, providerName: 'QA custom live', connectionName: ' qa custom live ',
