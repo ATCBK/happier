@@ -1,12 +1,14 @@
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { act } from 'react-test-renderer';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, type HomeDomainAnswer } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { buildServerFeaturesResponse, stubServerFeaturesFetch, stubServerFeaturesFetchFailure } from './serverFeaturesTestUtils';
+import { buildServerFeaturesResponse } from './serverFeaturesTestUtils';
 import { renderHookAndCollectValues } from './serverFeatureHookHarness.testHelpers';
 import { resetServerFeaturesClientForTests, getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getStorage } from '@/sync/domains/state/storage';
@@ -18,16 +20,15 @@ beforeAll(loadSyncSingletonForTests);
 
 
 const homes = createHomeGovernanceHarness();
+function answerFeatureProbe(serverId: string, answer: HomeDomainAnswer): void {
+    homes.answer(serverId, '/v1/features', answer);
+    homes.answer(serverId, '/v1/features/authenticated', answer);
+}
 beforeEach(async () => {
     await homes.reset();
     const { getStorage } = await import('@/sync/domains/state/storage');
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     getStorage().setState({ settings: { ...settingsDefaults }, settingsScope: null });
-    // Device credential reads are the OS boundary; selection and usable-Home policy stay real.
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (serverUrl) => {
-        const token = homes.findByServerUrl(serverUrl)?.token;
-        return token ? { token } : null;
-    });
     const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
     await updateEffectiveHomeViewState(() => ({
         version: 1, groups: [], activeTargetKind: null, activeTargetId: null,
@@ -56,19 +57,8 @@ describe('useFeatureDecision', () => {
             featureToggles: { automations: true },
         });
 
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async (url: RequestInfo | URL) => {
-                const href = url instanceof Request ? url.url : String(url);
-                if (href.includes('a.example')) {
-                    return Response.json(buildServerFeaturesResponse({ automationsEnabled: true }));
-                }
-                if (href.includes('b.example')) {
-                    return Response.json(buildServerFeaturesResponse({ automationsEnabled: false }));
-                }
-                return Response.json(buildServerFeaturesResponse({ automationsEnabled: true }));
-            }),
-        );
+        answerFeatureProbe(serverAId, { body: buildServerFeaturesResponse({ automationsEnabled: true }) });
+        answerFeatureProbe(serverBId, { body: buildServerFeaturesResponse({ automationsEnabled: false }) });
 
         await getServerFeaturesSnapshot({ serverId: serverAId, force: true });
         await getServerFeaturesSnapshot({ serverId: serverBId, force: true });
@@ -83,7 +73,8 @@ describe('useFeatureDecision', () => {
     }, 30_000);
 
     it('returns enabled decision when the feature is available', async () => {
-        await stubServerFeaturesFetch({ voiceEnabled: true });
+        const serverId = await homes.addHome({ serverUrl: 'https://features.test', name: 'Features', accountId: 'account-features' });
+        answerFeatureProbe(serverId, { body: buildServerFeaturesResponse({ voiceEnabled: true }) });
 
         getStorage().getState().applySettingsLocal({ experiments: true, featureToggles: { voice: true } });
 
@@ -170,10 +161,8 @@ describe('useFeatureDecision', () => {
     });
 
     it('returns unsupported when the features endpoint is missing', async () => {
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async () => Response.json({}, { status: 404 })),
-        );
+        const serverId = await homes.addHome({ serverUrl: 'https://features.test', name: 'Features', accountId: 'account-features' });
+        answerFeatureProbe(serverId, { body: {}, status: 404 });
 
         getStorage().getState().applySettingsLocal({ experiments: true, featureToggles: { voice: true } });
 
@@ -187,7 +176,8 @@ describe('useFeatureDecision', () => {
     }, 30_000);
 
     it('returns unknown when probing features fails', async () => {
-        await stubServerFeaturesFetchFailure();
+        const serverId = await homes.addHome({ serverUrl: 'https://features.test', name: 'Features', accountId: 'account-features' });
+        answerFeatureProbe(serverId, { dispatchThenFail: true });
 
         getStorage().getState().applySettingsLocal({ experiments: true, featureToggles: { voice: true } });
 
