@@ -938,6 +938,7 @@ describe('editor workflow composer', () => {
         if (!onChangeProjectTarget) throw new Error('Missing workflow Project target handler');
         await act(async () => onChangeProjectTarget({ machineId: 'machine-1', directory: '/repo' }));
         await screen.pressByTestIdAsync('workflow-editor-save');
+        await vi.waitFor(() => expect(body.props.saveStatus?.kind).toBe('failed'));
         expect(automationWrites(), JSON.stringify(body.props.saveStatus)).toHaveLength(1);
         expect(definitionWrites()).toHaveLength(0);
         expect(body.props.saveStatus).toMatchObject({ kind: 'failed' });
