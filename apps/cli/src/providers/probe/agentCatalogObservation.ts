@@ -458,18 +458,6 @@ export function createAgentProviderCatalogObservationService(dependencies: Reado
       const credentialRevision = `csr_${input.credential.credentialFingerprint.slice('sha256:'.length, 'sha256:'.length + 32)}`;
       const nativeDependencies: ObservationDependencies = {
         ...dependencies,
-        activatePurposeBindings: ({ subject, bindings }) => {
-          let active = true;
-          return Object.freeze({
-            subjectId: `native-catalog:${input.operationId}`,
-            isCurrent: () => active && input.isCurrent(),
-            resolvePurposeBinding: (purpose) => qualifiedPurposeKey(purpose) === qualifiedPurposeKey(input.purpose)
-              ? bindings[0] ?? null
-              : null,
-            listPurposeBindings: () => bindings,
-            dispose: () => { active = false; },
-          });
-        },
         requestAuth: {
           lookupRequestAuth: async ({ subject }) => {
             subject.registerRedaction([input.credential.accessToken]);

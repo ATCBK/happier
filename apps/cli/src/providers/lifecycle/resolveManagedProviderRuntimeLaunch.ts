@@ -17,6 +17,7 @@ import { projectPathFromModuleUrl } from '@/projectPath';
 import {
   resolveCliRuntimeAssetPath,
 } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
+import { isExecutingFirstPartySourceRuntime } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 export type PackagedRuntimeBinaryExecutableRef = Extract<
   ManagedExecutableRef,
   Readonly<{ kind: 'packaged-runtime-binary' }>
@@ -327,7 +328,15 @@ export async function resolveManagedProviderRuntimeExecutable(
     })) {
       return null;
     }
-    if (dependencies.installedPluginGenerationRuntimeRoot === undefined) {
+    const runtimeModuleUrl = dependencies.runtimeModuleUrl ?? import.meta.url;
+    // Source bundles stage current native code beside their executing graph;
+    // packaged-dist metadata belongs only to prepared distribution bytes.
+    // A source caller cannot use that distinction to borrow another root.
+    const isExactSourceRuntime = !retainedRuntimeRoot
+      && isExecutingFirstPartySourceRuntime(runtimeModuleUrl)
+      && canonicalPath(await resolveRealPath(projectPathFromModuleUrl(runtimeModuleUrl)), platform)
+        === canonicalPath(verifiedRuntimeRoot, platform);
+    if (dependencies.installedPluginGenerationRuntimeRoot === undefined && !isExactSourceRuntime) {
       const integrity = cliDistBuildManifest.readCliRuntimeAssetIntegrity({
         runtimeRoot: verifiedRuntimeRoot,
         relativePath,

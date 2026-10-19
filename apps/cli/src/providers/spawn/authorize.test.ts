@@ -650,6 +650,17 @@ describe('provider spawn authorization lifecycle', () => {
       },
       suppressedServiceIds: ['openai-codex'],
     });
+    expect(filterSuppressedConnectedServiceBindings({
+      bindings: { v: 2, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'codex-work' },
+      } },
+      suppressConnectedServiceIds: ['openai-codex'],
+    })).toEqual({ bindings: null, suppressedServiceIds: ['openai-codex'] });
+    // An empty caller selection was not cleared by Provider authority and
+    // must retain its existing distinct Account-defaulting semantics.
+    expect(filterSuppressedConnectedServiceBindings({
+      bindings: { v: 2, bindingsByServiceId: {} }, suppressConnectedServiceIds: ['openai-codex'],
+    })).toEqual({ bindings: { v: 2, bindingsByServiceId: {} }, suppressedServiceIds: [] });
   });
 
   it('revalidates before decrypt/materialize and again before commit without rerunning side effects', async () => {

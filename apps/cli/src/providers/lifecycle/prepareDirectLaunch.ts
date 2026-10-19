@@ -57,6 +57,7 @@ export type DirectProviderLaunchResult =
       launchMaterialization: AgentProviderBindingLaunchMaterializationV1;
       bindingMetadata: SessionProviderBindingMetadataV1;
       sanitizeDiagnosticText: (value: string) => string;
+      additionalRedactionValues: readonly string[];
       revalidateBeforeCommit: () => Promise<Readonly<
         { ok: true } | { ok: false; error: ProviderErrorV1 }
       >>;
@@ -242,6 +243,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
       launchMaterialization: materialized.materialization.launchMaterialization,
       bindingMetadata: attempt.authorization.sessionBindingMetadata,
       sanitizeDiagnosticText,
+      additionalRedactionValues: materialized.redactionLease.values(),
       revalidateBeforeCommit,
       transferLaunchMaterializationCleanupOwnership,
       cleanupOnExit,

@@ -64,14 +64,13 @@ export async function awaitWithinProviderOperation<T>(
   lifetime: ProviderOperationLifetime,
   now: () => number = Date.now,
 ): Promise<T> {
-  if (lifetime.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
-  const remainingMs = providerOperationRemainingMs(lifetime, now);
-  if (remainingMs <= 0) throw new ProviderOperationAbandonedError('deadline');
-
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const signal = lifetime.signal;
   try {
+    if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+    const remainingMs = providerOperationRemainingMs(lifetime, now);
+    if (remainingMs <= 0) throw new ProviderOperationAbandonedError('deadline');
     return await Promise.race([
       work,
       new Promise<never>((_resolve, reject) => {

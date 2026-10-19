@@ -13,7 +13,7 @@ import type { DaemonProviderDraftProbeRequestV1 } from '@happier-dev/protocol/rp
 
 import { configuration } from '@/configuration';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
-import { resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
+import { readProviderModelNameCatalog, resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
 import {
   resolveProviderConnectionForMachine,
   resolveProviderConnectionForMachineFromSettingsRead,
@@ -30,9 +30,10 @@ import { projectProviderCatalogPresentation } from '@/providers/catalog';
 import { createProviderRuntimeStateStore, type ProviderRuntimeStateStore } from '@/providers/runtimeState';
 import { getActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
-import { prepareProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
+import { prepareProviderConnectionsCatalogForCli, refreshProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import type { SavedSecretCatalogResourceInputV1 } from '@/settings/secrets/savedSecretCatalog';
 import {
+  awaitAbortableWithinProviderOperation,
   awaitWithinProviderOperation,
   createProviderOperationLifetime,
   ProviderOperationAbandonedError,
@@ -90,6 +91,7 @@ import type {
 import type { ProviderLocalCatalogFallbackResult } from './localCommand';
 import type { ProviderProbeOperationScope } from './authorization';
 import { admitRuntimeProviderSavedSecret } from '@/providers/spawn/runtimeCredential';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import type {
   ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
@@ -148,9 +150,27 @@ export type RuntimeProviderCatalogContext =
         endpointTemplateId: string;
         endpointFingerprint: string;
       }>[];
+      catalogFingerprint: ReturnType<typeof createProviderCatalogRefreshFingerprint> | null;
       catalogRuntimeRecord: ProviderCatalogRuntimeStateRecordV1 | null;
       catalogRuntimeKey: ProviderCatalogRuntimeStateRecordV1['key'] | null;
+      modelNameCatalog?: ReturnType<typeof readProviderModelNameCatalog>;
     }>;
+
+/** Reproject observations without reopening the same immutable presentation
+ * admission after demand refresh has spent its containing operation budget. */
+export function projectProviderCatalogContextRuntimeState(
+  context: Extract<RuntimeProviderCatalogContext, { status: 'success' }>,
+  runtimeState: ProviderRuntimeStateFileV1,
+): Extract<RuntimeProviderCatalogContext, { status: 'success' }> {
+  const record = context.catalogFingerprint === null ? null : selectCurrentProviderCatalogRuntimeRecord({
+    state: runtimeState,
+    machineId: context.connection.machineId,
+    connectionId: context.connection.connectionId,
+    catalogFingerprint: context.catalogFingerprint,
+    allowedObservationAuthorizationFingerprints: context.allowedObservationAuthorizationFingerprints,
+  });
+  return { ...context, runtimeState, catalogRuntimeRecord: record, catalogRuntimeKey: record?.key ?? null };
+}
 
 export type RuntimeProviderServices = Readonly<{
   probe(
@@ -424,6 +444,23 @@ export function createRuntimeProviderServices(input: Readonly<{
       }),
     };
 
+  const refreshAmbientCatalog = async (identity: RuntimeProviderIdentity, lifetime: RuntimeProviderOperationScope['lifetime']) => {
+    if (!isProviderFeatureEnabled()) return providerFeatureDisabled(identity).error;
+    // An issued snapshot reader retains its caller's already-admitted basis.
+    if (input.getAccountSettingsSnapshot) return null;
+    const snapshot = getSnapshot();
+    if (!snapshot?.scopeKey) return createProviderErrorV1('provider_connection_not_found', identity);
+    try {
+      const catalog = await awaitWithinProviderOperation(refreshProviderConnectionsCatalogForCli({
+        expectedScopeKey: snapshot.scopeKey, signal: lifetime.signal,
+      }), lifetime);
+      return catalog.status === 'ready' ? null : createProviderErrorV1('provider_settings_invalid', identity);
+    } catch (error) {
+      if (error instanceof ProviderOperationAbandonedError) return createProviderErrorV1('provider_endpoint_unavailable', identity);
+      throw error;
+    }
+  };
+
   async function resolveConnectionContext(
     identity: Readonly<{ connectionId: string; machineId: string }>,
     scope: RuntimeProviderOperationScope,
@@ -460,7 +497,7 @@ export function createRuntimeProviderServices(input: Readonly<{
       && scope.accountSettingsBasis !== undefined
       && scope.accountSettingsBasis.scopeKey === snapshot!.scopeKey
       && scope.accountSettingsBasis.settingsVersion === snapshot!.settingsVersion
-      && scope.accountSettingsBasis.providerConnectionsCatalog === snapshot!.providerConnectionsCatalog;
+      && sameProviderConnectionsCatalogAuthority(scope.accountSettingsBasis.providerConnectionsCatalog, snapshot!.providerConnectionsCatalog);
     if (!settingsBasis && scope.accountSettingsBasis && !scopedAccountSettingsBasisIsCurrent) {
       return {
         ok: false as const,
@@ -747,7 +784,7 @@ export function createRuntimeProviderServices(input: Readonly<{
         return {
           ok: false,
           error: createProviderErrorV1(
-            'provider_probe_authorization_invalid',
+            'provider_connection_invalid',
             identity,
           ),
         };
@@ -755,7 +792,7 @@ export function createRuntimeProviderServices(input: Readonly<{
       let purposeBindingResolution;
       try {
         purposeBindingResolution =
-          await resolveManagedProviderPurposeBindingSnapshot({
+          await awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
           implementationIdentity:
             managedDeployment.implementationIdentity,
           connectedAccounts:
@@ -763,13 +800,15 @@ export function createRuntimeProviderServices(input: Readonly<{
           purposeBindingIntents:
             managedDeployment.purposeBindingIntents,
           resolveBindingIntent: resolveManagedPurposeBindingIntent,
-          signal: lifetime?.signal,
-        });
-      } catch {
+          signal,
+        }), lifetime);
+      } catch (error) {
         return {
           ok: false,
           error: createProviderErrorV1(
-            'provider_probe_authorization_invalid',
+            // A saved account/pool that cannot resolve needs connection repair;
+            // approving or restarting the same probe cannot restore that slot.
+            error instanceof ProviderOperationAbandonedError ? 'provider_endpoint_unavailable' : 'provider_connection_invalid',
             identity,
           ),
         };
@@ -1020,22 +1059,18 @@ export function createRuntimeProviderServices(input: Readonly<{
     const catalogFingerprint = request.probes.length === 0
       ? null
       : createProviderCatalogRefreshFingerprint(request);
-    const record = catalogFingerprint === null ? null : selectCurrentProviderCatalogRuntimeRecord({
-      state: runtimeState,
-      ...identity,
-      catalogFingerprint,
-      allowedObservationAuthorizationFingerprints: request.observationAuthorizationFingerprints,
-    });
-    return {
+    return projectProviderCatalogContextRuntimeState({
       status: 'success' as const,
       connection: resolved.connection,
+      modelNameCatalog: readProviderModelNameCatalog(resolved.registry),
       providerSettings: resolved.providerSettings,
       runtimeState,
       allowedObservationAuthorizationFingerprints: request.observationAuthorizationFingerprints,
       expectedEndpointObservations: expectedEndpointObservations(request),
-      catalogRuntimeRecord: record,
-      catalogRuntimeKey: record?.key ?? null,
-    };
+      catalogFingerprint,
+      catalogRuntimeRecord: null,
+      catalogRuntimeKey: null,
+    }, runtimeState);
   };
 
   const resolveCatalogContext = async (
@@ -1074,10 +1109,12 @@ export function createRuntimeProviderServices(input: Readonly<{
       return {
         status: 'success' as const,
         connection: connectionContext.value.connection,
+        modelNameCatalog: readProviderModelNameCatalog(connectionContext.value.registry),
         providerSettings: connectionContext.value.providerSettings,
         runtimeState,
         allowedObservationAuthorizationFingerprints: [] as const,
         expectedEndpointObservations: [] as const,
+        catalogFingerprint: null,
         catalogRuntimeRecord: null,
         catalogRuntimeKey: null,
       };
@@ -1101,6 +1138,8 @@ export function createRuntimeProviderServices(input: Readonly<{
 
   const lowLevelProbe = createProviderProbeRpcHandler({
     resolveSaved: async (identity, lifetime) => {
+      const unavailable = await refreshAmbientCatalog(identity, lifetime);
+      if (unavailable) throw new ProviderProbeRpcResolutionError(unavailable);
       const resolved = await resolveSaved(identity, 'catalog', { lifetime });
       if (!resolved.ok) throw new ProviderProbeRpcResolutionError(resolved.error);
       return {
@@ -1339,6 +1378,7 @@ export function createRuntimeProviderServices(input: Readonly<{
     const catalog = sourceCatalog(context.connection);
     const record = context.catalogRuntimeRecord;
     const projected = projectProviderCatalogPresentation({
+      modelNameCatalog: context.modelNameCatalog,
       staticModels: staticModels(catalog),
       ...(catalogMembershipPolicy(catalog)
         ? { membershipPolicy: catalogMembershipPolicy(catalog) }
@@ -1406,6 +1446,8 @@ export function createRuntimeProviderServices(input: Readonly<{
     machineId: input.machineId,
     models: async (identity): Promise<ProviderSavedModelsRpcResult> => {
       const operationScope = withOperationLifetime(undefined);
+      const unavailable = await refreshAmbientCatalog(identity, operationScope.lifetime);
+      if (unavailable) return { status: 'error', error: unavailable };
       const context = await resolveCatalogContext(identity, undefined, operationScope);
       if (context.status === 'error') return context;
       void scheduleDemandRefresh(identity, 'picker_open', operationScope);

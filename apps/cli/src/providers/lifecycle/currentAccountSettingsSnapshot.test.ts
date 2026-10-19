@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import {
   createAccountBoundProviderSnapshotReader,
   createAuthoritativeProviderSnapshotReader,
+  sameProviderConnectionsCatalogAuthority,
 } from './currentAccountSettingsSnapshot';
+
+it('preserves Provider row authority across cleanup reports while refusing a different row or catalog', () => {
+  const admitted = { status: 'ready' as const, revision: 4, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+  expect(sameProviderConnectionsCatalogAuthority(admitted, { ...admitted, cleanup: { status: 'complete' } })).toBe(true);
+  expect(sameProviderConnectionsCatalogAuthority(admitted, { ...admitted,
+    cleanup: { status: 'cleanup-pending', reason: 'history-incomplete' } })).toBe(true);
+  expect(sameProviderConnectionsCatalogAuthority(admitted, { ...admitted, revision: 5 })).toBe(false);
+  expect(sameProviderConnectionsCatalogAuthority(admitted, { ...admitted, catalog: { ...admitted.catalog } })).toBe(false);
+  expect(sameProviderConnectionsCatalogAuthority(admitted, { status: 'loading' })).toBe(false);
+  expect(sameProviderConnectionsCatalogAuthority(admitted, undefined)).toBe(false);
+});
 
 function snapshot(version: number, marker: string, scopeKey = 'account-a'): ActiveAccountSettingsSnapshot {
   return {

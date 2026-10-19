@@ -173,7 +173,7 @@ export async function authorizeSessionModelTransitionProviderTargetWithLease(
       : {}),
   });
   if (!result.ok) {
-    throw new Error(result.error.code);
+    throw Object.assign(new Error(result.error.code), result.error);
   }
   try {
     const authorization = result.attempt.authorization;

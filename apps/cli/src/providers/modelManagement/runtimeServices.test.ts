@@ -122,7 +122,7 @@ describe('runtime provider model-management composition', () => {
     )).toEqual(definition.catalog);
   });
 
-  it('projects exact structured refs and compatibility without exposing connection endpoints or secrets', async () => {
+  it.each(['issued', 'ambient'] as const)('projects current %s structured refs and compatibility without exposing endpoints or secrets', async custody => {
     const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
     const contributionKey = 'acme.gateway/main';
     const definition = ProviderContributionV1Schema.parse({
@@ -360,16 +360,31 @@ describe('runtime provider model-management composition', () => {
       scopeKey: resolveAccountSettingsScopeKeyForToken(token) };
     vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue({ token, encryption: null });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: { teams: { enabled: true } }, capabilities: {} }))));
-    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { resources: [{
+    const materialResponse = { status: 200, data: { resources: [{
       resourceId, encryptionMode: 'plain', recipientEnvelope: null, storedContent: savedSecretResource.storedContent,
       entry: { ref: formatSharedSavedSecretRefV1(resourceId), source: 'shared_resource', relationship: 'recipient',
         name: 'Gateway key', kind: 'apiKey', ownerAccountId: 'owner-account', revision: savedSecretResource.revision, materialStatus: 'ready',
         capabilities: { use: true, rename: false, rotate: false, manageAccess: false, delete: false } },
-    }] } });
+    }] } };
+    let observedCatalog = splitProviderSettingsV1(settings).catalog;
+    let observedRevision = 1;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+        status: 'present', revision: observedRevision, content: { t: 'plain', v: observedCatalog } } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      const history = emptyAccountSettingsHistoryCaptureResponse(path);
+      return history ?? materialResponse;
+    });
     const accountSettings = authorizedAccountSettings;
     setActiveAccountSettingsSnapshot(authorizedAccountSettings);
     const publishProviderSettings = (providerSettings: ProviderSettingsV1, revision: number) => {
       const { catalog } = splitProviderSettingsV1(providerSettings);
+      observedCatalog = catalog;
+      observedRevision = revision;
       if (!commitActiveProviderConnectionsCatalog({
         scopeKey: authorizedAccountSettings.scopeKey,
         lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
@@ -387,12 +402,22 @@ describe('runtime provider model-management composition', () => {
       resolveRegistry: async () => preparedRegistry,
       resolveAddresses: async () => ['1.1.1.1'], acquireRuntimeLease: async () => currentLease,
       client: createProviderProbeHttpClient({ resolveAddresses: async () => ['1.1.1.1'], transport }),
-      getAccountSettingsSnapshot: getActiveAccountSettingsSnapshot,
+      ...(custody === 'issued' ? { getAccountSettingsSnapshot: getActiveAccountSettingsSnapshot } : {}),
       featureGate: { isEnabled: () => true },
       modelSettingsMutation,
     });
 
+    if (custody === 'ambient') {
+      // A different client completed this row write; this daemon has no hint yet.
+      observedCatalog = { ...observedCatalog, connections: observedCatalog.connections.map(connection => ({
+        ...connection, displayName: 'Current Gateway', displayNameMode: 'custom' as const,
+      })) };
+      observedRevision += 1;
+    }
     const result = await services.projectModels({ machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' });
+    if (custody === 'ambient') expect(result).toMatchObject({ status: 'success', groups: [
+      expect.objectContaining({ connectionId, connectionName: 'Current Gateway' }),
+    ] });
     expect(executable.activateContributionsOnDemand).toHaveBeenCalledWith([{
       pluginId: 'happier.agent.codex',
       family: 'agents',
@@ -1028,6 +1053,13 @@ describe('runtime provider model-management composition', () => {
     if (warm.status !== 'success') throw new Error('Expected model projection');
     expect(warm.groups.flatMap((group) => group.rows).map((row) => row.ref.modelId))
       .toEqual(['cold-model']);
+    // The warm read intentionally returned before its refresh. Observe that
+    // actual catalog commit before replacing the store for the next scenario;
+    // otherwise the released writer can repopulate the supposedly cold store.
+    await vi.waitFor(async () => {
+      const refreshed = await runtimeStore.read();
+      expect(refreshed.catalogs[0]?.state.snapshot?.stale).toBe(false);
+    });
 
     // A cold read whose own demand refresh FAILS must return the refresh's
     // typed failure instead of a success whose group is silently missing: the
@@ -1093,6 +1125,7 @@ describe('runtime provider model-management composition', () => {
     expect(catalogSucceeded.refreshFailures).toBeUndefined();
     expect(catalogSucceeded.groups.flatMap((group) => group.rows).map((row) => row.ref.modelId))
       .toEqual(['healthy-catalog-model']);
+
   });
 
   it('submits picker demand to the sole scheduler and retains no tail the scheduler refused', async () => {

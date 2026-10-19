@@ -19,6 +19,8 @@ import {
 } from '@happier-dev/protocol';
 
 import type { ResolvedProviderConnectionRecord } from '../registry/types';
+import { parseProviderCatalogResponse } from '../probe/parsers';
+import { DaemonProviderModelProjectionRowV1Schema } from '@happier-dev/protocol/rpc/providers';
 import type { ProviderCatalogCompatibilityPresentation } from './types';
 import {
   assembleProviderConnectionCatalog,
@@ -276,6 +278,48 @@ function compatibilityMap(modelIds: readonly string[]) {
 }
 
 describe('provider catalog host assembly', () => {
+  it('projects only declared and configured Gateway slots from actual model-purpose facts through the strict picker consumer', () => {
+    const initial = managedResolvedConnection();
+    if (initial.deployment.kind !== 'managedLocal') throw new Error('Expected managed fixture');
+    const binding = initial.deployment.purposeBindingIntents.bindings[0]!;
+    const pool = { purpose: { ...binding.purpose, purpose: 'other-vendor' },
+      target: { kind: 'group' as const, service: { pluginId: 'happier.connected-account.other', localId: 'other' }, groupId: 'pool-work' } };
+    const connection: ResolvedProviderConnectionRecord = { ...initial, endpoints: [], scope: 'machine', deployment: { ...initial.deployment,
+      purposeBindingIntents: { v: 1, bindings: [binding, pool] },
+      managedRuntime: { ...initial.deployment.managedRuntime, connectedAccounts: [
+        ...initial.deployment.managedRuntime.connectedAccounts,
+        { purpose: pool.purpose.purpose, service: pool.target.service, materializationKinds: ['httpHeaders'] },
+      ] },
+    } };
+    const catalog = parseProviderCatalogResponse('openai-models', { data: [
+      { id: 'opaque-model', happier_connected_account_purposes: [binding.purpose] },
+      { id: 'shared-model', happier_connected_account_purposes: [binding.purpose, pool.purpose] },
+      { id: 'pool-model', happier_connected_account_purposes: [pool.purpose] },
+      { id: 'gpt-name-is-not-evidence' },
+      { id: 'foreign-model', happier_connected_account_purposes: [{ ...binding.purpose, purpose: 'undeclared' }] },
+    ] });
+    const assembled = assembleProviderConnectionCatalog({
+      agentTargetKey: 'agent_a', connection, providerSettings: settings(),
+      runtimeState: runtimeState({ catalogs: [catalogRecord({ models: catalog.models })] }),
+      catalogRuntimeKey: currentCatalogKey,
+      compatibilityByModelId: compatibilityMap(catalog.models.map(model => model.id)),
+    });
+    const picker = projectProviderCatalogForPicker({ catalogs: [assembled], modelVisibilityByRef: {}, sourceConnectionId: connection.connectionId });
+    const row = picker.groups[0]!.rows.find(candidate => candidate.ref.modelId === 'opaque-model')!;
+    expect(row).toMatchObject({ gatewaySlots: [binding] });
+    const consumed = DaemonProviderModelProjectionRowV1Schema.parse({
+      ref: row.ref, descriptor: row.descriptor, sources: row.sources, confidence: row.confidence,
+      gatewaySlots: Reflect.get(row, 'gatewaySlots'),
+      compatibility: { ...experimentalCompatibility, confirmed: false },
+      endpointHealth: 'not_checked', catalog: row.presentation.catalog, loadState: row.presentation.loadState, visibility: row.visibility,
+    });
+    expect(consumed).toMatchObject({ gatewaySlots: [binding] });
+    expect(picker.groups[0]!.rows.find(candidate => candidate.ref.modelId === 'shared-model')).toMatchObject({ gatewaySlots: [binding, pool] });
+    expect(picker.groups[0]!.rows.find(candidate => candidate.ref.modelId === 'pool-model')).toMatchObject({ gatewaySlots: [pool] });
+    for (const id of ['gpt-name-is-not-evidence', 'foreign-model']) {
+      expect(Reflect.get(picker.groups[0]!.rows.find(candidate => candidate.ref.modelId === id)!, 'gatewaySlots')).toBeUndefined();
+    }
+  });
   it('rejects duplicate load evidence while projecting the exact active catalog generation', () => {
     const record = catalogRecord({ models: [{ id: 'probe-current' }] });
     const duplicateLoad = {
@@ -631,6 +675,7 @@ describe('provider catalog exact-reference and picker projection', () => {
       agentTargetKey: 'codex', providerConnectionId: 'pc_a', modelId: 'vendor/never-listed',
     });
     const assemble = (agentSupportsFreeformModelIds: boolean) => assembleProviderConnectionCatalog({
+      modelNameCatalog: [{ id: 'vendor/family', name: 'Vendor Family', aliases: ['vendor/never-listed'] }],
       agentTargetKey: 'codex', connection, providerSettings: settings(connection),
       runtimeState: runtimeState({ catalogs: [catalogRecord({ models: [{ id: 'probe-current' }] })] }),
       catalogRuntimeKey: currentCatalogKey,
@@ -655,6 +700,8 @@ describe('provider catalog exact-reference and picker projection', () => {
     })).toMatchObject({ status: 'not_found', errorCode: 'provider_model_not_found' });
 
     const permitted = assemble(true);
+    expect(permitted.staleRows.find(row => row.ref.modelId === freeformRef.modelId)?.descriptor)
+      .toEqual({ id: 'vendor/never-listed', name: 'Vendor Family' });
     expect(projectProviderCatalogForPicker({
       catalogs: [permitted], modelVisibilityByRef: {}, currentSelection: freeformRef,
     }).groups[0]?.rows.map((row) => row.ref.modelId)).toContain('vendor/never-listed');

@@ -130,6 +130,7 @@ function managedRuntimeBindingBasis(
     v: 1,
     deployment: {
       kind: 'managedLocal',
+      gatewayPlacement: { kind: 'sessionMachine' },
       implementationIdentity: {
         pluginId: 'provider.test',
         localId: 'gateway',
@@ -446,12 +447,12 @@ describe('createSessionModelTransitionCoordinator', () => {
       expect(await coordinator.readAppliedTarget()).toMatchObject({ status: 'applied', target: { selection: native('X') } });
       publicationRelease.resolve();
       await applicationStarted.promise;
-      expect(await coordinator.readAppliedTarget()).toEqual({ status: 'unavailable' });
+      expect(await coordinator.readAppliedTarget()).toEqual({ status: 'unavailable', reason: 'prompt_admission_fenced' });
       applicationRelease.resolve();
       await expect(transition).resolves.toMatchObject({ ok: true, activeSelection: native('Y') });
       expect(await coordinator.readAppliedTarget()).toMatchObject({ status: 'applied', target: { selection: native('Y') } });
       current = false;
-      expect(await coordinator.readAppliedTarget()).toEqual({ status: 'unavailable' });
+      expect(await coordinator.readAppliedTarget()).toEqual({ status: 'unavailable', reason: 'run_not_current' });
     } finally {
       publicationRelease.resolve(); applicationRelease.resolve(); await coordinator.dispose();
     }

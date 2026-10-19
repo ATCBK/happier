@@ -38,6 +38,7 @@ const providersEnabledFeatureGate = Object.freeze({
 
 function createMachineServices(): RuntimeProviderOperationsProducer['machineServices'] {
   return {
+    prepareProfileMigrationSource: vi.fn(async () => { throw new Error('Unexpected Profile migration source RPC'); }),
     probe: vi.fn(async () => ({
       status: 'success' as const,
       models: [],
@@ -80,6 +81,11 @@ function createMachineServices(): RuntimeProviderOperationsProducer['machineServ
       }),
     })),
     projectModels: vi.fn(async (request) => ({
+      status: 'success' as const,
+      agentTargetKey: request.agentTargetKey,
+      groups: [],
+    })),
+    projectModelsForAccount: vi.fn(async (request) => ({
       status: 'success' as const,
       agentTargetKey: request.agentTargetKey,
       groups: [],

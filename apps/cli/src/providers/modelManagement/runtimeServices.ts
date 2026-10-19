@@ -17,13 +17,13 @@ import { projectProviderConnectionBrokerApplication } from '@/providers/broker/p
 import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import type { TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams';
 import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
-import type { ProviderContributionRegistryView } from '@/providers/registry';
+import type { ProviderContributionRegistryView, ProviderEndpointDnsEvidence } from '@/providers/registry';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { getProviderContribution } from '@/providers/registry/lookup';
-import { resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
+import { readProviderModelNameCatalog, resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
 import { createProviderProbeHttpClient } from '@/providers/probe/client';
 import { ProviderProbeAdmissionCapacityError } from '@/providers/probe/scheduler';
-import { createRuntimeProviderServices } from '@/providers/probe/runtimeServices';
+import { createRuntimeProviderServices, projectProviderCatalogContextRuntimeState } from '@/providers/probe/runtimeServices';
 import type {
   RuntimeProviderOperationScope,
   RuntimeProviderPresentationResolutionBasis,
@@ -50,7 +50,7 @@ import type { ProviderConnectionCatalog } from '@/providers/catalog';
 import { resolveProviderModelCompatibility } from '@/providers/catalog/compatibility';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
-import { prepareProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
+import { prepareProviderConnectionsCatalogForCli, refreshProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import { configuration } from '@/configuration';
 import type { ProviderModelSettingsMutationIntent } from '@/providers/connections';
 import { resolveProviderModelPickerVisibility } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
@@ -258,16 +258,17 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
   readModelProjection?: ProviderRuntimeModelProjectionReader;
   openTeamDirect?: Parameters<typeof createRuntimeProviderServices>[0]['openTeamDirect'];
 }>): RuntimeProviderModelManagementServices {
-  const readAdmittedSnapshot = async (context?: RuntimeProviderAccountModelProjectionContext) => {
+  const readAdmittedSnapshot = async (context?: RuntimeProviderAccountModelProjectionContext, signal?: AbortSignal) => {
     const readSnapshot = context?.getAccountSettingsSnapshot
       ?? input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot;
     const captured = readSnapshot();
     if (!captured?.scopeKey || !input.featureGate.isEnabled('providers')) return null;
     // An issued Account context cannot hydrate the ambient Account's catalog.
     if (context && captured.providerConnectionsCatalog?.status !== 'ready') return null;
-    const catalog = captured.providerConnectionsCatalog?.status === 'ready'
+    const catalog = captured.providerConnectionsCatalog?.status === 'ready' && (context || input.getAccountSettingsSnapshot)
       ? captured.providerConnectionsCatalog
-      : await prepareProviderConnectionsCatalogForCli({ expectedScopeKey: captured.scopeKey });
+      : await (context || input.getAccountSettingsSnapshot ? prepareProviderConnectionsCatalogForCli
+        : refreshProviderConnectionsCatalogForCli)({ expectedScopeKey: captured.scopeKey, signal });
     const snapshot = readSnapshot();
     return input.featureGate.isEnabled('providers') && catalog.status === 'ready' && snapshot?.scopeKey === captured.scopeKey
       ? snapshot : null;
@@ -369,7 +370,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       if (!await isAccountCurrent()) {
         return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
       }
-      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(accountContext), operationLifetime);
+      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
         return { status: 'error', error: createProviderErrorV1('provider_endpoint_unavailable', { machineId: request.machineId }) };
@@ -441,37 +442,15 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         lease.registry.generation,
         lease.registry.readPluginOccurrenceId,
       );
-      let dnsEvidenceByConnectionId;
-      try {
-        dnsEvidenceByConnectionId = await collectProviderConnectionsDnsEvidence({
-          connectionIds: settingsRead.settings.connections.map((connection) => connection.id),
-          machineId: request.machineId,
-          providerSettings: settingsRead.settings,
-          registry,
-          ...(input.resolveAddresses ? { resolveAddresses: input.resolveAddresses } : {}),
-          admitResolution: sharedRuntime.probeInfrastructure.scheduler.runDns,
-          isCurrent: () => input.featureGate.isEnabled('providers'),
-          lifetime: operationLifetime,
-        });
-      } catch (error) {
-        if (error instanceof ProviderProbeAdmissionCapacityError) {
-          return {
-            status: 'error',
-            error: createProviderErrorV1('provider_probe_capacity_exhausted', {
-              machineId: request.machineId,
-            }),
-          };
-        }
-        if (error instanceof ProviderOperationAbandonedError) {
-          return {
-            status: 'error',
-            error: createProviderErrorV1('provider_endpoint_unavailable', {
-              machineId: request.machineId,
-            }),
-          };
-        }
-        throw error;
-      }
+      const modelNameCatalog = readProviderModelNameCatalog(registry);
+      // Exact-source browse and launch admission must not resolve DNS, purpose
+      // bindings or catalogs belonging to an unrelated connection.
+      const connections = settingsRead.settings.connections.filter(connection => (
+        (!request.sourceConnectionId || connection.id === request.sourceConnectionId)
+        && (!request.providerConnection || connection.id === request.providerConnection.connectionId)
+      ));
+      const resolutionFailures = new Map<ProviderConnectionId, DaemonProviderModelProjectionRefreshFailureV1['error']>();
+      const dnsEvidenceByConnectionId = new Map<string, ProviderEndpointDnsEvidence>();
       const operationScope: RuntimeProviderOperationScope = {
         registry,
         dnsEvidenceByConnectionId,
@@ -507,7 +486,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         settingsRead,
         ...(accountContext ? { resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } : {}),
       });
-      const assemble = async (runtimeState: ProviderRuntimeStateFileV1) => {
+      const indexRuntimeState = (runtimeState: ProviderRuntimeStateFileV1) => {
         // This projection is a single point-in-time read. Index the immutable
         // runtime snapshot once, then give each connection only its own rows.
         // The canonical selectors and assemblers still make every semantic
@@ -530,7 +509,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         for (const row of runtimeState.modelLoadStates) {
           append(modelLoadStatesByConnectionId, row.key.connectionId, row);
         }
-        const runtimeStateForConnection = (connectionId: string): ProviderRuntimeStateFileV1 => ({
+        return (connectionId: string): ProviderRuntimeStateFileV1 => ({
           ...runtimeState,
           endpointHealth: endpointHealthByConnectionId.get(connectionId) ?? [],
           catalogs: catalogsByConnectionId.get(connectionId) ?? [],
@@ -539,21 +518,63 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           installationChecks: [],
           modelLoadStates: modelLoadStatesByConnectionId.get(connectionId) ?? [],
         });
-        // DNS and canonical connection resolution are independent across this
-        // immutable settings basis. Resolve them together; Promise.all retains
-        // settings order, and no consumer queue competes with the sole probe
-        // scheduler that owns later refresh admission.
-        const resolvedContexts = await Promise.all(settingsRead.settings.connections.map(async (connection) => {
+      };
+      const initialRuntimeState = await sharedRuntime.runtimeStore.read();
+      const initialRuntimeStateForConnection = indexRuntimeState(initialRuntimeState);
+      // Resolve the immutable Account/registry basis once per source. A slow
+      // source spends the existing operation budget, and only that source is
+      // refused; successful admissions survive the later observation refresh.
+      const resolvePresentationContext = async (connection: (typeof settingsRead.settings.connections)[number]) => {
+        const identity = { connectionId: connection.id, machineId: request.machineId };
+        const failure = resolutionFailures.get(connection.id);
+        if (failure) return { connection, context: { status: 'error' as const, error: failure } };
+        try {
+          const context = await awaitWithinProviderOperation(sharedRuntime.resolvePresentationCatalogContext(
+            identity, initialRuntimeStateForConnection(connection.id), operationScope, presentationSettingsBasis,
+          ), operationLifetime);
+          if (context.status === 'error') resolutionFailures.set(connection.id, context.error);
+          return { connection, context };
+        } catch (error) {
+          if (!(error instanceof ProviderOperationAbandonedError)) throw error;
+          const failure = createProviderErrorV1('provider_endpoint_unavailable', identity);
+          resolutionFailures.set(connection.id, failure);
+          return { connection, context: { status: 'error' as const, error: failure } };
+        }
+      };
+      const connectionsById = new Map<string, (typeof connections)[number]>(connections.map(connection => [connection.id, connection]));
+      const pendingContexts = new Map<string, ReturnType<typeof resolvePresentationContext>>();
+      await collectProviderConnectionsDnsEvidence({
+        connectionIds: [...connectionsById.keys()], machineId: request.machineId,
+        providerSettings: settingsRead.settings, registry,
+        ...(input.resolveAddresses ? { resolveAddresses: input.resolveAddresses } : {}),
+        admitResolution: sharedRuntime.probeInfrastructure.scheduler.runDns,
+        isCurrent: () => input.featureGate.isEnabled('providers'), lifetime: operationLifetime,
+        onConnectionResolved: (connectionId, { evidence, error }) => {
+          const connection = connectionsById.get(connectionId)!;
+          if (error) resolutionFailures.set(connection.id, createProviderErrorV1(
+            error instanceof ProviderProbeAdmissionCapacityError ? 'provider_probe_capacity_exhausted' : 'provider_endpoint_unavailable',
+            { connectionId, machineId: request.machineId },
+          ));
+          dnsEvidenceByConnectionId.set(connectionId, evidence);
+          const pending = resolvePresentationContext(connection);
+          // A different DNS lookup can still be pending when this source
+          // fails. Promise.all below remains the result owner.
+          void pending.catch(() => {});
+          pendingContexts.set(connectionId, pending);
+        },
+      });
+      const presentationContexts = await Promise.all([...connectionsById.keys()].map(connectionId => pendingContexts.get(connectionId)!));
+      const assemble = (runtimeState: ProviderRuntimeStateFileV1) => {
+        const runtimeStateForConnection = indexRuntimeState(runtimeState);
+        const resolvedContexts = presentationContexts.map(({ connection, context }) => {
           const connectionRuntimeState = runtimeStateForConnection(connection.id);
           return {
             connection,
             connectionRuntimeState,
-            context: await sharedRuntime.resolvePresentationCatalogContext({
-              connectionId: connection.id,
-              machineId: request.machineId,
-            }, connectionRuntimeState, operationScope, presentationSettingsBasis),
+            context: context.status === 'success'
+              ? projectProviderCatalogContextRuntimeState(context, connectionRuntimeState) : context,
           };
-        }));
+        });
         const catalogs: ProviderConnectionCatalog[] = [];
         const modelLoadProjectionByConnectionId = new Map<string, Readonly<{
           action: 'available' | 'descriptor_absent' | 'feature_disabled';
@@ -571,12 +592,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         }>> = [];
         for (const { connection, connectionRuntimeState, context } of resolvedContexts) {
           if (context.status === 'error') continue;
-          if (request.sourceConnectionId && connection.id !== request.sourceConnectionId) continue;
-          if (request.providerConnection && (
-            connection.id !== request.providerConnection.connectionId
-            || context.connection.connectionSecurityFingerprint
-              !== request.providerConnection.expectedConnectionSecurityFingerprint
-          )) continue;
+          if (request.providerConnection && context.connection.connectionSecurityFingerprint
+            !== request.providerConnection.expectedConnectionSecurityFingerprint) continue;
           if (request.connectedAccountTarget) {
             if (context.connection.deployment.kind !== 'managedLocal') continue;
             const expectedTarget = request.connectedAccountTarget;
@@ -636,6 +653,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             agentSupportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
           };
           const initial = assembleProviderConnectionCatalog({
+            modelNameCatalog,
             agentTargetKey: request.agentTargetKey,
             connection: context.connection,
             providerSettings: context.providerSettings,
@@ -667,6 +685,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             endpointHealth: connectionRuntimeState.endpointHealth,
           });
           const assembled = assembleProviderConnectionCatalog({
+            modelNameCatalog,
             agentTargetKey: request.agentTargetKey,
             connection: context.connection,
             providerSettings: context.providerSettings,
@@ -690,7 +709,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         return { catalogs, modelLoadProjectionByConnectionId, confirmedByRef, resolvedConnectionById, pickerDemand, coldDemand };
       };
 
-      let assembly = await assemble(await sharedRuntime.runtimeStore.read());
+      let assembly = assemble(initialRuntimeState);
       // A cold automatic read must wait because it has no rows to show. An
       // explicit user Retry waits for every eligible connection and enters the
       // scheduler's existing forced branch; no consumer retry loop or cache is
@@ -698,22 +717,23 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       const awaitedDemand = request.refreshPolicy === 'current_only'
         ? []
         : request.forceRefresh ? assembly.pickerDemand : assembly.coldDemand;
-      const refreshFailures: DaemonProviderModelProjectionRefreshFailureV1[] = [];
+      const refreshFailures: DaemonProviderModelProjectionRefreshFailureV1[] = [...resolutionFailures].map(([connectionId, error]) => ({ connectionId, error }));
       if (awaitedDemand.length > 0) {
         const outcomes = await Promise.all(awaitedDemand.map(async (identity) => ({
           identity,
-          error: await sharedRuntime.scheduleDemandRefresh(
-            identity,
-            request.forceRefresh ? 'manual_refresh' : 'picker_open',
-            operationScope,
-          ),
+          error: await awaitWithinProviderOperation(sharedRuntime.scheduleDemandRefresh(
+            identity, request.forceRefresh ? 'manual_refresh' : 'picker_open', operationScope,
+          ), operationLifetime).catch(error => {
+            if (!(error instanceof ProviderOperationAbandonedError)) throw error;
+            return createProviderErrorV1('provider_endpoint_unavailable', identity);
+          }),
         })));
         for (const outcome of outcomes) {
           if (outcome.error !== null) {
             refreshFailures.push({ connectionId: outcome.identity.connectionId, error: outcome.error });
           }
         }
-        assembly = await assemble(await sharedRuntime.runtimeStore.read());
+        assembly = assemble(await sharedRuntime.runtimeStore.read());
       }
       const { catalogs, modelLoadProjectionByConnectionId, confirmedByRef, resolvedConnectionById, pickerDemand } = assembly;
       const awaitedConnectionIds = new Set(awaitedDemand.map((identity) => identity.connectionId));
@@ -854,6 +874,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               return ({
               ref: row.ref,
               descriptor: row.descriptor,
+              ...(row.gatewaySlots ? { gatewaySlots: row.gatewaySlots } : {}),
               ...(exactApplication ? { application: exactApplication } : {}),
               ...(requestPolicySupport ? { requestPolicySupport } : {}),
               ...(request.includeDirectMaterialization && directEndpoint && directCredentialTransport ? {
@@ -1180,7 +1201,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     });
     let snapshot;
     try {
-      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(), operationLifetime);
+      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(undefined, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
         return { status: 'incompatible', error: createProviderErrorV1('provider_endpoint_unavailable', errorContext) };

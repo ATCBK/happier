@@ -2,7 +2,7 @@ import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, FeaturesResponseSchema,
   ProviderConnectionIdSchema, ProviderContributionV1Schema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -18,6 +18,7 @@ it('admits a Provider shared secret through Bob private custody without publishi
   const providerSettings = { ...DEFAULT_PROVIDER_SETTINGS_V1,
     connections: [{ v: 1 as const, id: connectionId, role: 'default' as const,
       source: { kind: 'contribution' as const, contributionKey: 'acme.gateway/gateway' },
+      deployment: { kind: 'external' as const },
       displayName: 'Gateway', displayNameMode: 'automatic' as const, revision: 0, createdAt: 1, updatedAt: 1 }],
     secretBindingsByConnectionId: { [connectionId]: { account: { apiKey: ref }, byMachineId: {} } } };
   const settings = AccountSettingsSchema.parse({});

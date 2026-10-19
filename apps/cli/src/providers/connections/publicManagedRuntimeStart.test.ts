@@ -29,6 +29,7 @@ import type {
 
 import { createPublicManagedProviderRuntimeStartOperation } from './publicManagedRuntimeStart';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 function managedServiceHandle(dispose: () => Promise<void>): ManagedServiceHandle {
   const snapshot = Object.freeze({
@@ -100,6 +101,8 @@ function runtimeRegistry(input: Readonly<{
   ) => Promise<ManagedProviderExplicitStartJoinResult>;
 }>): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    declarationContributes: createResolvedContributionRegistry({}),
+    claimReleaseLessDeclarations: async () => undefined,
     projectManagedServices: createManagedServicesOwner({
       processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
       dependencies: createUnavailablePluginServices().managedServices.dependencies,
@@ -107,6 +110,9 @@ function runtimeRegistry(input: Readonly<{
     }),
     contributes: {
       agents: Object.freeze([]),
+      voiceProviders: Object.freeze([]),
+      connectedAccountDescriptorsById: new Map(),
+      providersByContributionKey: new Map(),
       actions: Object.freeze([]),
       resources: Object.freeze([]),
       uiViewsV2: Object.freeze([]),

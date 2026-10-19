@@ -20,6 +20,7 @@ import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/cat
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { ProviderContributionV1Schema, type AccountSettingsV2UpdateResponse } from '@happier-dev/protocol';
 
 const migrationContributionKey = 'happier.provider.deepseek/deepseek';
@@ -98,7 +99,7 @@ describe('legacy profile migration coordinator', () => {
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
   it('automatically promotes a descriptor-classified literal before the accepted Profile and Provider catalog transaction', async () => {
-    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-auto' })).toString('base64url')}.signature` };
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-auto' })).toString('base64url')}.signature`, encryption: null };
     let raw: Record<string, unknown> = { profiles: [{ id: 'deepseek', name: 'Retained DeepSeek', environmentVariables: [
       { name: 'ANTHROPIC_BASE_URL', value: 'https://api.deepseek.com/anthropic' },
       { name: 'DEEPSEEK_AUTH_TOKEN', value: 'private-inline-key' }, { name: 'TEAM_FLAG', value: 'public' }], createdAt: 1, updatedAt: 1 }],
@@ -121,7 +122,8 @@ describe('legacy profile migration coordinator', () => {
       if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`
         || path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`
         || path === ACP_CATALOG_ROWS_ROUTE_V1 || path === MCP_SERVER_CATALOG_ROWS_ROUTE_V1
-        || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1) {
+        || path === REMOTE_HOST_ROWS_ROUTE_V1 || path === NOTIFICATION_CHANNELS_ROUTE_V1
+        || path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) {
         return { status: 200, data: { status: 'absent' } };
       }
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };

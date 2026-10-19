@@ -5,7 +5,7 @@ import type { DaemonProviderModelLoadRequestV1 } from '@happier-dev/protocol/rpc
 
 import type { ProviderModelLoadRequest, ProviderModelLoadResult } from './load';
 
-export const ProviderModelLoadRpcRequestSchema = DaemonProviderModelLoadRequestV1Schema;
+export const ProviderModelLoadRpcRequestSchema: typeof DaemonProviderModelLoadRequestV1Schema = DaemonProviderModelLoadRequestV1Schema;
 export type ProviderModelLoadRpcRequest = DaemonProviderModelLoadRequestV1;
 
 type ProviderModelLoadRpcDependencies = Readonly<{

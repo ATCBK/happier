@@ -15,6 +15,7 @@ import { createManagedServicesOwner } from '@/plugins/runtime/invocation/service
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 
@@ -22,6 +23,21 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 const persistenceBoundary = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
 vi.mock('@/persistence', async importOriginal => ({ ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: persistenceBoundary.readStoredCredentials }));
+
+function mockProviderCatalogReadHttp(catalog: ProviderConnectionsCatalogV1) {
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+      status: 'present', revision: 1, content: { t: 'plain', v: catalog } } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    throw new Error(`Unexpected Provider catalog HTTP read: ${path}`);
+  });
+}
 
 function runtimeRegistry(
   activateContributionsOnDemand: ResolvedExecutablePluginRuntimeRegistry['activateContributionsOnDemand'],
@@ -32,6 +48,7 @@ function runtimeRegistry(
     resolveScope: () => null,
   });
   return {
+    declarationContributes: createResolvedContributionRegistry({}),
     claimReleaseLessDeclarations: async () => undefined,
     projectManagedServices: managedOwner,
     readSharedProviderGatewayRuntime: managedOwner.readSharedProviderGatewayRuntime,
@@ -45,6 +62,9 @@ function runtimeRegistry(
       activationTargets: Object.freeze([]),
       catalogEntriesById: Object.freeze({}),
       agentDefinitionsById: new Map(),
+      voiceProviders: Object.freeze([]),
+      connectedAccountDescriptorsById: new Map(),
+      providersByContributionKey: new Map(),
       pluginDiagnosticsByPluginId: Object.freeze({}),
     },
     hookHandlersByHookId: new Map(),
@@ -77,10 +97,9 @@ describe('runtime Provider connection composition', () => {
   it('reads admitted gateway custody without activation and leaves unavailable authority unchecked', async () => {
     const { setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
     const activeRegistry = runtimeRegistry(async () => { throw new Error('Description cannot activate plugins'); });
-    const controller = createPluginReloadController();
+    const { pluginReloadController: controller } = await import('@/plugins/runtime/reload/singleton');
     await controller.adoptPreparedRuntimeRegistry({ registry: activeRegistry, changedPluginIds: [], durableRevision: 1,
       runningSessionDisposition: 'retainRunningSessions' });
-    vi.doMock('@/plugins/runtime/reload/singleton', () => ({ pluginReloadController: controller }));
     const credentials: StoredCredentials = { token: 'gateway-read-test', encryption: null };
     const { defaultsByAgentTargetKey: _defaults, ...catalog } = DEFAULT_PROVIDER_SETTINGS_V1;
     const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway', role: 'named',
@@ -89,6 +108,7 @@ describe('runtime Provider connection composition', () => {
     setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({}), rawSettings: {},
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
       providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: { ...catalog, connections: [connection] } } });
+    mockProviderCatalogReadHttp({ ...catalog, connections: [connection] });
     const definition = ProviderContributionV1Schema.parse({ v: 1, id: 'gateway', name: 'Gateway', kind: 'aggregator',
       endpointTemplates: [{ id: 'chat', protocol: 'openai-chat', baseUrl: 'http://127.0.0.1:9000/v1',
         capabilities: { streaming: 'unknown', toolRoundTrips: 'unknown', statefulResponses: 'unknown', reasoningControls: 'unknown' } }],
@@ -165,7 +185,7 @@ describe('runtime Provider connection composition', () => {
     const services = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials,
       happyHomeDir: configuration.happyHomeDir, featureGate: { isEnabled: () => true }, runtimeSummary,
       resolveRegistry: async () => ({ providersByContributionKey: new Map() }), resolveAddresses });
-    expect(await services.mutateConnection({ action: 'update', machineId: 'machine-a', connectionId: 'pc_account',
+    expect(await services.mutateConnection({ action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_account'),
       expectedRevision: 0, displayName: 'Edited Account' })).toMatchObject({ status: 'success', connection: { displayName: 'Edited Account' } });
     expect(catalog.connections[0]?.displayName).toBe('Edited Account');
     expect(resolveAddresses).not.toHaveBeenCalled();
@@ -181,7 +201,7 @@ describe('runtime Provider connection composition', () => {
       scopeKey: resolveAccountSettingsScopeKey(credentials),
     });
     const { defaultsByAgentTargetKey: _defaults, ...emptyCatalog } = DEFAULT_PROVIDER_SETTINGS_V1;
-    const catalog = { ...emptyCatalog, connections: [ProviderConnectionV1Schema.parse({
+    let catalog = { ...emptyCatalog, connections: [ProviderConnectionV1Schema.parse({
       v: 1, id: 'pc_row', role: 'named', displayName: 'Row Provider', displayNameMode: 'custom',
       revision: 0, createdAt: 1, updatedAt: 1, source: { kind: 'custom', template: {
         v: 1, name: 'Row Provider', endpointTemplates: [{ id: 'chat', protocol: 'openai-chat', baseUrl: 'https://row-provider.invalid/v1',
@@ -190,6 +210,7 @@ describe('runtime Provider connection composition', () => {
       } },
     })] };
     let rowAvailable = outage !== 'row';
+    let rowRevision = 7;
     const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
@@ -197,7 +218,7 @@ describe('runtime Provider connection composition', () => {
       } };
       if (path === '/v1/account/entity-rows/provider-connections') {
         if (!rowAvailable) throw new Error('Temporary Home outage');
-        return { status: 200, data: { status: 'present', revision: 7, content: { t: 'plain', v: catalog } } };
+        return { status: 200, data: { status: 'present', revision: rowRevision, content: { t: 'plain', v: catalog } } };
       }
       if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
       if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
@@ -231,6 +252,15 @@ describe('runtime Provider connection composition', () => {
       status: 'success', connections: [{ connectionId: 'pc_row', displayName: 'Row Provider' }],
     });
     expect(post).not.toHaveBeenCalled();
+    if (outage === 'none') {
+      // A successful write from another client can precede the daemon's row hint.
+      rowRevision += 1;
+      catalog = { ...catalog, connections: catalog.connections.map(connection => ({ ...connection,
+        revision: connection.revision + 1, displayName: 'Current Row Provider' })) };
+      expect(await services.describeConnections({ machineId: 'machine-a' })).toMatchObject({
+        status: 'success', connections: [{ connectionId: 'pc_row', revision: 1, displayName: 'Current Row Provider' }],
+      });
+    }
     if (outage === 'history') expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({
       status: 'ready', cleanup: { status: 'cleanup-pending' },
     });
@@ -269,6 +299,8 @@ describe('runtime Provider connection composition', () => {
         return catalog;
       })() },
     });
+    const { defaultsByAgentTargetKey: _defaults, ...catalog } = DEFAULT_PROVIDER_SETTINGS_V1;
+    mockProviderCatalogReadHttp(catalog);
 
     const { createRuntimeProviderConnectionServices } = await import('./runtimeServices');
     const services = createRuntimeProviderConnectionServices({

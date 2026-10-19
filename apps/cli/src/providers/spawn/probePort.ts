@@ -14,7 +14,7 @@ import type {
   ProviderEndpointDnsEvidence,
 } from '../registry/types';
 import { readProviderSettingsForCli } from '../settings/read';
-import { createAccountBoundProviderSnapshotReader } from '../lifecycle/currentAccountSettingsSnapshot';
+import { createAccountBoundProviderSnapshotReader, sameProviderConnectionsCatalogAuthority } from '../lifecycle/currentAccountSettingsSnapshot';
 import { collectProviderConnectionDnsEvidence } from '../registry/dnsEvidence';
 import {
   awaitWithinProviderOperation,
@@ -237,7 +237,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
     const settingsBasisIsCurrent = admittedSettingsBasis !== undefined
       && admittedSettingsBasis.scopeKey === snapshot.scopeKey
       && admittedSettingsBasis.settingsVersion === snapshot.settingsVersion
-      && admittedSettingsBasis.providerConnectionsCatalog === snapshot.providerConnectionsCatalog;
+      && sameProviderConnectionsCatalogAuthority(admittedSettingsBasis.providerConnectionsCatalog, snapshot.providerConnectionsCatalog);
     if (admittedSettingsBasis && !settingsBasisIsCurrent) {
       return {
         ok: false,
@@ -352,7 +352,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
           error: createProviderErrorV1(
             error instanceof ProviderOperationAbandonedError
               ? 'provider_endpoint_unavailable'
-              : 'provider_probe_authorization_invalid', {
+              : 'provider_connection_invalid', {
             connectionId: request.connectionId,
             machineId: request.machineId,
           }),
@@ -364,7 +364,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       || admittedSettingsBasis && (
         admittedSettingsBasis.scopeKey !== currentSnapshot.scopeKey
         || admittedSettingsBasis.settingsVersion !== currentSnapshot.settingsVersion
-        || admittedSettingsBasis.providerConnectionsCatalog !== currentSnapshot.providerConnectionsCatalog
+        || !sameProviderConnectionsCatalogAuthority(admittedSettingsBasis.providerConnectionsCatalog, currentSnapshot.providerConnectionsCatalog)
       )) {
       return {
         ok: false,

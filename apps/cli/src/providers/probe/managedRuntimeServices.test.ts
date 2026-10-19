@@ -26,6 +26,7 @@ import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/co
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 import {
   createProviderProbeHttpClient,
@@ -150,11 +151,9 @@ describe('managed Provider catalog runtime composition', () => {
         displayNameMode: 'automatic',
         purposeBindingDefaults: {
           upstream: {
-            kind: 'account',
-            account: {
-              service: managedRuntime.connectedAccounts[0]!.service,
-              accountId: 'account-a',
-            },
+            kind: 'group',
+            service: managedRuntime.connectedAccounts[0]!.service,
+            groupId: 'upstream-pool',
           },
         },
         revision: 0,
@@ -393,6 +392,25 @@ describe('managed Provider catalog runtime composition', () => {
     const transport = vi.fn(async () => {
       throw new Error('managed catalog must use opaque endpoint access');
     });
+    let poolAvailable = true;
+    const bindingOwner = createConnectedAccountPurposeBindingOwner({
+      store: {
+        read: async () => ({ v: 1, bindings: [] }),
+        update: async (mutate) => mutate({ v: 1, bindings: [] }),
+        subscribe: () => ({ dispose() {} }),
+      },
+      selectTarget: unavailable,
+      // Account inventory is the external data boundary. Keep the binding
+      // owner's admission and immutable snapshot construction real.
+      resolveTarget: async () => poolAvailable ? {
+        displayName: 'Upstream pool',
+        account: { service: managedRuntime.connectedAccounts[0]!.service, accountId: 'account-a' },
+        group: { groupId: 'upstream-pool', generation: 1 },
+      } : null,
+      materializeAccount: unavailable,
+      projectTargetAccounts: unavailable,
+      assertTargetAccountMaterializable: unavailable,
+    });
     const services = createRuntimeProviderServices({
       machineId: 'machine-a',
       happyHomeDir,
@@ -404,10 +422,7 @@ describe('managed Provider catalog runtime composition', () => {
         transport,
       }),
       managedCatalogRuntime,
-      resolveManagedPurposeBindingIntent: async ({ purpose, target }) => ({
-        purpose,
-        target,
-      }),
+      resolveManagedPurposeBindingIntent: bindingOwner.resolveBindingIntent,
       createObservationId: () => 'managed-observation',
     });
     const identity = { connectionId, machineId: 'machine-a' };
@@ -482,6 +497,16 @@ describe('managed Provider catalog runtime composition', () => {
       },
     });
     runtimeUnavailable = false;
+
+    poolAvailable = false;
+    const startsBeforeUnavailablePool = start.mock.calls.length;
+    for (const read of [services.probe, services.models]) {
+      await expect(read(identity)).resolves.toMatchObject({
+        status: 'error',
+        error: { code: 'provider_connection_invalid', action: 'review_connection' },
+      });
+    }
+    expect(start).toHaveBeenCalledTimes(startsBeforeUnavailablePool);
 
     const state = await services.runtimeStore.read();
     expect(state.catalogs).toHaveLength(1);

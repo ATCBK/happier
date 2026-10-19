@@ -153,14 +153,13 @@ export function createRuntimeProviderConnectionServices(input: Readonly<{
           mode: 'blocking',
         });
       const capturedStore = createCliProviderConnectionsStore({ credentials: input.credentials });
-      if (!active.providerConnectionsCatalog || active.providerConnectionsCatalog.status === 'loading'
-        || active.providerConnectionsCatalog.status === 'unavailable') {
-        await refreshActiveProviderConnectionsCatalog({ credentials: input.credentials });
-        capturedStore.assertCurrent();
-        const refreshed = getActiveAccountSettingsSnapshot();
-        if (!refreshed || refreshed.scopeKey !== active.scopeKey) throw createProviderErrorV1('provider_settings_invalid');
-        active = refreshed;
-      }
+      // An explicit operation reads current row authority even when the
+      // daemon's asynchronous Account-change observer has not caught up yet.
+      await refreshActiveProviderConnectionsCatalog({ credentials: input.credentials }, { afterChange: true });
+      capturedStore.assertCurrent();
+      const refreshed = getActiveAccountSettingsSnapshot();
+      if (!refreshed || refreshed.scopeKey !== active.scopeKey) throw createProviderErrorV1('provider_settings_invalid');
+      active = refreshed;
       const providerRead = readProviderSettingsForCli(active, { purpose: 'display' });
       const projection = registryProjection ?? await loadRegistryProjection();
       capturedStore.assertCurrent();

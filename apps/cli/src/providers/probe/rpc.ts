@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PROVIDER_CATALOG_LIMITS_V1 } from '@happier-dev/protocol/providers/catalog/limits';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
@@ -26,12 +26,12 @@ import type { ProviderOperationLifetime } from '../operationLifetime';
 import type { ProviderProbeOperationScope } from './authorization';
 
 const TriggerSchema = z.enum(PROVIDER_PROBE_REFRESH_TRIGGERS);
-const SavedProbeRequestSchema = z.object({
+const SavedProbeRequestSchema = z.strictObject({
   kind: z.literal('saved'),
   connectionId: ProviderConnectionIdSchema,
   machineId: ProviderMachineIdSchema,
   trigger: TriggerSchema,
-}).strict();
+});
 const ProbeRequestSchema = SavedProbeRequestSchema;
 
 export type ResolvedProviderProbeRpcRequest = Readonly<{
@@ -84,10 +84,10 @@ export type ProviderProbeWaiterLifetime = Readonly<Pick<
   'signal' | 'isCurrent'
 >>;
 
-const SavedConnectionMachineRequestSchema = z.object({
+const SavedConnectionMachineRequestSchema = z.strictObject({
   connectionId: ProviderConnectionIdSchema,
   machineId: ProviderMachineIdSchema,
-}).strict();
+});
 
 export class ProviderProbeRpcResolutionError extends Error {
   readonly error: ProviderErrorV1;

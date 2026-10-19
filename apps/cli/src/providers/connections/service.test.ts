@@ -2869,6 +2869,21 @@ describe('provider connection service', () => {
     expect(h.updateProviderSettings).not.toHaveBeenCalled();
   });
 
+  it('normalizes a Mini schema failure in a prepared secret as an invalid connection', async () => {
+    const h = harness();
+    const record = SavedSecretSchema.parse({
+      id: 'secret_prepared', name: 'Prepared', kind: 'apiKey',
+      encryptedValue: { _isSecretValue: true, value: 'secret' }, createdAt: 100, updatedAt: 100,
+    });
+    Object.defineProperty(record, 'id', { value: 123 });
+    await expect(h.service.create({
+      action: 'createContribution', machineId: 'machine-a', connectionId: 'pc_gateway',
+      contributionKey, displayName: null, savedSecretId: 'secret_prepared', enable: false,
+      preparedSavedSecret: { id: 'secret_prepared', record },
+    })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_invalid' } });
+    expect(h.updateProviderSettings).not.toHaveBeenCalled();
+  });
+
   it('normalizes mutation callback domain errors into stable service results', async () => {
     const h = harness();
     await expect(h.service.update({

@@ -1,5 +1,14 @@
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
+/** Cleanup reports wrap an admitted row without changing its revision or catalog. */
+export function sameProviderConnectionsCatalogAuthority(
+  admitted: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+  current: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+): boolean {
+  return admitted === current || admitted?.status === 'ready' && current?.status === 'ready'
+    && admitted.revision === current.revision && admitted.catalog === current.catalog;
+}
+
 /**
  * Keeps a Provider operation tied to one account while re-reading the current
  * version for authorization and commit revalidation. Live mode fails closed

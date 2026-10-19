@@ -17,9 +17,9 @@ import { AccountSettingsSavedSecretMutationError, promoteProfileEnvironmentVaria
 import { formatSharedSavedSecretRefV1, parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { prepareProfileEnvironmentVariableSavedSecretPromotionForOperation, promoteSavedSecretResourceForOperation,
-  createInvocationSavedSecretOperationContextV1,
-  captureSavedSecretReferencesForOperation, captureSavedSecretReferenceCatalogsForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { prepareProfileEnvironmentVariableSavedSecretPromotionForOperation, promoteSavedSecretResourceForOperation, captureSavedSecretReferenceCatalogsForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readLegacyProfileMigrationContributionMap } from '../migrations/coordinator';

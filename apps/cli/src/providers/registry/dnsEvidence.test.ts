@@ -74,7 +74,32 @@ describe('provider connection DNS evidence', () => {
     await expect(collected).rejects.toBeInstanceOf(ProviderOperationAbandonedError);
   });
 
-  it('abandons resolution when the caller cancels before the resolver answers', async () => {
+  it('retains other connections DNS evidence when a projection collects a source-scoped deadline failure', async () => {
+    const base = customConnectionSettings();
+    const original = base.connections[0]!;
+    if (original.source.kind !== 'custom') throw new Error('Expected custom source');
+    const settings = ProviderSettingsV1Schema.parse({ ...base, connections: [original, {
+      ...original, id: 'pc_healthy', source: { ...original.source, template: {
+        ...original.source.template, endpointTemplates: original.source.template.endpointTemplates.map(endpoint => ({
+          ...endpoint, baseUrl: 'https://healthy.example/v1',
+        })),
+      } },
+    }] });
+    const failures = new Map<string, unknown>();
+    const evidence = await collectProviderConnectionsDnsEvidence({
+      connectionIds: settings.connections.map(connection => connection.id), machineId: 'machine-a', providerSettings: settings, registry,
+      resolveAddresses: hostname => hostname === 'healthy.example'
+        ? Promise.resolve(['1.1.1.1']) : new Promise<readonly string[]>(() => {}),
+      lifetime: { wallDeadlineAtMs: Date.now() + 20 },
+      onConnectionResolved: (connectionId, { error }) => { if (error) failures.set(connectionId, error); },
+    });
+    expect(evidence.get('pc_healthy')).toEqual(new Map([['https://healthy.example/v1', ['1.1.1.1']]]));
+    expect(failures.size).toBe(1);
+    expect(failures.get('pc_custom')).toMatchObject({ reason: 'deadline' });
+    expect(evidence.get('pc_custom')).toEqual(new Map());
+  });
+
+  it.each([false, true])('abandons resolution when the caller cancels before the resolver answers (partial: %s)', async partial => {
     const controller = new AbortController();
     const collected = collectProviderConnectionDnsEvidence({
       connectionId: 'pc_custom',
@@ -83,6 +108,7 @@ describe('provider connection DNS evidence', () => {
       registry,
       resolveAddresses: () => new Promise<readonly string[]>(() => {}),
       lifetime: { signal: controller.signal, wallDeadlineAtMs: Date.now() + 60_000 },
+      ...(partial ? { onConnectionResolved: () => {} } : {}),
     });
     controller.abort();
 
