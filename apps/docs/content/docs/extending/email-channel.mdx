@@ -56,6 +56,14 @@ reports a history gap instead of claiming that no messages were missed.
 Submission checks Sent for the deterministic Message-ID and appends a copy
 when the server has not saved one.
 
+Keep the existing connection when updating Happier or the Email plugin. In the
+current development source it follows the admitted Email provider on the same
+Home and machine, including a same-identity reinstall or development-source
+replacement. An update alone needs no transfer, setup rerun or history reset.
+Changing placement, transport, credentials or provider configuration still uses
+the connection transfer flow. A genuine history gap or ambiguous SMTP outcome
+keeps its existing recovery requirement; updating does not settle it.
+
 ### Microsoft 365 app-only setup
 
 Use `microsoft-app-only` for Exchange Online. An administrator completes these
