@@ -11,7 +11,7 @@ import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracki
 import { getActivePrismaRuntime } from '@/storage/db';
 import { readManagedPendingActivationHoldReasonInTx, resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
 import { projectManagedMachine } from '@/app/machines/managed/managedRows';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { markAccountChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { readStoredSessionInputAdmissionReceipt, isCurrentSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import type { EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { PendingActivationFailureCodeV1Schema, PendingActivationFailureDetailsV1Schema,
@@ -39,6 +39,9 @@ export function mapPendingActivationFailureDetails(row: object): PendingActivati
 export type PendingActivationTarget = Readonly<{ accountId: string; requestId: string;
     machinePublication?: Readonly<{ target: SessionInputMachineTargetV1; custodianAccountId: string; requestedAt: number }>;
     managedControllerPublication?: Readonly<{ accountId: string; cursor: number }> }>;
+
+export type PendingActivationPublicationTarget = Omit<PendingActivationTarget, 'managedControllerPublication'>
+    & Readonly<{ managedControllerPublication?: AccountChangePublication }>;
 
 /**
  * Cursor lock audience only. Include the target Machine's owner even before
@@ -195,7 +198,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
     currentAccess: Pick<EffectiveSessionAccess, 'accountId' | 'sessionId' | 'level'>;
     now?: Date;
     resumeWhenAvailable?: true;
-}>): Promise<PendingActivationTarget | undefined> {
+}>): Promise<PendingActivationPublicationTarget | undefined> {
     // Immutable input provenance is not current mutation authority. An editor
     // may change an owner's queued input without borrowing its owner activation.
     if (params.currentAccess.level !== 'owner' || params.currentAccess.sessionId !== params.sessionId) return undefined;
@@ -276,11 +279,12 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
             pendingActivationManagedTarget: managedTarget ?? getActivePrismaRuntime().DbNull,
         },
     });
-    let managedControllerPublication: PendingActivationTarget['managedControllerPublication'];
+    let managedControllerPublication: PendingActivationPublicationTarget['managedControllerPublication'];
     if (managedTarget) {
         const controller = await params.tx.machine.findUniqueOrThrow({ where: { id: managedTarget.controller.machineId }, select: { accountId: true } });
-        managedControllerPublication = { accountId: controller.accountId,
-            cursor: await markAccountChanged(params.tx, { accountId: controller.accountId, kind: 'machine', entityId: managedTarget.controller.machineId }) };
+        managedControllerPublication = await markAccountChanged(params.tx, {
+            accountId: controller.accountId, kind: 'machine', entityId: managedTarget.controller.machineId,
+        });
     }
     const targetMachine = admittedTarget ? await params.tx.machine.findUniqueOrThrow({ where: { id: admittedTarget.machineId }, select: { accountId: true } }) : undefined;
     return { accountId: session.accountId, requestId: params.requestId,

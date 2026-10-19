@@ -14,8 +14,9 @@ import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEn
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
+import { invalidateRunFollowDestinationsInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { markAccountChangesForSessionAccounts } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { emitAutomationRunUpdatedToMachineOnly } from "@/app/automations/automationChangePublisher";
 import { publishManagedRunWakeInTx, publishManagedContextWakeInTx } from '@/app/machines/managed/managedWake';
@@ -198,7 +199,7 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
 
 async function loadAccountModeTx(tx: Tx, accountId: string, runId?: string): Promise<"plain" | "e2ee"> {
     if (runId) await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     if (fence.status !== "ready") {
         throw new WorkflowRunServiceError("content_unavailable");
     }
@@ -223,7 +224,7 @@ async function loadCurrentWorkflowAccountModeTx(
     runId: string,
 ): Promise<"plain" | "e2ee"> {
     await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     if (fence.status !== "ready") throw new WorkflowRunServiceError("content_unavailable");
     const current = projectAutomationAccountCurrentnessWitnessV1({
         mode: fence.account.currentness.encryptionMode,
@@ -276,12 +277,17 @@ async function reconcileWorkflowRunAttentionAndHintTx(tx: Tx, accountId: string,
     }
 }
 
-async function markWorkflowRunChangedTx(tx: Tx, accountId: string, runId: string, deliveryBefore?: OriginDeliverySignal | null, inputDeliverable = false): Promise<number> {
+async function markWorkflowRunChangedTx(tx: Tx, accountId: string, runId: string, deliveryBefore?: OriginDeliverySignal | null, inputDeliverable = false): Promise<AccountChangePublication> {
     const recipients = await resolveWorkflowRunRecipientAccountIdsInTx(tx, runId);
     const cursors = await markAccountsChanged(tx, { accountIds: [accountId, ...recipients], kind: "account", entityId: `workflow-run:${runId}` });
-    const ownerCursor = cursors.find(cursor => cursor.accountId === accountId)?.cursor ?? 0;
+    const ownerCursor = cursors.find(cursor => cursor.accountId === accountId);
+    if (!ownerCursor) throw new Error("Workflow owner is missing from its publication audience");
     if (deliveryBefore !== undefined) await reconcileWorkflowRunAttentionAndHintTx(tx, accountId, runId, deliveryBefore, inputDeliverable);
     await admitWorkflowRunLifecycleAutomationRunsTx(tx, runId);
+    const run = await tx.automationRun.findUnique({ where: { id: runId }, select: { state: true, workflowCustodyState: true } });
+    if (run?.workflowCustodyState !== null && run && ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.state)) {
+        await invalidateRunFollowDestinationsInTx(tx, { kind: 'workflow_run', runId });
+    }
     return ownerCursor;
 }
 
@@ -344,10 +350,11 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (!WorkflowDirectRunAdmissionIdV1Schema.safeParse(params.runId).success) {
             throw new WorkflowRunServiceError("invalid_input");
         }
-        if (params.resultDelivery?.kind === 'originating_discussion' && !params.origin.discussion
-            || params.discussionTargetSessionIds !== undefined && !params.origin.discussion) throw new WorkflowRunServiceError('invalid_input');
-        if (params.origin.discussion) await withWorkflowRunAccess(() => assertWorkflowDiscussionAdmissionInTx(tx, {
-            accountId: params.accountId, origin: params.origin.discussion, targetSessionIds: params.discussionTargetSessionIds ?? [],
+        const discussionOrigin = params.origin.discussion;
+        if (params.resultDelivery?.kind === 'originating_discussion' && !discussionOrigin
+            || params.discussionTargetSessionIds !== undefined && !discussionOrigin) throw new WorkflowRunServiceError('invalid_input');
+        if (discussionOrigin) await withWorkflowRunAccess(() => assertWorkflowDiscussionAdmissionInTx(tx, {
+            accountId: params.accountId, origin: discussionOrigin, targetSessionIds: params.discussionTargetSessionIds ?? [],
             authentication: params.discussionAuthentication, publishes: params.resultDelivery?.kind === 'originating_discussion',
         }));
         await withWorkflowRunAccess(() => acquireWorkflowPublicationLocksInTx(tx, {
@@ -1416,7 +1423,7 @@ export async function completeWorkflowInvocationReview(input: WorkflowReviewMuta
         const live = current.run.state === "claimed" || current.run.state === "running" || current.run.state === "pause_requested";
         const machineId = run.assignments[0]?.machineId;
         if (machineId && (wake || live)) afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({
-            accountId: current.ownerAccountId, machineId, run: run as WorkflowRunFullRow, cursor,
+            accountId: current.ownerAccountId, machineId, run: run as WorkflowRunFullRow, cursor: cursor.resolveCursor(),
             ...(live ? { workflowControl: "review_resolved" } : {}),
         }));
         return { run: projectRun(run as WorkflowRunRow), invocation: { index: projectInvocation(row as InvocationRow), contentEnvelope: row.contentEnvelope },
@@ -2019,7 +2026,7 @@ async function controlWorkflowRun(params: Readonly<{
             await publishManagedRunWakeInTx(tx, { accountId: ownerAccountId, runId: params.runId, cursor });
             const machineId = row.assignments[0]?.machineId;
             if (machineId) afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: ownerAccountId,
-                machineId, run: row as WorkflowRunFullRow, cursor }));
+                machineId, run: row as WorkflowRunFullRow, cursor: cursor.resolveCursor() }));
         }
         return projectRun(row as WorkflowRunRow);
     }, {
@@ -2158,7 +2165,7 @@ export async function cancelWorkflowRunTx(
             accountId: params.accountId,
             machineId,
             run: row as WorkflowRunFullRow,
-            cursor,
+            cursor: cursor.resolveCursor(),
             workflowControl: "cancel_requested",
         }));
     }
@@ -2390,7 +2397,7 @@ export async function recoverWorkflowInvocations(params: Readonly<{
         const updatedParent = await tx.automationRun.findUniqueOrThrow({ where: { id: params.runId }, select: workflowRunSelect });
         const cursor = await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore);
         afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: params.accountId, machineId: params.machineId,
-            run: updatedParent as WorkflowRunFullRow, cursor }));
+            run: updatedParent as WorkflowRunFullRow, cursor: cursor.resolveCursor() }));
         return { disposition: "accepted" as const, run: projectRun(updatedParent as WorkflowRunRow), invocations: created.map(projectInvocation) };
     }, {
         // Ordered publication locks/replay and mode/control/row predicates fence this mutation.

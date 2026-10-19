@@ -8,7 +8,7 @@ import {
 } from "@/app/session/metadata/sessionMetadataRecipientProjection";
 import { parsePersistedSessionOwnerMetadataEnvelopeV1 } from "@/app/session/metadata/sessionOwnerMetadataPersistence";
 import { readSessionOrganizationPlacementInTx } from "@/app/session/organization/organizationMutations";
-import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { inTx, transactionResult, TransactionReplayRequiredError, type TransactionResult, type Tx } from "@/storage/inTx";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
@@ -60,7 +60,7 @@ async function resolveExistingLayout1SessionInTx(
     prepared: PreparedLayout1SessionCreate,
     accountEncryptionMode: "e2ee" | "plain",
     authentication?: SessionAccessAuthentication,
-): Promise<Layout1SessionCreateOutcome | null> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome> | null> {
     const existing = await tx.session.findUnique({
         where: {
             accountId_tag: {
@@ -135,16 +135,17 @@ async function resolveExistingLayout1SessionInTx(
         });
         if (!bound.ok) throw new SessionCreationOriginError();
     }
-    return {
+    const organizationPlacement = await readSessionOrganizationPlacementInTx(tx, {
+        accountId: prepared.accountId,
+        sessionId: existing.id,
+    });
+    return transactionResult<Layout1SessionCreateOutcome>(() => ({
         kind: "rejoined",
         session: restored.session,
         ownerAccountMode: accountEncryptionMode,
-        organizationPlacement: await readSessionOrganizationPlacementInTx(tx, {
-            accountId: prepared.accountId,
-            sessionId: existing.id,
-        }),
-        publication: restored.publication,
-    };
+        organizationPlacement,
+        publication: restored.resolveResult().publication,
+    }));
 }
 
 /**
@@ -157,7 +158,7 @@ export async function createOrRejoinLayout1SessionByTagInTx(
     prepared: PreparedLayout1SessionCreate,
     authentication: SessionAccessAuthentication,
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
-): Promise<Layout1SessionCreateOutcome> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome>> {
     // Both fresh creation and the released tag-rejoin mutation consume the
     // same already-verified invocation inside this transaction.
     await readSessionCreationApiTokenIdInTx(tx, prepared.accountId, sessionCreationAuthorization);
@@ -263,11 +264,11 @@ export async function rejoinLayout1SessionByTagInTx(
     prepared: PreparedLayout1SessionCreate,
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
     authentication?: SessionAccessAuthentication,
-): Promise<Layout1SessionCreateOutcome | null> {
+): Promise<Layout1SessionCreateOutcome | TransactionResult<Layout1SessionCreateOutcome> | null> {
     // The unique-insert loser starts a fresh transaction: its original
     // invocation must still be current before restoring the winner's row.
     await readSessionCreationApiTokenIdInTx(tx, prepared.accountId, sessionCreationAuthorization);
-    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId);
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.accountId, "content");
     const currentness = await readSessionCreatorCurrentness(tx, prepared.accountId);
     if (currentness?.status === "inactive") {
         return { kind: "rejected", rejection: { reason: "account-disabled" } };

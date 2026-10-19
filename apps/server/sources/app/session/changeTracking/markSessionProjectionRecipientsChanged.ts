@@ -7,11 +7,13 @@ import type { Tx } from "@/storage/inTx";
 import {
     markAccountChangesForSessionAccounts,
     type SessionAccountChangeCursor,
+    type SessionAccountChangePublication,
 } from "./markAccountChangesForSessionAccounts";
 import { invalidateSessionFollowDestinationsForSourceChangeInTx, resolveSessionFollowSourceChangeRecipientsInTx } from "@/app/session/follow/sessionFollowEdgeService";
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 
 export type SessionRecipientCursor = SessionAccountChangeCursor;
+export type SessionRecipientPublication = SessionAccountChangePublication;
 
 /**
  * Transcript-publication-aware fanout. It keeps its own publication filter and
@@ -30,7 +32,7 @@ export async function markSessionProjectionRecipientsChanged(params: {
     hint?: unknown;
     recipientAccountIds?: readonly string[];
     hintForRecipient?: (accountId: string) => unknown;
-}): Promise<SessionRecipientCursor[]> {
+}): Promise<SessionRecipientPublication[]> {
     const publication = await loadSessionTranscriptPublication(params.tx, params.sessionId);
     const recipientAccountIds = params.recipientAccountIds
         ?? await resolveCurrentSessionRecipientAccountIdsInTx(params.tx, {

@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import {
     resolveStructuralSessionAccessForSessionsInTx,
     type EffectiveSessionAccess,
@@ -57,11 +58,11 @@ async function resolveAccountStatusAffectedSessionIdsInTx(tx: Tx, accountId: str
 /** Lock the status transition's Session audience before actor/target Account fences. */
 export async function acquireSessionAccountStatusCursorLocksInTx(
     tx: Tx,
-    input: Readonly<{ accountId: string; additionalAccountIds: readonly string[] }>,
+    input: Readonly<{ accountId: string; additionalAccountIds: readonly string[]; intent?: AccountAdmissionIntent }>,
 ): Promise<void> {
     await acquireSessionAccessTransitionCursorLocksInTx(tx,
         await resolveAccountStatusAffectedSessionIdsInTx(tx, input.accountId),
-        [input.accountId, ...input.additionalAccountIds]);
+        [input.accountId, ...input.additionalAccountIds], { intent: input.intent });
 }
 
 export async function captureSessionAccessAccountStatusImpactInTx(

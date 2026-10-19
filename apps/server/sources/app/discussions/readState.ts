@@ -3,7 +3,7 @@ import type { DiscussionReadCursorV1 } from '@happier-dev/protocol/discussions/m
 import { prismaRuntime as Prisma, getDbProviderFromEnv } from '@/storage/prisma';
 import { inTx, type Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import { resolveDiscussionContextInTx } from './access';
+import { acquireDiscussionMutationAccountsInTx, resolveDiscussionContextInTx } from './access';
 import { markDiscussionPrivateReaderChangedInTx, scheduleDiscussionReaderBadgeRefreshInTx } from './changes';
 import { readDiscussionRowInTx } from './queries';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
@@ -34,6 +34,7 @@ export async function setDiscussionReadCursor(input: Readonly<{
     actorAccountId: string; discussionId: string; lastReadSeq: number; authentication: SessionAccessAuthentication;
 }>): Promise<DiscussionResult<DiscussionReadCursorV1>> {
     return inTx(async tx => {
+        await acquireDiscussionMutationAccountsInTx(tx, input);
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         // Tools may read but cannot silently acknowledge for a person.

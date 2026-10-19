@@ -6,7 +6,7 @@ import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelop
 import { inTx, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
     readSessionDataKeyEnvelopeInTx,
@@ -87,7 +87,7 @@ export type SessionAccessGrantEffects = Readonly<{
     /** Lost `readTranscript` entirely, not merely downgraded. */
     revokedAccountIds: readonly string[];
     rosterManagerAccountIds: readonly string[];
-    accountCursors: ReadonlyMap<string, number>;
+    accountCursors: ReadonlyMap<string, AccountChangePublication>;
 }>;
 
 export type PutSessionAccessGrantResult =
@@ -510,8 +510,10 @@ async function applyGrantTransitionEffectsInTx(
     }
     const effects = await applySessionAccessTransitionEffectsInTx(tx, { ...params, additionalPublicationAccountIds: [...rosterManagerAccountIds] });
     const accountCursors = new Map(effects.accountCursors);
-    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
-        accountCursors.set(accountId, Math.max(accountCursors.get(accountId) ?? 0, cursor));
+    for (const publication of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
+        // Roster publication follows the access projection for this Account,
+        // so its terminal cursor is the newest one without eager resolution.
+        accountCursors.set(publication.accountId, publication);
     }
     return { ...effects, rosterManagerAccountIds: [...rosterManagerAccountIds], accountCursors };
 }

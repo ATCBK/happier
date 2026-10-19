@@ -1,14 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInTxHarness } from "@/app/api/testkit/txHarness";
+import { createAccountCursorRawQueryTransactionModel } from "@/app/api/testkit/txHarness";
+import { inTxPostgresControlStatementMock } from "@/app/api/testkit/dbMocks";
 import type { Tx } from "@/storage/inTx";
 
-vi.mock("@/storage/inTx", () => {
-    const { inTx, afterTx } = createInTxHarness(() => ({}));
-    return { inTx, afterTx };
+let migrationTx: Tx;
+vi.mock("@/storage/db", async () => {
+    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    return { db: createDbTransactionMock(() => migrationTx).wrapDb({}) };
 });
 
 const sessionWriteService =
     await import("./sessionWriteService");
+const { inTx } = await import("@/storage/inTx");
+
+async function migrateSessionAccountEncryption(
+    params: Parameters<typeof sessionWriteService.migrateSessionAccountEncryptionInTx>[0],
+) {
+    migrationTx = params.tx;
+    return inTx(tx => sessionWriteService.migrateSessionAccountEncryptionInTx({ ...params, tx }));
+}
 
 function createTx(params: Readonly<{
     rows: readonly Readonly<{
@@ -26,25 +36,23 @@ function createTx(params: Readonly<{
 }>): Tx {
     let updateIndex = 0;
     let cursor = 10;
+    const account = {
+        update: vi.fn(async () => ({ seq: ++cursor })),
+    };
+    const accountChange = { upsert: vi.fn(async () => ({})) };
+    // Only the persistent SQL transport is substituted; the real transaction
+    // owner flushes publication and resolves the committed migration receipt.
     return {
-        // The migration runs inside the Account coordinator's transaction in
-        // production. Preserve its post-commit wake registration contract in
-        // this narrow deterministic transaction double.
-        __afterTxCallbacks: [],
+        ...inTxPostgresControlStatementMock,
+        $queryRawUnsafe: createAccountCursorRawQueryTransactionModel({ account, accountChange }),
         session: {
             findMany: vi.fn(async () => params.rows),
             updateMany: vi.fn(async () => ({
                 count: params.updateCounts?.[updateIndex++] ?? 1,
             })),
         },
-        account: {
-            update: vi.fn(async () => ({
-                seq: ++cursor,
-            })),
-        },
-        accountChange: {
-            upsert: vi.fn(async () => ({})),
-        },
+        account,
+        accountChange,
     } as unknown as Tx;
 }
 
@@ -73,7 +81,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
         }));
         const tx = createTx({ rows });
 
-        const result = await sessionWriteService.migrateSessionAccountEncryptionInTx({
+        const result = await migrateSessionAccountEncryption({
             tx,
             accountId: "account-1",
             fromMode: "e2ee",
@@ -124,8 +132,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
         const tx = createTx({ rows });
 
         const result =
-            await sessionWriteService
-                .migrateSessionAccountEncryptionInTx({
+            await migrateSessionAccountEncryption({
                     tx,
                     accountId: "account-1",
                     fromMode: "e2ee",
@@ -257,8 +264,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
         ]) {
             const tx = createTx({ rows: [row] });
             const result =
-                await sessionWriteService
-                    .migrateSessionAccountEncryptionInTx({
+                await migrateSessionAccountEncryption({
                         tx,
                         accountId: "account-1",
                         fromMode: "e2ee",
@@ -298,7 +304,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
         const malformedTx = createTx({ rows: malformedRows });
 
         await expect(
-            sessionWriteService.migrateSessionAccountEncryptionInTx({
+            migrateSessionAccountEncryption({
                 tx: malformedTx,
                 accountId: "account-1",
                 fromMode: "e2ee",
@@ -322,7 +328,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
             }],
         });
         await expect(
-            sessionWriteService.migrateSessionAccountEncryptionInTx({
+            migrateSessionAccountEncryption({
                 tx: archivedTx,
                 accountId: "account-1",
                 fromMode: "e2ee",
@@ -347,7 +353,7 @@ describe("migrateSessionAccountEncryptionInTx", () => {
         const tx = createTx({ rows: [row], updateCounts: [0] });
 
         await expect(
-            sessionWriteService.migrateSessionAccountEncryptionInTx({
+            migrateSessionAccountEncryption({
                 tx,
                 accountId: "account-1",
                 fromMode: "e2ee",

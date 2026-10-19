@@ -19,7 +19,7 @@ import {
     patchSessionInTx,
     updateSessionMetadataEnvelopeTupleInTx,
 } from "@/app/session/sessionWriteService";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 
 /**
  * Same-Session cross-Agent transition — the narrow current-view transaction.
@@ -199,7 +199,7 @@ function isExactCommittedTargetCurrentView(
 export async function commitSessionAgentCurrentViewInTx(
     tx: Tx,
     params: CommitSessionAgentCurrentViewParams,
-): Promise<CommitSessionAgentCurrentViewResult> {
+): Promise<CommitSessionAgentCurrentViewResult | TransactionResult<CommitSessionAgentCurrentViewResult>> {
     if (
         typeof params.actorUserId !== "string" || params.actorUserId.length === 0
         || typeof params.sessionId !== "string" || params.sessionId.length === 0
@@ -275,6 +275,7 @@ export async function commitSessionAgentCurrentViewInTx(
     if (current.archivedAt !== null) return { ok: false, error: "archived" };
 
     if (params.currentView.kind === "legacy_v0") {
+        const currentView = params.currentView;
         const patched = await patchSessionInTx(tx, {
             actorUserId: params.actorUserId,
             sessionId: params.sessionId,
@@ -312,16 +313,16 @@ export async function commitSessionAgentCurrentViewInTx(
                 agentStateVersion: true,
             },
         });
-        return {
+        return transactionResult<CommitSessionAgentCurrentViewResult>(() => ({
             ok: true,
             currentView: {
                 kind: "legacy_v0",
                 metadataVersion: patched.metadata?.version
-                    ?? params.currentView.expectedMetadataVersion,
+                    ?? currentView.expectedMetadataVersion,
                 agentStateVersion: patched.agentState?.version
-                    ?? params.currentView.expectedAgentStateVersion,
+                    ?? currentView.expectedAgentStateVersion,
             },
-            recipientCursors: patched.recipientCursors,
+            recipientCursors: ("resolveResult" in patched ? patched.resolveResult() : patched).recipientCursors,
             // Read back inside the same transaction so the announced projection
             // is exactly the row this commit produced, and so the projector
             // keeps owning the layout dispatch.
@@ -332,7 +333,7 @@ export async function commitSessionAgentCurrentViewInTx(
                     session: patchedRow,
                   }
                 : null,
-        };
+        }));
     }
 
     const tuple = await updateSessionMetadataEnvelopeTupleInTx(tx, {
@@ -352,14 +353,14 @@ export async function commitSessionAgentCurrentViewInTx(
         sessionId: params.sessionId,
     });
     await writeTargetTeamCredentialBindingsInTx(tx, params);
-    return {
+    return transactionResult<CommitSessionAgentCurrentViewResult>(() => ({
         ok: true,
         currentView: {
             kind: "envelope_tuple_v1",
             sharedMetadataVersion: tuple.sharedMetadata.version,
             agentStateVersion: tuple.agentState.version,
         },
-        recipientCursors: tuple.recipientCursors,
+        recipientCursors: ("resolveResult" in tuple ? tuple.resolveResult() : tuple).recipientCursors,
         // The tuple owner's own in-memory result, not a re-read: the announced
         // envelope must be the one this write committed.
         publication: {
@@ -370,7 +371,7 @@ export async function commitSessionAgentCurrentViewInTx(
             ownerMetadata: tuple.ownerMetadata,
             agentState: tuple.agentState,
         },
-    };
+    }));
 }
 
 /**

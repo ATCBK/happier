@@ -306,7 +306,7 @@ export async function insertLayout1SessionRowInTx(
             const recipientAccountId = directShare.sharedWithUserId;
             scheduleReleasedDirectShareEvent(tx, {
                 recipientAccountId,
-                cursor: accessResult.effects.accountCursors.get(recipientAccountId) ?? 0,
+                publication: accessResult.effects.accountCursors.get(recipientAccountId),
                 event: projectReleasedDirectShareEvent({
                     recipientAccountId,
                     effects: accessResult.effects,

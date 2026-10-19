@@ -1,4 +1,4 @@
-import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { markSessionProjectionRecipientsChanged, type SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
 import type { Tx } from "@/storage/inTx";
 import { buildPendingActivationRequestHint } from "@/app/session/pending/publishPendingMutation";
 
@@ -10,7 +10,7 @@ export async function markPendingStateChangedRecipients(params: {
     pendingBlockedCount?: number;
     meaningfulActivityAt?: Date;
     activationTarget?: Readonly<{ accountId: string; requestId: string }>;
-}): Promise<SessionRecipientCursor[]> {
+}): Promise<SessionRecipientPublication[]> {
     const meaningfulActivityAt = params.meaningfulActivityAt instanceof Date
         && Number.isFinite(params.meaningfulActivityAt.getTime())
         ? params.meaningfulActivityAt.getTime()

@@ -724,6 +724,11 @@ describe("session publisher presence on SQLite", () => {
         if (expired?.status !== "expired") throw new Error("expected expiry");
         expect(expired.badgeAttentionChanged).toBe(false);
         expect(expired.recipientCursors.map(({ accountId }) => accountId).sort()).toEqual(seeded.participantIds);
+        expect(expired.recipientCursors).toEqual(await db.accountChange.findMany({
+            where: { kind: "session", entityId: seeded.binding.sessionId },
+            orderBy: { accountId: "asc" },
+            select: { accountId: true, cursor: true },
+        }));
         await expect(db.session.findUniqueOrThrow({
             where: { id: seeded.binding.sessionId },
             select: {

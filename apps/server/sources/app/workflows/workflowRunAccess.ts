@@ -342,7 +342,7 @@ export async function commitWorkflowRunRecipientKeyEnvelopesInTx(tx: Tx, input: 
     const access = await resolveWorkflowRunAccessInTx(tx, input);
     if (!access) throw new WorkflowRunAccessError("run_not_found");
     await acquireWorkflowPublicationLocksInTx(tx, { accountId: access.ownerAccountId, runIds: [input.runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, access.ownerAccountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, access.ownerAccountId, "content");
     if (fence.status !== "ready") throw new WorkflowRunAccessError("content_unavailable");
     const census = await readWorkflowRunKeyProjectionInTx(tx, input);
     if (census.encryptionMode === "plain") throw new WorkflowRunAccessError("data_key_not_required");

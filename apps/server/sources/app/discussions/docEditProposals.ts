@@ -7,6 +7,7 @@ import { readDiscussionMessageInTx } from './queries';
 import { resolveDiscussionDocTargetInTx, type DiscussionDocSource } from './docPassages';
 import { markDiscussionReadersChangedInTx, scheduleDiscussionBadgeRefreshInTx } from './changes';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
+import { acquireDiscussionMutationAccountsInTx } from './access';
 
 export interface StoredDocEditProposal {
     message: DiscussionMessageV1;
@@ -30,6 +31,7 @@ async function lockProposalMessageInTx(tx: Tx, proposalRef: DiscussionMessageRef
 export async function readDocEditProposalInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; authentication: SessionAccessAuthentication; proposalRef: DiscussionMessageRefV1;
 }>): Promise<DiscussionResult<StoredDocEditProposal>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { actorAccountId: input.actorAccountId, discussionId: input.proposalRef.discussion.discussionId });
     await lockProposalMessageInTx(tx, input.proposalRef);
     const read = await readDiscussionMessageInTx(tx, { actorAccountId: input.actorAccountId, authentication: input.authentication,
         discussionId: input.proposalRef.discussion.discussionId, messageId: input.proposalRef.messageId });
@@ -48,6 +50,7 @@ export async function setDocEditProposalDispositionInTx(tx: Tx, input: Readonly<
     proposalRef: DiscussionMessageRefV1; expectedDisposition: 'open';
     disposition: Exclude<DocEditProposalDispositionV1, { state: 'open' }>;
 }>): Promise<boolean> {
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.proposalRef.discussion.discussionId });
     const disposition = DocEditProposalDispositionV1Schema.safeParse(input.disposition);
     if (!disposition.success || disposition.data.state === 'open') return false;
     const changed = await tx.discussionMessage.updateMany({
