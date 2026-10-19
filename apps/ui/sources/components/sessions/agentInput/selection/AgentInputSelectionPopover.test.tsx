@@ -173,6 +173,32 @@ describe('AgentInputSelectionPopover', () => {
         windowWidthState.value = 480;
     });
 
+    it('drops a document composer\'s chip picker below its chip when the room above cannot hold it (a Run now form at the window top)', async () => {
+        windowWidthState.value = 1440;
+        const { resolveHappierPopoverPlacement } = await import('@happier-dev/plugin-ui/presentation');
+        const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
+        const { AgentInputDocumentPanelContext } = await import('./useAgentInputPopoverLayout');
+        const anchorRef = { current: { nodeType: 'View' } } as any;
+        await renderScreen(
+            <AgentInputDocumentPanelContext.Provider value>
+                <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
+                    {() => <React.Fragment />}
+                </AgentInputSelectionPopover>
+            </AgentInputDocumentPanelContext.Provider>,
+        );
+        const decide = (available: Readonly<{ top: number; bottom: number }>) => resolveHappierPopoverPlacement({
+            placement: capturedPopoverProps.current?.placement as 'top' | 'bottom',
+            preferredMinAvailable: (capturedPopoverProps.current?.placementMinSpace as number | undefined) ?? 560,
+            flip: capturedPopoverProps.current?.flip !== false,
+            available: { ...available, left: 0, right: 0 },
+        });
+        // A step card mid-page keeps the composer placement: above its chip.
+        expect(decide({ top: 400, bottom: 256 })).toBe('top');
+        // The Run now form hangs from the page header: 130 above, the page below.
+        expect(decide({ top: 130, bottom: 640 })).toBe('bottom');
+        windowWidthState.value = 480;
+    });
+
     it('forwards an explicit top/bottom portal layout override to the shared popover', async () => {
         const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
         const anchorRef = { current: { nodeType: 'View' } } as any;

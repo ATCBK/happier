@@ -5,6 +5,7 @@ import {
     MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS,
     type PopoverPortalOptions,
 } from '@/components/ui/popover';
+import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
 import { useComposerKeyboardLayout } from '@/components/sessions/keyboardAvoidance/ComposerKeyboardContext';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
@@ -26,6 +27,12 @@ const AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS = Number.POSITIVE_INFINITY;
  * over the text being written. Chip pickers ignore it: they hang directly above their chip.
  */
 export const AgentInputPopoverClearanceContext = React.createContext<React.RefObject<any> | undefined>(undefined);
+
+/**
+ * True inside a document composer (`AgentInput` `panelPresentation="document"`): a form card in a page or
+ * a floating form, not the chat composer at the bottom of the window.
+ */
+export const AgentInputDocumentPanelContext = React.createContext(false);
 
 export type AgentInputPopoverLayout = Readonly<{
     maxHeightCap?: number;
@@ -55,6 +62,7 @@ export function useAgentInputPopoverLayout(input: Readonly<{
     const keyboardHeight = useKeyboardHeight();
     const composerKeyboardLayout = useComposerKeyboardLayout();
     const clearanceRef = React.useContext(AgentInputPopoverClearanceContext);
+    const documentPanel = React.useContext(AgentInputDocumentPanelContext);
     const retainedNativeKeyboardHeightRef = React.useRef(0);
     const { height: windowHeight, width: windowWidth } = useWindowDimensions();
     const normalizedKeyboardHeight = Number.isFinite(keyboardHeight)
@@ -140,12 +148,16 @@ export function useAgentInputPopoverLayout(input: Readonly<{
     }, [input.portalTopBottomLayout]);
 
     const caretAnchored = input.anchor === 'caret';
+    // A document composer's chip picker still opens above its chip, but a form hung near the window's top
+    // (the Run now form under the page header) leaves no room there: it drops below instead of cramping.
+    const documentChip = !caretAnchored && documentPanel;
     return {
         maxHeightCap,
         keyboardBottomInset: effectiveKeyboardHeight,
         placement: caretAnchored && Platform.OS === 'web' ? 'bottom' : 'top',
-        ...(caretAnchored && Platform.OS === 'web' ? { placementMinSpace: AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS } : {}),
-        flip: caretAnchored,
+        ...(caretAnchored && Platform.OS === 'web' ? { placementMinSpace: AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS }
+            : documentChip ? { placementMinSpace: POPOVER_PREFERRED_ROOM_PX } : {}),
+        flip: caretAnchored || documentChip,
         // The popover now anchors correctly on every platform (Popover resolves the portal-relative
         // anchor via window-deltas on Android — see `resolvePortalRelativeAnchorRect`), so the gap is
         // the same snug value everywhere. Previously Android over-padded (32) to mask an anchor that
