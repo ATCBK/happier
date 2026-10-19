@@ -1,30 +1,67 @@
 import { describe, expect, it } from 'vitest';
+import tweetnacl from 'tweetnacl';
 import { TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1';
+import { buildApprovalRequesterConfirmationV1 } from './approvalRequestV1';
+import { buildApprovalExecutionOriginV1 } from '../actions/actionExecutor';
+import type { ActionExecutorContext } from '../actions/executor/types';
+import { ExternalActionExecutionAuthorizationV1Schema } from '../actions/externalActionApi';
+import {
+  computeExternalActionRequestEnvelopeDigestV1,
+  signExternalActionApprovalInputV1,
+  verifyExternalActionApprovalInputV1,
+} from '../actions/externalActionExecutionAuthorization';
+import { SessionActionRpcOriginV1Schema } from '../rpc/socket';
 import { computeActionInputApprovalDigestV1 } from '../actions/decisionAuthority';
 
 describe('TargetActionApprovalRequestV1Schema', () => {
   it('binds shared-Bot confirmation and its deciding person without changing executor custody', () => {
-    const requesterConfirmation = {
-      requestRef: 'request-bob', requesterAccountId: 'bob',
-      personaSessionRef: { serverId: 'server-1', sessionId: 'bot-session' },
-      executionAccountId: 'alice', inputDigest: computeActionInputApprovalDigestV1('action.invoke', {
-        action: { pluginId: 'acme.alpha', localId: 'run' }, input: { value: 'x' },
-      }),
+    const input = { action: { pluginId: 'acme.alpha', localId: 'run' }, input: { value: 'x' } };
+    const target = { kind: 'session' as const, sessionId: 'bot-session' };
+    const sessionActionOrigin = SessionActionRpcOriginV1Schema.parse({ v: 1,
+      caller: { kind: 'session', sessionId: 'bot-session', starterDepth: 0, turnDepth: 0 },
+      sourceTurnId: 'bot-turn', callerPermissionMode: 'default', workspaceWrites: 'allow', requestId: 'request-1' });
+    // The Home token is an opaque transport boundary; the origin and its input signature use real producers.
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-authorization', binding: {
+      accountId: 'alice', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'srv_home', machineId: 'machine-1', installationId: 'installation-1',
+      actionId: 'action.invoke', requestId: 'request-1', target,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'request-1', target, input }),
+      sessionActionOrigin, sessionActionSource: { machineId: 'machine-1', installationId: 'installation-1' },
+    } });
+    const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(19));
+    const context: ActionExecutorContext = {
+      surface: 'agent', authority: 'account_automation', runtimeAccountId: 'alice', serverId: 'server-1',
+      serverIdentityId: 'srv_home', defaultSessionId: 'bot-session', actionRequestId: 'request-1',
+      actionCaller: sessionActionOrigin.caller, callerPermissionMode: sessionActionOrigin.callerPermissionMode,
+      workspaceWrites: sessionActionOrigin.workspaceWrites,
+      sessionInputSource: { sourceSessionId: 'bot-session', sourceTurnId: 'bot-turn', via: 'action' },
+      actionRequestAttributionV1: { requestRef: 'request-bob', requester: { serverId: 'server-1', accountId: 'bob' },
+        persona: { serverId: 'server-1', sessionId: 'bot-session' }, origin: null },
+      externalActionTarget: target, externalActionExecutionAuthorization: authorization,
+      signExternalActionApprovalInput: request => signExternalActionApprovalInputV1({ actionId: request.actionId,
+        input: request.input, target: request.target, authorizationToken: request.authorization.token,
+        requesterConfirmation: request.requesterConfirmation, privateKey: keys.secretKey }),
     };
+    const requesterConfirmation = buildApprovalRequesterConfirmationV1({ context, actionId: 'action.invoke', input });
+    if (!requesterConfirmation) throw new Error('Expected an admitted shared requester');
+    expect(requesterConfirmation).toEqual({ requestRef: 'request-bob', requesterAccountId: 'bob',
+      personaSessionRef: { serverId: 'server-1', sessionId: 'bot-session' }, executionAccountId: 'alice',
+      inputDigest: computeActionInputApprovalDigestV1('action.invoke', input) });
+    const executionOriginV1 = buildApprovalExecutionOriginV1({ context, actionId: 'action.invoke', input,
+      targetSessionId: 'bot-session', requesterConfirmation });
+    if (!executionOriginV1?.externalActionInputSignature) throw new Error('Expected a signed execution origin');
+    expect(executionOriginV1).toMatchObject({ authority: 'account_automation', surface: 'agent',
+      accountId: 'alice', serverId: 'server-1', sessionId: 'bot-session', actionId: 'action.invoke', requestId: 'request-1' });
+    expect(verifyExternalActionApprovalInputV1({ actionId: 'action.invoke', input, target,
+      authorizationToken: authorization.token, requesterConfirmation, publicKey: keys.publicKey,
+      signature: executionOriginV1.externalActionInputSignature })).toBe(true);
     const request = {
       v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.alpha/actions/run',
       input: { value: 'x' }, sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
       policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'c'.repeat(64), summary: 'Run',
       requesterConfirmation,
-      executionOriginV1: {
-        v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
-        serverId: 'server-1', accountId: 'alice', sessionId: 'bot-session', actionId: 'action.invoke', requestId: 'request-1',
-        actionRequestAttributionV1: {
-          requestRef: 'request-bob', requester: { serverId: 'server-1', accountId: 'bob' },
-          persona: { serverId: 'server-1', sessionId: 'bot-session' }, origin: null,
-        },
-      },
+      executionOriginV1,
     };
     expect(TargetActionApprovalRequestV1Schema.parse(request)).toEqual(request);
     expect(TargetActionApprovalRequestV1Schema.safeParse({
@@ -37,6 +74,11 @@ describe('TargetActionApprovalRequestV1Schema', () => {
     expect(TargetActionApprovalRequestV1Schema.safeParse({
       ...request, requesterConfirmation: { ...requesterConfirmation, requesterAccountId: 'carol' },
     }).success).toBe(false);
+    for (const removed of ['externalActionExecutionAuthorization', 'externalActionInputSignature'] as const) {
+      const unsignedOrigin = { ...executionOriginV1 };
+      delete unsignedOrigin[removed];
+      expect(TargetActionApprovalRequestV1Schema.safeParse({ ...request, executionOriginV1: unsignedOrigin }).success).toBe(false);
+    }
   });
   it('requires an exact qualified action subject and correlation fingerprint', () => {
     const request = { v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
