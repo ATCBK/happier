@@ -1557,12 +1557,16 @@ export const Item = React.memo<ItemProps>((props) => {
     // `text` starts on the title's edge, also when the row has no glyph of its own but its section reserves the column.
     // A menu row's title edge is its own padding plus the menu glyph box, not the page row's.
     const menuBottomText = bottomElementInset === 'text' && isMenuRow && (icon != null || leftElement != null);
+    // A list row (a collection rail) with a glyph: the title's edge is the row's own padding, the glyph box and its gap.
+    const listBottomTextStart = bottomElementInset === 'text' && !isPageRow && !isMenuRow && icon != null && leftElement == null
+        ? ITEM_ROW_PADDING_HORIZONTAL[resolvedIconDensity] + (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight
+        : null;
     const bottomTextInset = bottomElementInset === 'text' && isPageRow && (icon != null || leftElement != null || reservesLeadingColumn)
         ? PAGE_LIST_METRICS.rowLeadingColumnPx + resolvedIconMarginRight
         : 0;
     const bottomPaddingLeft = menuBottomText
         ? MENU_ROW_METRICS.paddingHorizontalPx + MENU_ROW_METRICS.iconBoxSizePx + MENU_ROW_METRICS.iconMarginRightPx
-        : PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset;
+        : listBottomTextStart ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset;
     const bottom = bottomElement ? <View style={{ paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingLeft: bottomPaddingLeft, paddingBottom: PAGE_LIST_METRICS.rowPaddingVerticalPx }}>{bottomElement}</View> : null;
     const content = React.useMemo(() => (
         <>

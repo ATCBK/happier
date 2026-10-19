@@ -9,7 +9,7 @@ import { applySavedSecretCatalogPage, invalidateSavedSecretCatalog, resetSavedSe
 
 import { pickMostBlockingCapabilityStatus, presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 
-import { mcpServerMachineStatuses, mcpServerStatus, type McpServerStatusInput } from './mcpServerStatus';
+import { mcpServerAttentionStatus, mcpServerMachineStatuses, mcpServerStatus, type McpServerStatusInput } from './mcpServerStatus';
 
 const remote: McpServerCatalogEntryV1 = McpServerCatalogEntryV1Schema.parse({
     id: 'sentry', name: 'sentry', transport: 'http', env: {}, createdAt: 1, updatedAt: 1,
@@ -153,5 +153,27 @@ describe('mcpServerStatus', () => {
         }));
         expect(byMachine.has('a')).toBe(false);
         expect(byMachine.get('b')?.kind).toBe('error');
+    });
+});
+
+describe('mcpServerAttentionStatus', () => {
+    const catalog = { resolveReference: (ref: string) => resolveSavedSecretReference(null, [], ref) };
+    const attention = (entry: McpServerCatalogEntryV1, signIn: McpServerStatusInput['signIn']) =>
+        mcpServerAttentionStatus({ entry, signIn, savedSecretCatalog: catalog });
+
+    it('names what blocks a sign-in server in the page\'s own vocabulary, with its time', () => {
+        expect(attention(remote, { state: 'not_connected' })?.kind).toBe('signin');
+        expect(attention(remote, { state: 'no_machine_online' })?.kind).toBe('signin');
+        expect(attention(remote, { state: 'revoked' })?.kind).toBe('revoked');
+        expect(attention(remote, { state: 'expired', reason: 'expired', at: 'Oct 10' })).toEqual({ kind: 'expired', detail: 'Oct 10' });
+    });
+    it('stays quiet while signing in or connected, and for a server that does not sign in', () => {
+        expect(attention(remote, { state: 'signing' })).toBeNull();
+        expect(attention(remote, { state: 'connected' })).toBeNull();
+        expect(attention({ ...local, env: {} }, null)).toBeNull();
+    });
+    it('a missing Saved Secret is a key status, drawn fix-less (the list action column owns the fix)', () => {
+        const status = attention(local, null);
+        expect(status).toEqual({ kind: 'key' });
     });
 });

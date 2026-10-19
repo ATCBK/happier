@@ -19,7 +19,9 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { useMcpServersSettings } from '../useMcpServersSettings';
 import { McpServerMark } from '../identity/McpServerMark';
-import { mcpServerNeedsKey } from '../status/mcpServerStatus';
+import { mcpServerAttentionStatus } from '../status/mcpServerStatus';
+import { mcpSignInFact } from '../signIn/mcpSignInGrantView';
+import { useMcpSignInViewOf } from '../signIn/useMcpSignInViewOf';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { shortWhereItsOn } from '@/components/capabilities/where/whereItsOnPresentation';
 import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
@@ -70,6 +72,7 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
     const agentIds = React.useMemo(() => [...new Set(reachMachines.flatMap((machine) => machine.agentIds))], [reachMachines]);
     const { names } = useWhereItsOnNames({ agentIds, machines: placeMachines });
     const savedSecretCatalog = useSavedSecretCatalog({ scope });
+    const signInOf = useMcpSignInViewOf(settings, scope);
     const pluginItems = usePluginMcpServerItems();
     const plugins = React.useMemo(() => {
         const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -104,7 +107,7 @@ export const McpServerCollection = React.memo(function McpServerCollection(props
                     ...(toolCount !== undefined ? { cost: { toolCount, ...(tokens ? { tokensPerTurn: tokens } : {}) } } : {}),
                     extra: [row.server.transport === 'stdio' ? t('capabilities.mcp.local') : t('capabilities.mcp.remote')],
                 }}
-                status={mcpServerNeedsKey(row.server, savedSecretCatalog) ? { kind: 'key' } : null}
+                status={row.unbound ? null : mcpServerAttentionStatus({ entry: row.server, signIn: mcpSignInFact(signInOf(row.server.id)), savedSecretCatalog })}
                 density={rail ? 'rail' : 'page'}
                 selected={rail ? selected : undefined}
                 onPress={() => navigate(mcpServerRoute(row.server.id))}

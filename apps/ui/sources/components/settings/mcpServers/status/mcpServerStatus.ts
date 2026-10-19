@@ -2,7 +2,7 @@ import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/
 import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
-import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { pickMostBlockingCapabilityStatus, presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { describeCapabilityNoticeReason, readCapabilityNoticeReason } from '@/components/capabilities/status/capabilityNoticeReason';
 
@@ -123,6 +123,26 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
             ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
     }
     return statuses;
+}
+
+const NO_FIXES: McpServerStatusFixes = {
+    signIn: () => {},
+    reconnect: () => {},
+    grantAccess: () => {},
+    howToFix: () => {},
+    tryAgain: () => {},
+};
+
+/**
+ * What a list says about a server: the most blocking status the person must act on (sign-in family or key), the
+ * same one the page's banner leads with, drawn without its fix (a list's action column owns the fix). Quiet while
+ * signing in, when connected and for a server that needs nothing; null when it needs nothing.
+ */
+export function mcpServerAttentionStatus(input: Pick<McpServerStatusInput, 'entry' | 'signIn' | 'savedSecretCatalog'>): CapabilityStatus | null {
+    const needsYou = mcpServerStatus({ ...input, tests: {}, machines: [], fixes: NO_FIXES })
+        .filter((status) => presentCapabilityStatus(status, 'row').tone === 'needs_you');
+    const top = pickMostBlockingCapabilityStatus(needsYou, 'row');
+    return top ? { kind: top.kind, ...(top.detail ? { detail: top.detail } : {}) } : null;
 }
 
 /** Each machine's own status (offline, can't run, stopped), keyed by machine id; healthy machines are absent. */

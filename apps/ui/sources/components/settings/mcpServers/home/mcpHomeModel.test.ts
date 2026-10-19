@@ -7,11 +7,16 @@ import type {
 } from '@happier-dev/protocol';
 
 import { buildMcpServerCollection } from '../collection/mcpServerCollectionModel';
-import {
-  buildMcpHome,
-  MCP_RING_MORE_KEY,
-  type McpHomeGrant,
-} from './mcpHomeModel';
+import { buildMcpHome, MCP_RING_MORE_KEY } from './mcpHomeModel';
+import type { McpSignInView } from '../signIn/mcpSignInGrantView';
+
+/** A test grant: absent (never signed in), signed in, or one whose sign-in ran out. */
+type McpHomeGrant = Readonly<{ connected: boolean; identity: string | null }> | null;
+function signInView(grant: McpHomeGrant): McpSignInView {
+  if (!grant) return { state: 'not_connected' };
+  if (!grant.connected) return { state: 'expired', reason: 'expired' };
+  return { state: 'connected', identity: grant.identity, scopes: [], lastUsedAt: null };
+}
 
 type Kind = 'oauth' | 'key' | 'local' | 'remote';
 
@@ -91,7 +96,7 @@ function home(
 ) {
   return buildMcpHome({
     rows: buildMcpServerCollection(settings(input.servers, input.off), ''),
-    grantOf: (id) => input.grants?.[id] ?? null,
+    signInOf: (id) => signInView(input.grants?.[id] ?? null),
     savedSecretCatalog: { resolveReference: ref => resolveSavedSecretReference(null,
       (input.secrets ?? []).map(id => SavedSecretSchema.parse({ id, name: id, kind: 'apiKey',
         encryptedValue: { _isSecretValue: true, value: 'test-value' }, createdAt: 1, updatedAt: 1 })), ref) },
@@ -134,10 +139,10 @@ describe('MCP homepage model (P7 U7.11, lab hm-A)', () => {
       figma: 'none', // off: no tether, and no problem asked of the person
     });
     expect(
-      model.servers.find((server) => server.id === 'sentry')?.problem,
+      model.servers.find((server) => server.id === 'sentry')?.status?.kind,
     ).toBe('expired');
     expect(
-      model.servers.find((server) => server.id === 'figma')?.problem,
+      model.servers.find((server) => server.id === 'figma')?.status,
     ).toBeNull();
     expect(
       model.servers.find((server) => server.id === 'github')?.identity,
@@ -156,7 +161,7 @@ describe('MCP homepage model (P7 U7.11, lab hm-A)', () => {
       servers: [entry('context7', 'key'), entry('linear', 'oauth')],
     });
     expect(
-      model.servers.map((server) => [server.id, server.problem, server.tether]),
+      model.servers.map((server) => [server.id, server.status?.kind, server.tether]),
     ).toEqual([
       ['context7', 'key', 'attention'],
       ['linear', 'signin', 'attention'],

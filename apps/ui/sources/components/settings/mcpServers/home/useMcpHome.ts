@@ -3,18 +3,11 @@ import * as React from 'react';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { useRegistrySuggestions } from '@/registries/useRegistrySuggestions';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
-import { getStorage } from '@/sync/domains/state/storageStore';
 
 import { buildMcpServerCollection } from '../collection/mcpServerCollectionModel';
-import {
-  findMcpSignInGrant,
-  mcpSignInGrantIdentity,
-  mcpSignInGrantView,
-} from '../signIn/mcpSignInGrantView';
-import { useMcpSignInGrantDiagnostics } from '../signIn/useMcpSignInGrantDiagnostics';
-import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
+import { useMcpSignInViewOf } from '../signIn/useMcpSignInViewOf';
 import { useMcpServersSettings } from '../useMcpServersSettings';
-import { buildMcpHome, type McpHomeGrant } from './mcpHomeModel';
+import { buildMcpHome } from './mcpHomeModel';
 
 /**
  * The homepage's data: the Account's servers, their sign-in grants and saved keys, the registry's
@@ -26,9 +19,7 @@ export function useMcpHome() {
     () => buildMcpServerCollection(settings, ''),
     [settings],
   );
-  const grants = getStorage()((state) => state.profile.connectedAccountsV4);
-  const { machines } = useReachMachines();
-  const diagnostics = useMcpSignInGrantDiagnostics(grants, scope, machines.find(machine => !machine.offline)?.machineId ?? machines[0]?.machineId ?? null);
+  const signInOf = useMcpSignInViewOf(settings, scope);
   const savedSecretCatalog = useSavedSecretCatalog({ scope });
   const { resolveReference } = savedSecretCatalog;
   const secretAvailability = React.useMemo(() => ({ resolveReference }), [resolveReference]);
@@ -49,21 +40,12 @@ export function useMcpHome() {
     () =>
       buildMcpHome({
         rows,
-        grantOf: (serverId): McpHomeGrant => {
-          const grant = findMcpSignInGrant(grants, serverId);
-          const server = settings.servers.find(server => server.id === serverId);
-          return grant
-            ? {
-                connected: server ? mcpSignInGrantView(server, grant, machines.some(machine => !machine.offline), diagnostics[serverId])?.state === 'connected' : false,
-                identity: mcpSignInGrantIdentity(grant),
-              }
-            : null;
-        },
+        signInOf,
         savedSecretCatalog: secretAvailability,
         firstVisitDismissed: dismissedAt !== null,
         suggestions,
       }),
-    [diagnostics, dismissedAt, grants, machines, rows, secretAvailability, settings.servers, suggestions],
+    [dismissedAt, rows, secretAvailability, signInOf, suggestions],
   );
   const dismissFirstVisit = React.useCallback(
     () => setDismissedAt(Date.now()),
