@@ -310,6 +310,7 @@ import { useDeviceType, useIsLandscape, useIsTablet } from '@/utils/platform/res
 import { getSessionName, getSessionStatus, shouldShowAbortButtonForSessionState, useSessionStatus } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { SessionDiscussionSourceLinksProvider } from '@/components/discussions/SessionDiscussionSourceLinks';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -2795,7 +2796,9 @@ function SessionViewLoaded(props: Parameters<typeof SessionViewLoadedContent>[0]
     );
     return <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.routeServerId ?? props.session.serverId} interaction={interaction} navigation={props.embedded?.navigation}>
         <SessionDraftHydrationBoundary lifetime={props.accountBinding} addresses={[{ kind: 'session', sessionId: props.sessionId }]}>
-            <SessionViewLoadedContent {...props} />
+            <SessionDiscussionSourceLinksProvider sessionId={props.sessionId} serverId={props.routeServerId ?? props.session.serverId ?? null}>
+                <SessionViewLoadedContent {...props} />
+            </SessionDiscussionSourceLinksProvider>
         </SessionDraftHydrationBoundary>
     </AppSessionTranscriptSourceProvider>;
 }

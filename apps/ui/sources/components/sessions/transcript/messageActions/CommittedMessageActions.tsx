@@ -14,6 +14,7 @@ import { MessagePinButton } from './MessagePinButton';
 import { PluginMessageActionsView } from './PluginMessageActions';
 import { useCommittedMessageActions, type CommittedMessageActionInput } from './useCommittedMessageActions';
 import { SaveMessageAsPrompt } from './SaveMessageAsPrompt';
+import { DiscussionSourceMarkers } from '@/components/discussions/SessionDiscussionSourceLinks';
 import { SaveMemoryDecisionSheet, seedMemoryDecisionFromMessage } from '@/components/memory/SaveMemoryDecisionSheet';
 import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
 import { Text } from '@/components/ui/text/Text';
@@ -68,7 +69,7 @@ export function CommittedMessageActions(props: Props) {
     const decisionAnchorRef = React.useRef<View>(null);
     const [decisionSeedSource, setDecisionSeedSource] = React.useState<SessionMessageRefV1 | null>(null);
     const [decisionSaved, setDecisionSaved] = React.useState(false);
-    const { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability } = useCommittedMessageActions({
+    const { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability, committedMessage } = useCommittedMessageActions({
         ...props, openSavePrompt: () => setSaveOpen(true), openSaveDecision: setDecisionSeedSource,
     });
     React.useEffect(() => { setSaveOpen(false); setMenuOpen(false); setSavedArtifactId(null); setDecisionSeedSource(null); setDecisionSaved(false); }, [props.message.id]);
@@ -145,6 +146,7 @@ export function CommittedMessageActions(props: Props) {
     </MessageActionRow>;
     const contents = <>
         {props.children(row)}
+        <DiscussionSourceMarkers source={committedMessage} navigate={source.navigate} />
         {hasNativeMenu ? <ContextMenu
             open={menuOpen} onOpenChange={setMenuOpen} anchorRef={anchorRef}
             items={items} onSelect={perform} placement="auto" variant="slim" showCategoryTitles={false}

@@ -11,6 +11,7 @@ import { matchesComposerSuggestionQuery, type ComposerSuggestionCatalogs } from 
 import type { SessionResponsibilityCandidateV1 } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import { AgentInput } from '@/components/sessions/agentInput';
 import type { AgentInputSendOptions } from '@/components/sessions/agentInput/agentInputSendOptions';
+import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import {
     structuredInputMentionSurvivesText,
     type ComposerStructuredInputMention,
@@ -74,6 +75,8 @@ export function DiscussionComposer(props: Readonly<{
     onChange: (value: DiscussionComposerValue) => void;
     disabled: boolean;
     onSend: (content: ReturnType<typeof buildDiscussionContent>) => void;
+    /** The page's own composer controls after `@` (a running Discussion's Run…). */
+    extraActionChips?: readonly AgentInputExtraActionChip[];
 }>): React.ReactElement {
     const { scope, availability, disabled, accountLifetime } = props;
     const client = React.useMemo(() => createDiscussionClient({ scope, availability }), [availability, scope]);
@@ -236,11 +239,12 @@ export function DiscussionComposer(props: Readonly<{
         write({ text, mentions: latest.mentions });
         requestAnimationFrame(() => focusRequestRef.current?.());
     }, [write]);
+    const pageChips = props.extraActionChips;
     const mentionChips = React.useMemo(() => [createMentionActionChip({
         label: t('session.collaboration.discussion.composer.mention'),
         disabled,
         onMention: insertMention,
-    })], [disabled, insertMention]);
+    }), ...(pageChips ?? [])], [disabled, insertMention, pageChips]);
     const phone = useSurfaceStateSize() === 'phone';
     // A new Discussion's page says how addressing works itself, so the line beside send is for a running thread.
     const addressingHint = phone || !props.discussionId ? undefined : <Text testID="session-discussion-composer-hint" style={styles.hint} numberOfLines={1}>{t('session.collaboration.discussion.composer.mentionHint')}</Text>;

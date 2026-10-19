@@ -1,5 +1,6 @@
 import { DiscussionSelectionSourceV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
+import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
@@ -100,6 +101,11 @@ export type DiscussionTimelineItem<
         anchorSeq: number;
         entry: AgentActivityEntry;
         subagent: SessionSubagent;
+    }>
+    | Readonly<{
+        /** A managed Pattern run, shown right under the message that started it. */
+        kind: 'workflow_run';
+        run: WorkflowRunSummaryV1;
     }>;
 
 type AgentActivityReference = Extract<DiscussionTimelineItem, { kind: 'agent_activity_reference' }>;
@@ -128,6 +134,8 @@ export function buildDiscussionTimelineItems<TMessage extends DiscussionTimeline
     messages: readonly TMessage[];
     subagents: readonly SessionSubagent[];
     readExecutionRunEntry: (runId: string) => AgentActivityEntry | null;
+    /** The authorized managed Run list for this Discussion; a Run whose starting message isn't loaded waits for it. */
+    workflowRuns?: readonly WorkflowRunSummaryV1[];
 }>): readonly DiscussionTimelineItem<TMessage>[] {
     const messageById = new Map(params.messages.map((message) => [message.id, message]));
     const referencesByAnchorSeq = new Map<number, AgentActivityReference[]>();
@@ -169,9 +177,20 @@ export function buildDiscussionTimelineItems<TMessage extends DiscussionTimeline
 
     for (const references of referencesByAnchorSeq.values()) references.sort(compareReferences);
 
+    const workflowRunsByMessageId = new Map<string, WorkflowRunSummaryV1[]>();
+    for (const run of params.workflowRuns ?? []) {
+        const origin = run.origin.kind === 'direct' ? run.origin.discussion : undefined;
+        if (!origin || origin.discussion.discussionId !== params.discussionId
+            || !areServerProfileIdentifiersEquivalent(origin.discussion.serverId, params.serverId)) continue;
+        const atMessage = workflowRunsByMessageId.get(origin.messageId);
+        if (atMessage) atMessage.push(run);
+        else workflowRunsByMessageId.set(origin.messageId, [run]);
+    }
+
     const items: DiscussionTimelineItem<TMessage>[] = [];
     for (const message of params.messages) {
         items.push({ kind: 'human_message', message });
+        for (const run of workflowRunsByMessageId.get(message.id) ?? []) items.push({ kind: 'workflow_run', run });
         items.push(...(referencesByAnchorSeq.get(message.seq) ?? []));
     }
     return items;

@@ -1,28 +1,14 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import {
-  HappierPressable,
-  HAPPIER_PRESS_FEEDBACK_V1,
-  isHappierPageRowNarrow,
-  type HappierDisclosureHeaderState,
-} from '@happier-dev/plugin-ui/presentation';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
-import { Text } from '@/components/ui/text/Text';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import {
-  ExpandableItem,
-  ExpandableItemCaret,
-} from '@/components/ui/lists/ExpandableItem';
+import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
-import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import { useWorkflowsAvailability } from '@/components/workflows/gating/workflowsAvailability';
-import { WorkflowPurposeGlyph } from '@/components/workflows/presentation/WorkflowPurposeGlyph';
+import { WorkflowRunFoldHeader } from '@/components/workflows/presentation/WorkflowRunFoldHeader';
 import { describeWorkflowTriggerRunFold } from '@/components/workflows/presentation/workflowTriggerRunFoldPresentation';
 import { isTerminalWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { useSessionManagedWorkflowRunFlow } from '@/components/workflows/run/useContextManagedWorkflowRuns';
-import { Typography } from '@/constants/Typography';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
@@ -32,7 +18,6 @@ import {
   useActiveServerAccountScope,
   useWorkflowRun,
 } from '@/sync/store/hooks';
-import { t } from '@/text';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 
 import { useTranscriptRowLayoutMutation } from '../measurement/TranscriptRowLayoutMutationContext';
@@ -129,6 +114,11 @@ export const WorkflowRunFold = React.memo(function WorkflowRunFold(
     [notifyLayoutMutation, props.turnId],
   );
 
+  const source = useSessionTranscriptSource();
+  const runId = props.run.runId;
+  const open = React.useMemo(() => source.navigate === null ? null : () => {
+    navigateWithBlurOnWeb(() => source.navigate?.(createWorkflowRunRoute(runId)));
+  }, [runId, source.navigate]);
   const detail = row?.detail;
   const acceptedSource = detail?.acceptedContext.source;
   const catalogRef =
@@ -170,6 +160,7 @@ export const WorkflowRunFold = React.memo(function WorkflowRunFold(
             runId={props.run.runId}
             disclosure={null}
             presentation={presentation}
+            onOpen={open}
           />
         </View>
       );
@@ -187,6 +178,7 @@ export const WorkflowRunFold = React.memo(function WorkflowRunFold(
               runId={props.run.runId}
               disclosure={{ expanded: isExpanded, headerProps }}
               presentation={presentation}
+              onOpen={open}
             />
           )}
         >
@@ -211,128 +203,6 @@ export const WorkflowRunFold = React.memo(function WorkflowRunFold(
   );
 });
 
-function WorkflowRunFoldHeader(
-  props: Readonly<{
-    runId: string;
-    /** Absent for a run with nothing to expand. */
-    disclosure: Readonly<{
-      expanded: boolean;
-      headerProps: HappierDisclosureHeaderState['headerProps'];
-    }> | null;
-    presentation: ReturnType<typeof describeWorkflowTriggerRunFold>;
-  }>,
-) {
-  const { theme } = useUnistyles();
-  const source = useSessionTranscriptSource();
-  const [narrow, setNarrow] = React.useState(false);
-  const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-    setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width));
-  }, []);
-  const { verb, details, meta, purpose } = props.presentation;
-  const line = [verb, ...details].join(' · ');
-  const glyph = purpose ? (
-    <WorkflowPurposeGlyph
-      purpose={purpose}
-      size={ICON_SIZE.xs}
-      color={theme.colors.text.secondary}
-    />
-  ) : (
-    <Icon
-      name="tree-structure"
-      size={ICON_SIZE.xs}
-      color={theme.colors.text.secondary}
-    />
-  );
-  const open =
-    source.navigate === null
-      ? null
-      : () => {
-          navigateWithBlurOnWeb(() =>
-            source.navigate?.(createWorkflowRunRoute(props.runId)),
-          );
-        };
-  // The outcome is the fact the row exists for: on a narrow row it wraps rather than ellipsizes, and the
-  // trailing workflow/trigger fact is what gives way.
-  const summary = (
-    <>
-      <View style={styles.glyph}>{glyph}</View>
-      <Text
-        numberOfLines={narrow ? 3 : 1}
-        ellipsizeMode="tail"
-        style={styles.line}
-      >
-        <Text style={styles.verb}>{verb}</Text>
-        {details.map((part, index) => (
-          <Text key={index} style={styles.detail}>{` · ${part}`}</Text>
-        ))}
-      </Text>
-      {meta && !narrow ? (
-        <Text numberOfLines={1} ellipsizeMode="tail" style={styles.meta}>
-          {meta}
-        </Text>
-      ) : null}
-    </>
-  );
-  const { disclosure } = props;
-  return (
-    <View style={styles.header} onLayout={onLayout}>
-      {disclosure ? (
-        <HappierPressable
-          {...disclosure.headerProps}
-          expanded={disclosure.expanded}
-          accessibilityLabel={line}
-          testID={`workflow-run-fold-toggle:${props.runId}`}
-          style={({ pressed, focused }) => [
-            styles.toggle,
-            pressed
-              ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
-              : null,
-            focusRingStyle({ focused, color: theme.colors.border.focus }),
-          ]}
-        >
-          {summary}
-        </HappierPressable>
-      ) : (
-        <View style={styles.toggle} testID={`workflow-run-fold:${props.runId}`}>
-          {summary}
-        </View>
-      )}
-      {open ? (
-        <HappierPressable
-          onPress={open}
-          accessibilityRole="button"
-          accessibilityLabel={`${t('workflows.run.open')}: ${verb}`}
-          testID={`workflow-run-fold-open:${props.runId}`}
-          style={({ pressed, focused }) => [
-            styles.open,
-            pressed
-              ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
-              : null,
-            focusRingStyle({ focused, color: theme.colors.border.focus }),
-          ]}
-        >
-          <Text style={styles.openLabel}>{t('workflows.run.open')}</Text>
-        </HappierPressable>
-      ) : null}
-      {disclosure ? (
-        // The caret ends the row, past the action. It repeats the row toggle for the pointer only; keyboard
-        // and assistive technology reach the one toggle above.
-        <View aria-hidden style={styles.caretHost}>
-          <HappierPressable
-            onPress={disclosure.headerProps.onPress}
-            tabIndex={-1}
-            style={styles.caret}
-          >
-            <ExpandableItemCaret expanded={disclosure.expanded} />
-          </HappierPressable>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-const FOLD_ROW_HEIGHT = 36;
-
 const styles = StyleSheet.create((theme) => ({
   // The row sits in the transcript column exactly like a message: centered, at most the column's width.
   outer: { width: '100%', alignSelf: 'center' },
@@ -340,61 +210,6 @@ const styles = StyleSheet.create((theme) => ({
     width: '100%',
     paddingHorizontal: theme.space.s16,
     paddingBottom: theme.space.s12,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: FOLD_ROW_HEIGHT,
-    borderRadius: theme.borderRadius.lg,
-    ...resolveThemeHairlineBorderStyle(theme.colors.border.surface),
-    paddingLeft: theme.space.s10,
-    paddingRight: theme.space.s8,
-    gap: theme.space.s8,
-  },
-  toggle: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s8,
-    minHeight: FOLD_ROW_HEIGHT,
-    paddingVertical: theme.space.s4,
-    borderRadius: theme.borderRadius.md,
-  },
-  glyph: { flexShrink: 0 },
-  line: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.secondary,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  verb: {
-    ...Typography.variant('meta', 'semiBold'),
-    color: theme.colors.text.primary,
-  },
-  detail: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
-  meta: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.tertiary,
-    flexShrink: 1000,
-    minWidth: 0,
-    marginLeft: 'auto',
-  },
-  open: {
-    minHeight: FOLD_ROW_HEIGHT,
-    justifyContent: 'center',
-    paddingHorizontal: theme.space.s8,
-    borderRadius: theme.borderRadius.md,
-  },
-  openLabel: {
-    ...Typography.variant('meta', 'medium'),
-    color: theme.colors.text.primary,
-  },
-  caretHost: { flexShrink: 0 },
-  caret: {
-    minHeight: FOLD_ROW_HEIGHT,
-    justifyContent: 'center',
-    paddingHorizontal: theme.space.s2,
   },
   body: { paddingTop: theme.space.s8 },
 }));

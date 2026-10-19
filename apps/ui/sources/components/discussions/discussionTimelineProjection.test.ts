@@ -9,6 +9,7 @@ import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
 import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
+import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 describe('readDiscussionMessagePreview', () => {
     it.each(['Clarify retries', ' \n '])('summarizes a proposal without before/after text: %j', (reason) => {
@@ -83,6 +84,13 @@ describe('resolveDiscussionReplyAttributionLine', () => {
         expect(resolveDiscussionReplyAttributionLine({ producerV1: null }, viewer, 'Release bot')).toBeNull();
     });
 });
+
+function workflowRun(id: string, params: Readonly<{ messageId: string; serverId?: string; discussionId?: string }>) {
+    return createWorkflowRunSummaryFixture({ id, origin: { kind: 'direct', discussion: {
+        discussion: { serverId: params.serverId ?? 'home-1', discussionId: params.discussionId ?? 'discussion-1' },
+        messageId: params.messageId, throughSeq: 1,
+    } } });
+}
 
 function message(id: string, seq: number) {
     return { id, seq };
@@ -233,6 +241,29 @@ describe('buildDiscussionTimelineItems', () => {
             anchorSeq: 1,
             entry: { runId: 'run-valid' },
         });
+    });
+
+    it('places each managed Pattern run right after the exact message that started it, on this Discussion and Home only', () => {
+        const items = buildDiscussionTimelineItems({
+            serverId: 'home-1',
+            discussionId: 'discussion-1',
+            messages: [message('message-1', 1), message('message-2', 2), message('message-3', 3)],
+            subagents: [],
+            readExecutionRunEntry: () => null,
+            workflowRuns: [
+                workflowRun('wf-later', { messageId: 'message-2' }),
+                workflowRun('wf-first', { messageId: 'message-1' }),
+                workflowRun('wf-other-home', { messageId: 'message-1', serverId: 'home-2' }),
+                workflowRun('wf-other-discussion', { messageId: 'message-1', discussionId: 'discussion-2' }),
+                workflowRun('wf-unloaded', { messageId: 'message-0' }),
+                { ...workflowRun('wf-no-origin', { messageId: 'message-1' }), origin: { kind: 'direct' as const } },
+            ],
+        });
+
+        expect(items.map((item) => item.kind === 'human_message' ? item.message.id
+            : item.kind === 'workflow_run' ? `run:${item.run.id}` : 'reference')).toEqual([
+            'message-1', 'run:wf-first', 'message-2', 'run:wf-later', 'message-3',
+        ]);
     });
 
 });

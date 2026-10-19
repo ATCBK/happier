@@ -27,7 +27,7 @@ beforeEach(async () => { await homes.reset(); });
 afterEach(async () => { standardCleanup(); clearDiscussionRepositoryRegistryForTests(); await homes.reset(); });
 
 describe('shared Discussion repository Account custody', () => {
-    it('starts whole-list search after Strict Effects cleanup and keeps unrelated thread updates local', async () => {
+    it('completes a delayed whole-list search under the canonical StrictMode wrapper and keeps unrelated thread updates local', async () => {
         const serverId = await homes.addHome({ name: 'Search Strict Effects', serverUrl: 'https://search-strict.test', accountId: 'alice', currentAccount: true });
         const scope = { serverId, accountId: 'alice' };
         const thread = answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
@@ -39,9 +39,13 @@ describe('shared Discussion repository Account custody', () => {
             name: 'Payment source', path: '/project', host: 'review-box',
         } });
         getStorage().getState().applySessions([sourceSession]);
+        const firstPageEntered = createDeferred<void>();
+        const firstPageReady = createDeferred<void>();
         homes.answer(serverId, 'GET /v1/discussions', { select: (_input, request) => {
             const url = new URL(request.url);
-            return { body: { discussions: url.searchParams.get('state') === 'archived' ? []
+            const firstPage = url.searchParams.get('state') === 'active' && !url.searchParams.has('cursor');
+            if (firstPage) firstPageEntered.resolve();
+            return { ...(firstPage ? { respondAfter: firstPageReady.promise } : {}), body: { discussions: url.searchParams.get('state') === 'archived' ? []
                 : url.searchParams.has('cursor') ? [{ ...base, id: 'later-match', titleContent: { t: 'plain', v: { v: 1, title: 'Release gates' } },
                     participantAccounts: [SessionMessageAccountActorV1Schema.parse({ v: 1, accountId: 'mei-account', profile: {
                         name: 'Mei Chen', firstName: 'Mei', lastName: 'Chen', username: 'mei', avatarUrl: null,
@@ -56,7 +60,12 @@ describe('shared Discussion repository Account custody', () => {
             renders += 1;
             return useDiscussionListSearch({ repository, scope, accountLifetime, query, state: 'active' });
         }, { initialProps: { query: 'release' }, wrapper: ({ children }) => createElement(StrictMode, null, children) });
-        await vi.waitFor(() => expect(search.getCurrent()).toMatchObject({ status: 'ready', errorCode: null, incomplete: false, items: [{ id: 'later-match' }] }));
+        await firstPageEntered.promise;
+        await act(async () => {
+            firstPageReady.resolve();
+            await vi.waitFor(() => expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', nextCursor: null }));
+        });
+        expect(search.getCurrent()).toMatchObject({ status: 'ready', errorCode: null, incomplete: false, items: [{ id: 'later-match' }] });
         await search.rerender({ query: 'Payment source' });
         expect(search.getCurrent().items.map(row => row.id)).toEqual(['source-match']);
         await act(async () => { getStorage().getState().applySessions([{ ...sourceSession, metadata: {

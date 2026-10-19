@@ -1274,6 +1274,25 @@ describe('DiscussionDetailsView selection', () => {
     expect(slotRevealed('message-agent')).toBe(true);
   });
 
+  it('offers Save as decision on a committed message and opens the sheet for that exact message', async () => {
+    const screen = await renderScreen(
+      <DiscussionDetailsView
+        target={{
+          kind: 'discussion',
+          address: { serverId: 'server-a' },
+          discussionId: 'discussion-a',
+        }}
+        active
+      />,
+    );
+    expect(screen.findByTestId('save-memory-decision')).toBeNull();
+    await press(screen, 'session-discussion-save-decision-message-a');
+    expect(screen.findByTestId('save-memory-decision')).toBeTruthy();
+    expect(
+      screen.findByTestId('save-memory-decision.text')?.props.value,
+    ).toBe(screen.findByTestId('session-discussion-message-content-message-a')?.props.children);
+  });
+
   it('mounts row selection, copies canonical labeled text, and opens the interactive Agent draft', async () => {
     const screen = await renderScreen(
       <DiscussionDetailsView
