@@ -65,6 +65,8 @@ export type SessionAwarenessPresentationV1 = Readonly<{
 type UiSessionAwareness = import('@happier-dev/protocol').SessionAwarenessProjectionV1;
 
 export interface SessionStatus {
+    /** Optional authored explanation, independent of the runtime-derived status label. */
+    statusReason?: string;
     /**
      * The canonical projection this status was localized from. Required, not optional: a consumer
      * that has a `SessionStatus` always has the semantic answer too, so none of them needs a
@@ -482,6 +484,7 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         awareness,
         state: presented.state,
         statusText: presented.statusText,
+        ...(awareness.statusReason ? { statusReason: awareness.statusReason } : {}),
         isConnected: chrome.disconnected ? false : connected,
         shouldShowStatus: !presented.quiet,
         statusColor: color,
@@ -666,13 +669,18 @@ export function getSessionCarriedLine(session: SessionStatusSource, serverId?: s
     return [status.shouldShowStatus ? status.statusText : null, getSessionWorkContext(session, serverId)].filter(Boolean).join(' · ') || null;
 }
 
-/** Compact Work identity: Agent · named machine, otherwise the workspace owner's display name. */
-export function getSessionWorkContext(session: SessionStatusSource, serverId?: string | null): string | null {
+/** Display-only identity behind Work bylines and Session reference rows. */
+export function getSessionWorkContextParts(session: SessionDisplayNameSource, serverId?: string | null): Readonly<{
+    agentId: string | null;
+    agentLabel: string | null;
+    machineId: string | null;
+    locationLabel: string | null;
+}> {
     const state = storage.getState();
     const ownerMetadata = readDisplayOwnerMetadata(session);
     const target = readPrivateDisplayMachineTarget(session, ownerMetadata, serverId);
     const home = serverId?.trim() || getActiveServerId();
-    const machineId = target?.machineId ?? ownerMetadata?.machineId;
+    const machineId = target?.machineId ?? ownerMetadata?.machineId ?? null;
     const machine = machineId ? state.machineListByServerId[home]?.find(item => item.id === machineId)
         ?? (home === getActiveServerId() ? state.machines[machineId] : undefined) : undefined;
     const machineName = getMachineDisplayName(machine) ?? readSessionOwnerHostName(session);
@@ -682,7 +690,13 @@ export function getSessionWorkContext(session: SessionStatusSource, serverId?: s
         ? resolveSessionWorkspaceDisplayPresentation({ serverId: home, metadata: ownerMetadata,
             machineTarget: target, workspaceRefs: readProjectWorkspaceRefs(state), workspacePathDisplayModeV1: 'name' }).displayTitle
         : null;
-    return [agent, machineName || workspace].filter(Boolean).join(' · ') || null;
+    return { agentId, agentLabel: agent, machineId, locationLabel: machineName || workspace || null };
+}
+
+/** Compact Work identity: Agent · named machine, otherwise the workspace owner's display name. */
+export function getSessionWorkContext(session: SessionDisplayNameSource, serverId?: string | null): string | null {
+    const parts = getSessionWorkContextParts(session, serverId);
+    return [parts.agentLabel, parts.locationLabel].filter(Boolean).join(' · ') || null;
 }
 
 /** Returns the session path for the subtitle on existing path-oriented surfaces. */
@@ -722,7 +736,7 @@ export function isSessionActive(session: Session): boolean {
 /**
  * Formats OS platform string into a more readable format
  */
-export function formatOSPlatform(platform?: string): string {
+export function formatOSPlatform(platform?: string | null): string {
     if (!platform) return '';
 
     const osMap: Record<string, string> = {

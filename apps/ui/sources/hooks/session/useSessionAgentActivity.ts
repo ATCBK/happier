@@ -172,13 +172,13 @@ function readActivitySessionForScope(
  * The narrow width: the subagent-source projection plus the headline. No transcript subscription.
  */
 export function useSessionAgentActivity(params: SessionAgentActivityParams): SessionAgentActivityState {
-    const storeSession = useSession(params.sessionId);
+    const storeSession = useSession(params.session === undefined ? params.sessionId : '');
     const serverScopeId = normalizeServerScopeId(params.serverId);
-    const scopedRenderable = useSessionListRenderableWithServerScope(serverScopeId || params.serverId, params.sessionId);
     const session = readActivitySessionForScope(
         params.session !== undefined ? params.session : storeSession,
         params.serverId,
     );
+    const scopedRenderable = useSessionListRenderableWithServerScope(serverScopeId || params.serverId, session ? '' : params.sessionId);
     const messages = useSessionSubagentSourceMessages(params.sessionId);
     const roster = useSessionSubagents({
         sessionId: params.sessionId,
@@ -207,13 +207,13 @@ export function useSessionAgentActivity(params: SessionAgentActivityParams): Ses
 export function useSessionAgentActivityRoster(
     params: SessionAgentActivityParams,
 ): SessionAgentActivityState {
-    const storeSession = useSession(params.sessionId);
+    const storeSession = useSession(params.session === undefined ? params.sessionId : '');
     const serverScopeId = normalizeServerScopeId(params.serverId);
-    const scopedRenderable = useSessionListRenderableWithServerScope(serverScopeId || params.serverId, params.sessionId);
     const session = readActivitySessionForScope(
         params.session !== undefined ? params.session : storeSession,
         params.serverId,
     );
+    const scopedRenderable = useSessionListRenderableWithServerScope(serverScopeId || params.serverId, session ? '' : params.sessionId);
     const messages = useSessionSubagentSourceMessages(params.sessionId);
     const roster = useSessionSubagents({
         sessionId: params.sessionId,

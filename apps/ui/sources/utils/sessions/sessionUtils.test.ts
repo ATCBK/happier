@@ -136,6 +136,20 @@ function createBaseSession(overrides: Partial<Session> = {}): Session {
     };
 }
 
+it('carries an opened Session explanation beside the runtime-derived status', async () => {
+    const { getSessionStatus } = await import('./sessionUtils');
+    const nowMs = 1_700_000_000_000;
+    const session = createBaseSession({ activeAt: nowMs, metadata: { path: '/workspace', host: 'dev' } });
+    const baseline = getSessionStatus(session, nowMs);
+    const explained = getSessionStatus({ ...session, metadata: { ...session.metadata!,
+        work: { statusReason: 'Waiting for the build' } } }, nowMs);
+    expect(explained).toMatchObject({ statusReason: 'Waiting for the build',
+        awareness: { statusReason: 'Waiting for the build' } });
+    expect(explained.state).toBe(baseline.state);
+    expect(explained.statusText).toBe(baseline.statusText);
+    expect(explained.awareness.operational).toEqual(baseline.awareness.operational);
+});
+
 function createPendingUserMessage(overrides: Partial<PendingMessage> = {}): PendingMessage {
     return {
         id: 'pending-first-turn',

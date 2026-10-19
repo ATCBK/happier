@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { t } from '@/text';
 
-import { describeMachineLockedReason, getMachineDisplayName, getSessionMachineLabel, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, getMachineSentenceName, getSessionMachineLabel, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
 
 const m = (id: string, displayName?: string, host?: string) => ({ id, metadata: { displayName, host } });
 
@@ -132,6 +132,23 @@ describe('describeMachineLockedReason', () => {
 
     it('has no reason for a readable machine', () => {
         expect(describeMachineLockedReason(m('a-1', 'Studio'))).toBeNull();
+    });
+});
+
+describe('getMachineSentenceName', () => {
+    it('names a loaded machine as its display name', () => {
+        expect(getMachineSentenceName(m('a-1', 'Studio Mac'))).toBe('Studio Mac');
+    });
+
+    it('never puts a placeholder title inside a sentence', () => {
+        const generic = t('machine.thisMachineInSentence');
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null })).toBe(generic);
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null, availability: { kind: 'locked' } })).toBe(generic);
+        expect(getMachineSentenceName(null)).toBe(generic);
+    });
+
+    it('keeps a removed machine named by what happened to it', () => {
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null, absence: 'removed' })).toBe(t('machine.removedMachine'));
     });
 });
 

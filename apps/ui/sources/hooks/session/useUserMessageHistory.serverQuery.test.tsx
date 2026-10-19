@@ -192,7 +192,7 @@ describe('useUserMessageHistory server role query', () => {
         await hook.unmount();
     });
 
-    it('retains readable records and partial coverage through a failed older page, then retries its cursor', async () => {
+    it('retains readable records and immediately retries a failed older cursor on explicit demand', async () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
         historyPageHttpReply
@@ -208,8 +208,10 @@ describe('useUserMessageHistory server role query', () => {
         expect(hook.getCurrent().coverage).toBe('partial');
         expect(hook.getCurrent().error).toBe(true);
         expect(hook.getCurrent().isLoading).toBe(false);
-        vi.setSystemTime(Date.now() + USER_MESSAGE_HISTORY_REMOTE_RETRY_COOLDOWN_MS);
+        await act(async () => { await hook.getCurrent().loadMore(); });
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
         await act(async () => { await hook.getCurrent().retry(); });
+        expect(historyPageHttpReply).toHaveBeenCalledTimes(3);
         expect(historyPageHttpReply).toHaveBeenLastCalledWith('s1', { limit: 40, beforeSeq: 9 });
         expect(hook.getCurrent().entries[0]?.text).toBe('readable');
         expect(hook.getCurrent().coverage).toBe('complete');
@@ -659,6 +661,10 @@ describe('useUserMessageHistory server role query', () => {
         });
         expect(hook.getCurrent().rows).toEqual([]);
         expect(historyPageHttpReply).toHaveBeenCalledTimes(1);
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(hook.getCurrent().failure).toBe('error');
+        });
 
         // A failed page leaves the cursor unchanged, so the transcript-navigation continuation
         // effect re-drives it on every transcript store update. Those must not reach the wire.
@@ -676,8 +682,11 @@ describe('useUserMessageHistory server role query', () => {
             await flushHookEffects();
         });
 
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(hook.getCurrent().rows.map((entry) => entry.text)).toEqual(['retried prompt']);
+        });
         expect(historyPageHttpReply).toHaveBeenCalledTimes(2);
-        expect(hook.getCurrent().rows.map((entry) => entry.text)).toEqual(['retried prompt']);
         await hook.unmount();
     });
 
@@ -697,6 +706,11 @@ describe('useUserMessageHistory server role query', () => {
         await act(async () => {
             hook.getCurrent().requestNextPage();
             await flushHookEffects();
+        });
+
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(hook.getCurrent().failure).toBe('error');
         });
 
         await act(async () => {

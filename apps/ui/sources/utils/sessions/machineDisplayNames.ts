@@ -79,6 +79,20 @@ export function lockedMachineName(): string {
     return t('machine.lockedMachine');
 }
 
+/**
+ * The machine's name as copy uses it inside a sentence ("Can't list processes on {machine}",
+ * "Sign in on {machine}"). A machine whose details are locked or still loading has a placeholder
+ * title, not a name, so the sentence says "this machine" rather than "Locked machine" or "Loading…".
+ * Pass `displayName` when the title was already resolved among sibling machines (same-name
+ * disambiguation); otherwise it is the machine's own display name.
+ */
+export function getMachineSentenceName(machine: MachineNameInput | null | undefined, displayName?: string): string {
+    if (!machine || (!machine.absence && (isMachineLocked(machine) || isMachineDisplayHydrating(machine)))) {
+        return t('machine.thisMachineInSentence');
+    }
+    return displayName ?? getMachineDisplayName(machine);
+}
+
 /** What an unnamed machine is called on screen. */
 export function unnamedMachineName(): string {
     return t('machine.unnamedMachine');
@@ -127,7 +141,12 @@ type MachineNameSource = MachineNameInput & Readonly<{ id: string }>;
  * and a name must stay stable.
  */
 export function resolveMachineDisplayNames(machines: readonly MachineNameSource[]): ReadonlyMap<string, string> {
-    return new Map([...resolveMachineDisplayNameParts(machines)].map(([id, parts]) => [id, parts.hint ? `${parts.name} · ${parts.hint}` : parts.name]));
+    return new Map([...resolveMachineDisplayNameParts(machines)].map(([id, parts]) => [id, formatMachineDisplayNameParts(parts)]));
+}
+
+/** A machine's name and telling suffix as the one-string name ("Build box · 3ca2"). */
+export function formatMachineDisplayNameParts(parts: Readonly<{ name: string; hint: string | null }>): string {
+    return parts.hint ? `${parts.name} · ${parts.hint}` : parts.name;
 }
 
 /**

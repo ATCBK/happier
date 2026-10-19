@@ -10,6 +10,7 @@ import { sync } from '@/sync/sync';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
+import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { t } from '@/text';
 
@@ -132,7 +133,7 @@ function resolveHydratedServerIdForRouteResult(
 export function useHydrateSession(
     sessionId: string,
     tag: string,
-    options?: Readonly<{ serverId?: string; forceRefresh?: boolean; hydrateMessages?: boolean }>,
+    options?: Readonly<{ serverId?: string; forceRefresh?: boolean; hydrateMessages?: boolean; includeTurnsProjection?: boolean }>,
 ): SessionRouteHydrationState {
     const normalizedSessionId = normalizeSessionId(sessionId);
     const normalizedServerId = String(options?.serverId ?? '').trim();
@@ -140,6 +141,7 @@ export function useHydrateSession(
     const routeKey = `${routeServerId ?? ''}\n${normalizedSessionId}`;
     const forceRefresh = options?.forceRefresh === true;
     const hydrateMessages = options?.hydrateMessages;
+    const includeTurnsProjection = options?.includeTurnsProjection;
     const hasHydratedSession = React.useSyncExternalStore(
         storage.subscribe,
         () => readHydratedRouteSnapshot(normalizedSessionId, routeServerId),
@@ -163,7 +165,12 @@ export function useHydrateSession(
             setRouteStateRecord({ routeKey, state: createMissingState('', routeServerId, 'not_found') });
             return;
         }
-        if (!forceRefresh && hasHydratedSession) {
+        const session = storage.getState().sessions[normalizedSessionId];
+        const needsTurnsProjection = includeTurnsProjection === true
+            && session !== undefined
+            && session?.sessionTurns === undefined
+            && isSessionContentReadable(readSessionContentAvailability(session));
+        if (!forceRefresh && hasHydratedSession && !needsTurnsProjection) {
             setRouteStateRecord({ routeKey, state: createAvailableState(normalizedSessionId, routeServerId) });
             return;
         }
@@ -180,10 +187,11 @@ export function useHydrateSession(
                 ...(forceRefresh ? { forceRefresh: true } : {}),
                 ...(routeServerId ? { serverId: routeServerId } : {}),
                 ...(hydrateMessages !== undefined ? { hydrateMessages } : {}),
+                ...(includeTurnsProjection !== undefined ? { includeTurnsProjection } : {}),
             };
             const promise = (sync.ensureSessionVisibleForMessageRoute as (
                 sessionId: string,
-                options?: Readonly<{ forceRefresh?: boolean; serverId?: string; hydrateMessages?: boolean }>,
+                options?: Readonly<{ forceRefresh?: boolean; serverId?: string; hydrateMessages?: boolean; includeTurnsProjection?: boolean }>,
             ) => Promise<EnsureSessionVisibleForRouteResult>)(normalizedSessionId, Object.keys(hydrationOptions).length > 0 ? hydrationOptions : undefined);
             fireAndForget(promise, { tag });
 
@@ -255,7 +263,7 @@ export function useHydrateSession(
                 clearTimeout(retryTimeoutId);
             }
         };
-    }, [forceRefresh, hasHydratedSession, hydrateMessages, normalizedSessionId, routeKey, routeServerId, tag]);
+    }, [forceRefresh, hasHydratedSession, hydrateMessages, includeTurnsProjection, normalizedSessionId, routeKey, routeServerId, tag]);
 
     const routeState = routeStateRecord.routeKey === routeKey
         ? routeStateRecord.state
@@ -278,7 +286,12 @@ export function useHydrateSessionForRoute(
     tag: string,
     options?: Parameters<typeof useHydrateSession>[2],
 ): SessionRouteHydrationState {
-    const result = useHydrateSession(sessionId, tag, options);
+    // An opened transcript needs the bounded turn facts for grouping and workflow folds.
+    // Detail-only/background readers keep using the same hydration owner without that demand.
+    const result = useHydrateSession(sessionId, tag, {
+        ...options,
+        includeTurnsProjection: options?.includeTurnsProjection ?? options?.hydrateMessages !== false,
+    });
     // The route read owns absence; a loaded list/cache alone cannot establish it.
     useDestinationPageTitle(result.kind === 'missing' ? t('errors.sessionDeleted') : undefined);
     return result;

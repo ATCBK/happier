@@ -24,10 +24,16 @@ export function useWarmRepositoryDirectoryCacheOnSessionOpen(input: Readonly<{
         if (!input.machineOnline) return;
         if (didWarmRef.current === sessionKey) return;
         didWarmRef.current = sessionKey;
-
+        const controller = new AbortController();
         fireAndForget(
-            warmRepositoryDirectoryCache({ sessionId: input.sessionId, directoryPath: '' }),
+            warmRepositoryDirectoryCache({ sessionId: input.sessionId, directoryPath: '', signal: controller.signal }).catch(error => {
+                if (!controller.signal.aborted) throw error;
+            }),
             { tag: 'useWarmRepositoryDirectoryCacheOnSessionOpen.warmRoot' }
         );
+        return () => {
+            controller.abort();
+            if (didWarmRef.current === sessionKey) didWarmRef.current = null;
+        };
     }, [enabled, input.machineOnline, input.sessionId, input.sessionPath, sessionKey]);
 }
