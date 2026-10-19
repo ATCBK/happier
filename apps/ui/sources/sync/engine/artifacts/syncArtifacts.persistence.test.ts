@@ -13,7 +13,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 const currentCursor = (cursor: number) => json(CurrentCursorResponseSchema.parse({ cursor, changesFloor: 0 }));
 const scope = { serverId: 'inventory-home', accountId: 'inventory-person' };
 function head(id: string, version = 1): Artifact {
-    return { id, header: encodePlainArtifactStoredContent({ title: id, kind: 'prompt_doc.v2' }),
+    return { id, kind: 'prompt', header: encodePlainArtifactStoredContent({ title: id, kind: 'prompt_doc.v2' }),
         headerVersion: version, bodyVersion: version, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         ownerAccountId: scope.accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
         seq: version, createdAt: 1, updatedAt: version };
@@ -68,17 +68,11 @@ describe('device-persisted Artifact inventory through the real writer and store'
     });
 
     it('backfills retained unclassified headers after Home upgrade without delaying inventory publication', async () => {
-        const unsupported = await import('@/sync/api/capabilities/serverFeaturesClient');
-        unsupported.primeServerFeaturesSnapshot({ serverId: scope.serverId,
-            snapshot: { status: 'unsupported', reason: 'endpoint_missing' } });
-        const first = await load(async path => path === '/v2/cursor' ? currentCursor(10)
-            : json([{ ...head('known'), kind: 'prompt' }, { ...head('unclassified'), kind: null }]));
+        const first = await load(async (path, init) => init?.method === 'POST' ? json({ error: 'unavailable' }, 503)
+            : path === '/v2/cursor' ? currentCursor(10)
+                : json([head('known'), { ...head('unclassified'), kind: null }]));
         await first.completion;
         vi.resetModules();
-        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
-        const { FeaturesResponseSchema } = await import('@happier-dev/protocol/features/payload/featuresResponseSchema');
-        primeServerFeaturesSnapshot({ serverId: scope.serverId, snapshot: { status: 'ready',
-            features: FeaturesResponseSchema.parse({ features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {} }) } });
         const writeStarted = createDeferred<void>();
         const acknowledgement = createDeferred<Response>();
         const writes: unknown[] = [];
@@ -97,6 +91,38 @@ describe('device-persisted Artifact inventory through the real writer and store'
             await writeStarted.promise;
             expect(writes).toEqual([{ kind: 'prompt', expectedHeaderVersion: 1 }]);
         } finally { acknowledgement.resolve(json({ success: true })); }
+    });
+
+    it('repairs null and stale kinds from opened headers, skips locked rows and stops writing after the server echo', async () => {
+        const rows: Artifact[] = [head('known'), { ...head('unclassified'), kind: null },
+            { ...head('board'), kind: 'other', header: encodePlainArtifactStoredContent({ kind: 'work-board.v1', title: 'Board' }) },
+            { ...head('locked'), kind: null, encryptionMode: 'e2ee', dataEncryptionKey: 'unavailable-key', header: 'ciphertext' }];
+        const before = rows.map(row => ({ ...row }));
+        const writes: unknown[] = [];
+        const request = async (path: string, init?: RequestInit) => {
+            if (path === '/v2/cursor') return currentCursor(10);
+            if (init?.method !== 'POST') return json(rows);
+            const write = JSON.parse(String(init.body));
+            writes.push({ path, write });
+            const row = rows.find(row => path === `/v1/artifacts/${row.id}`);
+            if (!row) throw new Error(`Unexpected Artifact write: ${path}`);
+            row.kind = write.kind;
+            return json({ success: true });
+        };
+        const first = await load(request);
+        await first.completion;
+        await vi.waitFor(() => expect(writes).toEqual(expect.arrayContaining([
+            { path: '/v1/artifacts/unclassified', write: { kind: 'prompt', expectedHeaderVersion: 1 } },
+            { path: '/v1/artifacts/board', write: { kind: 'work_board', expectedHeaderVersion: 1 } },
+        ])));
+        expect(first.store.getState().artifacts.locked?.isDecrypted).toBe(false);
+        expect(rows.map(({ kind: _kind, ...row }) => row)).toEqual(before.map(({ kind: _kind, ...row }) => row));
+        // A fresh inventory observes the repaired metadata; it neither rewrites
+        // already-correct rows nor makes unreadable ciphertext classification guesses.
+        const next = await load(request, { scope: { ...scope, serverId: 'fresh-inventory' } });
+        await next.completion;
+        expect(writes).toHaveLength(2);
+        expect(next.store.getState().artifacts.board?.kind).toBe('work_board');
     });
 
     it('hydrates stale rows before delta catch-up, then applies changed and deleted headers without a full listing', async () => {

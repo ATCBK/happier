@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
 import { createAccountArtifactStore, encodeAccountArtifactListCursor } from './accountArtifactStore';
-import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock('axios', () => ({ default: { get, post } }));
@@ -19,18 +18,10 @@ function store() {
   return createAccountArtifactStore({ credentials: { token: 'synthetic-token', encryption: null },
     getAccountEncryptionMode: async () => 'plain' });
 }
-function advertise(kindFiltering: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-    features: kindFiltering === undefined ? {} : { artifacts: { kindFiltering: { enabled: kindFiltering } } }, capabilities: {},
-  }), { status: 200, headers: { 'content-type': 'application/json' } })));
-}
-
 describe('Account Artifact coarse kind transport', () => {
-  beforeEach(() => { get.mockReset(); post.mockReset(); resetServerFeaturesClientForTests(); });
-  afterEach(() => { vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); });
+  beforeEach(() => { get.mockReset(); post.mockReset(); });
 
-  it.each([true, false, undefined, 'true'])('negotiates classification for create, update, binary upload and restore (advertised=%s)', async enabled => {
-    advertise(enabled);
+  it('sends classification for create, update, binary upload and restore', async () => {
     const current = row(artifactId, skillHeader, 1);
     get.mockImplementation(async (url: string) => ({ status: 200, data: new URL(url).pathname.endsWith('/revisions')
       ? { revisions: [{ bodyVersion: 1, body: current.body, createdAt: 1, sizeBytes: 8 }], retentionCount: 10 }
@@ -39,13 +30,7 @@ describe('Account Artifact coarse kind transport', () => {
       const wire = Buffer.isBuffer(input)
         ? decodeArtifactUploadMetadataV1(input.subarray(0, input.indexOf(10)))
         : input;
-      expect(wire).toEqual(expect.objectContaining(enabled === true
-        ? Buffer.isBuffer(input) ? { artifactKind: 'other' } : { kind: 'skill' }
-        : {}));
-      if (enabled !== true) {
-        expect(wire).not.toHaveProperty('artifactKind');
-        if (!Buffer.isBuffer(input)) expect(wire).not.toHaveProperty('kind');
-      }
+      expect(wire).toEqual(expect.objectContaining(Buffer.isBuffer(input) ? { artifactKind: 'other' } : { kind: 'skill' }));
       return { status: 200, data: { id: artifactId, success: true, headerVersion: 2, bodyVersion: 2 } };
     });
     const artifacts = store();
@@ -60,7 +45,6 @@ describe('Account Artifact coarse kind transport', () => {
   });
 
   it('reads only classified skill pages and retains filtered pagination', async () => {
-    advertise(true);
     const rows = Array.from({ length: 501 }, (_, i) => row(`skill-${i}`, skillHeader, 501 - i));
     const queries: URLSearchParams[] = [];
     get.mockImplementation(async (url: string) => {
@@ -78,7 +62,6 @@ describe('Account Artifact coarse kind transport', () => {
   });
 
   it('restarts the full scan while unclassified rows remain before applying the caller limit', async () => {
-    advertise(true);
     const known = row('known', skillHeader, 1);
     const older = row('unclassified', skillHeader, 502);
     const fullRows = [older, ...Array.from({ length: 499 }, (_, i) => row(`other-${i}`, { kind: 'ordinary.v1' }, 501 - i)), known];
@@ -99,25 +82,12 @@ describe('Account Artifact coarse kind transport', () => {
     expect(next.nextCursor).toBeUndefined();
   });
 
-  it.each([false, undefined, 'true'])('uses the full scan when current Home filtering is disabled or its bit is missing or malformed (%s)', async enabled => {
-    advertise(enabled);
-    get.mockImplementation(async (url: string) => {
-      expect(new URL(url).searchParams.has('kind')).toBe(false);
-      return { status: 200, data: [row('ordinary', { kind: 'ordinary.v1' }, 2), row('skill', skillHeader, 1)] };
-    });
-    const page = await store().list({ coarseKind: 'skill', kind: 'prompt_bundle.v2', limit: 1 });
-    expect(page.items.map(item => item.artifactId)).toEqual(['skill']);
-    expect(page.coverage).toBe('complete');
-  });
-
   it('refuses a filtered response that omits its completeness witness', async () => {
-    advertise(true);
     get.mockResolvedValue({ status: 200, data: { items: [] } });
     await expect(store().list({ coarseKind: 'skill', limit: 1 })).rejects.toMatchObject({ code: 'list_failed' });
   });
 
   it('refuses an unfiltered response missing authenticated Artifact authority', async () => {
-    advertise(undefined);
     // Retained ciphertext from server-v0.2.16-preview.1
     // (22ac8263cfdbcdb845441b9044ff18199cf7652e) is valid stored data.
     // Missing current Home authority must still be refused before opening it.
@@ -128,7 +98,7 @@ describe('Account Artifact coarse kind transport', () => {
         dataEncryptionKey: 'AKwBsiCehjVPuFMje13g9PqxPH/L9DOmHAGTaWF/7PELBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEFp2vL9F4qtFp456Ip/CLBk3sduq0hPJdydpvcpyDvxcC/u5pBQ8RJx6w/6IzrX2B',
         headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }] };
     });
-    await expect(store().list({ coarseKind: 'skill', limit: 1 }))
+    await expect(store().list({ limit: 1 }))
       .rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
   });
 });

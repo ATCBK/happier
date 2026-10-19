@@ -25,7 +25,6 @@ import {
     fetchArtifactBlob,
     fetchArtifactHtmlPreviewLocation,
     restoreArtifactRevision,
-    supportsArtifactKindFiltering,
 } from '@/sync/api/artifacts/apiArtifacts';
 import type { Encryption } from '@/sync/encryption/encryption';
 import { ArtifactEncryption, projectArtifactHeaderForDisplay } from '@/sync/encryption/artifactEncryption';
@@ -798,6 +797,20 @@ export async function fetchAndApplyArtifactsList(params: {
         finishInventory();
         log.log(`📦 fetchArtifactsList: Applied ${decryptedArtifacts.length} artifact headers`);
 
+        // Repair only hints whose private headers this reader opened. Publish
+        // membership first; refused or slow metadata writes never hold it back.
+        // The server fences the observed header version and repeated kinds are no-ops.
+        for (const artifact of decryptedArtifacts) {
+            if (!shouldContinue()) break;
+            if (!artifact.isDecrypted || !artifact.rawHeader) continue;
+            const kind = deriveArtifactCoarseKindV1(artifact.rawHeader);
+            if (artifact.kind === kind) continue;
+            void updateArtifactApi(credentials, artifact.id, { kind, expectedHeaderVersion: artifact.headerVersion },
+                { request: params.request, signal: params.signal, retry: 'none' }).catch(error => {
+                log.log(`📦 fetchArtifactsList: Kind backfill refused for ${artifact.id}: ${error}`);
+            });
+        }
+
         // The always-mounted Inbox badge consumes strict open approval bodies and
         // private usage notices. Settled receipts are demanded by their transcript;
         // Launch Profiles have their own scoped catalog read owner.
@@ -1399,7 +1412,6 @@ export async function updateArtifactWithHeaderViaApi(params: {
 
     // Send update to server
     updateRequest.kind = deriveArtifactCoarseKindV1(rawHeader);
-    const kindSupported = await supportsArtifactKindFiltering(params);
     if (params.memoryDecisionSource) updateRequest.memoryDecisionSource = params.memoryDecisionSource;
     params.signal?.throwIfAborted();
     const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, signal: params.signal, serverId: params.serverId });
@@ -1416,7 +1428,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
     // Update local storage
     const updatedArtifact: DecryptedArtifact = {
         ...currentArtifact,
-        kind: kindSupported ? updateRequest.kind : null,
+        kind: updateRequest.kind,
         header: normalizedHeader,
         rawHeader,
         title: normalizedHeader.title,

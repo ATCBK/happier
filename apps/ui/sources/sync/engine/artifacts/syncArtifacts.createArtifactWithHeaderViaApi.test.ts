@@ -11,11 +11,7 @@ import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/ac
 import { createDeferred } from '@/dev/testkit';
 
 describe('createArtifactWithHeaderViaApi', () => {
-  it('derives coarse kind from the actual header for create and update on a supporting Home', async () => {
-    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
-    const { FeaturesResponseSchema } = await import('@happier-dev/protocol/features/payload/featuresResponseSchema');
-    primeServerFeaturesSnapshot({ serverId: 'artifact-kind-home', snapshot: { status: 'ready',
-      features: FeaturesResponseSchema.parse({ features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {} }) } });
+  it('derives coarse kind from the actual header for create and update', async () => {
     const writes: Record<string, unknown>[] = [];
     let current: DecryptedArtifact | undefined;
     const request = async (path: string, init?: RequestInit) => {

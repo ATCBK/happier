@@ -2226,16 +2226,14 @@ Artifact bytes and grants. See the
 [Source storage disclosure](encryption.md#project-source-metadata-03-development).
 
 ### Artifacts
-- In 0.3 development, Homes advertise `features.artifacts.kindFiltering.enabled`.
-  Only an explicit `true` admits coarse kind inputs. `GET /v1/artifacts?kind=skill`
+- In 0.3 development, `GET /v1/artifacts?kind=skill`
   (also `prompt`, `plugin_ui`, `work_board`, or `other`) returns
   `{items: [...], hasUnclassified: boolean}` with the same authorized header
   projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
   rows readable by the caller, including grants, independently of the current page.
   The page and witness share one read snapshot; a true witness stays conservative
   while classification or access changes, and the fallback scan rechecks access.
-  A true flag makes clients restart with the full inventory; a missing or malformed
-  feature bit keeps the existing full scan without sending the new query parameter.
+  A true flag makes clients restart with the full inventory.
   Omitting `kind` preserves the array response. Rows expose nullable plaintext
   `kind`; clients still open and validate their private header before using content.
 - `GET /v1/artifacts?limit=...&cursor=...` lists Artifact headers in
@@ -2284,9 +2282,9 @@ Artifact bytes and grants. See the
 The development kind-filtering extension accepts optional coarse `kind` on
 Artifact JSON create/update and restore writes (`artifactKind` in the framed binary
 upload metadata, whose `kind` already identifies create/update). Writers derive it
-from the logical header with Protocol's `deriveArtifactCoarseKindV1`, and omit the
-field against a Home that does not advertise support. Older writers remain valid;
-an opaque header write without kind clears the previous hint. The existing update
+from the logical header with Protocol's `deriveArtifactCoarseKindV1`, without a
+feature gate. Older writers remain valid; an opaque header write without kind
+clears the previous hint. The existing update
 route also accepts `{kind, expectedHeaderVersion}` alone for best-effort backfill.
 It requires header-edit authority and the current header version, and changes no
 header/body bytes or content versions. These changes are development-only and

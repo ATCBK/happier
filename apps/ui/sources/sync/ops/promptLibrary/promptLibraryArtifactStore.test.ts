@@ -84,7 +84,6 @@ describe('UI qualified prompt-library Artifact authority', () => {
     const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
       entries: [{ path: 'SKILL.md', contentKind: 'utf8',
         contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
-      serverFeatures: { features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {} },
       handleRequest: async (path, init) => {
         if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
           inventoryQueries.push(path);
@@ -107,7 +106,7 @@ describe('UI qualified prompt-library Artifact authority', () => {
       : ['/v1/artifacts?limit=500&kind=skill']);
   });
   it.each(['complete', 'incomplete', 'unreadable', 'failed', 'different-account', 'different-credentials', 'cancelled'] as const)(
-    'joins only an eligible cold inventory attempt through skills.list (%s)', async scenario => {
+    'joins only an eligible cold inventory attempt through the unfiltered store (%s)', async scenario => {
       const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
       const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
       resetPromptLibraryCatalogEngineForTests();
@@ -115,10 +114,10 @@ describe('UI qualified prompt-library Artifact authority', () => {
       const catalog = createPromptLibraryCatalogBoundary();
       const inventoryRequested = createDeferred<void>();
       const releaseInventory = createDeferred<void>();
-      const catalogRequested = createDeferred<void>();
       let inventoryGets = 0;
       const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
-        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
+        if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET'
+          && !new URL(path, 'https://home.test').searchParams.has('kind')) {
           inventoryGets += 1;
           if (inventoryGets === 1) {
             inventoryRequested.resolve();
@@ -127,15 +126,12 @@ describe('UI qualified prompt-library Artifact authority', () => {
             if (scenario === 'unreadable') return Response.json(f.boundary.list().map(row => ({ ...row, header: 'invalid header' })));
           }
         }
-        const result = await catalog.handle(path, init);
-        if (path === '/v1/account/entity-rows/prompt-library') catalogRequested.resolve();
-        return result;
+        return catalog.handle(path, init);
       } });
       storage.setState({ artifacts: {}, artifactsLoaded: false });
       const controller = new AbortController();
-      await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      await withUiPromptLibraryArtifactStore(async (store, account) => {
         const { fetchAndApplyArtifactsList } = await import('@/sync/engine/artifacts/syncArtifacts');
-        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
         const basis = storage.getState().artifacts;
         const params = { credentials: scenario === 'different-credentials' ? { token: 'restricted-credential' } : account.credentials,
           inventoryScope: scenario === 'different-account' ? { ...account.accountLifetime.scope, accountId: 'another-account' } : account.accountLifetime.scope,
@@ -144,27 +140,22 @@ describe('UI qualified prompt-library Artifact authority', () => {
           applyArtifacts: (rows: DecryptedArtifact[], source?: 'inventory') => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) };
         const inventory = fetchAndApplyArtifactsList(params).catch(error => error);
         await inventoryRequested.promise;
-        const action = executeDefaultActionInCapturedAccount(account, 'skills.list', {},
-          { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId,
-            signal: controller.signal });
+        const action = store.list!({ signal: controller.signal });
         try {
-          await Promise.race([catalogRequested.promise, action.then(result => {
-            throw new Error(`Action settled before inventory release: ${JSON.stringify(result)}`);
-          })]);
           if (scenario === 'different-account' || scenario === 'different-credentials') {
-            // The unrelated attempt stays held while the captured Action finishes.
-            expect(await action).toMatchObject({ ok: true });
+            // The unrelated attempt stays held while the captured list finishes.
+            expect(await action).toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(2);
           } else if (scenario === 'cancelled') {
             controller.abort();
             const outcome = await action.catch((error: unknown) => error);
-            expect(outcome).not.toMatchObject({ ok: true });
+            expect(outcome).not.toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(1);
             expect(storage.getState().artifactsLoaded).toBe(false);
           } else {
             releaseInventory.resolve();
             await inventory;
-            expect(await action).toMatchObject({ ok: true });
+            expect(await action).toMatchObject({ coverage: 'complete' });
             expect(inventoryGets).toBe(scenario === 'complete' ? 1 : 2);
           }
         } finally {

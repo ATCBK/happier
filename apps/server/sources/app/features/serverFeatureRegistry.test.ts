@@ -68,11 +68,6 @@ describe('features/serverFeatureRegistry', () => {
         expect((byDefault.features.sessions as Record<string, unknown>).collaboration).toBeUndefined();
     });
 
-    it('advertises Artifact kind filtering by default and respects operator build policy', () => {
-        expect(readServerEnabledBit(resolveServerFeaturePayload({}, serverFeatureRegistry), 'artifacts.kindFiltering')).toBe(true);
-        expect(readServerEnabledBit(resolveServerFeaturePayload({ HAPPIER_BUILD_FEATURES_DENY: 'artifacts.kindFiltering' }, serverFeatureRegistry), 'artifacts.kindFiltering')).toBe(false);
-    });
-
     it('publishes Following by default, independently of its diagnostic protocol capability', () => {
         const byDefault = resolveServerFeaturePayload({}, serverFeatureRegistry);
         const operatorDisabled = resolveServerFeaturePayload({

@@ -81,7 +81,6 @@ type RootLayoutFeaturesOverrides = Omit<Partial<RootLayoutFeatures>, 'features' 
 
 const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
     features: {
-        artifacts: FeatureGatesSchema.shape.artifacts.parse(undefined),
         teams: FeatureGatesSchema.shape.teams.parse(undefined),
         bugReports: { enabled: true },
         e2ee: {

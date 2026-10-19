@@ -64,7 +64,6 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
 
     return {
         features: {
-            artifacts: FeatureGatesSchema.shape.artifacts.parse(undefined),
             teams: FeatureGatesSchema.shape.teams.parse(undefined),
             bugReports: { enabled: true },
             providers: {

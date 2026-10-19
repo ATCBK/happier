@@ -4,9 +4,7 @@ import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testk
 import { act } from 'react-test-renderer';
 import type { Artifact, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useArtifacts } from '@/sync/domains/state/storage';
-import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { fetchAndApplyArtifactsList } from '@/sync/engine/artifacts/syncArtifacts';
 import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -55,7 +53,6 @@ beforeEach(async () => {
   }, concurrentSessionListCacheByServerId: { [serverIdB]: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } } } });
 });
 afterEach(async () => {
-  resetServerFeaturesClientForTests();
   setPreferredLanguageFromSettings('en');
   standardCleanup();
   storage.setState(initialState, true);
@@ -63,11 +60,8 @@ afterEach(async () => {
 });
 
 describe('ApprovalInboxCard', () => {
-  it('reads and mounts unclassified and stale-kind approvals without updating any Artifact', async () => {
+  it('mounts unclassified and stale-kind approvals while inventory sync repairs only their kind metadata', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
-    primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
-      features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {},
-    }) } });
     const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'cli' }, actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
       executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'read-only-approval',
@@ -79,10 +73,11 @@ describe('ApprovalInboxCard', () => {
       body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }),
       publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: index, createdAt: 1, updatedAt: 1,
     }));
-    const requests: Array<{ path: string; method: string }> = [];
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
     // Only the Home HTTP boundary is replaced; sync, codecs, store and mounted cards stay real.
     const request = async (path: string, init?: RequestInit) => {
-      requests.push({ path, method: init?.method ?? 'GET' });
+      requests.push({ path, method: init?.method ?? 'GET',
+        ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}) });
       if (path.startsWith('/v1/artifacts?')) return Response.json(rows.map(({ body: _body, ...head }) => head));
       if (path === '/v1/artifacts/read') return Response.json({ items: rows.map(artifact => ({
         artifactId: artifact.id, ok: true, artifact, recipientCensus: null,
@@ -103,7 +98,12 @@ describe('ApprovalInboxCard', () => {
       expect(screen.findByTestId(`inbox.approval.${row.id}`)).not.toBeNull();
       expect(storage.getState().artifacts[row.id]).toMatchObject({ kind: row.kind, body: JSON.stringify(approval), isDecrypted: true });
     }
-    expect(requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read')).toEqual([]);
+    const writes = requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read');
+    expect(writes).toEqual(rows.map(row => ({ path: `/v1/artifacts/${row.id}`, method: 'POST',
+      body: { kind: 'other', expectedHeaderVersion: 1 } })));
+    // Mounting or rerendering a card itself remains observational.
+    await act(async () => { screen.tree.update(<ApprovalRead />); });
+    expect(requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read')).toEqual(writes);
   });
   it('localizes the first-party title in French and resolves its document through the shared reference reader', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');

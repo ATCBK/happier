@@ -1297,6 +1297,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       .resolves.toEqual({ ok: true, revision: { headerVersion: 4, bodyVersion: 5 } });
     expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/shared/revisions/2/restore'),
       { expectedHeaderVersion: 3, expectedBodyVersion: 4,
+        kind: 'other',
         header: encodePlainArtifactStoredContent({ title: 'Shared', ...(typeof priorBody === 'string' ? { excerpt: priorBody } : {}) }) }, expect.any(Object));
   });
 
@@ -1326,7 +1327,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
     // it selects retained bytes while the real CLI owner prepares the header and CAS.
     mockPost.mockImplementationOnce(async (url: string, wire: unknown) => {
       expect(url).toContain('/shared/revisions/2/restore');
-      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string() }).parse(wire);
+      const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4), header: z.string(), kind: z.literal('other') }).parse(wire);
       stored = { ...stored, header: request.header, body: retainedBody, headerVersion: 4, bodyVersion: 5 };
       return { status: 200, data: { success: true, headerVersion: 4, bodyVersion: 5 } };
     });
@@ -1572,7 +1573,7 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       mockPost.mockImplementationOnce(async (rawUrl: string, wire: unknown) => {
         expect(new URL(rawUrl).pathname).toBe(`/v1/artifacts/${artifactId}/revisions/2/restore`);
         const request = z.strictObject({ expectedHeaderVersion: z.literal(3), expectedBodyVersion: z.literal(4),
-          header: z.string(), provenance: z.string() }).parse(wire);
+          header: z.string(), provenance: z.string(), kind: z.literal('other') }).parse(wire);
         expect(decodePlainArtifactStoredContent(request.provenance)).toMatchObject({ artifactId, bodyVersion: 5,
           provenance: { savedBy: { kind: 'person', accountId: 'owner' }, restoredFromBodyVersion: 2 } });
         stored = { ...stored, header: request.header, body: retainedBody, provenance: request.provenance, headerVersion: 4, bodyVersion: 5 };

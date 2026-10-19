@@ -4,11 +4,12 @@ import type {
 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import type { WorkflowDefinitionArtifactOperations } from '@happier-dev/protocol/actions';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
 import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
-import { encodeArtifactListCursor, supportsArtifactKindFiltering } from '@/sync/api/artifacts/apiArtifacts';
+import { encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -253,9 +254,8 @@ export function createUiPromptLibraryArtifactStore(
       throwIfAborted(options?.signal);
       account?.assertCurrent();
       const scope = account?.accountLifetime.scope;
-      // A supported selective read must not wait for an unrelated full inventory scan.
-      const filtered = options?.coarseKind !== undefined && account !== undefined
-        && await supportsArtifactKindFiltering({ serverId: account.serverId, signal: options?.signal });
+      // A selective read must not wait for an unrelated full inventory scan.
+      const filtered = options?.coarseKind !== undefined && account !== undefined;
       let rows = scope ? readCompleteAccountArtifactInventory(scope) : null;
       if (!filtered && !rows && account && scope
         && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
@@ -272,10 +272,11 @@ export function createUiPromptLibraryArtifactStore(
         // search requests local selection over this already complete inventory.
         const page = await listArtifactHeadersV1({
           options: { ...options, search: '' },
-          readPage: async () => ({
+          readPage: async pageOptions => ({
             items: rows.map(artifact => ({ artifactId: artifact.id,
               header: artifact.isDecrypted ? artifact.rawHeader ?? {} : {},
-              createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, access: artifact.access })),
+              createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, access: artifact.access }))
+              .filter(item => !pageOptions?.coarseKind || deriveArtifactCoarseKindV1(item.header) === pageOptions.coarseKind),
             coverage: 'complete',
           }),
           encodeCursor: item => account.encodeArtifactListCursor(item),

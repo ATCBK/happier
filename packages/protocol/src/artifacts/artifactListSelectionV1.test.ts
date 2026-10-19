@@ -34,10 +34,4 @@ describe('Artifact coarse selection', () => {
     expect(page.coverage).toBe('complete');
   });
 
-  it('locally selects an unfiltered inventory when the current Home disables filtering and preserves incomplete coverage', async () => {
-    const page = await listArtifactHeadersV1({ options: { coarseKind: 'skill' }, encodeCursor,
-      readPage: async () => ({ items: [skill, prompt], coverage: 'partial' }) });
-    expect(page.items.map(row => row.artifactId)).toEqual(['skill']);
-    expect(page.coverage).toBe('partial');
-  });
 });

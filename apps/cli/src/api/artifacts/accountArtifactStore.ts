@@ -25,7 +25,6 @@ import { sealAesGcmPayloadWebCrypto, openAesGcmPayloadWebCrypto } from '@happier
 import { artifactHtmlBundleFromBodyV1, isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
-import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { projectTargetActionApprovalInvocationV1, TargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -51,7 +50,6 @@ import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/pro
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { HttpStatusError, readHttpStatus } from '@/api/client/httpStatusError';
-import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createBackoff } from '@/utils/time';
 import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEditAcceptTransportInputV1Schema,
   DocEditDeclineTransportInputV1Schema, DocEditDecisionResultV1Schema,
@@ -358,13 +356,6 @@ export function createAccountArtifactStore(params: Readonly<{
   // Axios chooses the media type from actual request data. Bodyless GET/DELETE
   // requests must not advertise JSON; binary uploads set their own media type.
   const headers = () => ({ Authorization: `Bearer ${params.credentials.token}` });
-  const supportsKindFiltering = async (signal?: AbortSignal) => {
-    const snapshot = await fetchServerFeaturesSnapshot({ serverUrl: resolveServerHttpBaseUrl(), signal });
-    signal?.throwIfAborted();
-    return snapshot.status === 'ready' && readServerEnabledBit(snapshot.features, 'artifacts.kindFiltering') === true;
-  };
-  const writeKind = async (header: Readonly<Record<string, unknown>>, signal?: AbortSignal) =>
-    await supportsKindFiltering(signal) ? { kind: deriveArtifactCoarseKindV1(header) } : {};
   const fetchStored = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders): Promise<StoredArtifact | null> => {
     const path = `/v1/artifacts/${encodeURIComponent(artifactId)}`;
     const response = await axios.get(`${resolveServerHttpBaseUrl()}${path}`, {
@@ -561,7 +552,7 @@ export function createAccountArtifactStore(params: Readonly<{
     if (options?.cursor) url.searchParams.set('cursor', options.cursor);
     if (options?.includeBody) url.searchParams.set('includeBody', 'true');
     const coarseKind = options?.coarseKind;
-    const filtered = coarseKind !== undefined && await supportsKindFiltering(options?.signal);
+    const filtered = coarseKind !== undefined;
     if (filtered && coarseKind !== undefined) url.searchParams.set('kind', coarseKind);
     const response = await axios.get(url.toString(), { headers: headers(),
       ...(options?.signal ? { signal: options.signal } : {}), validateStatus: () => true });
@@ -854,7 +845,7 @@ export function createAccountArtifactStore(params: Readonly<{
         const response = await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`,
           { expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             header: codec.encode(withArtifactExcerptV1(nextHeader, retained.body)),
-            ...await writeKind(nextHeader, signal),
+            kind: deriveArtifactCoarseKindV1(nextHeader),
             ...provenance.wire }, accessConfig(signal));
         const quota = readQuotaFailure(response);
         if (quota) return quota;
@@ -920,7 +911,7 @@ export function createAccountArtifactStore(params: Readonly<{
       input.signal?.throwIfAborted();
       const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body), content.body);
       const header = codec.encode(nextHeader);
-      const kind = await writeKind(nextHeader, input.signal);
+      const kind = deriveArtifactCoarseKindV1(nextHeader);
       const body = codec.encode({ body: content.body });
       const provenance = (await writeProvenance({ artifactId, bodyVersion: 1, savedBy: input.savedBy, source: input.source, signal: input.signal })).wire;
       // Host-owned admission is rechecked after preparation's last await and
@@ -929,11 +920,11 @@ export function createAccountArtifactStore(params: Readonly<{
       const response = content.blob?.content
         ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
           kind: 'create', artifactId, blobId: content.blob.blobId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance,
-          ...(kind.kind ? { artifactKind: kind.kind } : {}),
+          artifactKind: kind,
         }, content.blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
           ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
         : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts${input.memoryDecisionSource ? '/memory-decision/create' : content.blob ? '/content/binary' : ''}`, {
-        id: artifactId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance, ...kind,
+        id: artifactId, header, body, dataEncryptionKey: codec.dataEncryptionKey, ...provenance, kind,
         ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
         ...(content.blob ? { blob: content.blob } : {}),
       }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
@@ -969,7 +960,7 @@ export function createAccountArtifactStore(params: Readonly<{
       const context = await sharedWriteContext(stored, currentHeader.data, input.header, input.signal, content.body);
       const nextHeader = withArtifactExcerptV1(prepareArtifactHeaderForBodyV1(input.header, content.body, context), content.body);
       const header = codec.encode(nextHeader);
-      const kind = await writeKind(nextHeader, input.signal);
+      const kind = deriveArtifactCoarseKindV1(nextHeader);
       const body = codec.encode({ body: content.body });
       const source = readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion)?.source;
       const provenance = await writeProvenance({ artifactId: input.artifactId, bodyVersion: input.expectedRevision.bodyVersion + 1, savedBy: input.savedBy, source, signal: input.signal }, stored, codec);
@@ -981,14 +972,14 @@ export function createAccountArtifactStore(params: Readonly<{
           const result = blob?.content
             ? await axios.post(`${resolveServerHttpBaseUrl()}${ARTIFACT_UPLOAD_PATH_V1}`, Buffer.from(encodeArtifactUploadFrameV1({
               kind: 'update', artifactId: input.artifactId, blobId: blob.blobId, header, body, ...provenance.wire,
-              ...(kind.kind ? { artifactKind: kind.kind } : {}),
+              artifactKind: kind,
               expectedHeaderVersion: input.expectedRevision.headerVersion, expectedBodyVersion: input.expectedRevision.bodyVersion,
             }, blob.content)), { headers: { ...headers(), 'Content-Type': ARTIFACT_UPLOAD_CONTENT_TYPE_V1 },
               ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true })
             : await axios.post(`${resolveServerHttpBaseUrl()}/v1/artifacts/${encodeURIComponent(input.artifactId)}${input.memoryDecisionSource ? '/memory-decision' : blob !== undefined ? '/content/binary' : ''}`, {
               header, expectedHeaderVersion: input.expectedRevision.headerVersion,
               body, expectedBodyVersion: input.expectedRevision.bodyVersion,
-              ...provenance.wire, ...kind,
+              ...provenance.wire, kind,
               ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
               ...(blob !== undefined ? { blob } : {}),
             }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });

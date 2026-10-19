@@ -6,12 +6,6 @@ import { FEATURE_CATALOG } from './catalog.js';
 import { readServerEnabledBit, resolveServerEnabledBitPath, tryWriteServerEnabledBitInPlace } from './serverEnabledBit.js';
 
 describe('server enabled bit helpers', () => {
-  it('negotiates Artifact kind filtering only from a well-formed advertised bit', () => {
-    const read = (features: unknown) => readServerEnabledBit(FeaturesResponseSchema.parse({ features, capabilities: {} }), 'artifacts.kindFiltering');
-    expect(read({ artifacts: { kindFiltering: { enabled: true } } })).toBe(true);
-    expect(read({})).toBe(false);
-    expect(read({ artifacts: { kindFiltering: { enabled: 'true' } } })).toBe(false);
-  });
   it('preserves the Teams decision and defaults an absent projection to disabled', () => {
     const enabled = FeaturesResponseSchema.parse({ features: { teams: { enabled: true } }, capabilities: {} });
     const absent = FeaturesResponseSchema.parse({ features: {}, capabilities: {} });

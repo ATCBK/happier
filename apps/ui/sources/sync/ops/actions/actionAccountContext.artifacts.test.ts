@@ -42,6 +42,7 @@ import { resourceStoredContentContext } from '@/sync/encryption/resourceStoredCo
 import { sealSessionStoredContent } from '@happier-dev/sync-client';
 import { executeDiscussionActionInAccountContext } from '@/sync/api/discussions/discussionActions';
 import { createArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -56,6 +57,19 @@ vi.mock('@/text', async () => {
 });
 await loadSyncSingletonForTests();
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+// Adapt the existing HTTP facts through the canonical Session batch fixture;
+// Coach now reads exact Session snapshots, turns and messages on this transport.
+function installSessionBatchHttpFixture(accountId: string, route: (url: unknown, init?: RequestInit) => Promise<Response>) {
+    const boundary = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+        : route(request.url, { method: request.method, headers: request.headers, signal: request.signal,
+            ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) }));
+    runtimeFetch.mockImplementation(async (input: unknown, init?: RequestInit) => {
+        const url = new URL(String(input));
+        return boundary.handle({ url, path: url.pathname, home: url.origin, accountId,
+            method: init?.method ?? 'GET', headers: new Headers(init?.headers), signal: init?.signal,
+            body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+    });
+}
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
 
 describe('scoped Account workflow Artifact operations', () => {
@@ -256,7 +270,7 @@ describe('scoped Account workflow Artifact operations', () => {
         let witnessSequence = 1;
         let calls = 0;
         let coverage: 'complete' | 'partial' = 'complete';
-        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+        installSessionBatchHttpFixture('coach-account', async (url: unknown, init?: RequestInit) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return json({});
             if (path === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -288,6 +302,7 @@ describe('scoped Account workflow Artifact operations', () => {
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } }),
                 agentStateVersion: 1, agentState: null, share: null,
             } });
+            if (path === '/v1/sessions/coach-session/turns') return json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
             if (path === '/v1/sessions/coach-session/messages') {
                 const usage = { v: 2, evidenceId: `mcp-window-${witnessSequence}`, sessionId: 'coach-session', turnId: `turn-${witnessSequence}`, observedAtMs: 300 + witnessSequence,
                     window: { startMs: 200 + witnessSequence, endMs: 300 + witnessSequence }, coverage, bindings: [{ serverId: 'server', bindingId: 'binding', catalogRevision: witnessedRevision,
@@ -403,7 +418,7 @@ describe('scoped Account workflow Artifact operations', () => {
         let race = true;
         let retainHistory = true;
         const history = new Map<number, Record<string, unknown>>();
-        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+        installSessionBatchHttpFixture('settings-account', async (url: unknown, init?: RequestInit) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return json({});
             if (path === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -425,6 +440,7 @@ describe('scoped Account workflow Artifact operations', () => {
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } }),
                 agentStateVersion: 1, agentState: null, share: null,
             } });
+            if (path === '/v1/sessions/coach-session/turns') return json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
             if (path === '/v1/sessions/coach-session/messages') {
                 // This retained host event is an HTTP fixture, not model-native evidence or a prebuilt Coach evaluation.
                 const composition = { v: 1, evidenceId: 'composition', sessionId: 'coach-session', turnId: 'turn', inputId: 'input',
@@ -870,7 +886,7 @@ describe('scoped Account workflow Artifact operations', () => {
         const home = await upsertAndActivateServer({ serverUrl: `https://board-listing-${unclassified}.test`, scope: 'tab' });
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
-        const row = (id: string, header: Record<string, unknown>, kind: string | null): Artifact & { kind: string | null } => ({
+        const row = (id: string, header: Record<string, unknown>, kind: NonNullable<Artifact['kind']> | null): Artifact => ({
             id, kind, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
             header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: 'retained body' }),
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
@@ -884,7 +900,7 @@ describe('scoped Account workflow Artifact operations', () => {
         runtimeFetch.mockImplementation(async (url: unknown) => {
             const target = new URL(String(url));
             if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
-            if (target.pathname === '/v1/features') return json({ features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: { accountStoredContentCompatibility: {
+            if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
                 v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                 currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
             } } });
@@ -892,14 +908,19 @@ describe('scoped Account workflow Artifact operations', () => {
             if (target.pathname !== '/v1/artifacts') return json({ error: 'unexpected_route' }, 404);
             urls.push(target);
             const kind = target.searchParams.get('kind');
-            if (!kind) return json(rows.slice(0, Number(target.searchParams.get('limit') ?? 100)));
+            if (!kind) {
+                const cursor = target.searchParams.get('cursor');
+                const after = cursor ? JSON.parse(new TextDecoder().decode(decodeBase64(cursor, 'base64url'))) as { id: string } : null;
+                const start = after ? rows.findIndex(item => item.id === after.id) + 1 : 0;
+                return json(rows.slice(start, start + Number(target.searchParams.get('limit') ?? 100)));
+            }
             return json({ items: rows.filter(item => item.kind === kind), hasUnclassified: rows.some(item => item.kind === null) });
         });
         const account = await captureLazyActionAccountContext(home.id);
         try {
             const port = createWorkBoardArtifactPortV1(account.workflowArtifacts);
             expect((await port.list()).map(item => item.id).sort()).toEqual(['board-classified', 'board-legacy']);
-            expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['work_board', null] : ['work_board']);
+            expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['work_board', null, null] : ['work_board']);
         } finally { account.dispose(); }
     });
     it('selects ordinary Artifact lists across structural pages without leaking filters or truncating omitted limits', async () => {

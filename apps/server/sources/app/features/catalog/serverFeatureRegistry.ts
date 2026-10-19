@@ -46,7 +46,6 @@ import { resolveAccountStoredContentCompatibilityFeature } from '../accountStore
 import { resolveAccountDirectoryFeature } from '../accountDirectoryFeature';
 import { resolveSessionConversationsFeature } from '../sessionConversationsFeature';
 import { resolveSessionAutonomousExchangeFeature } from '../sessionAutonomousExchangeFeature';
-import { resolveArtifactKindFilteringFeature } from '../artifactKindFilteringFeature';
 
 export type ServerFeatureResolver = ((env: NodeJS.ProcessEnv) => FeaturesPayloadDelta) & Readonly<{
     /** Every feature root this producer writes; empty for a diagnostic-only producer. */
@@ -61,7 +60,6 @@ function register(
 }
 
 export const serverFeatureRegistry = Object.freeze([
-    register(['artifacts'], () => resolveArtifactKindFilteringFeature()),
     register([], () => resolveAccountStoredContentCompatibilityFeature()),
     register([], (env) => resolveAccountDirectoryFeature(env)),
     register([], () => resolveSessionProtocolCapabilitiesFeature()),

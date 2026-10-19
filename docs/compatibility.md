@@ -52,13 +52,9 @@ clients testing against an upgraded daemon ends. The moving predecessor at
 
 ## Coarse Artifact kind (0.3 development)
 
-Artifact kind filtering is an additive HTTP and persistence extension, negotiated
-by `artifacts.kindFiltering`. Current readers send the optional `kind` query and
-write metadata only after an explicit enabled bit. Current 0.3 Homes can disable
-the feature through `HAPPIER_BUILD_FEATURES_DENY=artifacts.kindFiltering`.
-Those Homes retain the unfiltered array response; keyholding readers select
-locally through the same `listArtifactHeadersV1` owner, and writers omit kind
-metadata. Missing or malformed bits also fail closed.
+Artifact kind filtering is an additive HTTP and persistence extension.
+Current readers send the optional `kind` query and writers derive kind metadata
+without a feature gate.
 
 The one-way 0.3 upgrade does not support a 0.3 client against a 0.2 Home.
 No legacy-server adapter is required or provided. Current readers still require
@@ -70,17 +66,18 @@ an opaque header edit without kind invalidates its previous classification. New
 writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
 The filtered response reports readable unclassified rows, and the shared
 `listArtifactHeadersV1` owner restarts a full scan while any remain. Header
-decryption, content validation and access remain authoritative. Inventory and
-Inbox reads leave stored kind metadata untouched, including missing or stale
-development hints. Readers classify opened headers locally; ordinary explicit
-content writes derive the current hint without a separate read-time backfill.
+decryption, content validation and access remain authoritative. After publishing
+the inventory, `syncArtifacts.ts` best-effort repairs null or stale hints from
+headers it already opened, using the metadata-only write fenced by that header's
+version. Locked rows are never classified. The server makes repeated writes of
+the same kind no-ops without changing content bytes or versions. Inbox reads do
+not perform a separate backfill; explicit content writes derive the current hint.
 
 The new nullable column and Account/kind index require an additive migration
 before loading the new server Prisma projection. Migration deployment and shared
 Prisma client generation belong to the environment owner; source validation may
 generate private clients for disposable test databases without changing live
-clients. Full scans remain necessary for current Homes with filtering disabled
-and for inventories with unclassified rows.
+clients. Full scans remain necessary for inventories with unclassified rows.
 
 ## Map the seam
 
@@ -268,7 +265,7 @@ current publisher before excluding them from rejoin/claim selection. It does not
 resolve those rows or infer native acceptance. No persisted format changes.
 
 The inspected moving 0.2 predecessor at
-`077db90d049ee283ef99196c45c6074a3160c91d` advertises revision 2 and ignores
+`89868c98f0cddc0a42fc3a97b2b3e311363756ed` advertises revision 2 and ignores
 unknown fields at its materialization ingress; its relevant paths were clean.
 That reader cannot safely consume this proof, hence the operation-scoped
 capability requirement. This is a 0.3 development contract, not a released

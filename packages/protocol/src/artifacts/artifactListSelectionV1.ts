@@ -14,6 +14,7 @@ type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; 
 /** Decrypted selection shared by keyholding hosts; transport pages retain their own codecs and custody. */
 export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params: Readonly<{
   options?: ArtifactListSelectionOptionsV1;
+  /** Apply requested coarse-kind filtering and report any readable unclassified rows. */
   readPage: (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>) => Promise<ArtifactListPage<T>>;
   readBodies?: (items: readonly T[]) => Promise<readonly T[]>;
   encodeCursor: (item: T) => string;
@@ -53,8 +54,9 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   } while (true);
   const search = options.search?.trim().toLocaleLowerCase();
   const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
+  const unclassifiedScanKind = coarseKind === undefined ? options.coarseKind : undefined;
   const matchesKind = (item: T) => (!options.kind || item.header.kind === options.kind)
-    && (!options.coarseKind || deriveArtifactCoarseKindV1(item.header) === options.coarseKind);
+    && (!unclassifiedScanKind || deriveArtifactCoarseKindV1(item.header) === unclassifiedScanKind);
   const matching = all.filter(matchesKind);
   // Open selected bodies before sorting/cursors so a fresh read keeps content and revisions aligned.
   const selected = options.includeBody && params.readBodies ? await params.readBodies(matching) : matching;
