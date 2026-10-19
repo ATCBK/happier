@@ -431,6 +431,20 @@ describe('Runner Agent protocol', () => {
 
     expect(extracted.transformed).toEqual({ text: 'Review this image.' });
     expect(extracted.settlement).toEqual(settlement);
+    const fullSnapshotSettlement = {
+      ...settlement,
+      releaseIntents: Array.from({ length: 128 }, (_, index) => ({
+        ...settlement.releaseIntents[0], handle: { ...handle, id: `snapshot-${index}` },
+      })),
+    };
+    expect(extractComposerStagedMediaAdmissionSettlement({
+      [COMPOSER_STAGED_MEDIA_ADMISSION_SETTLEMENT_FIELD]: fullSnapshotSettlement,
+    }).settlement?.releaseIntents).toHaveLength(128);
+    expect(() => extractComposerStagedMediaAdmissionSettlement({
+      [COMPOSER_STAGED_MEDIA_ADMISSION_SETTLEMENT_FIELD]: {
+        ...fullSnapshotSettlement, releaseIntents: [...fullSnapshotSettlement.releaseIntents, settlement.releaseIntents[0]],
+      },
+    })).toThrow('Daemon returned an invalid staged-media admission settlement');
     expect(AgentRuntimeDaemonTurnContributionRequestV1Schema.safeParse({
       kind: 'settleComposerStagedMedia',
       outcome: 'accepted',

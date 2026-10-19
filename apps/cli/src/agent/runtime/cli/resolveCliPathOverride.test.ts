@@ -2,9 +2,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveCliPathOverride } from './resolveCliPathOverride';
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn((path: Parameters<typeof actual.existsSync>[0]) => (
+    // Simulated Windows paths use backslashes on the POSIX fixture filesystem.
+    actual.existsSync(typeof path === 'string' && process.platform === 'win32' ? path.replaceAll('\\', '/') : path)
+  )) };
+});
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 const originalEnv = { ...process.env };
@@ -13,6 +21,7 @@ describe('resolveCliPathOverride', () => {
   const tempDirs = new Set<string>();
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
     }
@@ -37,9 +46,11 @@ describe('resolveCliPathOverride', () => {
     writeFileSync(cmdShimPath, '@echo off\r\necho ok\r\n', 'utf8');
 
     process.env.HOME = join(root, 'home');
+    process.env.USERPROFILE = join(root, 'home');
     process.env.HAPPIER_CLAUDE_PATH = '~/bin/claude';
 
-    expect(resolveCliPathOverride({ agentId: 'claude' })?.toLowerCase()).toBe(cmdShimPath.toLowerCase());
+    expect(resolveCliPathOverride({ agentId: 'claude' })?.replaceAll('\\', '/').toLowerCase())
+      .toBe(cmdShimPath.replaceAll('\\', '/').toLowerCase());
   });
 
   it('resolves command-only Windows override values via PATH', () => {

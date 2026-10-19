@@ -15,17 +15,27 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
-import { resolveExecutablePluginRuntimeRegistry } from '../../../plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
 import { resolveEngineRuntimeContribution } from './engineRegistry/contributions';
+import { bindNativeAgentLaunchPreparationFixture, createNativeAgentLaunchPreparationFixture } from './engineRegistry/nativeAgentSession.testkit';
 
 const AUGGIE_BACKEND_ID = 'auggie';
 const AUGGIE_PLUGIN_ID = 'happier.agent.auggie';
 
-function resolveGeneratedAuggieFixture() {
+function resolveGeneratedAuggieFixture(systemToolExecutablePath: string) {
   const builtInContributions = resolveBuiltInContributions();
   const agentContribution = builtInContributions.agents.find((entry) => entry.id === AUGGIE_BACKEND_ID);
-  const contributes = createResolvedContributionRegistry(builtInContributions);
+  const contributes = createResolvedContributionRegistry({
+    ...builtInContributions,
+    activationTargets: builtInContributions.activationTargets?.map(target => target.pluginId === AUGGIE_PLUGIN_ID
+      ? { ...target, manifest: { ...target.manifest, contributes: { ...target.manifest.contributes,
+        systemTools: target.manifest.contributes.systemTools?.map(tool => ({ ...tool, executableNames: [systemToolExecutablePath] })),
+      } } } : target),
+    systemTools: builtInContributions.systemTools?.map(tool => tool.pluginId === AUGGIE_PLUGIN_ID
+      ? { ...tool, definition: { ...tool.definition, executableNames: [systemToolExecutablePath] } } : tool),
+  });
   const backend = resolveEngineRuntimeContribution(contributes, AUGGIE_BACKEND_ID);
   const systemTools = builtInContributions.systemTools?.filter((entry) => entry.pluginId === AUGGIE_PLUGIN_ID) ?? [];
   const activationTargets = builtInContributions.activationTargets?.filter((target) => target.pluginId === AUGGIE_PLUGIN_ID) ?? [];
@@ -117,35 +127,28 @@ describe('engineRegistry (auggie runtimeCore)', () => {
 
       const envScope = createEnvKeyScope(['DROP_ME']);
       envScope.patch({ DROP_ME: 'ambient-value-must-be-unset' });
-      let runtimeRegistry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+      let admittedRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       try {
-        const fixture = resolveGeneratedAuggieFixture();
-        runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
-          contributes: fixture.contributes,
+        const fixture = resolveGeneratedAuggieFixture(systemToolExecutablePath);
+        admittedRuntime = await createAdmittedPluginRuntimeFixture({
           happyHomeDir: join(directory, 'home'),
-          pluginIds: [AUGGIE_PLUGIN_ID],
+          runtimeOptions: {
+            contributes: fixture.contributes,
+            pluginIds: [AUGGIE_PLUGIN_ID],
+          },
         });
+        const runtimeRegistry = bindNativeAgentLaunchPreparationFixture(admittedRuntime.registry, await createNativeAgentLaunchPreparationFixture());
         const systemToolDefinitions = runtimeRegistry.systemToolDefinitionsByPluginId?.get(AUGGIE_PLUGIN_ID);
         expect(systemToolDefinitions).toEqual([
           expect.objectContaining({
             id: 'auggie-cli',
             title: 'Auggie CLI',
-            executableNames: ['auggie'],
+            executableNames: [systemToolExecutablePath],
           }),
         ]);
         if (!systemToolDefinitions) throw new Error('Expected activated Auggie system-tool definition');
-        const runtimeRegistryWithProcessBoundary = Object.freeze({
-          ...runtimeRegistry,
-          systemToolDefinitionsByPluginId: new Map([
-            ...(runtimeRegistry.systemToolDefinitionsByPluginId ?? new Map()),
-            [AUGGIE_PLUGIN_ID, Object.freeze(systemToolDefinitions.map((definition) => Object.freeze({
-              ...definition,
-              executableNames: Object.freeze([systemToolExecutablePath]),
-            })))],
-          ]),
-        });
         const resolution = await resolveBackendEngineAdapterResolution('auggie', {
-          runtimeRegistry: runtimeRegistryWithProcessBoundary,
+          runtimeRegistry,
         });
 
         expect(resolution).toMatchObject({
@@ -191,8 +194,8 @@ describe('engineRegistry (auggie runtimeCore)', () => {
           kind: 'hostSessionRuntimePlan',
           agentId: 'auggie',
           config: {
-            backendDisplayName: 'Auggie CLI',
-            providerName: 'Auggie CLI',
+            backendDisplayName: 'Auggie',
+            providerName: 'Auggie',
             agentMessageType: 'auggie',
           },
         });
@@ -216,6 +219,7 @@ describe('engineRegistry (auggie runtimeCore)', () => {
           agentTargetKey: 'agent:happier.agent.auggie/auggie',
           session,
           transcriptSession: session,
+          currentSessionPresentation: createCurrentSessionPresentationHost({ session, signal: new AbortController().signal }).bindCurrentSession,
           messageBuffer: new MessageBuffer(),
           mcpServers: {
             happier: { command: 'happier-mcp', args: ['serve'] },
@@ -265,7 +269,7 @@ describe('engineRegistry (auggie runtimeCore)', () => {
           await created.operations.resetOrDisposeRuntime();
         }
       } finally {
-        await runtimeRegistry?.dispose();
+        await admittedRuntime?.dispose();
         envScope.restore();
       }
     });

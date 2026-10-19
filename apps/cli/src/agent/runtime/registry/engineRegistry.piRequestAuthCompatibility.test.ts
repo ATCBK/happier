@@ -23,6 +23,7 @@ import { readAgentSessionCapabilities } from '@/plugins/projection/registry/agen
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
 import { createPluginInvocationPresentation } from '../../../plugins/runtime/invocation/services/interactions';
+import { createUnboundConnectedAccountsFixture } from './engineRegistry/connectedAccounts.testkit';
 
 const { socketIo } = vi.hoisted(() => ({ socketIo: vi.fn() }));
 // Only the remote HTTP and Socket.IO transports are replaced; Session state and
@@ -130,6 +131,7 @@ describe('engineRegistry (Pi request-auth compatibility)', () => {
             runtimeOptions: {
               contributes: createPiContributionRegistry(),
               pluginIds: [PI_PLUGIN_ID],
+              connectedAccounts: createUnboundConnectedAccountsFixture(),
             },
           });
           const runtimeRegistry = fixture.registry;

@@ -5,6 +5,13 @@ import { isForegroundTurnRuntimeTranscriptEvent } from '../events/runtimeTranscr
 import { commitRequiredRuntimeTranscriptMessage, type RuntimeTranscriptProjectionSession } from './projectRuntimeTranscriptEvent';
 
 type RuntimeFailureEvent = Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' | 'input-rejected' }>;
+type RuntimeFailureProjectionSubject = Extract<AgentSessionRuntimeEvent, {
+  kind: 'transcript-message-committed' | 'turn-failed' | 'input-rejected';
+}>;
+type RuntimeFailureProjectionEvent = RuntimeFailureProjectionSubject | Readonly<{
+  sessionId: string;
+  kind: Exclude<AgentSessionRuntimeEvent['kind'], RuntimeFailureProjectionSubject['kind']>;
+}>;
 
 function runtimeIssueFromFailureEvent(event: RuntimeFailureEvent, provider: ACPProvider): SessionRuntimeIssueV1 {
   return classifyPrimarySessionRuntimeIssue({
@@ -25,7 +32,7 @@ export function createRuntimeFailureTranscriptProjector(params: Readonly<{
   session: RuntimeTranscriptProjectionSession;
   provider: ACPProvider;
   providerName: string;
-}>): (event: AgentSessionRuntimeEvent) => Promise<void> | null {
+}>): (event: RuntimeFailureProjectionEvent) => Promise<void> | null {
   const projectedDiagnostics = new Set<string>();
   const projectedLifecycleMarkers = new Set<string>();
   let lastAssistantMessage: Readonly<{ turnId: string; text: string }> | null = null;
@@ -47,7 +54,7 @@ export function createRuntimeFailureTranscriptProjector(params: Readonly<{
     const issue = runtimeIssueFromFailureEvent(event, params.provider);
     const details = event.diagnostic.details;
     const requestErrorCode = details && typeof details === 'object' && !Array.isArray(details)
-      && typeof details.requestErrorCode === 'number' && Number.isSafeInteger(details.requestErrorCode)
+      && 'requestErrorCode' in details && typeof details.requestErrorCode === 'number' && Number.isSafeInteger(details.requestErrorCode)
       ? details.requestErrorCode : null;
     const meta = {
       source: 'runtime', runtimeIssueCode: issue.code, runtimeIssueSource: issue.source,

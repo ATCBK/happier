@@ -9,25 +9,14 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
-import {curatedMarketplaceSourceFixture,communityMarketplaceSourceFixture,publishAccountRegistrySourcesFixture} from '@/plugins/testkit/accountRegistrySources';
-import {installMarketplaceHttpBoundaryFixture} from '@/plugins/testkit/marketplaceHttpFixture';
+import { publishAccountRegistrySourcesFixture } from '@/plugins/testkit/accountRegistrySources';
 import {resetActiveAccountSettingsSnapshotForTests} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import * as undici from 'undici';
-import * as https from 'node:https';
-import { createPluginRegistryStateStore } from '@/plugins/store/registry/currentState';
-import { createNpmPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
-import { DaemonPluginChangePreparationError } from '@/plugins/daemon/changeService';
-import { resolveInstalledPluginUpdate } from '@/plugins/daemon/resolveInstalledUpdate';
 import { PluginCatalogEntry, projectBundledPluginCatalogEntries } from '@/plugins/projection/catalog/installed';
 import { loadBundledPluginLocators } from '@/plugins/projection/registry/builtIn/locators';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createCliCapabilitiesService } from './capabilities';
-
-function serveMarketplaceHttpFixture(read:(args:Parameters<typeof createMarketplaceSnapshot>[0])=>Promise<ReturnType<typeof createMarketplaceSnapshot>>){
-  installMarketplaceHttpBoundaryFixture(kind=>{const fixture=kind==='npm'?communityMarketplaceSourceFixture():curatedMarketplaceSourceFixture();return read({source:{id:fixture.id,title:fixture.title,sourceUrl:fixture.sourceUrl,kind:fixture.origin}});});
-}
 
 const decideDaemonPluginChangeMock = vi.hoisted(() => vi.fn());
 
@@ -37,7 +26,7 @@ const controlDaemonPluginDevelopmentMock = vi.hoisted(() => vi.fn());
 
 const listDaemonPluginChangesMock = vi.hoisted(() => vi.fn<
     typeof import('@/daemon/controlClient').listDaemonPluginChanges
->(async () => ({ changes: [] })));
+>(async () => ({ kind: 'available', changes: [] })));
 
 const readDaemonPluginChangeStatusMock = vi.hoisted(() => vi.fn());
 
@@ -47,55 +36,6 @@ const promptConfirmYesNoMock = vi.hoisted(() => vi.fn());
 
 const runPluginAuthorToolchainMock = vi.hoisted(() => vi.fn());
 
-function createMarketplaceSnapshot(params: Readonly<{
-    source: Readonly<{
-        id: string;
-        title: string;
-        sourceUrl: string;
-        kind: 'curated' | 'community-npm';
-    }>;
-}>) {
-    return {
-        source: params.source,
-        freshness: { state: 'fresh' as const, fetchedAtMs: Date.now() },
-        entries: [{
-            pluginId: SAMPLE_PLUGIN_ID,
-            publisher: { id: 'acme', displayName: 'Acme' },
-            display: { title: 'Acme Sample', description: 'Reviewed sample plugin' },
-            distribution: {
-                kind: 'npm' as const,
-                registryOrigin: 'https://registry.npmjs.org',
-                packageName: '@acme/sample',
-                version: '1.0.0',
-                integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
-            },
-            manifestDigest: `sha256:${'a'.repeat(64)}`,
-            compatibility: { happier: '>=1.0.0', platforms: ['darwin' as const] },
-            summary: {
-                contributions: ['actions'],
-                requiredHostAccess: [],
-                optionalHostAccess: [],
-                executableRealms: ['daemon' as const],
-            },
-            review: params.source.kind === 'curated'
-                ? { status: 'approved' as const, reviewedAt: '2026-07-22T00:00:00.000Z' }
-                : { status: 'unreviewed' as const, reviewedAt: null },
-            categories: ['actions'],
-            media: [],
-            updatePolicy: params.source.kind === 'curated'
-                ? 'allowed' as const
-                : 'allowed' as const,
-            links: {},
-        }],
-        diagnostics: [],
-    };
-}
-
-// Boundary fixtures only: remote marketplace retrieval and daemon/process/user interaction.
-// The in-process exact-install and user-change owners remain real in this suite.
-vi.mock('node:dns/promises',async original=>({...await original<typeof import('node:dns/promises')>(),lookup:async()=>[{address:'93.184.216.34',family:4}]}));
-vi.mock('undici',async original=>{const actual=await original<typeof import('undici')>();return {...actual,fetch:vi.fn(actual.fetch)};});
-vi.mock('node:https',async original=>{const actual=await original<typeof import('node:https')>();return {...actual,request:vi.fn(actual.request)};});
 
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/daemon/controlClient')>()),
@@ -341,12 +281,12 @@ describe('createCliCapabilitiesService tool.plugins', () => {
     });
 
     afterEach(() => {
-        vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
+        vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
         decideDaemonPluginChangeMock.mockReset();
         requestDaemonPluginChangeMock.mockReset();
         controlDaemonPluginDevelopmentMock.mockReset();
         listDaemonPluginChangesMock.mockReset();
-        listDaemonPluginChangesMock.mockResolvedValue({ changes: [] });
+        listDaemonPluginChangesMock.mockResolvedValue({ kind: 'available', changes: [] });
         readDaemonPluginChangeStatusMock.mockReset();
         readDaemonPluginChangeStatusMock.mockResolvedValue({ kind: 'expired' });
         ensureDaemonRunningMock.mockClear();
@@ -489,7 +429,7 @@ describe('createCliCapabilitiesService tool.plugins', () => {
             pendingChangeId: 'pending-agent-1',
             review: { source: { kind: 'path', locator: '/workspace/plugins/agent-authored' } },
         } as const;
-        listDaemonPluginChangesMock.mockResolvedValue({ changes: [sourceRootReview] });
+        listDaemonPluginChangesMock.mockResolvedValue({ kind: 'available', changes: [sourceRootReview] });
         readDaemonPluginChangeStatusMock.mockResolvedValue({ kind: 'applying', pendingChangeId: 'pending-agent-1' });
         const service = await createCliCapabilitiesService({
             readPluginCatalog: async () => Object.freeze([]),
@@ -531,198 +471,6 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         });
     });
 
-    it('keeps a generic curated install prepare-only even if a downstream adapter reports a commit', async () => {
-        const home = await createTempDir('happier-cli-capabilities-curated-install-');
-        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({
-            HAPPIER_HOME_DIR: home,
-        });
-        reloadConfiguration();
-        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
-        requestDaemonPluginChangeMock.mockResolvedValue({
-            kind: 'committed',
-            pluginId: SAMPLE_PLUGIN_ID,
-            desiredGeneration: 'generation-1',
-            appliedGeneration: 'generation-1',
-            pendingSurfaces: [],
-        });
-
-        try {
-            const sourceId = curatedMarketplaceSourceFixture().id;
-            const service = await createCliCapabilitiesService();
-            const installResponse = await service.invoke({
-                id: 'tool.plugins',
-                method: 'install',
-                params: {
-                    sourceId,
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    approval: 'approved-by-client',
-                    version: '9.9.9',
-                    integrity: 'sha512-client-supplied',
-                },
-            });
-            expect(installResponse).toMatchObject({
-                ok: false,
-                error: {
-                    code: 'plugin_install_human_decision_required',
-                },
-            });
-
-            expect(requestDaemonPluginChangeMock).toHaveBeenCalledWith(expect.objectContaining({
-                kind: 'installNpm',
-                expectedMarketplaceListing: expect.objectContaining({
-                    source: { id: sourceId, kind: 'curated', sourceUrl },
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    version: '1.0.0',
-                }),
-            }));
-            expect(requestDaemonPluginChangeMock.mock.calls[0]?.[0]).not.toMatchObject({
-                selector: '9.9.9',
-                integrity: 'sha512-client-supplied',
-            });
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
-
-    it('returns the staged community package review for an explicit UI decision', async () => {
-        const review = {
-            pluginId: SAMPLE_PLUGIN_ID,
-            displayName: 'Community sample',
-            version: '1.0.0',
-            source: {
-                kind: 'npm' as const,
-                locator: 'https://registry.npmjs.org/@acme/sample/-/sample-1.0.0.tgz',
-                integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
-            },
-            executableRealms: ['daemon' as const],
-            requiredHostAccess: [],
-            optionalHostAccess: [],
-        };
-        const home = await createTempDir('happier-cli-capabilities-community-install-');
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({ HAPPIER_HOME_DIR: home });
-        reloadConfiguration();
-        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
-        requestDaemonPluginChangeMock.mockResolvedValue({
-            kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-            pendingChangeId: 'pending-community',
-            review,
-        });
-
-        try {
-            const service = await createCliCapabilitiesService();
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'install',
-                params: { sourceId: 'marketplace:community-npm', pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'install',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'pending-community', review },
-                },
-            });
-            expect(promptConfirmYesNoMock).not.toHaveBeenCalled();
-            expect(decideDaemonPluginChangeMock).not.toHaveBeenCalled();
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
-
-    it('hands a registry selection back to the present user, from the listing and from preparation', async () => {
-        const home = await createTempDir('happier-cli-capabilities-registry-selection-');
-        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({ HAPPIER_HOME_DIR: home });
-        reloadConfiguration();
-        // The curated listing is published on a private registry this Home has
-        // no profile or source binding for; only the remote index is a fixture.
-        serveMarketplaceHttpFixture(async ({ source }) => {
-            const snapshot = createMarketplaceSnapshot({ source });
-            if (source.kind !== 'curated') return snapshot;
-            return {
-                ...snapshot,
-                entries: snapshot.entries.map((entry) => ({
-                    ...entry,
-                    distribution: { ...entry.distribution, registryOrigin: 'https://npm.acme.example' },
-                })),
-            };
-        });
-
-        try {
-            const sourceId = curatedMarketplaceSourceFixture().id;
-            const service = await createCliCapabilitiesService();
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'install',
-                params: { sourceId, pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toEqual({
-                ok: true,
-                result: {
-                    action: 'install',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: {
-                        kind: 'registryProfileRequired',
-                        registryOrigin: 'https://npm.acme.example',
-                        packageName: '@acme/sample',
-                        registryProfileId: null,
-                    },
-                },
-            });
-            expect(requestDaemonPluginChangeMock).not.toHaveBeenCalled();
-
-            // A registry that refuses at download is the same selection, named by
-            // the daemon's change owner.
-            requestDaemonPluginChangeMock.mockResolvedValue({
-                kind: 'registryProfileRequired',
-                registryOrigin: 'https://registry.npmjs.org',
-                packageName: '@acme/sample',
-                registryProfileId: 'registry_team',
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'install',
-                params: { sourceId: 'marketplace:community-npm', pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toEqual({
-                ok: true,
-                result: {
-                    action: 'install',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: {
-                        kind: 'registryProfileRequired',
-                        registryOrigin: 'https://registry.npmjs.org',
-                        packageName: '@acme/sample',
-                        registryProfileId: 'registry_team',
-                    },
-                },
-            });
-            // An update whose trusted channel's registry now refuses is the same
-            // present-user selection, not a generic failure.
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: { pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'update',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: { kind: 'registryProfileRequired', registryProfileId: 'registry_team' },
-                },
-            });
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
 
     it('rejects the hidden install decision method without contacting the daemon decision command', async () => {
         decideDaemonPluginChangeMock.mockResolvedValue({
@@ -752,350 +500,6 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         expect(decideDaemonPluginChangeMock).not.toHaveBeenCalled();
     });
 
-    it('exposes private lifecycle methods through the canonical daemon change owner without restoring reload or source-url mutation', async () => {
-        const home = await createTempDir('happier-cli-capabilities-plugin-lifecycle-');
-        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({
-            HAPPIER_HOME_DIR: home,
-        });
-        reloadConfiguration();
-        const review = {
-            pluginId: SAMPLE_PLUGIN_ID,
-            displayName: 'Sample plugin',
-            version: '1.0.0',
-            source: { kind: 'npm' as const, locator: '@acme/sample@1.0.0' },
-            executableRealms: ['daemon' as const],
-            requiredHostAccess: [],
-            optionalHostAccess: [],
-        };
-        serveMarketplaceHttpFixture(async ({ source }) => createMarketplaceSnapshot({ source }));
-        requestDaemonPluginChangeMock.mockImplementation(async (request: Readonly<{ kind: string; pluginId?: string }>) => (
-            request.kind === 'update'
-                ? { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'pending-update', review }
-                : {
-                    kind: 'committed',
-                    pluginId: request.pluginId ?? SAMPLE_PLUGIN_ID,
-                    desiredGeneration: request.kind === 'uninstall' || request.kind === 'forgetTrust'
-                        ? null
-                        : 'generation-1',
-                    appliedGeneration: request.kind === 'uninstall' || request.kind === 'forgetTrust'
-                        ? null
-                        : 'generation-1',
-                    pendingSurfaces: [],
-                }
-        ));
-
-        try {
-            const sourceId = curatedMarketplaceSourceFixture().id;
-            const service = await createCliCapabilitiesService();
-            const described = service.describe() as CapabilitiesDescribeResponse;
-            const plugins = described.capabilities.find((capability) => capability.id === 'tool.plugins');
-
-            expect(plugins?.methods).not.toHaveProperty('reload');
-            expect(plugins?.methods).toEqual(expect.objectContaining({
-                update: expect.any(Object),
-                setUpdatePolicy: expect.any(Object),
-                rollback: expect.any(Object),
-                uninstall: expect.any(Object),
-                forgetTrust: expect.any(Object),
-            }));
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'reload',
-                params: { pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'unsupported-method' },
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: {
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    sourceId,
-                    sourceUrl: 'https://untrusted.invalid/catalog.json',
-                },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'update',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: {
-                        kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-                        pendingChangeId: 'pending-update',
-                        review,
-                    },
-                },
-            });
-            // The installed record — not the marketplace listing the caller named —
-            // is the update authority, so nothing about the catalog travels with it.
-            expect(requestDaemonPluginChangeMock).toHaveBeenNthCalledWith(1, {
-                kind: 'update',
-                pluginId: SAMPLE_PLUGIN_ID,
-            });
-            expect(JSON.stringify(requestDaemonPluginChangeMock.mock.calls[0]?.[0])).not.toContain('untrusted.invalid');
-
-            requestDaemonPluginChangeMock.mockResolvedValueOnce({
-                kind: 'committed',
-                pluginId: SAMPLE_PLUGIN_ID,
-                desiredGeneration: 'generation-1',
-                appliedGeneration: 'generation-1',
-                pendingSurfaces: [],
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'setUpdatePolicy',
-                params: { pluginId: SAMPLE_PLUGIN_ID, policy: 'allowed' },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'setUpdatePolicy',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    policy: 'allowed',
-                    change: { kind: 'committed' },
-                },
-            });
-            expect(requestDaemonPluginChangeMock).toHaveBeenNthCalledWith(2, {
-                kind: 'setUpdatePolicy',
-                pluginId: SAMPLE_PLUGIN_ID,
-                policy: 'allowed',
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'setUpdatePolicy',
-                params: { pluginId: SAMPLE_PLUGIN_ID, policy: 'automatic' },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'plugin_update_policy_invalid' },
-            });
-
-            for (const method of ['rollback', 'uninstall', 'forgetTrust'] as const) {
-                await expect(service.invoke({
-                    id: 'tool.plugins',
-                    method,
-                    params: { pluginId: SAMPLE_PLUGIN_ID },
-                })).resolves.toMatchObject({
-                    ok: true,
-                    result: {
-                        action: method,
-                        pluginId: SAMPLE_PLUGIN_ID,
-                        change: { kind: 'committed', pluginId: SAMPLE_PLUGIN_ID },
-                    },
-                });
-            }
-            expect(requestDaemonPluginChangeMock.mock.calls.slice(2, 5).map(([request]) => request)).toEqual([
-                { kind: 'rollback', pluginId: SAMPLE_PLUGIN_ID },
-                { kind: 'uninstall', pluginId: SAMPLE_PLUGIN_ID },
-                { kind: 'forgetTrust', pluginId: SAMPLE_PLUGIN_ID },
-            ]);
-
-            requestDaemonPluginChangeMock.mockResolvedValueOnce({
-                kind: 'unavailable',
-                code: 'daemon_unavailable',
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: { sourceId, pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'outcomeUnknown' },
-            });
-
-            requestDaemonPluginChangeMock.mockResolvedValueOnce({
-                kind: 'committed',
-                pluginId: SAMPLE_PLUGIN_ID,
-                desiredGeneration: 'generation-2',
-                appliedGeneration: 'generation-2',
-                pendingSurfaces: [],
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: { sourceId, pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: true,
-                result: {
-                    action: 'update',
-                    pluginId: SAMPLE_PLUGIN_ID,
-                    change: {
-                        kind: 'committed',
-                        desiredGeneration: 'generation-2',
-                        appliedGeneration: 'generation-2',
-                    },
-                },
-            });
-
-            requestDaemonPluginChangeMock.mockResolvedValueOnce({
-                kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
-                pendingChangeId: 'pending-unexpected',
-                review,
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'uninstall',
-                params: { pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'reviewRequired' },
-            });
-
-            requestDaemonPluginChangeMock.mockResolvedValueOnce({
-                kind: 'unavailable',
-                code: 'daemon_unavailable',
-            });
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'forgetTrust',
-                params: { pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({
-                ok: false,
-                error: { code: 'outcomeUnknown' },
-            });
-
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: { sourceId, pluginId: '   ' },
-            })).resolves.toMatchObject({ ok: false, error: { code: 'plugin-not-found' } });
-            // An exact catalog install still requires the source it installs from;
-            // an update never did, because it does not read the catalog.
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'install',
-                params: { sourceId: '   ', pluginId: SAMPLE_PLUGIN_ID },
-            })).resolves.toMatchObject({ ok: false, error: { code: 'plugin_source_missing' } });
-
-            expect(promptConfirmYesNoMock).not.toHaveBeenCalled();
-            expect(decideDaemonPluginChangeMock).not.toHaveBeenCalled();
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
-
-    it('routes update through the canonical installed-update owner so a pinned installation is refused with its own reason', async () => {
-        const home = await createTempDir('happier-cli-capabilities-plugin-pinned-update-');
-        const sourceUrl = curatedMarketplaceSourceFixture().sourceUrl;
-        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-        envScope.patch({
-            HAPPIER_HOME_DIR: home,
-        });
-        reloadConfiguration();
-        // A newer version is genuinely offered by the catalog: an update arm that
-        // installs the catalog version would advance this pinned installation.
-        serveMarketplaceHttpFixture(async ({ source }) => {
-            const snapshot = createMarketplaceSnapshot({ source });
-            return {
-                ...snapshot,
-                entries: snapshot.entries.map((entry) => ({
-                    ...entry,
-                    distribution: { ...entry.distribution, version: '2.0.0' },
-                })),
-            };
-        });
-
-        try {
-            await createPluginStateStore({ happyHomeDir: home }).write({
-                t: 'happier_plugin_state_v1',
-                schemaVersion: 1,
-                plugins: {
-                    [SAMPLE_PLUGIN_ID]: {
-                        source: {
-                            kind: 'marketplace',
-                            locator: '@acme/sample@1.0.0',
-                            resolvedPath: join(home, 'plugins', SAMPLE_PLUGIN_ID),
-                            manifestPath: join(home, 'plugins', SAMPLE_PLUGIN_ID, '.happier-plugin', 'plugin.json'),
-                            trustPolicy: 'prompt',
-                            installPolicy: 'managed_install',
-                        },
-                        compatibility: { status: 'compatible', diagnostics: [] },
-                        install: {
-                            mode: 'managed_install',
-                            manifestVersion: '1.0.0',
-                            trust: createPluginTrustRecord({
-                                pluginId: SAMPLE_PLUGIN_ID,
-                                distribution: createNpmPluginDistributionIdentity({
-                                    registryOrigin: 'https://registry.npmjs.org',
-                                    packageName: '@acme/sample',
-                                }),
-                                approvedAtMs: 0,
-                            }),
-                            updatePolicy: 'pinned',
-                        },
-                        state: { enabled: true },
-                    },
-                },
-            });
-
-            // The daemon process is the mocked boundary; the decision it reports
-            // is the real canonical installed-update owner's decision.
-            requestDaemonPluginChangeMock.mockImplementation(async (request: Readonly<{ kind: string; pluginId?: string }>) => {
-                if (request.kind !== 'update') {
-                    return { kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], pendingChangeId: 'pending-exact-install', review: {} };
-                }
-                const installed = (await createPluginRegistryStateStore({ happyHomeDir: home }).read())
-                    .plugins[request.pluginId ?? ''];
-                try {
-                    resolveInstalledPluginUpdate(request.pluginId ?? '', installed);
-                } catch (error) {
-                    return error instanceof DaemonPluginChangePreparationError
-                        ? { kind: 'failed', code: error.code, message: error.message }
-                        : { kind: 'failed', code: 'plugin_change_preparation_failed' };
-                }
-                return {
-                    kind: 'committed',
-                    pluginId: request.pluginId,
-                    desiredGeneration: 'generation-2',
-                    appliedGeneration: 'generation-2',
-                    pendingSurfaces: [],
-                };
-            });
-
-            // Derive the expected refusal from the canonical owner itself, so this
-            // test cannot pass against a fixture that is not actually pinned.
-            const canonicalRefusal = await (async () => {
-                const installed = (await createPluginRegistryStateStore({ happyHomeDir: home }).read())
-                    .plugins[SAMPLE_PLUGIN_ID];
-                try {
-                    resolveInstalledPluginUpdate(SAMPLE_PLUGIN_ID, installed);
-                } catch (error) {
-                    if (error instanceof DaemonPluginChangePreparationError) return error;
-                    throw error;
-                }
-                throw new Error('The pinned fixture must be refused by the canonical installed-update owner');
-            })();
-            expect(canonicalRefusal.code).toBe('plugin_update_pinned');
-
-            const sourceId = curatedMarketplaceSourceFixture().id;
-            const service = await createCliCapabilitiesService();
-            await expect(service.invoke({
-                id: 'tool.plugins',
-                method: 'update',
-                params: { pluginId: SAMPLE_PLUGIN_ID, sourceId },
-            })).resolves.toEqual({
-                ok: false,
-                error: {
-                    code: canonicalRefusal.code,
-                    message: canonicalRefusal.message,
-                },
-            });
-
-            expect(requestDaemonPluginChangeMock).toHaveBeenCalledTimes(1);
-            expect(requestDaemonPluginChangeMock).toHaveBeenCalledWith({
-                kind: 'update',
-                pluginId: SAMPLE_PLUGIN_ID,
-            });
-            expect(requestDaemonPluginChangeMock.mock.calls.map(([request]) => request.kind))
-                .not.toContain('installNpm');
-        } finally {
-            envScope.restore();
-            reloadConfiguration();
-            await removeTempDir(home);
-        }
-    });
 
     it('resolves the current folder or single-file Edit target and rejects stale development state', async () => {
         const home = await createTempDir('happier-cli-capabilities-plugin-edit-');
@@ -1308,7 +712,8 @@ describe('createCliCapabilitiesService tool.plugins', () => {
         }
     });
 
-    it.each(['develop', 'unregisterDevelopment', 'test', 'pack'])('rejects retired development capability %s', async (method) => {
+    it.each(['develop', 'unregisterDevelopment', 'test', 'pack', 'install', 'update', 'setUpdatePolicy',
+        'enable', 'disable', 'rollback', 'uninstall', 'forgetTrust'])('rejects retired plugin mutation capability %s', async (method) => {
         const service = await createCliCapabilitiesService();
         const described = service.describe() as CapabilitiesDescribeResponse;
         expect(described.capabilities.find((capability) => capability.id === 'tool.plugins')?.methods)
@@ -1329,12 +734,12 @@ describe('createCliCapabilitiesService tool.plugins', () => {
     });
 
     afterEach(() => {
-        vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
+        vi.restoreAllMocks();resetActiveAccountSettingsSnapshotForTests();
         decideDaemonPluginChangeMock.mockReset();
         requestDaemonPluginChangeMock.mockReset();
         controlDaemonPluginDevelopmentMock.mockReset();
         listDaemonPluginChangesMock.mockReset();
-        listDaemonPluginChangesMock.mockResolvedValue({ changes: [] });
+        listDaemonPluginChangesMock.mockResolvedValue({ kind: 'available', changes: [] });
         readDaemonPluginChangeStatusMock.mockReset();
         readDaemonPluginChangeStatusMock.mockResolvedValue({ kind: 'expired' });
         ensureDaemonRunningMock.mockClear();

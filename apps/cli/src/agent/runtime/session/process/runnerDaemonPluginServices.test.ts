@@ -206,6 +206,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -2313,9 +2314,21 @@ describe('runner daemon PluginServices proxy', () => {
                 if (operation.kind === 'plugin_services.prepare_v1') {
                     prepareCount += 1;
                     if (prepareCount === 2) {
+                        const bootstrap = managedProviderBootstrap('1');
                         return {
                             ...preparedSnapshot(),
-                            managedProvider: { invalid: true },
+                            managedProvider: {
+                                ...bootstrap,
+                                scope: {
+                                    ...bootstrap.scope,
+                                    runtimeBindingBasis: {
+                                        ...bootstrap.scope.runtimeBindingBasis,
+                                        adapterVersion: 'private-bootstrap-value',
+                                    },
+                                },
+                                providerPluginHardRevocationRevisionAtAdmission:
+                                    'private-bootstrap-value',
+                            },
                         };
                     }
                     return {
@@ -2361,11 +2374,23 @@ describe('runner daemon PluginServices proxy', () => {
 
         expect(bindingCurrentness).toHaveLength(1);
         expect(bindingCurrentness[0]?.()).toBe(true);
-        await expect(
-            services.storage.daemon.get('invalid-successor-prepare'),
-        ).rejects.toMatchObject({
+        const failure = await services.storage.daemon
+            .get('invalid-successor-prepare')
+            .catch((error: unknown) => error);
+        expect(failure).toMatchObject({
             code: 'plugin_services_prepare_invalid',
+            message: expect.stringContaining(
+                'providerPluginHardRevocationRevisionAtAdmission:invalid_type',
+            ),
+            details: { issues: expect.arrayContaining([{
+                path: ['providerPluginHardRevocationRevisionAtAdmission'],
+                code: 'invalid_type',
+            }, {
+                path: ['scope', 'runtimeBindingBasis', 'adapterVersion'],
+                code: 'invalid_type',
+            }]) },
         });
+        expect(JSON.stringify(failure)).not.toContain('private-bootstrap-value');
         expect(bindingCurrentness).toHaveLength(1);
         expect(bindingCurrentness[0]?.()).toBe(true);
     });

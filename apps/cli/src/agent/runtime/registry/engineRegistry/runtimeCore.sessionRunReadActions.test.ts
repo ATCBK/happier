@@ -54,7 +54,7 @@ describe('resolveBackendRuntimeCore Session Run read Actions', () => {
       mcpServers: { happier: { command: 'happier-mcp', args: ['--run', 'run-a'] } },
       supportedSessionReadActions: [
         'session.transcript.get' as const,
-        'session.discussion.read' as const,
+        'discussion.read' as const,
       ],
       dispose: () => undefined,
     }));
@@ -127,7 +127,7 @@ describe('resolveBackendRuntimeCore Session Run read Actions', () => {
     expect(openedContext).toBeTruthy();
     expect(composeRunToolBinding).toHaveBeenCalledTimes(1);
     expect(publishSupportedSessionReadActions).toHaveBeenCalledWith(
-      ['session.transcript.get', 'session.discussion.read'],
+      ['session.transcript.get', 'discussion.read'],
       expect.any(AbortSignal),
     );
   });

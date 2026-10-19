@@ -24,6 +24,12 @@ const TRUST_FOLDER_DIALOG = [
     '❯ 1. Yes, I trust this folder', '  2. No, exit',
 ].join('\n');
 const IDLE_COMPOSER = ['──────────────────────────────', '❯ ', '──────────────────────────────'].join('\n');
+const HIDDEN_TRUST_FOLDER_DIALOG = [
+    'Accessing workspace:', '/tmp/new-project',
+    'Quick safety check: Is this a project you created or one you trust?',
+    '❯ No, exit', '  Yes, I trust this folder',
+    'Enter to confirm · Esc to cancel',
+].join('\n');
 const NEXT_DIALOG = [
     'Allow external CLAUDE.md file imports?',
     '❯ No, disable external imports', '  Yes, allow external imports',
@@ -100,6 +106,32 @@ describe('native startup question permission composition', () => {
         });
     });
     afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+    it('applies one child trust answer through the hidden native chooser before retiring the question', async () => {
+        const fixture = createFixture('read-only');
+        const focusedTrust = HIDDEN_TRUST_FOLDER_DIALOG
+            .replace('❯ No, exit', '  No, exit')
+            .replace('  Yes, I trust this folder', '❯ Yes, I trust this folder');
+        const port = createFakeControlPort({ captures: [HIDDEN_TRUST_FOLDER_DIALOG, focusedTrust, IDLE_COMPOSER] });
+        const startup = createClaudeUnifiedResumeChoiceStartupHandler({ ctx: fixture.native, sessionId: fixture.sessionId,
+            port, settleMs: 0, wait: async () => undefined,
+        });
+        try {
+            expect(await startup.handle(parseClaudeScreenState(HIDDEN_TRUST_FOLDER_DIALOG))).toBe('waiting_for_user');
+            await vi.waitFor(() => expect(Object.keys(fixture.state().requests ?? {})).toHaveLength(1));
+            const requestId = Object.keys(fixture.state().requests ?? {})[0]!;
+            await expect(fixture.answer({ id: requestId, approved: true,
+                answers: { claudeUnifiedTerminalTrustFolder: ['trust_once'] },
+            })).resolves.toBeUndefined();
+            expect(port.sentLiteral).toEqual([]);
+            expect(port.sentKeys).toEqual(['ArrowDown', 'Enter']);
+            expect(fixture.state().requests?.[requestId]).toBeUndefined();
+            expect(fixture.state().completedRequests?.[requestId]).toMatchObject({ status: 'approved' });
+        } finally {
+            fixture.occurrence.abort();
+            await startup.dispose();
+            await fixture.permissions.abortPendingRequestsAndFlush('test cleanup');
+        }
+    });
     it.each(['read-only', 'default'])('publishes a child workspace trust question through the Run policy in %s mode', async (mode) => {
         const fixture = createFixture(mode);
         if (mode === 'read-only') fixture.setWitness({ inputId: 'child-input', turnId: 'child-turn',

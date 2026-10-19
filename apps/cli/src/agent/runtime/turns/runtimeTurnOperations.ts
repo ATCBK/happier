@@ -11,6 +11,7 @@ import type {
   AgentSessionInput,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
+import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 export type { RuntimeConfigUpdateOutcomeV1 };
 
@@ -70,6 +71,9 @@ export type RuntimeTurnCompletionOptions = Readonly<{
 }>;
 
 export type RuntimeTurnPromptMeta = Readonly<{
+  discussionAddressing?: import('@happier-dev/protocol/discussions/participants').DiscussionAddressingV1;
+  /** Exact host-admitted request cause; never Agent-authored send options. */
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
   /** Host-owned turn correlation; native Agent runtimes must preserve it when supplied. */
   turnId?: string | null;
   localId?: string | null;
@@ -157,6 +161,8 @@ export type RuntimeTurnDisposeReason = NonNullable<
 export type RuntimeTurnOperations = Readonly<{
   /** Full plan supplied by the host on this native open, not provider-input acceptance. */
   readSessionStartupInstructions?: () => AgentSessionStartupInstructionsV1 | null;
+  /** Concrete open result; an explicit native refusal withdraws manifest support for this incarnation. */
+  readSessionStartupInstructionsSupport?: () => boolean | undefined;
   /** Existing native runtime scope, including plugin retirement; never a transport-request lifetime. */
   getRuntimeLifetimeSignal?: () => AbortSignal | null;
   permissionCapability?: RuntimePermissionCapability;
@@ -189,6 +195,8 @@ export type RuntimeTurnOperations = Readonly<{
   readActiveTurnPermissionWitness?: () => RuntimeActiveTurnPermissionWitness | null;
   /** Exact local input identity that admitted the currently active parent turn. */
   readActiveTurnInputId?: () => string | null;
+  /** Exact initial native input for a canonical started turn; later steers cannot replace it. */
+  readTurnStartingInputId?: (turnId: string) => string | null;
   readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
   /**
    * Prepare the live, process-local metadata required by the Agent's existing

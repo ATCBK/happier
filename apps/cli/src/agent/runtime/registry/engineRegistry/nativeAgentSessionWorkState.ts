@@ -13,6 +13,7 @@ import type {
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
 import { deterministicStringify } from '@/utils/deterministicJson';
+import { logger } from '@/ui/logger';
 
 const MAX_ITEMS_PER_SOURCE = 100;
 const MAX_SOURCE_JSON_BYTES = 256 * 1024;
@@ -300,6 +301,20 @@ export function createNativeAgentSessionWorkStateService(params: Readonly<{
                             decodedBytes: Buffer.byteLength(normalized.fingerprint, 'utf8'),
                             itemCount: normalized.items.length,
                         });
+
+                        if (declaration.itemKinds.includes('goal')) {
+                            logger.debug('[NativeAgentSession] Goal source projection', {
+                                sessionId: params.session.sessionId,
+                                sourceKey,
+                                occurrenceId: params.occurrenceId,
+                                sourceSequence: request.sourceSequence,
+                                observedAtMs: request.observedAtMs,
+                                goals: normalized.items.filter(item => item.kind === 'goal').map(item => ({
+                                    id: item.id, status: item.status,
+                                    tokenBudget: item.tokenBudget ?? null, updatedAt: item.updatedAt,
+                                })),
+                            });
+                        }
 
                         let retiredDuringMerge = false;
                         try {

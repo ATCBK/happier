@@ -8,7 +8,7 @@ export function requiresAgentSessionCli(agentId: CatalogAgentId, registry: Resol
   const definition = agent?.richDefinition?.definition;
   const runtime = registry.agentRuntimesByAgentId.get(agentId);
   const binding = runtime?.sessionRunnerFactoryBinding;
-  return !(definition?.runtime.kind === 'custom'
+  return !(agent && definition && 'runtime' in definition && definition.runtime.kind === 'custom'
     && definition.primary === 'sessions'
     && definition.cli === undefined
     && agent?.cliMetadata == null
@@ -32,7 +32,7 @@ export async function observeCurrentAgentSessionFactory(agentId: CatalogAgentId)
   try {
     const agent = lease.registry.contributes.agentDefinitionsById.get(agentId);
     const definition = agent?.richDefinition?.definition;
-    if (definition?.runtime.kind !== 'custom' || definition.primary !== 'sessions'
+    if (!agent || !definition || !('runtime' in definition) || definition.runtime.kind !== 'custom' || definition.primary !== 'sessions'
       || definition.cli !== undefined || agent?.cliMetadata != null || agent.runtimeSpec != null) return null;
     const { activateAgentRuntimeContributionOnDemand } = await import('@/agent/runtime/registry/activationDemand');
     await activateAgentRuntimeContributionOnDemand(lease.registry, agentId);

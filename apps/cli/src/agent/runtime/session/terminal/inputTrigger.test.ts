@@ -5,6 +5,20 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createTerminalRuntimeInputTriggerService } from './inputTrigger';
 
 describe('createTerminalRuntimeInputTriggerService', () => {
+    it('does not switch the terminal for next-turn information until real work arrives', () => {
+        const queue = new MessageQueue2<string>(mode => mode, {
+            isContextOnly: (_message, mode) => mode === 'information',
+        });
+        const received: unknown[] = [];
+        const subscription = createTerminalRuntimeInputTriggerService({ messageQueue: queue })
+            .subscribe(trigger => { received.push(trigger); });
+        queue.push('Returned answer', 'information');
+        expect(received).toEqual([]);
+        queue.push('Continue the real task', 'work');
+        expect(received).toEqual([{ sequence: 1 }]);
+        subscription.unsubscribe();
+        queue.close();
+    });
     it('publishes sanitized trigger notifications without queued prompt content', () => {
         const queue = new MessageQueue2<{ permissionMode: string }, { text: string }>((mode) => mode.permissionMode);
         const service = createTerminalRuntimeInputTriggerService({ messageQueue: queue });

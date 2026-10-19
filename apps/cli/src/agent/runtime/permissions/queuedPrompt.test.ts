@@ -6,6 +6,25 @@ import {
 } from './queuedPrompt';
 
 describe('combinePermissionModeQueuedPrompts', () => {
+  it('does not merge distinct protected Discussion questions into one turn cutoff', () => {
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'first', throughSeq: 2, participantSessionId: 'receiver' };
+    const prompt = { text: 'First question', localId: 'first-input', discussionAddressing };
+    expect(combinePermissionModeQueuedPrompts([prompt])).toMatchObject({ discussionAddressing });
+    expect(() => combinePermissionModeQueuedPrompts([prompt, { text: 'Second question', localId: 'second-input',
+      discussionAddressing: { ...discussionAddressing, messageId: 'second', throughSeq: 3 } }])).toThrow();
+  });
+  it('retains the exact request cause and refuses to coalesce different requesters', () => {
+    const bob = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'bot' }, origin: null };
+    const prompt = { text: 'work', localId: 'bob-input', actionRequestAttributionV1: bob };
+    expect(combinePermissionModeQueuedPrompts([prompt])).toMatchObject({ actionRequestAttributionV1: bob });
+    expect(() => combinePermissionModeQueuedPrompts([prompt, {
+      text: 'other work', localId: 'carol-input', actionRequestAttributionV1: {
+        ...bob, requestRef: 'carol-input', requester: { serverId: 'home', accountId: 'carol' },
+      },
+    }])).toThrow();
+  });
+
   it('joins prompt texts and keeps the first localId', () => {
     const combined = combinePermissionModeQueuedPrompts([
       { text: 'one', localId: 'a' },

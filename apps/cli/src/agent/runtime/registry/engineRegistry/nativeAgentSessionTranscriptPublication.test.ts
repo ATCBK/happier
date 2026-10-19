@@ -16,6 +16,11 @@ import { createNativeAgentSessionHostServiceOwners } from './nativeAgentSessionH
 import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
 import { createNativeAgentSessionWorkStateService } from './nativeAgentSessionWorkState';
 import { composeNativeAgentSessionRuntimeContext, createNativeAgentSessionHostServices } from './nativeAgentSession';
+import { createExecutionRunTranscriptProjection } from '@/agent/runtime/bridges/executionRun/messages/sessionStateEmission';
+import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/testkit';
+import { getSessionCommittedTranscriptLocalIds } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
+import { createHostTerminalTranscriptFollowService } from '@/agent/runtime/session/terminal/transcriptFollow';
+import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
 
 // Home Socket.IO is the transport boundary; Session custody and runtime owners remain real.
 vi.mock('socket.io-client', () => ({ io: () => createApiSessionSocketStub() }));
@@ -79,12 +84,12 @@ describe('native Agent durable transcript publication', () => {
         );
     });
 
-    it('custodies exact Claude prompt echoes through the native adapter and rejects a retired occurrence', async () => {
+    it.each([null, 'child-sidechain'])('custodies exact Claude prompt echoes in scope %s through the native adapter and rejects a retired occurrence', async (sidechainId) => {
         const fixture = await createAdmittedPluginRuntimeFixture({
             runtimeOptions: { pluginIds: ['happier.agent.claude'] },
         });
         const signal = new AbortController().signal;
-        const sessionId = 'session-source-fact';
+        const sessionId = sidechainId ? 'session-source-fact-child' : 'session-source-fact';
         const token = 'native-transcript-test-token';
         const serverUrl = 'https://native-transcript.example.test';
         let session: ApiSessionClient | undefined;
@@ -127,9 +132,23 @@ describe('native Agent durable transcript publication', () => {
             publications = createNativeAgentSessionPublications({
                 agentId: 'claude', session, signal, isCurrent: lease.isCurrent, supportsInFlightSteer: false,
             });
+            const controller: ExecutionRunBackendController = {
+                kind: 'backend', controllerOccurrenceId: 'child-custody', backend: createTestExecutionRunHostRuntime(),
+                backendSupportsResume: false, runtimeId: 'native-child', buffer: '', sidechainStreamBuffer: '',
+                sidechainStreamKey: '', streamWriter: null, cancelled: false, turnCount: 0, turnEpoch: 0,
+                turnInFlight: false, turnCancelReason: null, turnCancelEpoch: null, admittedLiveInterventions: [],
+                admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 0,
+                terminalPromise: Promise.resolve(), resolveTerminal() {}, pendingInputAcceptance: Promise.resolve('accepted'),
+            };
+            const transcriptSession = sidechainId ? (() => {
+                const projection = createExecutionRunTranscriptProjection({ controller, sidechainId, isCurrent: lease.isCurrent, session });
+                if (!projection.enqueueAgentMessageCommitted) throw new Error('Expected child transcript enqueue boundary');
+                return { sessionId, updateMetadata: session.updateMetadata.bind(session), ...projection,
+                    enqueueAgentMessageCommitted: projection.enqueueAgentMessageCommitted };
+            })() : session;
             const sessionServices = createNativeAgentSessionHostServices({
                 owners, agentId: 'claude', sessionId, directory, signal, isCurrent: lease.isCurrent,
-                session, publications: publications.services, readToolExecutionCapability: () => null,
+                session: transcriptSession, publications: publications.services, readToolExecutionCapability: () => null,
             });
             const context = composeNativeAgentSessionRuntimeContext({
                 identity: { pluginId: lease.pluginId, pluginVersion: lease.pluginVersion, agentId: 'claude' },
@@ -163,6 +182,7 @@ describe('native Agent durable transcript publication', () => {
                         marker: 'source_fact_consumed',
                         reason: 'host_prompt_echo',
                     },
+                    ...(sidechainId ? { sidechainId } : {}),
                 },
                 {
                     localId: 'claude-jsonl:main:user:user-1',
@@ -175,6 +195,33 @@ describe('native Agent durable transcript publication', () => {
             expect(enqueue.mock.calls).toEqual([expectedRecord]);
             await expect(enqueue.mock.results[0]?.value).resolves.toMatchObject({ persisted: true });
             expect(result).toEqual({ status: 'custodied' });
+
+            // A native source can catch up after the Home baseline was read but
+            // after this host prompt acquired durable custody. Its user echo must
+            // not overwrite the consumed marker with a different role/timestamp.
+            const publishedIds: string[] = [];
+            const follow = createHostTerminalTranscriptFollowService({
+                signal,
+                loadCommittedLocalIdBaseline: async () => ({
+                    localIds: getSessionCommittedTranscriptLocalIds(session!), complete: true,
+                }),
+                followProviderSession: async (_request, listener) => {
+                    await listener({ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail', items: [
+                        { kind: 'user', id: 'claude-jsonl:main:user:user-1', localId: 'claude-jsonl:main:user:user-1',
+                            userProjection: 'source_fact', timestampMs: 200, data: { role: 'user', content: { type: 'text', text: 'Host-only prompt' } } },
+                        { kind: 'agent', id: 'new-assistant', timestampMs: 201, data: { role: 'agent', content: { type: 'text', text: 'New output' } } },
+                    ] });
+                    return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
+                },
+                publish: async event => { if (event.kind === 'data') publishedIds.push(...event.items.map(item => item.id)); },
+            });
+            try {
+                await expect(follow.bindProviderSession({ agentId: 'claude', providerSessionId: 'native-echo' }))
+                    .resolves.toMatchObject({ status: 'following' });
+                expect(publishedIds).toEqual(['new-assistant']);
+            } finally {
+                await follow.releaseActiveBindings();
+            }
 
             await fixture.lease.release();
             await fixture.controller.shutdown();

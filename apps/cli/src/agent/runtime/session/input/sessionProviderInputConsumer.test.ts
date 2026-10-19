@@ -1899,6 +1899,45 @@ describe('createSessionProviderInputConsumer', () => {
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
+  it('retains Pending input when the Session has a persisted explicit Stop hold', async () => {
+    const materializeNextPendingMessageSafely = vi.fn(async () => ({
+      type: 'materialized' as const, localId: 'return-update', seq: 1, content: null,
+    }));
+    const consumer = createDrainConsumer({
+      waitForMetadataUpdate: async () => false,
+      materializeNextPendingMessageSafely,
+      shouldAttemptPendingMaterialization: () => true,
+      getMetadataSnapshot: () => ({ ...createTestMetadata(), sessionExplicitStopV1: {
+        v: 1, cause: 'explicit_stop', requestId: 'stop-1', requestedAtMs: 1,
+      } }),
+    });
+
+    await expect(consumer.drainPending({ reason: 'active-host-pending-pump' })).resolves.toEqual({
+      materialized: 0, stoppedReason: 'materialization_blocked',
+    });
+    expect(materializeNextPendingMessageSafely).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a Stop-held Pending guard into a block on direct human input', async () => {
+    const queue = new MessageQueue2<{ id: string }, string>(() => 'hash');
+    queue.pushImmediate('human resumes', { id: 'mode' });
+    const materializeNextPendingMessageSafely = vi.fn(async () => ({ type: 'no_pending' as const }));
+    const consumer = createSessionProviderInputConsumer({
+      messageQueue: queue,
+      session: {
+        waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+        getMetadataSnapshot: () => ({ ...createTestMetadata(), sessionExplicitStopV1: {
+          v: 1, cause: 'explicit_stop', requestId: 'stop-1', requestedAtMs: 1,
+        } }),
+        materializeNextPendingMessageSafely,
+      },
+    });
+
+    await expect(consumer.waitForNextInput({ abortSignal: new AbortController().signal }))
+      .resolves.toMatchObject({ message: 'human resumes' });
+    expect(materializeNextPendingMessageSafely).not.toHaveBeenCalled();
+  });
+
   it('returns an error result when drain reconciliation fails', async () => {
     const popPendingMessage = vi.fn(async () => true);
     const reconcilePendingQueueState = vi.fn(async () => {

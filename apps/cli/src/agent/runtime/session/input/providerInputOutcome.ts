@@ -288,7 +288,7 @@ export function normalizeHostProviderInputOutcome(
             return {
                 kind: 'rejected_before_effect',
                 ...identity,
-                reason: 'provider_rejected_before_acceptance',
+                reason: outcome.retryable ? 'provider_unavailable_before_acceptance' : 'provider_rejected_before_acceptance',
                 diagnostic: outcome.diagnostic,
                 retryable: outcome.retryable,
             };

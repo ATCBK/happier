@@ -12,6 +12,7 @@ export const HOST_SESSION_STATE_METADATA_CAPABILITIES: SessionStateCapabilitiesV
     acpConfigOption: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
   },
   display: {
+    statusReason: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
     title: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
   },
   runtime: {

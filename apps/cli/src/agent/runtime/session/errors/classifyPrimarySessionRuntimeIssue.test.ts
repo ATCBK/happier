@@ -1,10 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyPrimarySessionRuntimeIssue } from './classifyPrimarySessionRuntimeIssue';
+import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from './classifyPrimarySessionRuntimeIssue';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it.each(['loading', 'source-unavailable', 'scope-retired', 'credentials-unavailable', 'account-mismatch', 'not-current'])('retains closed Role mutation diagnostics for %s', reason => {
+    expect(readSessionPreparationFailureDiagnostic(Object.assign(new Error('private detail'), {
+      code: 'account_role_overrides_unavailable', reason, contextSource: 'account_lifetime',
+    }))).toEqual({ originalCode: 'account_role_overrides_unavailable', reason, contextSource: 'account_lifetime' });
+  });
+  it.each(['loading', 'account-not-found', 'account-inconsistent', 'source-version-conflict', 'authority-not-confirmed'])(
+    'retains the closed Role catalog refusal reason %s', reason => {
+      expect(readSessionPreparationFailureDiagnostic(Object.assign(new Error('private detail'), {
+        code: 'role_overrides_unavailable', reason,
+      }))).toEqual({ originalCode: 'role_overrides_unavailable', reason, contextSource: 'unknown' });
+    },
+  );
+  it('keeps construction diagnostics closed without evaluating error accessors', () => {
+    const privateError = Object.assign(new Error('private message'), {
+      code: 'private-code', reason: 'private-reason', contextSource: 'private-source',
+    });
+    expect(readSessionPreparationFailureDiagnostic(privateError)).toEqual({
+      originalCode: 'unknown', reason: 'unknown', contextSource: 'unknown',
+    });
+    const accessor = Object.defineProperties(new Error('private message'), {
+      code: { get() { throw new Error('must not inspect private accessor'); } },
+      reason: { get() { throw new Error('must not inspect private accessor'); } },
+      contextSource: { get() { throw new Error('must not inspect private accessor'); } },
+    });
+    expect(readSessionPreparationFailureDiagnostic(accessor)).toEqual({
+      originalCode: 'unknown', reason: 'unknown', contextSource: 'unknown',
+    });
+  });
   it('preserves typed ACP failure code and bounded redacted detail for the existing issue view', () => {
     const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: {
       code: 'acp_turn_failed', severity: 'error',
@@ -20,7 +48,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
     } });
     expect(long.sanitizedPreview?.length).toBeLessThanOrEqual(2_000);
   });
-  it.each(['context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete'])(
+  it.each(['context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete', 'project_requester_credentials_unavailable'])(
     'publishes %s as a private-safe preparation refusal', (code) => {
       const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error:
         Object.assign(new Error('private Account route'), {
@@ -670,6 +698,20 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
     })).toMatchObject({
       source: 'agent_session_error',
       code: 'agent_session_error',
+    });
+  });
+
+  it('classifies a metadata privacy compatibility refusal as an actionable startup issue', () => {
+    expect(classifyPrimarySessionRuntimeIssue({
+      cause: 'session_error',
+      occurredAt: 1_000,
+      error: Object.assign(new Error('private server response'), {
+        code: 'metadata_privacy_upgrade_required',
+      }),
+    })).toMatchObject({
+      source: 'dependency_failure',
+      code: 'metadata_privacy_upgrade_required',
+      sanitizedPreview: 'Session startup needs a compatible Home. Update or reconnect, then retry the Session.',
     });
   });
 

@@ -229,8 +229,8 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
                         };
                     }
                     if (
-                        request.searchTerm === 'max-cursor'
-                        || request.searchTerm === 'max-cursor-plus-one'
+                        request.searchTerm === 'transcript-cursor-limit'
+                        || request.searchTerm === 'transcript-cursor-limit-plus-one'
                     ) {
                         return {
                             ok: true,
@@ -238,7 +238,7 @@ async function materializeAuxiliaryOnlyPlugin(pluginRoot: string): Promise<void>
                                 candidates: [],
                                 nextCursor: 'c'.repeat(
                                     ${EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits}
-                                    + (request.searchTerm === 'max-cursor-plus-one' ? 1 : 0),
+                                    + (request.searchTerm === 'transcript-cursor-limit-plus-one' ? 1 : 0),
                                 ),
                             },
                         };
@@ -738,7 +738,7 @@ describe('non-bundled auxiliary-only Agent contribution', () => {
             const maximumCursor = await externalSession!.listCandidates!({
                 source: runtimeSource,
                 limit: 1,
-                searchTerm: 'max-cursor',
+                searchTerm: 'transcript-cursor-limit',
             });
             expect(maximumCursor.nextCursor).toMatch(/^happier_external_cursor_v1:/);
             await expect(externalSession!.listCandidates!({
@@ -751,17 +751,18 @@ describe('non-bundled auxiliary-only Agent contribution', () => {
             await expect(externalSession!.listCandidates!({
                 source: runtimeSource,
                 limit: 1,
-                searchTerm: 'max-cursor-plus-one',
-            })).rejects.toMatchObject({
-                name: 'ExternalSessionProviderFailureError',
-                code: 'agent_error',
-                operation: 'listCandidates',
+                searchTerm: 'transcript-cursor-limit-plus-one',
+            })).resolves.toMatchObject({
+                // Candidate discovery cursors share the whole reply's byte
+                // budget, not the shorter transcript-only cursor bound.
+                candidates: [],
+                nextCursor: expect.stringMatching(/^happier_external_cursor_v1:/),
             });
             await expect(externalSession!.listCandidates!({
                 source: runtimeSource,
                 limit: 1,
                 cursor: 'c'.repeat(
-                    EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits + 1,
+                    EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes + 1,
                 ),
             })).rejects.toMatchObject({
                 name: 'ExternalSessionProviderFailureError',

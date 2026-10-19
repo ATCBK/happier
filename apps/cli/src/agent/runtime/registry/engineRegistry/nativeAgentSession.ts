@@ -1,3 +1,4 @@
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { randomUUID } from 'node:crypto';
@@ -17,6 +18,8 @@ import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/proto
 import type { AgentSessionStartupInstructionsV1 } from '@happier-dev/protocol/runtime';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { UsageRequestAttributionSchema, type UsageRequestAttribution } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { materializeActionRequestAttributionV1, type ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { DiscussionAddressingV1Schema, type DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 import { applySessionProviderBindingMetadataV1, projectAgentSessionProviderBindingV1, readSessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { ExternalSessionsAgentIdSchema } from '@happier-dev/protocol/sessions/external/sourceCatalog';
 import { materializeSessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -808,7 +811,10 @@ function createNativeAgentTerminalHostScope(params: Readonly<{
             return await params.owner.interruptTurn(handle);
         },
         ...(params.owner.subscribeExit ? {
-            async subscribeExit(handle, listener) {
+            async subscribeExit(
+                handle: Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[0],
+                listener: Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[1],
+            ) {
                 assertScopeAvailable();
                 assertOwnedHandle(handle);
                 return await params.owner.subscribeExit!(handle, result => {
@@ -898,7 +904,10 @@ function createPublicNativeAgentSessionTerminalHostService(
             );
         },
         ...(owner.subscribeExit ? {
-            async subscribeExit(handle, listener) {
+            async subscribeExit(
+                handle: Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[0],
+                listener: Parameters<NonNullable<AgentTerminalHostService['subscribeExit']>>[1],
+            ) {
                 return await invokeNativeAgentSessionPublicService(
                     async () => await owner.subscribeExit!(handle, listener),
                 );
@@ -1854,13 +1863,15 @@ function createNativeAgentSessionControlContext(params: Readonly<{
 }
 
 function directControlFailureResult(
-    result: Readonly<{ status: string; diagnostic?: Readonly<{ code: string; message?: string }> }>,
-): Readonly<{ ok: false; errorCode: string; error: string }> {
+    result: Readonly<{ status: string; diagnostic?: Readonly<{ code: string; message?: string }>; goalControlFailure?: unknown }>,
+) {
     const errorCode = result.diagnostic?.code ?? `agent_session_control_${result.status}`;
+    const failure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
     return Object.freeze({
         ok: false,
         errorCode,
         error: result.diagnostic?.message ?? errorCode,
+        ...(failure.success ? { goalControlFailure: failure.data } : {}),
     });
 }
 
@@ -2061,6 +2072,8 @@ export function toNativeAgentUsageObservation(
 }
 
 type NativeInputCorrelation = Readonly<{
+    discussionAddressing?: DiscussionAddressingV1;
+    actionRequestAttributionV1?: ActionRequestAttributionV1;
     inputId: string;
     turnId: string;
     deliveryKind: 'newTurn' | 'steer';
@@ -2073,6 +2086,8 @@ type NativeInputCorrelation = Readonly<{
 }>;
 
 export type NativeAgentNewTurnAdmissionWitness = Readonly<{
+    discussionAddressing?: DiscussionAddressingV1;
+    actionRequestAttributionV1?: ActionRequestAttributionV1;
     inputId: string;
     turnId: string;
     userMessageSeq: number | null;
@@ -2115,6 +2130,10 @@ function createNativeAgentTurnAdmissionWitness(
     }
     return Object.freeze({
         inputId: correlation.inputId,
+        ...(correlation.discussionAddressing ? { discussionAddressing: Object.freeze({ ...correlation.discussionAddressing }) } : {}),
+        ...(correlation.actionRequestAttributionV1 ? {
+            actionRequestAttributionV1: materializeActionRequestAttributionV1(correlation.actionRequestAttributionV1),
+        } : {}),
         turnId: correlation.turnId,
         userMessageSeq: correlation.userMessageSeq,
         userMessageSeqs: Object.freeze([
@@ -2151,11 +2170,19 @@ function resolveNativeInputCorrelation(
     }
     const agentStartCaller = meta?.agentStartCaller === undefined
         ? undefined : AgentStartSessionCallerV1Schema.parse(meta.agentStartCaller);
+    const discussionAddressing = meta?.discussionAddressing === undefined ? undefined : DiscussionAddressingV1Schema.parse(meta.discussionAddressing);
+    if (discussionAddressing && discussionAddressing.participantSessionId !== expectedSessionId) {
+        throw new Error('Discussion question input must belong to this receiver Session');
+    }
+    const actionRequestAttributionV1 = meta?.actionRequestAttributionV1
+        ? materializeActionRequestAttributionV1(meta.actionRequestAttributionV1) : undefined;
     if (agentStartCaller && agentStartCaller.sessionId !== expectedSessionId) {
         throw new Error('Native Agent runtime caller facts must belong to this Session');
     }
     return Object.freeze({
         inputId,
+        ...(discussionAddressing ? { discussionAddressing: Object.freeze({ ...discussionAddressing }) } : {}),
+        ...(actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
         turnId: meta?.turnId || fallbackTurnId,
         deliveryKind,
         userMessageSeq: meta?.userMessageSeq ?? null,
@@ -3098,7 +3125,7 @@ export function createNativeAgentSessionOperations(
     const activeControlUnavailable = (): boolean => disposeStarted
         || invariant.read().runtimeEnded
         || directFacets?.context.signal.aborted === true;
-    const runGoalMutation = (effect: (context: AgentSessionGoalControlContext) => Promise<AgentSessionGoalMutationResult>): Promise<AgentSessionGoalMutationResult> => inputDispatch.inLock(async () => {
+    const runGoalMutation = (effect: (context: AgentSessionGoalControlContext) => Promise<AgentSessionGoalMutationResult>): Promise<AgentSessionGoalMutationResult> => inputDispatch.inLock(async (): Promise<AgentSessionGoalMutationResult> => {
         // Join the incumbent host turn's completion, including its ordered
         // publications. A failed turn can still leave a usable native Session.
         const completion = turnCompletion;
@@ -3109,13 +3136,15 @@ export function createNativeAgentSessionOperations(
             });
         }
         if (activeControlUnavailable()) {
-            return { status: 'unavailable', diagnostic: { code: 'native_goal_control_unavailable' }, retryable: true };
+            return { status: 'unavailable', diagnostic: { code: 'native_goal_control_unavailable', severity: 'error' }, retryable: true,
+                goalControlFailure: { phase: 'native_effect' } };
         }
         const context = createControlContext('active');
-        return await effect(Object.freeze({
+        const apply = () => effect(Object.freeze({
             ...context,
             goalSource: directFacets.context.workState.publisher(directFacets.capabilities.goals!.source),
         }));
+        return await apply();
     });
     const directHostControls: NativeAgentSessionDirectHostControls = directFacets
         ? Object.freeze({
@@ -3317,6 +3346,7 @@ export function createNativeAgentSessionOperations(
                             return directControlFailureResult({
                                 status: 'unavailable',
                                 diagnostic: { code: 'native_goal_control_unavailable' },
+                                goalControlFailure: { phase: 'native_effect' },
                             });
                         }
                         const context = createControlContext('active');
@@ -3339,6 +3369,7 @@ export function createNativeAgentSessionOperations(
                             return directControlFailureResult({
                                 status: 'unavailable',
                                 diagnostic: { code: 'native_goal_control_unavailable' },
+                                goalControlFailure: { phase: 'native_effect' },
                             });
                         }
                         const status = options?.status;
@@ -3383,6 +3414,7 @@ export function createNativeAgentSessionOperations(
                             return directControlFailureResult({
                                 status: 'unavailable',
                                 diagnostic: { code: 'native_goal_control_unavailable' },
+                                goalControlFailure: { phase: 'native_effect' },
                             });
                         }
                         const result = await runGoalMutation(async context => directFacets.goals!.clear(context, { signal: context.signal }));
@@ -3697,6 +3729,9 @@ export function createNativeAgentSessionOperations(
         readActiveTurnInputId() {
             return readActiveTurnAdmissionWitness()?.inputId ?? null;
         },
+        readTurnStartingInputId(turnId: string) {
+            return rollbackTurns.find((turn) => turn.turnId === turnId)?.localId ?? null;
+        },
         readActiveTurnAdmissionWitness,
         subscribeRuntimeEvents(handler) {
             if (disposeStarted) return () => undefined;
@@ -3730,74 +3765,89 @@ export function createNativeAgentSessionOperations(
             ensureTurnCompletion();
             ensureSubscription();
             prepareInputCorrelation(correlation.inputId);
-            const admissionAbortController = authorizeNewTurn
-                ? new AbortController()
-                : null;
-            const pendingCorrelation = admissionAbortController
-                ? Object.freeze({
-                    ...correlation,
-                    admissionAbortController,
-                })
-                : correlation;
+            const admissionAbortController = new AbortController();
+            const pendingCorrelation = Object.freeze({
+                ...correlation,
+                admissionAbortController,
+            });
             inputCorrelations.set(
                 correlation.inputId,
                 pendingCorrelation,
             );
             return await inputDispatch.inLock(async () => {
-                // Queue retirement and Stop must still find an input while a native
-                // Goal holds dispatch. Recheck custody before authorization/effects.
-                if (disposeStarted || invariant.read().runtimeEnded
-                    || inputCorrelations.get(correlation.inputId) !== pendingCorrelation) {
-                    throw admissionAbortController?.signal.reason
-                        ?? new Error('Native Agent runtime delivery was retired before dispatch');
-                }
-                ensureTurnCompletion();
-                if (authorizeNewTurn && admissionAbortController) {
-                    try {
-                        const admission =
-                            await authorizeNewTurn(
-                                createNativeAgentTurnAdmissionWitness(correlation),
-                                Object.freeze({
-                                    signal: admissionAbortController.signal,
-                                }),
-                            );
-                        admissionAbortController.signal.throwIfAborted();
-                    } catch (error) {
-                        if (
-                            classifyNativeAgentSessionEffectBoundaryError(error)
-                            === 'authority_unavailable_before_effect'
-                        ) {
-                            emitDeliveryOutcome({
-                                type: 'input-rejected-before-provider',
-                                localInputId: correlation.inputId,
-                                userMessageSeq: correlation.userMessageSeq,
-                                ...(correlation.userMessageSeqs
-                                    ? { userMessageSeqs: correlation.userMessageSeqs }
-                                    : {}),
-                                reason: 'provider_unavailable_before_acceptance',
-                                diagnostic: {
-                                    code: 'daemon_turn_admission_unavailable',
-                                    severity: 'error',
-                                },
-                                retryable: true,
-                                retireLocalCustodyAfterDurableBlock: true,
+                try {
+                    const binding = publications?.readActiveInputBinding();
+                    // A turn-neutral control may acknowledge before its native
+                    // query releases transport. Keep Queue custody in the host.
+                    if (!disposeStarted && !invariant.read().runtimeEnded
+                        && inputCorrelations.get(correlation.inputId) === pendingCorrelation
+                        && binding?.waitForInputReady) {
+                        const signal = admissionAbortController.signal;
+                        signal.throwIfAborted();
+                        const readiness = binding.waitForInputReady();
+                        await new Promise<void>((resolve, reject) => {
+                            const onAbort = () => {
+                                signal.removeEventListener('abort', onAbort);
+                                reject(signal.reason);
+                            };
+                            signal.addEventListener('abort', onAbort, { once: true });
+                            readiness.then(() => {
+                                signal.removeEventListener('abort', onAbort);
+                                resolve();
+                            }, error => {
+                                signal.removeEventListener('abort', onAbort);
+                                reject(error);
                             });
-                        }
-                        if (
-                            inputCorrelations.get(correlation.inputId)
-                                === pendingCorrelation
-                        ) {
-                            inputCorrelations.delete(correlation.inputId);
-                        }
-                        settleUnstartedTurn();
-                        throw error;
+                            if (signal.aborted) onAbort();
+                        });
                     }
+                    // Queue retirement and Stop must still find an input while a native
+                    // Goal holds dispatch. Recheck custody before authorization/effects.
+                    if (disposeStarted || invariant.read().runtimeEnded
+                        || inputCorrelations.get(correlation.inputId) !== pendingCorrelation) {
+                        throw admissionAbortController.signal.reason
+                            ?? new Error('Native Agent runtime delivery was retired before dispatch');
+                    }
+                    ensureTurnCompletion();
+                    if (authorizeNewTurn) {
+                        await authorizeNewTurn(
+                            createNativeAgentTurnAdmissionWitness(correlation),
+                            Object.freeze({ signal: admissionAbortController.signal }),
+                        );
+                        admissionAbortController.signal.throwIfAborted();
+                    }
+                } catch (error) {
+                    if (
+                        classifyNativeAgentSessionEffectBoundaryError(error)
+                        === 'authority_unavailable_before_effect'
+                    ) {
+                        emitDeliveryOutcome({
+                            type: 'input-rejected-before-provider',
+                            localInputId: correlation.inputId,
+                            userMessageSeq: correlation.userMessageSeq,
+                            ...(correlation.userMessageSeqs
+                                ? { userMessageSeqs: correlation.userMessageSeqs }
+                                : {}),
+                            reason: 'provider_unavailable_before_acceptance',
+                            diagnostic: {
+                                code: 'daemon_turn_admission_unavailable',
+                                severity: 'error',
+                            },
+                            retryable: true,
+                            retireLocalCustodyAfterDurableBlock: true,
+                        });
+                    }
+                    if (inputCorrelations.get(correlation.inputId) === pendingCorrelation) {
+                        inputCorrelations.delete(correlation.inputId);
+                    }
+                    settleUnstartedTurn();
+                    throw error;
                 }
                 if (
                     inputCorrelations.get(correlation.inputId)
                         !== pendingCorrelation
                 ) {
-                    throw admissionAbortController?.signal.reason
+                    throw admissionAbortController.signal.reason
                         ?? new Error(
                             'Native Agent runtime delivery was cancelled before admission',
                         );
@@ -4070,7 +4120,6 @@ export function createNativeAgentSessionOperations(
         },
         setOnPromptDeliveryOutcome(handler) {
             deliveryOutcomeHandler = handler;
-            if (handler && !disposeStarted) ensureSubscription();
         },
         async updateSessionRuntimeConfig(update) {
             const reportOutcome = (
@@ -4179,6 +4228,9 @@ export function createNativeAgentSessionOperations(
                 // Native evidence is fenced as soon as retirement begins. Preserve
                 // exact unresolved custody before native cleanup can block or fail.
                 for (const correlation of inputCorrelations.values()) {
+                    correlation.admissionAbortController?.abort(
+                        new Error('Native Agent runtime delivery was retired before dispatch'),
+                    );
                     if (acceptedInputIds.has(correlation.inputId)) continue;
                     if (rejectedInputIds.has(correlation.inputId)) continue;
                     if (uncertainInputIds.has(correlation.inputId)) continue;
@@ -4546,6 +4598,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             const canApplyNativeStartup = sessionCapabilities.startupInstructions?.versions.includes(1) === true
                 && (openIntent.kind === 'create'
                     || (openIntent.kind === 'resume' && sessionCapabilities.startupInstructions.revisionChanges === 'resume'));
+            // A fork cannot receive startup text on that open, but may still
+            // support a later resume revision. Only an actual native refusal
+            // withdraws the declaration for this runtime incarnation.
+            let nativeStartupInstructionsSupported = sessionCapabilities.startupInstructions?.versions.includes(1) === true;
             if (startupInstructions && !canApplyNativeStartup) {
                 throw new PluginError({ code: 'agent_session_startup_instructions_unsupported', retryable: false });
             }
@@ -5813,6 +5869,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     // The native transport refuses before effects. Retry only this same open,
                     // leaving the complete plan to the host's ordinary prefix delivery owner.
                     startupInstructions = null;
+                    nativeStartupInstructionsSupported = false;
                     openRequest = buildOpenRequest();
                     assertGenerationCurrent();
                     await params.attestSessionOpen?.({ phase: 'prepare', request: openRequest, providerSessionId, signal });
@@ -6164,9 +6221,12 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             return {
                 operations: {
                     ...operations,
+                    readActiveTurnAdmissionWitness: () => readActiveTurnAdmissionWitness(),
                     getRuntimeLifetimeSignal: () => signal,
                     readSessionStartupInstructions: () => startupInstructions,
-                    ...(params.agent.richDefinition?.definition.capabilities.skills?.liveReload === 'supported'
+                    readSessionStartupInstructionsSupport: () => nativeStartupInstructionsSupported,
+                    ...(params.agent.richDefinition && 'skills' in params.agent.richDefinition.definition.capabilities
+                        && params.agent.richDefinition.definition.capabilities.skills?.liveReload === 'supported'
                         ? { refreshSkills: async (request: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[0],
                             options?: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[1]) => {
                             assertGenerationCurrent();
@@ -6406,7 +6466,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                                 ...request,
                                 preparedLaunchPlan: presentation.plan,
                                 ...(runtime.observeTerminalExecution
-                                    ? { observeTerminalExecution: input => runtime.observeTerminalExecution!(input) }
+                                    ? { observeTerminalExecution: (input: Parameters<NonNullable<AgentSessionRuntime['observeTerminalExecution']>>[0]) => runtime.observeTerminalExecution!(input) }
                                     : {}),
                             });
                         },
@@ -6465,6 +6525,13 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                                 terminalRemoteModeLoop: null,
                                 ownsCurrentTerminalDisplay: Boolean(terminal && buildActiveTerminalHostHandleFromMetadata(terminal)),
                             };
+                        }
+                        if (presentation.kind === 'provider_attach'
+                            && (normalizeStartingMode(params.sessionInput.runtimePreferences.startingMode)
+                                ?? (params.sessionInput.bootstrap.source === 'terminal' ? 'terminal' : 'remote')) === 'remote') {
+                            // Attach metadata does not give this host an exclusive terminal.
+                            // A remote start keeps the opened native Session running.
+                            return { terminalRemoteModeLoop: null, ownsCurrentTerminalDisplay: false };
                         }
                         if (presentation.kind !== 'terminal_launch') {
                             throw new PluginError({

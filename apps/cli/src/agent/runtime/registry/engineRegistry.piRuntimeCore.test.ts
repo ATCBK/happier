@@ -15,8 +15,10 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
-import { resolveExecutablePluginRuntimeRegistry } from '../../../plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
+import { createUnboundConnectedAccountsFixture } from './engineRegistry/connectedAccounts.testkit';
 
 const PI_BACKEND_ID = 'pi';
 const PI_PLUGIN_ID = 'happier.agent.pi';
@@ -115,13 +117,17 @@ describe('engineRegistry (pi runtimeCore)', () => {
       const builtInContributions = resolveBuiltInContributions();
       const envScope = createEnvKeyScope(['PATH']);
       envScope.patch({ PATH: `${directory}${delimiter}${process.env.PATH ?? ''}` });
-      let runtimeRegistry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+      let admittedRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       try {
-        runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
-          contributes: createResolvedContributionRegistry(builtInContributions),
+        admittedRuntime = await createAdmittedPluginRuntimeFixture({
           happyHomeDir: join(directory, 'home'),
-          pluginIds: [PI_PLUGIN_ID],
+          runtimeOptions: {
+            contributes: createResolvedContributionRegistry(builtInContributions),
+            pluginIds: [PI_PLUGIN_ID],
+            connectedAccounts: createUnboundConnectedAccountsFixture(),
+          },
         });
+        const runtimeRegistry = admittedRuntime.registry;
         const systemToolDefinitions = runtimeRegistry.systemToolDefinitionsByPluginId?.get(PI_PLUGIN_ID);
         expect(systemToolDefinitions).toEqual([
           expect.objectContaining({ id: 'pi-cli', executableNames: ['pi'] }),
@@ -174,6 +180,7 @@ describe('engineRegistry (pi runtimeCore)', () => {
           agentTargetKey: 'agent:happier.agent.pi/pi',
           session,
           transcriptSession: session,
+          currentSessionPresentation: createCurrentSessionPresentationHost({ session, signal: new AbortController().signal }).bindCurrentSession,
           messageBuffer: new MessageBuffer(),
           mcpServers: {},
           permissionHandler: createProviderEnforcedPermissionHandler({
@@ -197,9 +204,14 @@ describe('engineRegistry (pi runtimeCore)', () => {
         const unsubscribe = created.operations.subscribeRuntimeEvents((event) => runtimeEvents.push(event));
 
         try {
-          await expect(readFileEventually(capturePath, { timeoutMs: 5_000 })).resolves.toContain(
-            '"commands":["set_model"]',
-          );
+          const initialCapture = JSON.parse(await readFileEventually(capturePath, { timeoutMs: 5_000 })) as {
+            commands: string[];
+            requests: Array<Readonly<Record<string, unknown>>>;
+          };
+          expect(initialCapture.commands).not.toContain('prompt');
+          expect(initialCapture.requests.filter(request => request.type === 'set_model')).toEqual([
+            expect.objectContaining({ type: 'set_model', provider: 'openai', modelId: 'gpt-5.4' }),
+          ]);
           expect(created.nativeRuntime).not.toHaveProperty('checkUsageLimitRecoveryNow');
           await expect(created.operations.sendTurnPrompt('hello', {
             localId: 'pi-input-1',
@@ -212,8 +224,8 @@ describe('engineRegistry (pi runtimeCore)', () => {
             requests: Array<Readonly<Record<string, unknown>>>;
           };
           expect(capture.args).toEqual(expect.arrayContaining(['--mode', 'rpc']));
-          expect(capture.commands).toEqual(['set_model', 'get_state', 'prompt']);
-          expect(capture.requests[0]).toEqual(expect.objectContaining({
+          expect(capture.commands.filter(command => command === 'set_model' || command === 'prompt')).toEqual(['set_model', 'prompt']);
+          expect(capture.requests.find(request => request.type === 'set_model')).toEqual(expect.objectContaining({
             type: 'set_model',
             provider: 'openai',
             modelId: 'gpt-5.4',
@@ -221,7 +233,7 @@ describe('engineRegistry (pi runtimeCore)', () => {
           expect(runtimeEvents).toEqual(expect.arrayContaining([
             expect.objectContaining({
               kind: 'message-delta',
-              delta: expect.objectContaining({ text: 'PI_NATIVE_OK' }),
+              text: 'PI_NATIVE_OK',
             }),
             expect.objectContaining({ kind: 'turn-complete' }),
           ]));
@@ -260,6 +272,7 @@ describe('engineRegistry (pi runtimeCore)', () => {
           ...runtimeParams,
           session: rejectedSession,
           transcriptSession: rejectedSession,
+          currentSessionPresentation: createCurrentSessionPresentationHost({ session: rejectedSession, signal: new AbortController().signal }).bindCurrentSession,
           permissionHandler: createProviderEnforcedPermissionHandler({
             session: rejectedSession,
             logPrefix: '[Pi native rejected initial model]',
@@ -270,9 +283,9 @@ describe('engineRegistry (pi runtimeCore)', () => {
         const rejectedCapture = JSON.parse(
           await readFileEventually(capturePath, { timeoutMs: 5_000 }),
         ) as { commands: string[] };
-        expect(rejectedCapture.commands).toEqual(['set_model']);
+        expect(rejectedCapture.commands.filter(command => command === 'set_model' || command === 'prompt')).toEqual(['set_model']);
       } finally {
-        await runtimeRegistry?.dispose();
+        await admittedRuntime?.dispose();
         envScope.restore();
       }
     });

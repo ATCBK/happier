@@ -22,7 +22,7 @@ import type {
     ManagedServiceSpec,
     ManagedServices,
 } from '@happier-dev/plugin-sdk/managed-services';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
@@ -348,15 +348,13 @@ export type RunnerManagedServicesCustodyOwnerV1 =
 export const RUNNER_MANAGED_SERVICES_CUSTODY_RPC_METHOD =
     'managedServices.custody.v1';
 
-const BoundedProcessStringSchema = lazyZodSchema(() => z.string()
-    .max(65_536)
-    .refine((value) => !value.includes('\0')));
+const BoundedProcessStringSchema = lazyZodSchema(() => z.string().check(z.maxLength(65_536), z.refine((value) => !value.includes('\0'))));
 const BoundedStringRecordSchema = lazyZodSchema(() => z.record(
-    z.string().min(1).max(256),
+    z.string().check(z.minLength(1), z.maxLength(256)),
     BoundedProcessStringSchema,
-).refine((value) => Object.keys(value).length <= 256));
-const BoundedStringArraySchema = lazyZodSchema(() => z.array(BoundedProcessStringSchema).max(512));
-const PositiveTimeoutSchema = lazyZodSchema(() => z.number().int().min(1).max(2_147_483_647));
+).check(z.refine((value) => Object.keys(value).length <= 256)));
+const BoundedStringArraySchema = lazyZodSchema(() => z.array(BoundedProcessStringSchema).check(z.maxLength(512)));
+const PositiveTimeoutSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)));
 const HostManagedServiceLocalIdSchema = lazyZodSchema(() => asHostProtocolZod(
     ManagedServiceLocalIdSchema,
 ));
@@ -364,26 +362,19 @@ const HostPluginIdSchema = lazyZodSchema(() => asHostProtocolZod(PluginIdSchema)
 const HostPluginSourceCustodyV1Schema = lazyZodSchema(() => asHostProtocolZod(
     PluginSourceCustodyV1Schema,
 ));
-const CustodyIdentityPartSchema = lazyZodSchema(() => z.string().min(1).max(1_024)
-    .refine((value) => value === value.trim()));
-const ObservationIdSchema = lazyZodSchema(() => z.string().uuid());
-const EndpointPathSchema = lazyZodSchema(() => z.object({
+const CustodyIdentityPartSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(1_024), z.refine((value) => value === value.trim())));
+const ObservationIdSchema = lazyZodSchema(() => z.string().check(z.uuid()));
+const EndpointPathSchema = lazyZodSchema(() => z.strictObject({
     endpointTemplateId: CustodyIdentityPartSchema,
-    servicePath: z.string().min(1).max(16_384)
-        .refine((value) => value.startsWith('/')),
-}).strict());
-const CanonicalBase64Schema = lazyZodSchema(() => z.string().regex(
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u,
-).refine(
-    (value) => Buffer.from(value, 'base64').toString('base64') === value,
-    'Expected canonical padded Base64',
-));
-const CustodyBytesSchema = lazyZodSchema(() => z.object({
+    servicePath: z.string().check(z.minLength(1), z.maxLength(16_384), z.refine((value) => value.startsWith('/'))),
+}));
+const CanonicalBase64Schema = lazyZodSchema(() => z.string().check(z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u), z.refine((value) => Buffer.from(value, 'base64').toString('base64') === value, 'Expected canonical padded Base64')));
+const CustodyBytesSchema = lazyZodSchema(() => z.strictObject({
     t: z.literal('bytes'),
     base64: CanonicalBase64Schema,
-}).strict());
+}));
 
-const CustodyIdentitySchema = lazyZodSchema(() => z.object({
+const CustodyIdentitySchema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     sessionId: CustodyIdentityPartSchema,
     runtimeBindingBasis: ProviderRuntimeBindingBasisV1Schema,
@@ -393,253 +384,246 @@ const CustodyIdentitySchema = lazyZodSchema(() => z.object({
     sourceCustody: HostPluginSourceCustodyV1Schema,
     manifestAuthority: z.enum(['external', 'bundled_first_party']),
     operationClaimId: CustodyIdentityPartSchema,
-}).strict());
+}));
 
 const PluginPathSchema = lazyZodSchema(() => z.discriminatedUnion('root', [
-    z.object({
+    z.strictObject({
         root: z.literal('pluginData'),
         relativePath: BoundedProcessStringSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         root: z.literal('workspace'),
         relativePath: BoundedProcessStringSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         root: z.literal('project'),
         projectId: CustodyIdentityPartSchema,
         relativePath: BoundedProcessStringSchema,
-    }).strict(),
+    }),
 ]));
 
-const ExecSpawnRequestWireSchema = lazyZodSchema(() => z.object({
+const ExecSpawnRequestWireSchema = lazyZodSchema(() => z.strictObject({
     executable: ManagedExecutableRefSchema,
-    args: BoundedStringArraySchema.optional(),
-    cwd: PluginPathSchema.optional(),
-    env: BoundedStringRecordSchema.optional(),
-    stdin: CustodyBytesSchema.optional(),
-    maxStdoutBytes: z.number().int().min(0).max(1_073_741_824).optional(),
-    maxStderrBytes: z.number().int().min(0).max(1_073_741_824).optional(),
-}).strict());
+    args: z.optional(BoundedStringArraySchema),
+    cwd: z.optional(PluginPathSchema),
+    env: z.optional(BoundedStringRecordSchema),
+    stdin: z.optional(CustodyBytesSchema),
+    maxStdoutBytes: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(1_073_741_824))),
+    maxStderrBytes: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(1_073_741_824))),
+}));
 
 const MaterializationInjectionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
         kind: z.literal('environment'),
         targetEnvironmentKeysByMaterializedKey:
             BoundedStringRecordSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         kind: z.literal('httpHeaders'),
         target: z.enum([
             'healthRequests',
             'providerRequests',
             'healthAndProviderRequests',
         ]),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         kind: z.literal('files'),
         pathsByFileId: z.record(
-            z.string().min(1).max(256),
-            z.object({
-                environmentKey: z.string().min(1).max(256),
-            }).strict(),
-        ).refine((value) => Object.keys(value).length <= 128),
-    }).strict(),
+            z.string().check(z.minLength(1), z.maxLength(256)),
+            z.strictObject({
+                environmentKey: z.string().check(z.minLength(1), z.maxLength(256)),
+            }),
+        ).check(z.refine((value) => Object.keys(value).length <= 128)),
+    }),
 ]));
-const CredentialBindingSchema = lazyZodSchema(() => z.object({
+const CredentialBindingSchema = lazyZodSchema(() => z.strictObject({
     purpose: ConnectedAccountPurposeIdSchema,
     request: ConnectedAccountMaterializationRequestSchema,
     injection: MaterializationInjectionSchema,
-}).strict());
+}));
 const HealthCheckSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('none') }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('none') }),
+    z.strictObject({
         kind: z.literal('http'),
-        target: z.object({
+        target: z.optional(z.strictObject({
             kind: z.literal('servicePath'),
-            path: z.string().min(1).max(16_384),
-        }).strict().optional(),
-        headers: BoundedStringRecordSchema.optional(),
-        timeoutMs: PositiveTimeoutSchema.optional(),
-    }).strict(),
-    z.object({
+            path: z.string().check(z.minLength(1), z.maxLength(16_384)),
+        })),
+        headers: z.optional(BoundedStringRecordSchema),
+        timeoutMs: z.optional(PositiveTimeoutSchema),
+    }),
+    z.strictObject({
         kind: z.literal('command'),
         executable: ManagedExecutableRefSchema,
-        args: BoundedStringArraySchema.optional(),
-        timeoutMs: PositiveTimeoutSchema.optional(),
-    }).strict(),
+        args: z.optional(BoundedStringArraySchema),
+        timeoutMs: z.optional(PositiveTimeoutSchema),
+    }),
 ]));
 const ClientAccessSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('none') }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('none') }),
+    z.strictObject({
         kind: z.literal('hostBearer'),
-        injectEnvironmentKey: z.string().min(1).max(256),
-        headerName: z.string().min(1).max(256),
+        injectEnvironmentKey: z.string().check(z.minLength(1), z.maxLength(256)),
+        headerName: z.string().check(z.minLength(1), z.maxLength(256)),
         scheme: z.literal('Bearer'),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         kind: z.literal('hostBasic'),
-        username: z.string().min(1).max(256),
-        injectPasswordEnvironmentKey: z.string().min(1).max(256),
-    }).strict(),
+        username: z.string().check(z.minLength(1), z.maxLength(256)),
+        injectPasswordEnvironmentKey: z.string().check(z.minLength(1), z.maxLength(256)),
+    }),
 ]));
 const ManagedServiceSpecBaseShape = {
     id: HostManagedServiceLocalIdSchema,
-    credentialBindings: z.array(CredentialBindingSchema).optional(),
-    healthCheck: HealthCheckSchema.optional(),
-    startupTimeoutMs: PositiveTimeoutSchema.optional(),
-    healthPolicy: z.object({
+    credentialBindings: z.optional(z.array(CredentialBindingSchema)),
+    healthCheck: z.optional(HealthCheckSchema),
+    startupTimeoutMs: z.optional(PositiveTimeoutSchema),
+    healthPolicy: z.optional(z.strictObject({
         intervalMs: PositiveTimeoutSchema,
-        consecutiveFailures: z.number().int().min(1).max(1_000_000),
-    }).strict().optional(),
+        consecutiveFailures: z.number().check(z.int(), z.minimum(1), z.maximum(1_000_000)),
+    })),
 };
 const ManagedServiceSpecWireSchema = lazyZodSchema(() => z.union([
-    z.object({
+    z.strictObject({
         ...ManagedServiceSpecBaseShape,
-        clientAccess: ClientAccessSchema.optional(),
-        requestAuth: z.object({
+        clientAccess: z.optional(ClientAccessSchema),
+        requestAuth: z.optional(z.strictObject({
             kind: z.literal('connectedAccountCapabilityPath'),
-            injectEnvironmentKey: z.string().min(1).max(256),
-        }).strict().optional(),
-        mode: z.object({
+            injectEnvironmentKey: z.string().check(z.minLength(1), z.maxLength(256)),
+        })),
+        mode: z.strictObject({
             kind: z.literal('spawn'),
             launch: ExecSpawnRequestWireSchema,
             endpoint: z.discriminatedUnion('kind', [
-                z.object({ kind: z.literal('none') }).strict(),
-                z.object({
+                z.strictObject({ kind: z.literal('none') }),
+                z.strictObject({
                     kind: z.literal('detectAfterLaunch'),
-                    minimumConfidence: z.enum(['high', 'medium', 'low'])
-                        .optional(),
-                }).strict(),
-                z.object({
+                    minimumConfidence: z.optional(z.enum(['high', 'medium', 'low'])),
+                }),
+                z.strictObject({
                     kind: z.literal('assignAndInject'),
-                    host: z.enum(['127.0.0.1', '::1']).optional(),
+                    host: z.optional(z.enum(['127.0.0.1', '::1'])),
                     port: z.discriminatedUnion('kind', [
-                        z.object({
+                        z.strictObject({
                             kind: z.literal('fixed'),
-                            port: z.number().int().min(1).max(65_535),
-                            onCollision: z.enum(['fail', 'fallback'])
-                                .optional(),
-                        }).strict(),
-                        z.object({
+                            port: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+                            onCollision: z.optional(z.enum(['fail', 'fallback'])),
+                        }),
+                        z.strictObject({
                             kind: z.literal('allocated'),
-                            preferredPort: z.number().int().min(1)
-                                .max(65_535).optional(),
-                            onCollision: z.enum(['fail', 'fallback'])
-                                .optional(),
-                        }).strict(),
+                            preferredPort: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(65_535))),
+                            onCollision: z.optional(z.enum(['fail', 'fallback'])),
+                        }),
                     ]),
-                    inject: z.object({
-                        argument: BoundedProcessStringSchema.optional(),
-                        portEnvironmentKey: z.string().min(1).max(256)
-                            .optional(),
-                        baseUrlEnvironmentKey: z.string().min(1).max(256)
-                            .optional(),
-                    }).strict().optional(),
-                }).strict(),
+                    inject: z.optional(z.strictObject({
+                        argument: z.optional(BoundedProcessStringSchema),
+                        portEnvironmentKey: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+                        baseUrlEnvironmentKey: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+                    })),
+                }),
             ]),
-        }).strict(),
-        durableLog: z.object({
+        }),
+        durableLog: z.optional(z.strictObject({
             enabled: z.boolean(),
-            keepCount: z.number().int().min(0).max(1_000_000).optional(),
-        }).strict().optional(),
-    }).strict(),
-    z.object({
+            keepCount: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(1_000_000))),
+        })),
+    }),
+    z.strictObject({
         ...ManagedServiceSpecBaseShape,
-        clientAccess: z.object({ kind: z.literal('none') }).strict().optional(),
-        mode: z.object({
+        clientAccess: z.optional(z.strictObject({ kind: z.literal('none') })),
+        mode: z.strictObject({
             kind: z.literal('attach'),
-            baseUrl: z.string().url().max(16_384),
-        }).strict(),
-    }).strict(),
+            baseUrl: z.string().check(z.url(), z.maxLength(16_384)),
+        }),
+    }),
 ]));
 
 export const RunnerManagedServicesCustodyRequestV1Schema =
     lazyZodSchema(() => z.discriminatedUnion('kind', [
-        z.object({
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('supervise'),
             scope: CustodyIdentitySchema,
             spec: ManagedServiceSpecWireSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('adopt'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('projectEndpointAccess'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-            endpoints: z.array(EndpointPathSchema).min(1)
-                .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
-        }).strict(),
-        z.object({
+            endpoints: z.array(EndpointPathSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('commitAdoption'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('readAdoptedPublicOutcome'),
             claim: CustodyIdentitySchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('fenceHardRevocation'),
             pluginId: HostPluginIdSchema,
-            sourceCustody: HostPluginSourceCustodyV1Schema.optional(),
-        }).strict(),
-        z.object({
+            sourceCustody: z.optional(HostPluginSourceCustodyV1Schema),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('fenceRetainedProviderPolicy'),
             claim: CustodyIdentitySchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('waitUntilHealthy'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-            timeoutMs: PositiveTimeoutSchema.optional(),
-        }).strict(),
-        z.object({
+            timeoutMs: z.optional(PositiveTimeoutSchema),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('stop'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('dispose'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.open'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.next'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
             observationId: ObservationIdSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.close'),
             claim: CustodyIdentitySchema,
             serviceId: HostManagedServiceLocalIdSchema,
             observationId: ObservationIdSchema,
-        }).strict(),
+        }),
     ]));
 
-const ManagedServiceSnapshotSchema: z.ZodType<ManagedServiceSnapshot> =
-    lazyZodSchema(() => z.object({
+const ManagedServiceSnapshotSchema: z.ZodMiniType<ManagedServiceSnapshot> =
+    lazyZodSchema(() => z.strictObject({
         id: HostManagedServiceLocalIdSchema,
         state: z.enum([
             'starting',
@@ -652,27 +636,23 @@ const ManagedServiceSnapshotSchema: z.ZodType<ManagedServiceSnapshot> =
             'failed',
         ]),
         mode: z.enum(['spawn', 'attach']),
-        baseUrl: z.string().url().max(16_384).nullable(),
-        startedAtMs: z.number().finite().nonnegative().nullable(),
-        lastHealthyAtMs: z.number().finite().nonnegative().nullable(),
-        diagnostics: z.array(PluginDiagnosticDataV1Schema).max(1_024),
+        baseUrl: z.nullable(z.string().check(z.url(), z.maxLength(16_384))),
+        startedAtMs: z.nullable(z.number().check(z.nonnegative())),
+        lastHealthyAtMs: z.nullable(z.number().check(z.nonnegative())),
+        diagnostics: z.array(PluginDiagnosticDataV1Schema).check(z.maxLength(1_024)),
         diagnosticsTruncated: z.boolean(),
-    }).strict());
+    }));
 
 const AdoptedPublicOutcomeSchema:
-    z.ZodType<RunnerManagedProviderAdoptedPublicOutcomeV1> = lazyZodSchema(() => z.object({
+    z.ZodMiniType<RunnerManagedProviderAdoptedPublicOutcomeV1> = lazyZodSchema(() => z.strictObject({
         operationClaimId: CustodyIdentityPartSchema,
         serviceId: HostManagedServiceLocalIdSchema,
-        endpointTemplateIds: z.array(CustodyIdentityPartSchema)
-            .min(1)
-            .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)
-            .refine((values) => new Set(values).size === values.length),
-        endpoints: z.array(EndpointPathSchema.extend({
-            endpointUrl: z.string().url().max(16_384),
-        }).strict()).min(1)
-            .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
+        endpointTemplateIds: z.array(CustodyIdentityPartSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration), z.refine((values) => new Set(values).size === values.length)),
+        endpoints: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(EndpointPathSchema, {
+            endpointUrl: z.string().check(z.url(), z.maxLength(16_384)),
+        }))).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
         endpointAccess: z.literal('runnerProjected'),
-    }).strict().superRefine((value, context) => {
+    }).check(z.superRefine((value, context) => {
         if (
             value.endpointTemplateIds.length !== value.endpoints.length
             || value.endpointTemplateIds.some(
@@ -681,73 +661,70 @@ const AdoptedPublicOutcomeSchema:
             )
         ) {
             context.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 message:
                     'Managed Provider endpoint ids must match ordered endpoint rows',
             });
         }
-    }));
+    })));
 
 export const RunnerManagedServicesCustodyResultV1Schema:
-    z.ZodType<RunnerManagedServicesCustodyResultV1> =
+    z.ZodMiniType<RunnerManagedServicesCustodyResultV1> =
     lazyZodSchema(() => z.union([
-        z.object({
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('handle'),
             custodyScope: CustodyIdentitySchema,
             snapshot: ManagedServiceSnapshotSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('stop'),
-            result: z.object({
+            result: z.strictObject({
                 status: z.enum(['stopped', 'detached']),
-            }).strict(),
+            }),
             snapshot: ManagedServiceSnapshotSchema,
-        }).strict(),
-        z.object({ v: z.literal(1), kind: z.literal('disposed') })
-            .strict(),
-        z.object({ v: z.literal(1), kind: z.literal('projected') })
-            .strict(),
-        z.object({ v: z.literal(1), kind: z.literal('adopted') })
-            .strict(),
-        z.object({
+        }),
+        z.strictObject({ v: z.literal(1), kind: z.literal('disposed') }),
+        z.strictObject({ v: z.literal(1), kind: z.literal('projected') }),
+        z.strictObject({ v: z.literal(1), kind: z.literal('adopted') }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('adoptedPublicOutcome'),
-            outcome: AdoptedPublicOutcomeSchema.nullable(),
-        }).strict(),
-        z.object({
+            outcome: z.nullable(AdoptedPublicOutcomeSchema),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('hardRevocationFenced'),
-            fencedServiceCount: z.number().int().min(0),
-        }).strict(),
-        z.object({
+            fencedServiceCount: z.number().check(z.int(), z.minimum(0)),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('retainedProviderPolicyFenced'),
-            fencedServiceCount: z.number().int().min(0),
-        }).strict(),
-        z.object({
+            fencedServiceCount: z.number().check(z.int(), z.minimum(0)),
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.open'),
             observationId: ObservationIdSchema,
             snapshot: ManagedServiceSnapshotSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.next'),
             status: z.literal('snapshot'),
             snapshot: ManagedServiceSnapshotSchema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.next'),
             status: z.literal('closed'),
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             v: z.literal(1),
             kind: z.literal('observe.close'),
             closed: z.boolean(),
-        }).strict(),
+        }),
     ]));
 
 type CustodyEntry = Readonly<{

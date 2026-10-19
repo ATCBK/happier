@@ -1,8 +1,8 @@
-import { z as zClassic } from 'zod';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { readStoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import type { CreateAgentInvocationServices } from '@/plugins/runtime/invocation/services/types';
 import type { InstalledPluginCapabilityEntryV1 } from '@happier-dev/protocol/capabilities';
 import { ConnectedServicesProviderStateSharingSettingsV1Schema } from '@happier-dev/protocol/account/settings/connected-services';
 import { createCapabilityChecklists } from '@/capabilities/checklists';
@@ -45,7 +45,6 @@ import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/c
 import { PluginScaffoldUiModeSchema, PluginScaffoldTemplateSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import type { CapabilityId } from '@happier-dev/protocol';
-import { PluginUpdatePolicyV1Schema } from '@happier-dev/protocol/marketplace/pluginUpdatePolicyV1';
 import type { AgentProviderCatalogObservationService } from '@/providers/probe/agentCatalogObservation';
 import {
     isDynamicModelProbeEnabled,
@@ -80,7 +79,6 @@ import {
     resolveMergedContributionRegistry,
 } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { requestExactMarketplaceInstall } from '@/plugins/store/marketplace/exactInstall';
 import {
     readInstalledPluginCatalogEntry,
     type PluginCatalogEntry,
@@ -88,12 +86,9 @@ import {
 import {
     listUserPluginChanges,
     readUserPluginChangeStatus,
-    requestUserPluginChange,
 } from '@/plugins/daemon/changeClient';
 import { controlDaemonPluginDevelopment } from '@/daemon/controlClient';
 import { readCurrentDaemonPluginCatalog } from '@/plugins/daemon/currentCatalog';
-import { setInstalledPluginEnabled } from '@/plugins/store/enabled';
-import { ManagedResourceDispositionV1Schema, type ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
 import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
@@ -134,6 +129,7 @@ type ConnectedServiceProbeCredentials = NonNullable<
 type ConnectedServiceProbeApi = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['api'];
 
 type CliProbeDependencies = Readonly<{
+    createAgentInvocationServices?: CreateAgentInvocationServices;
     agentCatalogEntry?: AgentCatalogEntry | null;
     agentRuntimeCacheKey?: string;
     createApiClient?: (credentials: ConnectedServiceProbeCredentials) => Promise<ConnectedServiceProbeApi>;
@@ -155,6 +151,7 @@ type CliProbeRequestContext = Readonly<{
 }>;
 
 type ConnectedServiceProbeEnvironment = Readonly<{
+    exactPurposeBindingSubjectId?: string;
     materializedEnv: Readonly<Record<string, string>> | null;
     connectedServiceSelectionCacheKey: string | null;
     cleanup: (() => Promise<void>) | null;
@@ -283,6 +280,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
     });
     return {
         materializedEnv: resolved.env,
+        exactPurposeBindingSubjectId: resolved.materializationPurposeLease?.subjectId,
         connectedServiceSelectionCacheKey:
             resolved.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] ?? null,
         cleanup: async () => {
@@ -382,6 +380,7 @@ async function invokeCliProbeOrInstallMethod(
                 agentCatalogEntry: catalog.catalogEntry,
                 agentRuntimeCacheKey: catalog.runtimeCacheKey,
                 agentRegistrySnapshot: catalog.registrySnapshot,
+                createAgentInvocationServices: catalog.createAgentInvocationServices,
             } : {}),
             isAgentRegistryCurrent: catalog.isCurrent,
         }, requestContext);
@@ -559,17 +558,46 @@ async function invokeCliPreflightMethod(
             };
         }
     }
+    let preparedLaunchEnvironment: Awaited<ReturnType<NonNullable<AgentCatalogEntry['preparePreflightLaunchEnvironment']>>> | undefined;
+    const preparationLifetime = new AbortController();
+    const preparationSignal = requestContext.signal
+        ? AbortSignal.any([requestContext.signal, preparationLifetime.signal]) : preparationLifetime.signal;
     try {
     requestContext.signal?.throwIfAborted();
-    const materializedEnv = {
+    let materializedEnv = {
         ...nativeLaunchEnvironment,
         ...explicitEnvironment,
         ...(profileProbeEnvironment?.env ?? {}),
         ...(connectedServiceProbeEnvironment.materializedEnv ?? {}),
     };
+    if (requiresMaterializedAuth && dependencies.agentCatalogEntry?.preparePreflightLaunchEnvironment) {
+        const agent = dependencies.agentRegistrySnapshot?.agentDefinitionsById.get(agentId);
+        const identity = agent?.identity;
+        const target = dependencies.agentRegistrySnapshot?.activationTargets.find(target => target.pluginId === identity?.pluginId);
+        if (!identity || !target || !dependencies.agentRuntimeCacheKey || !dependencies.createAgentInvocationServices
+            || !connectedServiceProbeEnvironment.exactPurposeBindingSubjectId) {
+            return { ok: false, error: { code: 'connected-service-preflight-failed', message: 'Native account preparation is unavailable for this probe.' } };
+        }
+        const environment = (await resolvePreflightSessionControlsProbeEnvironment({ agentId, processEnv: process.env, materializedEnv })).env;
+        const values = Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+        const services = await dependencies.createAgentInvocationServices({
+            pluginId: identity.pluginId, pluginVersion: target.manifest.version, agentId,
+            occurrenceId: dependencies.agentRuntimeCacheKey, correlationId: randomUUID(), cwd,
+            exactPurposeBindingSubjectId: connectedServiceProbeEnvironment.exactPurposeBindingSubjectId,
+            environment: values, signal: preparationSignal,
+            isOccurrenceCurrent: dependencies.isAgentRegistryCurrent ?? (() => false),
+        });
+        preparedLaunchEnvironment = await dependencies.agentCatalogEntry.preparePreflightLaunchEnvironment({
+            environment: values, connectedAccounts: services.connectedAccounts, signal: preparationSignal,
+        });
+        materializedEnv = { ...preparedLaunchEnvironment.environment };
+        for (const key of preparedLaunchEnvironment.unset ?? []) delete materializedEnv[key];
+    }
     const probeProcessEnv = (await resolvePreflightSessionControlsProbeEnvironment({
         agentId,
-        processEnv: process.env,
+        // Preparation receives the complete cold launch environment. Do not
+        // reintroduce an inherited native home/key that it explicitly removed.
+        processEnv: preparedLaunchEnvironment ? {} : process.env,
         materializedEnv,
     })).env;
     const commonProbeArgs = {
@@ -601,7 +629,7 @@ async function invokeCliPreflightMethod(
       if (method === 'probePassiveRealtimeSetup') {
         const result = await withPreflightSessionControlsProbeEnvironment({
           agentId,
-          processEnv: profileProcessEnv,
+          processEnv: probeProcessEnv,
           materializedEnv: commonProbeArgs.materializedEnv,
         }, async ({ env }) => {
           if (!preflightAdapter?.probePassiveRealtimeSetupRaw) return { v: 1, status: 'unavailable' } as const;
@@ -732,34 +760,20 @@ async function invokeCliPreflightMethod(
       }
       return { ok: true, result: await probeAgentConfigOptionsBestEffort(commonProbeArgs) };
     } finally {
-      await connectedServiceProbeEnvironment.cleanup?.();
+      preparationLifetime.abort();
+      try { await preparedLaunchEnvironment?.dispose(); }
+      finally { await connectedServiceProbeEnvironment.cleanup?.(); }
     }
 }
 
 type PluginMarketplaceCapabilityMethod =
-    | 'install'
-    | 'update'
-    | 'setUpdatePolicy'
-    | 'enable'
-    | 'disable'
-    | 'rollback'
-    | 'uninstall'
-    | 'forgetTrust'
     | 'create'
     | 'edit'
     | 'changeStatus';
 
 function resolveMarketplaceActionMethod(method: string): PluginMarketplaceCapabilityMethod | null {
     if (
-        method === 'install'
-        || method === 'update'
-        || method === 'setUpdatePolicy'
-        || method === 'enable'
-        || method === 'disable'
-        || method === 'rollback'
-        || method === 'uninstall'
-        || method === 'forgetTrust'
-        || method === 'create'
+        method === 'create'
         || method === 'edit'
         || method === 'changeStatus'
     ) {
@@ -897,219 +911,8 @@ async function invokePluginMarketplaceAction(
     if (!action) {
         return { ok: false, error: { message: `Unsupported method: ${method}`, code: 'unsupported-method' } };
     }
-
-    if (action === 'changeStatus') {
-        return await invokePluginChangeStatusAction(params);
-    }
-
-    if (action === 'create' || action === 'edit') {
-        return await invokePluginDevelopmentAction(action, params);
-    }
-
-    let managedResourceDispositions: readonly ManagedResourceDispositionV1[] | undefined;
-    if ((action === 'disable' || action === 'uninstall') && params?.managedResourceDispositions !== undefined) {
-        const parsed = zClassic.array(ManagedResourceDispositionV1Schema).safeParse(params.managedResourceDispositions);
-        if (!parsed.success) {
-            return { ok: false, error: { code: 'invalid-request', message: 'Invalid reviewed managed-resource dispositions' } };
-        }
-        managedResourceDispositions = parsed.data;
-    }
-
-    if (action === 'enable' || action === 'disable') {
-        const pluginId = typeof params?.pluginId === 'string' ? params.pluginId.trim() : '';
-        if (!pluginId) {
-            return { ok: false, error: { message: 'pluginId is required', code: 'plugin-not-found' } };
-        }
-
-        const toggled = await setInstalledPluginEnabled({
-            happyHomeDir: configuration.happyHomeDir,
-            pluginId,
-            enabled: action === 'enable',
-            ...(managedResourceDispositions !== undefined ? { managedResourceDispositions } : {}),
-        });
-        if (!toggled.ok) {
-            if (action === 'disable' && toggled.change
-                && toggled.change.kind !== 'reviewRequired'
-                && toggled.change.kind !== 'registryProfileRequired'
-                && toggled.change.kind !== 'projectTrustAccepted') {
-                return { ok: true, result: { action, pluginId, change: toggled.change } };
-            }
-            return { ok: false, error: { message: toggled.errorMessage, code: toggled.errorCode } };
-        }
-
-        const entry = (await readCurrentDaemonPluginCatalog({
-            happyHomeDir: configuration.happyHomeDir,
-            reloadController: pluginReloadController,
-        })).find((candidate) => candidate.pluginId === pluginId) ?? null;
-        return {
-            ok: true,
-            result: {
-                action,
-                pluginId,
-                entry,
-                change: toggled.change ?? null,
-            },
-        };
-    }
-
-    const pluginId = typeof params?.pluginId === 'string' ? params.pluginId.trim() : '';
-    if (!pluginId) {
-        return { ok: false, error: { message: 'pluginId is required', code: 'plugin-not-found' } };
-    }
-
-    if (action === 'setUpdatePolicy') {
-        const parsedPolicy = PluginUpdatePolicyV1Schema.safeParse(params?.policy);
-        if (!parsedPolicy.success) {
-            return {
-                ok: false,
-                error: { message: 'policy must be a supported plugin update policy', code: 'plugin_update_policy_invalid' },
-            };
-        }
-        const change = await requestUserPluginChange({
-            request: { kind: 'setUpdatePolicy', pluginId, policy: parsedPolicy.data },
-            approval: 'none',
-        });
-        if (change.kind !== 'committed') {
-            return {
-                ok: false,
-                error: change.kind === 'failed'
-                    ? {
-                        message: change.message ?? `Plugin update policy change failed (${change.code}).`,
-                        code: change.code,
-                    }
-                    : {
-                        message: `The daemon did not commit the plugin update policy (${change.kind}).`,
-                        code: change.kind,
-                    },
-            };
-        }
-        return { ok: true, result: { action, pluginId, policy: parsedPolicy.data, change } };
-    }
-
-    // Installing an exact catalog listing is its own explicit action: the caller
-    // names a marketplace source and gets exactly that published version.
-    // Updating is not that action — see the canonical `update` dispatch below.
-    if (action === 'install') {
-        const sourceId = typeof params?.sourceId === 'string' ? params.sourceId.trim() : '';
-        if (!sourceId) {
-            return { ok: false, error: { message: 'sourceId is required', code: 'plugin_source_missing' } };
-        }
-        // The caller may carry the package name of the listing it showed. It
-        // only targets the source before acquisition — the exact origin,
-        // version, SRI and manifest facts still come from the source's own
-        // answer and are revalidated by the daemon staging owner.
-        const packageName = typeof params?.packageName === 'string' ? params.packageName.trim() : '';
-        const exactInstall = await requestExactMarketplaceInstall({
-            happyHomeDir: configuration.happyHomeDir,
-            sourceId,
-            pluginId,
-            ...(packageName ? { packageName } : {}),
-        });
-        // A registry selection, like a review, is the present user's to answer:
-        // it travels back typed whether the listing named it before any
-        // registry access or the daemon's preparer named it at download.
-        if (!exactInstall.ok && exactInstall.code === 'registry_profile_required') {
-            return {
-                ok: true,
-                result: {
-                    action,
-                    pluginId,
-                    change: { kind: 'registryProfileRequired', ...exactInstall.requirement },
-                },
-            };
-        }
-        if (!exactInstall.ok) {
-            return { ok: false, error: { message: exactInstall.message, code: exactInstall.code } };
-        }
-        if (exactInstall.change.kind === 'registryProfileRequired') {
-            const { kind, registryOrigin, packageName, registryProfileId } = exactInstall.change;
-            return {
-                ok: true,
-                result: { action, pluginId, change: { kind, registryOrigin, packageName, registryProfileId } },
-            };
-        }
-        if (exactInstall.change.kind === 'reviewRequired') {
-            return {
-                ok: true,
-                result: {
-                    action,
-                    pluginId,
-                    listing: exactInstall.listing,
-                    change: exactInstall.change,
-                },
-            };
-        }
-        if (exactInstall.change.kind !== 'committed') {
-            return {
-                ok: false,
-                error: {
-                    message: `The daemon did not commit the exact marketplace install (${exactInstall.change.kind}).`,
-                    code: exactInstall.change.kind,
-                },
-            };
-        }
-        return {
-            ok: false,
-            error: {
-                message: 'Generic plugin installation cannot approve or commit new package trust.',
-                code: 'plugin_install_human_decision_required',
-            },
-        };
-    }
-
-    // `update` carries only the plugin id on purpose. The installed record is the
-    // update authority: it owns the pinned/manual/automatic policy, the trusted
-    // distribution channel, and the newest-compatible selection. A marketplace
-    // listing is a discovery fact, never a second update resolver.
-    const change = await requestUserPluginChange({
-        request: action === 'uninstall'
-            ? { kind: 'uninstall', pluginId,
-                ...(managedResourceDispositions !== undefined ? { managedResourceDispositions } : {}) }
-            : { kind: action, pluginId },
-        approval: 'none',
-    });
-    // Removal reviews and partial/uncertain outcomes are semantic daemon results.
-    // Installation trust/registry reviews cannot settle a removal request.
-    if (action === 'uninstall' && change.kind !== 'reviewRequired'
-        && change.kind !== 'registryProfileRequired' && change.kind !== 'projectTrustAccepted') {
-        return { ok: true, result: { action, pluginId, change } };
-    }
-    // An update the installed policy still owes a present user travels back
-    // verbatim, exactly like an install review: only a present user can decide it.
-    if (action === 'update' && change.kind === 'reviewRequired') {
-        return { ok: true, result: { action, pluginId, change } };
-    }
-    // So is a registry selection the installed channel's registry now needs.
-    if (action === 'update' && change.kind === 'registryProfileRequired') {
-        const { kind, registryOrigin, packageName, registryProfileId } = change;
-        return { ok: true, result: { action, pluginId, change: { kind, registryOrigin, packageName, registryProfileId } } };
-    }
-    if (change.kind !== 'committed') {
-        return {
-            ok: false,
-            // A refusal the change owner explained — a pinned installation, an
-            // unavailable trusted channel — reaches the caller with that owner's
-            // own code and words, the same ones `happier plugins update`
-            // prints.
-            error: change.kind === 'failed'
-                ? {
-                    message: change.message ?? `Plugin change failed (${change.code}).`,
-                    code: change.code,
-                }
-                : {
-                    message: `The daemon did not commit the plugin ${action} (${change.kind}).`,
-                    code: change.kind,
-                },
-        };
-    }
-    return {
-        ok: true,
-        result: {
-            action,
-            pluginId,
-            change,
-        },
-    };
+    if (action === 'changeStatus') return await invokePluginChangeStatusAction(params);
+    return await invokePluginDevelopmentAction(action, params);
 }
 
 async function resolveCliPassiveRealtimeSetupProbeSupport(
@@ -1168,14 +971,6 @@ function createPluginMarketplaceCapability(
             kind: 'tool',
             title: 'Plugins',
             methods: {
-                install: { title: 'Install' },
-                update: { title: 'Update' },
-                setUpdatePolicy: { title: 'Set update policy' },
-                enable: { title: 'Enable' },
-                disable: { title: 'Disable' },
-                rollback: { title: 'Rollback' },
-                uninstall: { title: 'Uninstall' },
-                forgetTrust: { title: 'Forget trust' },
                 create: { title: 'Create' },
                 edit: { title: 'Edit' },
                 changeStatus: { title: 'Plugin change status' },
@@ -1187,6 +982,9 @@ function createPluginMarketplaceCapability(
                 listUserPluginChanges(),
                 controlDaemonPluginDevelopment({ kind: 'status' }),
             ]);
+            if (pendingChanges.kind === 'unavailable') {
+                throw new Error(`plugin_change_list_unavailable:${pendingChanges.code}`);
+            }
             // A change an Agent (or another client) prepared has no caller left
             // to hand its issued id to. Projecting the daemon's outstanding
             // decisions here makes it discoverable on the same plugin-truth
@@ -1293,9 +1091,7 @@ export async function createCliCapabilitiesService(dependencies: Readonly<{
         buildContext: async (requests) => {
             const context = await buildDetectContext(requests);
             if (context.cliSnapshot && dependencies.observeCliSnapshot) {
-                const observedAgentIds = requests.some(request => request.id === 'tool.executionRuns')
-                    ? Object.keys(context.cliSnapshot.clis)
-                    : requests.filter(request => request.id.startsWith('cli.')).map(request => request.id.slice(4));
+                const observedAgentIds = requests.filter(request => request.id.startsWith('cli.')).map(request => request.id.slice(4));
                 if (observedAgentIds.length) await dependencies.observeCliSnapshot({
                     snapshot: context.cliSnapshot, observedAgentIds, checkedAt: Date.now(),
                 }).catch(error => logger.warn('[CAPABILITIES] Failed to publish Machine Agent install facts', error));

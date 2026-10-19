@@ -28,7 +28,8 @@ vi.mock('../../../plugins/runtime/reload/runtimeLease', () => ({
     acquireAuthoritativePluginRuntimeRegistryLease: acquireAuthoritativePluginRuntimeRegistryLeaseMock,
 }));
 
-vi.mock('../../../plugins/projection/registry/createResolvedContributionRegistry', () => ({
+vi.mock('../../../plugins/projection/registry/createResolvedContributionRegistry', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../../../plugins/projection/registry/createResolvedContributionRegistry')>(),
     resolveMergedContributionRegistry: resolveMergedContributionRegistryMock,
 }));
 
@@ -40,6 +41,12 @@ vi.mock('./engineRegistry/resolution', async (importOriginal) => ({
     ...await importOriginal<typeof import('./engineRegistry/resolution')>(),
     resolveEngineAdapterResolutionFromRegistry: resolveEngineAdapterResolutionFromRegistryMock,
 }));
+
+// Load the real fixture owner during collection, like the other production
+// imports. Cold graph transformation is setup, not a lease-operation deadline.
+const { resolveExecutablePluginRuntimeRegistry: createRealRuntimeRegistry } = await vi.importActual<
+    typeof import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry')
+>('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry');
 
 function createContributionRegistry(
     options?: Readonly<{ includePluginBackend?: boolean }>,
@@ -59,6 +66,9 @@ function createContributionRegistry(
         });
     }
     return {
+        voiceProviders: [],
+        connectedAccountDescriptorsById: new Map(),
+        providersByContributionKey: new Map(),
         agents: Object.freeze([]),
                 actions: Object.freeze([]),
         resources: Object.freeze([]),
@@ -72,11 +82,13 @@ function createContributionRegistry(
     };
 }
 
-function createRuntimeRegistry(
+async function createRuntimeRegistry(
     contributes: ResolvedContributionRegistry,
     currentRuntimesByPluginId?: ResolvedExecutablePluginRuntimeRegistry['pluginFinalPolicyCurrentRuntimesById'],
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
+    const base = await createRealRuntimeRegistry({ contributes, pluginIds: [] });
     return {
+        ...base,
         contributes,
         resolveCaptureSource: unexpectedCaptureSourceResolution,
         resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
@@ -93,7 +105,7 @@ function createRuntimeRegistry(
         addRuntimeDisposable: (_pluginId, disposable) => disposable,
         createAgentInvocationServices: async () => createUnavailablePluginServices(),
         retireConsumers: () => {},
-        dispose: async () => {},
+        dispose: base.dispose,
     };
 }
 
@@ -109,7 +121,7 @@ describe('resolveCliEngineRegistry runtime lease convergence', () => {
     it('uses the authoritative plugin runtime lease for default contributions', async () => {
         const authoritativeContributes = createContributionRegistry();
         acquireAuthoritativePluginRuntimeRegistryLeaseMock.mockResolvedValue({
-            registry: createRuntimeRegistry(authoritativeContributes),
+            registry: await createRuntimeRegistry(authoritativeContributes),
             source: 'active',
             release: releaseLeaseMock,
         });
@@ -133,8 +145,8 @@ describe('resolveCliEngineRegistry runtime lease convergence', () => {
         const generationBContributes = createContributionRegistry({
             includePluginBackend: true,
         });
-        const generationARegistry = createRuntimeRegistry(generationAContributes);
-        const generationBRegistry = createRuntimeRegistry(generationBContributes);
+        const generationARegistry = await createRuntimeRegistry(generationAContributes);
+        const generationBRegistry = await createRuntimeRegistry(generationBContributes);
         const resolvedAdapter = Object.freeze({
             backendId: 'acme.backend',
             source: 'fresh-runtime-lease',
@@ -185,12 +197,12 @@ describe('resolveCliEngineRegistry runtime lease convergence', () => {
 
         acquireAuthoritativePluginRuntimeRegistryLeaseMock
             .mockResolvedValueOnce({
-                registry: createRuntimeRegistry(generationAContributes),
+                registry: await createRuntimeRegistry(generationAContributes),
                 source: 'active',
                 release: releaseGenerationA,
             })
             .mockResolvedValueOnce({
-                registry: createRuntimeRegistry(generationBContributes),
+                registry: await createRuntimeRegistry(generationBContributes),
                 source: 'active',
                 release: releaseGenerationB,
             });
@@ -238,8 +250,8 @@ describe('resolveCliEngineRegistry runtime lease convergence', () => {
             }],
         ]);
         acquireAuthoritativePluginRuntimeRegistryLeaseMock
-            .mockResolvedValueOnce({ registry: createRuntimeRegistry(contributions, current), source: 'active', release: vi.fn(async () => undefined) })
-            .mockResolvedValueOnce({ registry: createRuntimeRegistry(contributions, current), source: 'active', release: vi.fn(async () => undefined) });
+            .mockResolvedValueOnce({ registry: await createRuntimeRegistry(contributions, current), source: 'active', release: vi.fn(async () => undefined) })
+            .mockResolvedValueOnce({ registry: await createRuntimeRegistry(contributions, current), source: 'active', release: vi.fn(async () => undefined) });
 
         const registry = await resolveCliEngineRegistry();
         const catalog = await registry.resolveExecutionRunProfileCatalog();

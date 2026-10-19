@@ -6,6 +6,7 @@ import { UsagePromptCompositionSchema, type UsagePromptComposition, type UsagePr
 import { createPromptCompositionScope, type PromptCompositionScope } from '@/agent/prompting/promptComposition';
 import { logger } from '@/ui/logger';
 import type { PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
+import type { SessionClientInteractionApi } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
 import {
   resolveStructuredInputProviderDispatchContext,
@@ -53,6 +54,7 @@ export function projectSessionComposerAttachmentDispatchInput(
 
 export type SessionInputDispatchServices = Readonly<{
   sessionId?: string;
+  reconcileSessionInputForProviderDispatch?: SessionClientInteractionApi['reconcileSessionInputForProviderDispatch'];
   catalogs?: StructuredInputCatalogReaders;
   resolveComposerReference?: StructuredInputComposerReferenceResolver['resolve'];
   resolveComposerAttachmentForDispatch?: ComposerAttachmentDispatchResolver;
@@ -95,7 +97,11 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
           return await attachmentResolver(projectSessionComposerAttachmentDispatchInput(request, sessionId));
         } catch (error) {
           if (isAbortLikeError(error) || error instanceof StructuredInputComposerAttachmentResolutionError) throw error;
-          throw new StructuredInputComposerAttachmentUnavailableError();
+          throw new StructuredInputComposerAttachmentResolutionError(
+            'composer_attachment_resolution_failed',
+            true,
+            'Composer attachment resolver failed before provider dispatch',
+          );
         }
       },
     } } : {}),
@@ -105,7 +111,9 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
       provenanceBlock: input.prompt.inputContextBlock ?? '',
       ...context.promptContext,
       ...optionalContext,
-      transformedUserText: input.providerNativeCommand ? '' : input.transformedUserText,
+      returnedAnswers: [...input.prompt.returnedAnswerContext ?? [],
+        ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer, text: input.transformedUserText }] : [])],
+      transformedUserText: input.providerNativeCommand || input.prompt.returnedAnswer ? '' : input.transformedUserText,
     });
     finalPrompt = input.providerNativeCommand
       ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
@@ -139,6 +147,19 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
     catch { logger.debug('[Usage composition] Session detail retention unavailable'); }
   };
   return {
+    async assertAdmission(): Promise<void> {
+      if (!input.prompt.discussionAddressing) return;
+      const reconcile = services?.reconcileSessionInputForProviderDispatch;
+      if (!reconcile || !input.localId) throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+      let status: Awaited<ReturnType<typeof reconcile>>;
+      try {
+        status = await reconcile({ localId: input.localId, discussionAddressing: input.prompt.discussionAddressing, signal: input.signal });
+      } catch (error) {
+        if (isAbortLikeError(error)) throw error;
+        throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+      }
+      if (status !== 'admitted') throw new SessionInputDispatchAdmissionError(status);
+    },
     readComposition,
     retainComposition,
     renderPrompt,
@@ -150,7 +171,18 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
   };
 }
 
+class SessionInputDispatchAdmissionError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  constructor(status: 'rejected' | 'held' | 'outcomeUnknown') {
+    super('Discussion input is not currently admitted for provider dispatch');
+    this.code = status === 'rejected' ? 'session_input_rejected' : status === 'held' ? 'session_input_held' : 'session_input_admission_unavailable';
+    this.retryable = status !== 'rejected';
+  }
+}
+
 export function readStructuredInputPreparationFailure(error: unknown): Readonly<{ code: string; message: string; retryable: boolean }> | null {
+  if (error instanceof SessionInputDispatchAdmissionError) return { code: error.code, message: error.message, retryable: error.retryable };
   if (error instanceof StructuredInputComposerAttachmentResolutionError) {
     return {
       code: error.code,

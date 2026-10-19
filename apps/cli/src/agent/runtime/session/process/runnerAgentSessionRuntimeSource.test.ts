@@ -64,6 +64,8 @@ vi.mock('@/plugins/store/registry/generationStore', () => ({
 vi.mock('@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf', () => ({
     loadRetainedAgentRuntimeLeaf: async (...args: readonly unknown[]) => ({
         factory: await mocks.loadFactory(...args),
+        catalogEntry: null,
+        dispose: async () => {},
         ...(mocks.externalSessionsCompanion
             ? { externalSessions: mocks.externalSessionsCompanion }
             : {}),
@@ -411,6 +413,24 @@ describe('runner Agent session runtime source', () => {
             executeProviderSessionFollow: vi.fn(),
             retire: vi.fn(),
         });
+    });
+
+    it.each(['agent_runtime_daemon_service_forbidden', 'private_dispatch_value'])('retains only a safe private MCP dispatch cause across the runner port (%s)', async code => {
+        const source = await createRunnerAgentSessionRuntimeSource({
+            happyHomeDir: '/tmp/happier-runner-source', publicReleaseRing: 'stable',
+            authorityFilePath: '/tmp/happier-runner-source/authority.json',
+        });
+        expect(source).not.toBeNull();
+        mocks.dispatch.mockResolvedValue({ ok: false, error: {
+            code: 'native_agent_privileged_effect_authority_unavailable', message: 'private-response-body',
+            cause: { code, stage: 'dispatch' },
+        } });
+        try {
+            await expect(source!.daemonTurnContributionsBridge!.mcpRequestAuth!.open({
+                serverId: 'own-oauth', resource: 'https://private-resource.example.test/mcp', materializationId: 'own-oauth',
+            })).rejects.toMatchObject({ message: 'native_agent_privileged_effect_authority_unavailable',
+                cause: code === 'agent_runtime_daemon_service_forbidden' ? { code, stage: 'dispatch' } : undefined });
+        } finally { await source!.retire?.(); }
     });
 
     it('loads only the retained factory leaf and keeps one local runtime across daemon authority rotation', async () => {

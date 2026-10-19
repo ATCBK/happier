@@ -4,7 +4,7 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
-import type { RuntimeTurnOperations } from '@/agent/runtime/turns/runtimeTurnOperations';
+import type { RuntimeTurnOperations, RuntimeTurnMessageHandler } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { SessionStateSyncEngine } from '@happier-dev/agents';
 import { SessionCapabilityAgentFactsV1Schema, type CapabilityApplyTimingInputV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { RuntimeDescriptorV1 } from '@happier-dev/protocol';
@@ -28,14 +28,21 @@ function updateRuntimePublicationMetadata(
 export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
   session: Pick<ApiSessionClient, 'sessionId' | 'updateMetadata'>;
   sessionState: Pick<SessionStateSyncEngine, 'writeHappierField'>;
-  runtime: RuntimeTurnOperations;
+  runtime: Pick<RuntimeTurnOperations, 'readSessionIdentity' | 'subscribeRuntimeIdentityPublication'>;
   providerSessionMetadataKey?: string | null;
   /** Shared-editor runtimes retain runtime-local publications but cannot write owner metadata. */
   publishOwnerMetadata?: boolean;
   capabilitySelection?: CapabilityApplyTimingInputV1['agent'];
   resolveCapabilitySelectionForDescriptor?: (descriptor: RuntimeDescriptorV1) => Promise<CapabilityApplyTimingInputV1['agent']>;
-}>): () => void {
+}>): (() => void) & Readonly<{
+  observeRuntimeEvent: RuntimeTurnMessageHandler;
+  waitForProviderSessionIdPublication(providerSessionId: string, signal: AbortSignal): Promise<void>;
+}> {
   let lastPublishedNativeIdentity: string | null = null;
+  let nativeIdentityPublication: Readonly<{
+    providerSessionId: string;
+    result: ReturnType<SessionStateSyncEngine['writeHappierField']>;
+  }> | null = null;
   let lastPublishedDescriptor: unknown = undefined;
   let lastPublishedCapabilities: unknown = undefined;
   let lastPublishedFacets: unknown = undefined;
@@ -86,14 +93,16 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
     }
     const previousNativeIdentity = lastPublishedNativeIdentity;
     lastPublishedNativeIdentity = nativeIdentityKey;
-    void params.sessionState.writeHappierField({
+    const result = params.sessionState.writeHappierField({
       sessionId: params.session.sessionId,
       fieldId: 'identity.providerSessionId',
       value: { metadataKey, value: providerSessionId, nativeSessionLogPath },
       reason: 'reconciliation',
       metadataReason: 'runtime-provider-session-id',
       mirrorToProvider: false,
-    }).then((result) => {
+    });
+    nativeIdentityPublication = { providerSessionId, result };
+    void result.then((result) => {
       if (!result.ok && lastPublishedNativeIdentity === nativeIdentityKey) {
         lastPublishedNativeIdentity = previousNativeIdentity;
       }
@@ -110,14 +119,16 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
     // A later runtime event can still publish identity after cold-read failure.
   }
 
-  const unsubscribeRuntimeEvents = params.runtime.subscribeRuntimeEvents((message) => {
+  // The Session lifecycle feeds this observer from its canonical event watch.
+  const observeRuntimeEvent: RuntimeTurnMessageHandler = (message) => {
+    if (disposed) return;
     if (message.kind === 'provider-session-id') {
       publishProviderSessionId(
         message.providerSessionId,
         'nativeSessionLogPath' in message ? message.nativeSessionLogPath : null,
       );
     }
-  });
+  };
 
   const unsubscribeIdentityPublication = params.runtime.subscribeRuntimeIdentityPublication?.(
     (publication) => {
@@ -192,9 +203,33 @@ export function subscribeSessionRuntimePublicationToMetadata(params: Readonly<{
     },
   );
 
-  return () => {
+  const unsubscribe = () => {
     disposed = true;
-    unsubscribeRuntimeEvents();
     unsubscribeIdentityPublication?.();
   };
+  return Object.assign(unsubscribe, {
+    observeRuntimeEvent,
+    async waitForProviderSessionIdPublication(providerSessionId: string, signal: AbortSignal): Promise<void> {
+      signal.throwIfAborted();
+      const publication = nativeIdentityPublication;
+      const unavailable = () => Object.assign(new Error('Native Session identity publication is unavailable'), {
+        code: 'native_agent_identity_publication_unavailable',
+      });
+      if (disposed || publication?.providerSessionId !== providerSessionId) throw unavailable();
+      let onAbort: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      });
+      try {
+        const result = await Promise.race([publication.result, aborted]);
+        signal.throwIfAborted();
+        if (disposed || nativeIdentityPublication !== publication) throw unavailable();
+        if (!result.ok) throw Object.assign(unavailable(), { cause: result });
+      } finally {
+        if (onAbort) signal.removeEventListener('abort', onAbort);
+      }
+    },
+  });
 }

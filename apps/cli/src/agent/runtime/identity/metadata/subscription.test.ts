@@ -3,13 +3,10 @@ import { setImmediate } from 'node:timers/promises';
 
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { Metadata } from '@/api/types';
-import type {
-  RuntimeTurnMessage,
-  RuntimeTurnMessageHandler,
-} from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { NormalizedRuntimeIdentityPublicationV1 } from '@/agent/runtime/events/createNormalizedRuntimeEventWriter';
 import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { readSessionCapabilityAgentFactsV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
+import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
 
 import { subscribeSessionRuntimePublicationToMetadata } from './subscription';
 
@@ -32,7 +29,6 @@ function createRuntimePublicationMetadata(
 type IdentityPublicationHandler = (publication: NormalizedRuntimeIdentityPublicationV1) => void;
 
 function createHarness(options?: Readonly<{ providerSessionId?: string | null }>) {
-  let runtimeHandler: RuntimeTurnMessageHandler | null = null;
   let identityHandler: IdentityPublicationHandler | null = null;
 
   const session = {
@@ -49,14 +45,6 @@ function createHarness(options?: Readonly<{ providerSessionId?: string | null }>
   };
   const runtime = {
     readSessionIdentity: vi.fn(() => ({ sessionId: options?.providerSessionId ?? null })),
-    subscribeRuntimeEvents: vi.fn((handler: RuntimeTurnMessageHandler) => {
-      runtimeHandler = handler;
-      return () => {
-        if (runtimeHandler === handler) {
-          runtimeHandler = null;
-        }
-      };
-    }),
     subscribeRuntimeIdentityPublication: vi.fn((handler: IdentityPublicationHandler) => {
       identityHandler = handler;
       return () => {
@@ -71,9 +59,6 @@ function createHarness(options?: Readonly<{ providerSessionId?: string | null }>
     session,
     sessionState,
     runtime,
-    emit(message: RuntimeTurnMessage) {
-      runtimeHandler?.(message);
-    },
     publish(publication: NormalizedRuntimeIdentityPublicationV1) {
       identityHandler?.(publication);
     },
@@ -81,6 +66,65 @@ function createHarness(options?: Readonly<{ providerSessionId?: string | null }>
 }
 
 describe('subscribeSessionRuntimePublicationToMetadata', () => {
+  it('fences lifecycle events after metadata observation is disposed', () => {
+    const harness = createHarness({ providerSessionId: 'initial-native-session' });
+    const publication = subscribeSessionRuntimePublicationToMetadata({
+      session: harness.session, sessionState: harness.sessionState, runtime: harness.runtime,
+    });
+    expect(harness.sessionState.writeHappierField).toHaveBeenCalledTimes(1);
+    publication();
+    publication.observeRuntimeEvent({ kind: 'provider-session-id', providerSessionId: 'late-native-session',
+      sessionId: harness.session.sessionId, sequence: 1, emittedAtMs: 1 });
+    expect(harness.sessionState.writeHappierField).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['commit', 'refuse', 'abort', 'supersede'] as const)('waits for its exact native identity write before source follow (%s)', async outcome => {
+    const harness = createHarness();
+    let finishWrite!: () => void;
+    const writing = new Promise<void>(resolve => { finishWrite = resolve; });
+    let metadata = createTestMetadata({ flavor: 'claude' });
+    const sessionState = createCliRuntimeSessionStateBridge({
+      session: harness.session, credentials: { token: 'test-home', encryption: null },
+      // Home metadata persistence is the system boundary; the state engine,
+      // identity binding and subscriber all run unchanged beneath it.
+      metadataPort: { update: async (_sessionId, updater) => {
+        await writing;
+        if (outcome === 'refuse') return { ok: false, reason: 'unknown_error' };
+        metadata = createTestMetadata(updater(metadata));
+        return { ok: true, version: 1 };
+      } },
+    }).engine;
+    const subscription = subscribeSessionRuntimePublicationToMetadata({
+      session: harness.session, sessionState, runtime: harness.runtime, providerSessionMetadataKey: 'claudeSessionId',
+    });
+    const controller = new AbortController();
+    try {
+      subscription.observeRuntimeEvent({ kind: 'provider-session-id', sequence: 1, sessionId: 'session-1', emittedAtMs: 1,
+        providerSessionId: 'native-session', nativeSessionLogPath: '/native/session.jsonl' });
+      let settled = false;
+      const waiting = subscription.waitForProviderSessionIdPublication('native-session', controller.signal);
+      void waiting.then(() => { settled = true; }, () => { settled = true; });
+      await setImmediate();
+      expect(settled).toBe(false);
+      expect(metadata.claudeSessionId).toBeUndefined();
+      if (outcome === 'abort') {
+        const reason = new Error('follow invocation retired');
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
+      } else {
+        if (outcome === 'supersede') subscription.observeRuntimeEvent({ kind: 'provider-session-id', sequence: 2,
+          sessionId: 'session-1', emittedAtMs: 2, providerSessionId: 'successor-session' });
+        finishWrite();
+        if (outcome === 'commit') {
+          await waiting;
+          expect(metadata).toMatchObject({ claudeSessionId: 'native-session', claudeTranscriptPath: '/native/session.jsonl' });
+        } else {
+          await expect(waiting).rejects.toMatchObject({ code: 'native_agent_identity_publication_unavailable',
+            ...(outcome === 'refuse' ? { cause: { ok: false, reason: 'unknown_error' } } : {}) });
+        }
+      }
+    } finally { finishWrite(); subscription(); }
+  });
   it('contains a refused capability metadata transport publication and accepts a later native publication', async () => {
     const harness = createHarness();
     let metadata = createRuntimePublicationMetadata();
@@ -150,14 +194,14 @@ describe('subscribeSessionRuntimePublicationToMetadata', () => {
 
   it('publishes canonical provider-session-id events through the declared vendor metadata field', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'grokSessionId',
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       sequence: 1,
       sessionId: 'session-1',
@@ -305,7 +349,7 @@ describe('subscribeSessionRuntimePublicationToMetadata', () => {
 
   it('never routes host-owned identity facts through the canonical Agent Session event stream', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
@@ -313,7 +357,7 @@ describe('subscribeSessionRuntimePublicationToMetadata', () => {
 
     // A pseudo-event is no longer a member of the canonical union, so even a
     // hand-forged one must not be interpreted as a host identity publication.
-    harness.emit({
+    publication.observeRuntimeEvent({
       type: 'event',
       name: 'runtime.descriptor',
       payload: { v: 1, agentId: 'codex', agent: { backendMode: 'appServer' } },
@@ -485,14 +529,14 @@ describe('subscribeSessionRuntimePublicationToMetadata', () => {
 describe('subscribeSessionRuntimePublicationToMetadata — matched native resume identity', () => {
   it('carries a runtime-published continuity proof into the same metadata write as its id', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'claudeSessionId',
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       providerSessionId: 'claude-1',
       nativeSessionLogPath: '/home/u/.claude/x/claude-1.jsonl',
@@ -513,15 +557,15 @@ describe('subscribeSessionRuntimePublicationToMetadata — matched native resume
     // dedupe would swallow the update that carries the path, and the successor
     // Agent would be offered no log to read.
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'claudeSessionId',
     });
 
-    harness.emit({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
-    harness.emit({
+    publication.observeRuntimeEvent({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       providerSessionId: 'claude-1',
       nativeSessionLogPath: '/home/u/.claude/x/claude-1.jsonl',
@@ -537,34 +581,34 @@ describe('subscribeSessionRuntimePublicationToMetadata — matched native resume
 
   it('still dedupes an unchanged id/log-path pair', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'claudeSessionId',
     });
 
-    harness.emit({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
-    harness.emit({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
+    publication.observeRuntimeEvent({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
+    publication.observeRuntimeEvent({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
 
     expect(harness.sessionState.writeHappierField).toHaveBeenCalledTimes(1);
   });
 
   it('publishes a null log path so a retracted one clears the persisted slot', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'claudeSessionId',
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       providerSessionId: 'claude-1',
       nativeSessionLogPath: '/home/u/.claude/x/claude-1.jsonl',
     } as never);
-    harness.emit({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
+    publication.observeRuntimeEvent({ kind: 'provider-session-id', providerSessionId: 'claude-1' } as never);
 
     expect(harness.sessionState.writeHappierField).toHaveBeenLastCalledWith(expect.objectContaining({
       value: { metadataKey: 'claudeSessionId', value: 'claude-1', nativeSessionLogPath: null },
@@ -573,14 +617,14 @@ describe('subscribeSessionRuntimePublicationToMetadata — matched native resume
 
   it('ignores a non-string log path rather than trusting it', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: 'claudeSessionId',
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       providerSessionId: 'claude-1',
       nativeSessionLogPath: { kind: 'sessionFile', value: '/tmp/x' },
@@ -602,14 +646,14 @@ describe('subscribeSessionRuntimePublicationToMetadata — matched native resume
 describe('subscribeSessionRuntimePublicationToMetadata — Agent with no catalog-declared slot', () => {
   it('publishes the native id with no metadata key instead of dropping the event', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: null,
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       sequence: 1,
       sessionId: 'session-1',
@@ -634,14 +678,14 @@ describe('subscribeSessionRuntimePublicationToMetadata — Agent with no catalog
 
   it('still refuses to publish an empty native id', () => {
     const harness = createHarness();
-    subscribeSessionRuntimePublicationToMetadata({
+    const publication = subscribeSessionRuntimePublicationToMetadata({
       session: harness.session,
       sessionState: harness.sessionState,
       runtime: harness.runtime as never,
       providerSessionMetadataKey: null,
     });
 
-    harness.emit({
+    publication.observeRuntimeEvent({
       kind: 'provider-session-id',
       sequence: 1,
       sessionId: 'session-1',

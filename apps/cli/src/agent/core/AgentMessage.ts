@@ -52,7 +52,7 @@ export interface StatusMessage {
 export interface ToolCallMessage {
   type: 'tool-call';
   toolName: string;
-  args: Record<string, unknown>;
+  args: unknown;
   callId: ToolCallId;
   /** Stable bounded transcript identity for revision-capable producers. */
   localId?: string;
@@ -63,7 +63,8 @@ export interface ToolCallMessage {
  */
 export interface ToolResultMessage {
   type: 'tool-result';
-  toolName: string;
+  /** Native results correlate by call id and need not repeat the tool name. */
+  toolName?: string;
   result: unknown;
   callId: ToolCallId;
   /** Stable bounded transcript identity, domain-separated from the call identity. */

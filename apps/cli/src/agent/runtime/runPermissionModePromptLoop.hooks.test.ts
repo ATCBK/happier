@@ -315,18 +315,21 @@ function createRealWakeFollowContext() {
     destinationSessionId: 'session-local-special-command',
     delivered,
     observed,
-    mode: 'wake_on_human_change' as const,
+    policy: { preset: 'everything' as const },
   };
   const acknowledgeSessionFollow = vi.fn(async () => ({ ok: false }));
   const destinationClient = {
     sessionId: 'session-local-special-command',
     runSessionFollowSourceRequest: <T>(input: Readonly<{ request: () => T }>): T => input.request(),
-    observePendingSessionFollow: vi.fn(async () => ({
+    // This network boundary models a server-admitted wake. Real root/check-in
+    // admission is exercised by the server's SQLite composed suite.
+    observePendingSessionFollow: vi.fn(async (options?: { wakeAdmission?: unknown }) => ({
       ok: true,
       v: 1,
       sessionId: 'session-local-special-command',
       publisherGeneration: '4',
       observations: authorized ? [observation] : [],
+      ...(authorized && options?.wakeAdmission ? { wakeAdmission: { status: 'allowed' as const } } : {}),
     })),
     acknowledgeSessionFollow,
   } as unknown as ApiSessionClient;
@@ -556,8 +559,9 @@ describe('runPermissionModePromptLoop hook dispatch', () => {
     });
     expect(runtime.sendTurnPrompt).toHaveBeenCalledOnce();
     expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(
-      expect.stringContaining('protected human source text'), expect.objectContaining({ localId: wakeLocalId }),
+      expect.stringContaining('<session_follow>'), expect.objectContaining({ localId: wakeLocalId }),
     );
+    expect(runtime.sendTurnPrompt.mock.calls[0]![0]).not.toContain('protected human source text');
     expect(result.confirmUserMessageLocallyConsumed).not.toHaveBeenCalled();
     expect(result.observeProviderInputSettlement).not.toHaveBeenCalled();
     expect(result.hostEvents).toEqual([wakeLocalId]);

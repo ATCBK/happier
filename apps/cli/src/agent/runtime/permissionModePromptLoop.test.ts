@@ -1815,6 +1815,7 @@ describe('runPermissionModePromptLoop', () => {
 
   it('surfaces eager pending drain auth failures before parking idle', async () => {
     const session = createPromptLoopSession();
+    session.__setMetadata(createPromptLoopMetadata());
     const queue = createModeQueue();
     const runtime = createRuntime();
     const messageBuffer = new MessageBuffer();
@@ -1877,6 +1878,7 @@ describe('runPermissionModePromptLoop', () => {
 
   it('parks after an idle pending materialization auth failure and continues with later input', async () => {
     const session = createPromptLoopSession();
+    session.__setMetadata(createPromptLoopMetadata());
     const queue = createModeQueue();
     const runtime = createRuntime();
     const messageBuffer = new MessageBuffer();

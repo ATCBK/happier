@@ -12,7 +12,6 @@ import type {
     HostSessionQuestionsResult as PluginSessionQuestionsResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import {
-    type InteractionTransientQuestionAnswerV1,
     type InteractionTransientQuestionV1,
     type InteractionTransientRequestV1,
     type InteractionTransientRequesterV1,
@@ -20,6 +19,8 @@ import {
     type PluginMachineMaterializationRefV1,
 } from '@happier-dev/protocol';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { toStructuredQuestionPermissionInput } from '@/agent/permissions/structuredQuestionPermissionInput';
+import { normalizeQuestionAnswers, type QuestionAnswerWireValue } from '@/agent/permissions/structuredQuestionAnswers';
 import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
@@ -50,9 +51,6 @@ type InteractionResult =
     | PluginSessionQuestionsResult
     | PluginSessionConfirmationResult;
 
-type QuestionAnswerWireValue = string | readonly string[];
-type QuestionAnswersWire = Readonly<Record<string, QuestionAnswerWireValue>>;
-
 function unavailable(
     request: { kind: InteractionResult['kind'] },
     requestId: string,
@@ -62,61 +60,6 @@ function unavailable(
         kind: request.kind,
         status: 'unavailable',
     }) as InteractionResult;
-}
-
-function resolveChoiceSelection(
-    raw: string,
-    question: Extract<InteractionTransientQuestionV1, { type: 'singleChoice' | 'multipleChoice' }>,
-) {
-    const value = raw.trim();
-    const byId = question.choices.find((choice) => choice.id === value);
-    if (byId) return Object.freeze({ kind: 'choice', choiceId: byId.id });
-    const byLabel = question.choices.filter((choice) => choice.label === value);
-    if (byLabel.length === 1) return Object.freeze({ kind: 'choice', choiceId: byLabel[0]!.id });
-    if (byLabel.length > 1) return null;
-    return question.allowCustom && value.length > 0
-        ? Object.freeze({ kind: 'custom', value })
-        : null;
-}
-
-function normalizeQuestionAnswers(
-    questions: readonly InteractionTransientQuestionV1[],
-    rawAnswers: QuestionAnswersWire,
-): Readonly<Record<string, InteractionTransientQuestionAnswerV1>> | null {
-    const byId = new Map(questions.map((question) => [question.id, question]));
-    if (Object.keys(rawAnswers).some((questionId) => !byId.has(questionId))) return null;
-    const output = Object.create(null) as Record<string, InteractionTransientQuestionAnswerV1>;
-    for (const question of questions) {
-        const rawAnswer = rawAnswers[question.id];
-        if (rawAnswer === undefined) {
-            if (question.required) return null;
-            continue;
-        }
-        const values = Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer];
-        if (question.type === 'text') {
-            if (values.length !== 1) return null;
-            output[question.id] = Object.freeze({ kind: 'text', value: values[0]! });
-            continue;
-        }
-        if (question.type === 'singleChoice') {
-            if (values.length !== 1) return null;
-            const answer = resolveChoiceSelection(values[0]!, question);
-            if (!answer) return null;
-            output[question.id] = Object.freeze({ kind: 'singleChoice', answer });
-            continue;
-        }
-        const choices = values.map((value) => resolveChoiceSelection(value, question));
-        if (choices.length === 0 || choices.some((choice) => choice === null)) return null;
-        const dedupeKeys = choices.map((choice) => choice!.kind === 'choice'
-            ? `choice:${choice!.choiceId}`
-            : `custom:${choice!.value}`);
-        if (new Set(dedupeKeys).size !== dedupeKeys.length) return null;
-        output[question.id] = Object.freeze({
-            kind: 'multipleChoice',
-            answers: choices as [NonNullable<typeof choices[number]>, ...NonNullable<typeof choices[number]>[]],
-        });
-    }
-    return Object.freeze(output);
 }
 
 function interactionQuestions(
@@ -138,30 +81,10 @@ function toPermissionInput(request: InteractionTransientRequestV1): unknown {
         // transient owner retains the approval envelope and persistence ceiling.
         return request.subject.input;
     }
-    return Object.freeze({
+    return toStructuredQuestionPermissionInput({
         ...(request.title && (request.kind !== 'confirmation' || request.title !== 'Confirmation')
             ? { title: request.title } : {}),
-        questions: interactionQuestions(request).map((question) => Object.freeze({
-            id: question.id,
-            question: question.prompt,
-            ...(question.required ? { required: true } : {}),
-            ...(question.type === 'text'
-                ? {
-                    selection: 'text' as const,
-                    ...(question.initialValue === undefined
-                        ? {}
-                        : { presentation: { initialValue: question.initialValue } }),
-                }
-                : {
-                    selection: question.type === 'singleChoice' ? 'single' as const : 'multiple' as const,
-                    options: question.choices.map((choice) => Object.freeze({
-                        id: choice.id,
-                        label: choice.label,
-                        ...(choice.description ? { description: choice.description } : {}),
-                    })),
-                    ...(question.allowCustom ? { allowCustom: true } : {}),
-                }),
-        })),
+        questions: interactionQuestions(request),
     });
 }
 
@@ -286,7 +209,7 @@ async function presentBoundPermissionRequest(
     let result: Awaited<ReturnType<ProviderEnforcedPermissionHandler['handleToolCall']>>;
     try {
         result = await params.permissionHandler.handleToolCall(
-            request.requestId,
+            request.kind === 'approval' ? request.subject.toolCallId ?? request.requestId : request.requestId,
             toolName,
             toPermissionInput(request),
             {
@@ -303,6 +226,8 @@ async function presentBoundPermissionRequest(
                 ...(hasCausalPermissionAuthority && permissionContext
                     ? { causalPermissionAuthority: permissionContext.causalPermissionAuthority }
                     : {}),
+                ...(permissionContext?.callerPermissionMode !== undefined
+                    ? { callerPermissionMode: permissionContext.callerPermissionMode } : {}),
                 owner: permissionContext?.owner ?? {
                     kind: 'plugin',
                     pluginId: request.requester.pluginId,

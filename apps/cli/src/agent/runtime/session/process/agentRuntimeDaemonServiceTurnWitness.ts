@@ -1,36 +1,40 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SESSION_PERMISSION_MODES } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { AgentStartSessionCallerV1Schema, readAgentStartCallerWorkDepthV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { ActionRequestAttributionV1Schema } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { DiscussionAddressingV1Schema, type DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
 
-const OpaqueIdSchema = z.string().trim().min(1).max(512);
+const OpaqueIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
 const HostSessionInputCausalPermissionAuthorityV1Schema =
   asHostProtocolZod(SessionInputCausalPermissionAuthorityV1Schema);
 const HostAgentStartSessionCallerV1Schema =
   asHostProtocolZod(AgentStartSessionCallerV1Schema);
 
 export const AgentRuntimeDaemonServiceTurnWitnessV1Schema =
-  z.object({
+  z.strictObject({
     turnId: OpaqueIdSchema,
     inputId: OpaqueIdSchema,
+    discussionAddressing: z.optional(asHostProtocolZod(DiscussionAddressingV1Schema)),
     userMessageSeq:
-      z.number().int().nonnegative().nullable(),
+      z.nullable(z.number().check(z.int(), z.nonnegative())),
     userMessageSeqs: z.array(
-      z.number().int().nonnegative(),
+      z.number().check(z.int(), z.nonnegative()),
     ),
     causalPermissionAuthority:
-      HostSessionInputCausalPermissionAuthorityV1Schema.optional(),
+      z.optional(HostSessionInputCausalPermissionAuthorityV1Schema),
+    actionRequestAttributionV1: z.optional(asHostProtocolZod(ActionRequestAttributionV1Schema)),
     callerPermissionMode:
-      z.enum(SESSION_PERMISSION_MODES).nullable().optional(),
-    agentStartCaller: HostAgentStartSessionCallerV1Schema.optional(),
-    workDepth: z.number().int().nonnegative().safe().optional(),
-  }).strict().refine((witness) => witness.agentStartCaller
+      z.optional(z.nullable(z.enum(SESSION_PERMISSION_MODES))),
+    agentStartCaller: z.optional(HostAgentStartSessionCallerV1Schema),
+    workDepth: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+  }).check(z.refine((witness) => witness.agentStartCaller
     ? witness.workDepth === readAgentStartCallerWorkDepthV1(witness.agentStartCaller)
     : witness.workDepth === undefined, {
     message: 'Work depth must match the host Session caller facts',
     path: ['workDepth'],
-  });
+  }));
 
 export type AgentRuntimeDaemonServiceTurnWitnessV1 =
   z.infer<
@@ -41,8 +45,10 @@ export type AgentRuntimeDaemonServiceTurnWitnessInputV1 =
   Readonly<{
     turnId: string;
     inputId: string;
+    discussionAddressing?: DiscussionAddressingV1;
     userMessageSeq: number | null;
     userMessageSeqs: readonly number[];
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     causalPermissionAuthority?: import('@happier-dev/protocol')
       .SessionInputCausalPermissionAuthorityV1;
     callerPermissionMode?: import('@happier-dev/protocol')
@@ -61,8 +67,10 @@ export function projectAgentRuntimeDaemonServiceTurnWitnessV1(
   return AgentRuntimeDaemonServiceTurnWitnessV1Schema.parse({
     turnId: witness.turnId,
     inputId: witness.inputId,
+    ...(witness.discussionAddressing ? { discussionAddressing: witness.discussionAddressing } : {}),
     userMessageSeq: witness.userMessageSeq,
     userMessageSeqs: [...witness.userMessageSeqs],
+    ...(witness.actionRequestAttributionV1 ? { actionRequestAttributionV1: witness.actionRequestAttributionV1 } : {}),
     ...(witness.causalPermissionAuthority
       ? { causalPermissionAuthority: witness.causalPermissionAuthority }
       : {}),

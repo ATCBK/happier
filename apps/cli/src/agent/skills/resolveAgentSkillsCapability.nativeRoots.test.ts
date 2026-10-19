@@ -38,12 +38,12 @@ it.each(cases)('discovers the declared native roots of $manifest.id while retain
       await mkdir(join(root, `native-${index}`), { recursive: true });
       await writeFile(join(root, `native-${index}`, 'SKILL.md'), `---\nname: native-${index}\ndescription: Native root fixture\n---\nInstructions\n`);
     }
-    const agent = PluginAgentContributionV2Schema.parse(manifest.contributes.agents[0]);
+    const agent = PluginAgentContributionV2Schema.parse(manifest.contributes.agents?.[0]);
     const skills = 'skills' in agent.capabilities ? agent.capabilities.skills : undefined;
     expect(skills?.delivery).toBe('none');
     const scan = await scanNativeSkillRoots({ nativeRoots: skills?.nativeRoots, home, directory: cwd });
     expect(scan.status).toBe('ok');
     expect(scan.names.map(item => item.root).sort()).toEqual(expected.sort());
-    if (agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
+    if ('runtime' in agent && agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
   });
 });

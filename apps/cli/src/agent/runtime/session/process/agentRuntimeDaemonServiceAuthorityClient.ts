@@ -33,6 +33,7 @@ import {
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServerEndpointError';
+import { readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -58,13 +59,14 @@ export function isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition(
       === RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE;
 }
 
-function unavailableResponse(): AgentRuntimeDaemonServiceResponseV1 {
+function unavailableResponse(cause?: RunnerDaemonPluginServicesPreparationCauseV1): AgentRuntimeDaemonServiceResponseV1 {
   return {
     ok: false,
     error: {
       code: NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE,
       message:
         'Native Agent privileged effect authority is unavailable before dispatch',
+      ...(cause ? { cause } : {}),
     },
   };
 }
@@ -796,20 +798,23 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
       // run, so the only honest classification is outcome unknown — never a
       // proven pre-dispatch miss. Every other 503 shape (the daemon-quiescing
       // refusal or an unparseable body) was refused before dispatch.
+      let settledCandidate: unknown = null;
+      try { settledCandidate = rawBody.trim() ? JSON.parse(rawBody) as unknown : null; }
+      catch { /* Malformed control responses retain the existing classification. */ }
+      const settled = AgentRuntimeDaemonServiceResponseV1Schema.safeParse(settledCandidate);
+      // The existing private cause carries code-only evidence for MCP omission
+      // logs. It never changes whether a privileged effect was attempted.
+      let cause: RunnerDaemonPluginServicesPreparationCauseV1 | undefined;
+      if (request.operation.kind === 'mcp.request_auth.open') {
+        let code: ReturnType<typeof readMcpRequestAuthDiagnosticCode> = 'mcp_request_auth_unavailable';
+        if (settled.success && !settled.data.ok) code = readMcpRequestAuthDiagnosticCode(settled.data.error);
+        else if (settledCandidate && typeof settledCandidate === 'object' && 'errorCode' in settledCandidate
+          && settledCandidate.errorCode === 'daemon_shutting_down') code = 'daemon_shutting_down';
+        cause = { code, stage: 'dispatch' };
+      }
       if (response.status === 503) {
-        let settledCandidate: unknown = null;
-        try {
-          settledCandidate = rawBody.trim()
-            ? JSON.parse(rawBody) as unknown
-            : null;
-        } catch {
-          settledCandidate = null;
-        }
-        const settled = settledCandidate === null
-          ? null
-          : AgentRuntimeDaemonServiceResponseV1Schema.safeParse(settledCandidate);
         if (
-          settled?.success
+          settled.success
           && settled.data.ok === false
           && (
             settled.data.error.code
@@ -818,10 +823,10 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
               === 'agent_runtime_daemon_service_admission_invalid'
           )
         ) {
-          return unknownOutcomeResponse();
+          return unknownOutcomeResponse(cause);
         }
       }
-      return unavailableResponse();
+      return unavailableResponse(cause);
     }
     const parsedBody = rawBody.trim()
       ? JSON.parse(rawBody) as unknown

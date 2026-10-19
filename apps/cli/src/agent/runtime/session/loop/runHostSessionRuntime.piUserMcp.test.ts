@@ -105,7 +105,7 @@ it('passes materialized selected user MCP servers to a native_extension Agent op
     pluginRuntimeRegistryLease: runtimeFixture.lease,
     machineMetadata: { host: 'test', platform: process.platform, happyCliVersion: 'test',
       homeDir: '/tmp', happyHomeDir: '/tmp', happyLibDir: '/tmp' },
-    terminalDisplay: () => null, shouldRenderTerminalDisplay: () => false,
+    loadTerminalDisplay: async () => () => null, shouldRenderTerminalDisplay: () => false,
     formatPromptErrorMessage: String,
     createSessionRuntime: params => {
       request = params;

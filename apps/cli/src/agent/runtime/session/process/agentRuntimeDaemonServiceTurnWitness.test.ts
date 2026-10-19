@@ -16,6 +16,59 @@ import { AgentRuntimeDaemonServiceTurnWitnessV1Schema, projectAgentRuntimeDaemon
 import { SessionIndexedIdentifierMaxLengthV1 } from '@happier-dev/protocol/sessions/idsV1';
 
 describe('daemon service host turn depth', () => {
+  it('retains the protected Discussion question through the native host and private daemon witness only', async () => {
+    const providerRequests: Parameters<AgentSessionRuntime['send']>[0][] = [];
+    const provider: AgentSessionRuntime = { async send(request) { providerRequests.push(request); return { status: 'admitted' }; },
+      watch: () => ({ dispose() {} }), dispose() {} };
+    const native = createNativeAgentSessionOperations(provider, 'receiver', undefined, undefined, undefined, undefined, undefined,
+      { context: {} as AgentSessionRuntimeContext, cwd: '/workspace', connectedAccounts: [],
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false }, cancellation: { declared: false },
+        configuration: { declared: false }, manualCompaction: { declared: false } });
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
+    try {
+      await native.sendTurnPrompt('Answer this question', { localId: 'question-input', turnId: 'question-turn', discussionAddressing });
+      const current = native.readActiveTurnAdmissionWitness?.();
+      if (!current) throw new Error('Expected active question input');
+      expect(projectAgentRuntimeDaemonServiceTurnWitnessV1(current)).toMatchObject({ discussionAddressing });
+      discussionAddressing.throughSeq = 99;
+      expect(native.readActiveTurnAdmissionWitness?.()).toMatchObject({ discussionAddressing: { throughSeq: 2 } });
+      expect(providerRequests[0]).not.toHaveProperty('discussionAddressing');
+      expect(providerRequests[0]?.input).not.toHaveProperty('discussionAddressing');
+    } finally { await native.resetOrDisposeRuntime(); }
+  });
+  it('retains each admitted requester through the native host and private daemon witness', async () => {
+    const providerRequests: Parameters<AgentSessionRuntime['send']>[0][] = [];
+    const provider: AgentSessionRuntime = {
+      async send(request) { providerRequests.push(request); return { status: 'admitted' }; },
+      watch: () => ({ dispose() {} }), dispose() {},
+    };
+    const native = createNativeAgentSessionOperations(
+      provider, 'bot', undefined, undefined, undefined, undefined, undefined,
+      { context: {} as AgentSessionRuntimeContext, cwd: '/workspace', connectedAccounts: [],
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } },
+    );
+    try {
+      const attribution = {
+        requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+        persona: { serverId: 'home', sessionId: 'original-bot' }, origin: null,
+      };
+      await native.sendTurnPrompt('First request', {
+        localId: 'bob-input', turnId: 'bob-turn', actionRequestAttributionV1: attribution,
+      });
+      const first = native.readActiveTurnAdmissionWitness?.();
+      if (!first) throw new Error('Expected active turn');
+      const privateWitness = projectAgentRuntimeDaemonServiceTurnWitnessV1(first);
+      expect(privateWitness).toMatchObject({ actionRequestAttributionV1: attribution });
+      expect(providerRequests[0]).not.toHaveProperty('actionRequestAttributionV1');
+      expect(providerRequests[0]?.input).not.toHaveProperty('actionRequestAttributionV1');
+      attribution.requester.accountId = 'carol';
+      expect(native.readActiveTurnAdmissionWitness?.()).toMatchObject({
+        actionRequestAttributionV1: { requester: { accountId: 'bob' } },
+      });
+    } finally { await native.resetOrDisposeRuntime(); }
+  });
+
   it.each([
     { name: 'fresh session', starterDepth: 0, senderDepth: undefined, turnDepth: 0, workDepth: 0, messageCount: 1 },
     { name: 'depth-2 worker on a user turn', starterDepth: 2, senderDepth: undefined, turnDepth: 0, workDepth: 2, messageCount: 1 },

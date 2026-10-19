@@ -10,6 +10,11 @@ import { createJiti } from 'jiti';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
+import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
+import { HOST_SESSION_RUNTIME_PLAN_KIND, type HostSessionRuntimePlan } from '@/agent/runtime/session/loop/lifecycle';
+import { createRoleActionExecutor } from '@/session/actions/roleActions';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/session/client/transport/mutations/applyRegisteredSessionStateFieldMutation';
 import { resolveAgentSessionMcpLaunchConfigs, toAgentSessionMcpLaunchConfigs } from './nativeAgentSession';
 import { buildCodexAppServerConfigOverrides } from '@happier-dev/plugins-codex/agent/runtime/appServer/config/overrides';
 import * as processIdentity from '@/daemon/processIdentity';
@@ -60,11 +65,13 @@ import {
     type CodingPromptBehaviorV1,
     type SessionTurnMutationV1,
     SessionTurnsProjectionV1Schema,
+    SessionWorkStateGetResponseV1Schema,
 } from '@happier-dev/protocol';
 import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { SessionRollbackRangeV1 } from '@happier-dev/protocol/sessions/metadata/sessionRollbackRangesV1';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime';
+import { ProviderRuntimeBindingBasisV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
     CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY,
@@ -83,6 +90,7 @@ import {
 } from '@/agent/runtime/session/terminal/contract';
 import type { Credentials } from '@/persistence';
 import type { Metadata } from '@/api/types';
+import type { RpcHandler } from '@/api/rpc/types';
 import { captureSessionLaunchControlMetadata, createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
 import type { AgentRuntimeRegistrationLease } from '@/plugins/runtime/lifecycle/contributions/targetAgents';
 import type {
@@ -101,6 +109,11 @@ import { HERDR_ACTION_TIMEOUT_MS, HERDR_STARTUP_TIMEOUT_MS } from '@/integration
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { resolveNativeAgentLaunchEnvironment } from '@/agent/runtime/launchEnvironment';
+import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/queuedPrompt';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
+import { createSessionProviderInputConsumerSessionAdapter } from '@/agent/runtime/waitForNextPermissionModeMessage';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
@@ -181,7 +194,7 @@ import { withCodexNativeAttachFixture } from '../../../../../../../packages/plug
 import { managedServiceHandle } from '../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly.managedServices.testkit';
 import { resolveCodexAttachTarget, createCodexAttachArgs, resolveCodexAttachReachability } from '../../../../../../../packages/plugins/codex/src/agent/surfaces/sessions/attachDescriptor';
 import { resolveOpenCodeAttachTarget, createOpenCodeAttachArgs, resolveOpenCodeAttachReachability } from '../../../../../../../packages/plugins/opencode/src/agent/surfaces/sessions/attach/descriptor';
-import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan, createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
+import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan, createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners, createNativeAgentLaunchPreparationFixture } from './nativeAgentSession.testkit';
 import { createClaudeExternalSessionsContribution } from '../../../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/contribution';
 import { PLUGIN_MANIFEST as CLAUDE_ACCOUNTING_MANIFEST } from '../../../../../../../packages/plugins/claude/src/manifest';
 import { createBoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
@@ -510,7 +523,7 @@ function managedProviderBindingMetadata(
         contributionKey: 'acme.providers/gateway',
         materialization: 'spawnEnv' as const,
         managedPurposeBindings: purposeBindings,
-        runtimeBindingBasis: {
+        runtimeBindingBasis: ProviderRuntimeBindingBasisV1Schema.parse({
             v: 1 as const,
             deployment: {
                 kind: 'managedLocal' as const,
@@ -560,7 +573,7 @@ function managedProviderBindingMetadata(
                 applyPolicy: 'restart_session' as const,
                 supportsFreeformModelIds: true,
             },
-        },
+        }),
     };
 }
 
@@ -960,6 +973,26 @@ describe('native Agent session host adapter', () => {
                     // The normal host subscribes before running the mode loop; this real public
                     // subscription also supplies canonical native identity to the control owner.
                     stopRuntimeSubscriptions.push(created.operations.subscribeRuntimeEvents(event => { runtimeEvents.push(event); }));
+                    if (agentId === 'codex') {
+                        const controls: SessionRuntimeControls = {};
+                        applySessionRuntimeControls(controls, created.nativeRuntime ?? null);
+                        registerSessionControlHandlers(session.rpcHandlerManager, {
+                            sessionRuntimeControls: controls, getSessionMetadata: () => session.getMetadataSnapshot(),
+                        });
+                        const initialReceipt = await session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {});
+                        expect(initialReceipt).toHaveProperty('workState');
+                        const initial = SessionWorkStateGetResponseV1Schema.parse(initialReceipt);
+                        expect(initial.workState?.items ?? []).toEqual([]);
+                        const set = SessionWorkStateGetResponseV1Schema.parse(await session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the first ordinary input available' }));
+                        expect(set).toMatchObject({ workState: { items: [expect.objectContaining({
+                            kind: 'goal', title: 'Keep the first ordinary input available', status: 'active',
+                        })] } });
+                        const read = SessionWorkStateGetResponseV1Schema.parse(await session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}));
+                        expect(read).toMatchObject({ workState: { items: [expect.objectContaining({
+                            title: 'Keep the first ordinary input available',
+                        })] } });
+                    }
                     if (!created.terminalRemoteModeLoop) throw new Error('Actual optional provider omitted its shared mode owner');
                     loop = runTerminalRemoteSessionModeLoop(created.terminalRemoteModeLoop).then(() => undefined).catch(error => { loopFailure = error; });
                     await vi.waitFor(() => expect(session.rpcHandlerManager.hasHandler('switch')).toBe(true));
@@ -1056,7 +1089,7 @@ describe('native Agent session host adapter', () => {
             }
         }));
     });
-    it.skipIf(process.platform === 'win32').each(['unified', 'sdk', 'sdk-goal-first', 'sdk-startup-goal-replacement', 'sdk-startup-goal-stop', 'sdk-inflight-goal', 'sdk-inflight-goal-stop', 'sdk-inflight-goal-wrong-echo', 'sdk-sentinel-before-echo',
+    it.skipIf(process.platform === 'win32').each(['unified', 'sdk', 'sdk-goal-first', 'sdk-goal-first-failed', 'sdk-goal-first-stop', 'sdk-startup-goal-replacement', 'sdk-startup-goal-stop', 'sdk-inflight-goal', 'sdk-inflight-goal-stop', 'sdk-inflight-goal-wrong-echo', 'sdk-sentinel-before-echo',
         'sdk-history-active', 'sdk-history-cancelled', 'sdk-history-complete', 'sdk-history-failed', 'sdk-history-wrong-echo'] as const)('prepares the captured Claude Session through its real host owner (%s)', async scenario => {
         const selectedMode = scenario === 'unified' ? 'unified' : 'sdk';
         await withTempDir('native-selected-claude-host-', async directory => await withHerdrApi(async api => {
@@ -1123,12 +1156,14 @@ describe('native Agent session host adapter', () => {
                                 const nativePrompt = prompt.startsWith('/goal ')
                                     ? `<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>${prompt.slice('/goal '.length)}</command-args>` : prompt;
                                 // Real Claude writes the Set sentinel before its supplied user UUID echo.
-                                const sentinelBeforeEcho = scenario === 'sdk-sentinel-before-echo' && prompt.startsWith('/goal ') && prompt !== '/goal clear';
+                                const sentinelBeforeEcho = (['sdk', 'sdk-sentinel-before-echo'].includes(scenario) || scenario.startsWith('sdk-goal-first')) && prompt.startsWith('/goal ') && prompt !== '/goal clear';
                                 if (sentinelBeforeEcho) {
                                     await appendFile(capturedTranscript, `${JSON.stringify(goalRow(`native-sentinel-${sdkUserPrompts.length}`))}\n`);
                                 }
-                                await appendFile(capturedTranscript, `${JSON.stringify({ type: 'user', uuid: scenario.endsWith('wrong-echo') && prompt.startsWith('/goal ') ? 'misbound-command-echo' : record.uuid, sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(), message: { role: 'user', content: nativePrompt } })}\n`);
-                                if (!historicalGoal && prompt.startsWith('/goal ') && prompt !== '/goal clear') {
+                                await appendFile(capturedTranscript, `${JSON.stringify({ type: 'user', uuid: scenario.endsWith('wrong-echo') && prompt.startsWith('/goal ') ? 'misbound-command-echo' : record.uuid,
+                                    ...(sentinelBeforeEcho ? { parentUuid: `native-sentinel-${sdkUserPrompts.length}` } : {}),
+                                    sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(), message: { role: 'user', content: nativePrompt } })}\n`);
+                                if (!historicalGoal && !sentinelBeforeEcho && prompt.startsWith('/goal ') && prompt !== '/goal clear') {
                                     const publish = async () => { await appendFile(capturedTranscript, `${JSON.stringify({ type: 'attachment', uuid: `native-goal-${sdkUserPrompts.length}`, sessionId: 'exact-sdk-native-conversation', timestamp: new Date().toISOString(), attachment: { type: 'goal_status', met: false, ...(!sentinelBeforeEcho ? { sentinel: true } : {}), condition: prompt.slice('/goal '.length) } })}\n`); };
                                     if (scenario === 'sdk-startup-goal-replacement' || scenario === 'sdk-startup-goal-stop') startupGoal.publish = publish;
                                     else await publish();
@@ -1261,9 +1296,17 @@ describe('native Agent session host adapter', () => {
                     });
                 }
                 const binding = buildPluginSessionBindingInput({ credentials, directory, startedBy: 'terminal', startingMode: selectedMode === 'unified' ? 'terminal' : 'remote', ...(selectedMode === 'sdk' ? { resume: 'exact-sdk-native-conversation' } : {}), environmentVariables: { HAPPIER_CLAUDE_PATH: nativePath, HERDR_BIN_PATH: herdrPath, CLAUDE_CONFIG_DIR: join(directory, 'claude-home') }, backendTarget: { kind: 'backend', backendId: 'claude' } });
+                const launchPreparation = selectedMode === 'unified' ? await createNativeAgentLaunchPreparationFixture() : null;
+                const terminalExec = launchPreparation ? createStablePluginExecService({
+                    allowedExecutables: [], signal: generation.signal, isOccurrenceCurrent: () => !generation.signal.aborted,
+                    resolveExecutable: async () => { throw new Error('Terminal transport already resolved its native executable'); },
+                    resolvePath: async () => directory,
+                    prepareAgentNativeLaunch: launchPreparation.prepare(directory, generation.signal),
+                }) : null;
                 const plan = await createNativeAgentRuntimeSessionPlan({ runtime, lease: { ...createLease('claude'), pluginId }, backend, agent, sessionInput: { ...binding, bootstrap: { ...binding.bootstrap, runtimeDescriptorV1: selected.runtimeDescriptorV1 } }, executionSurfaces, externalSessionHostOperations: daemonFacets?.externalSessionHostOperations, generationSignal: generation.signal, createInvocationServices: async () => {
                     const unavailable = createUnavailablePluginServices();
                     return { ...unavailable, settings, storage, logger: invocationLogger,
+                        ...(terminalExec ? { exec: terminalExec } : {}),
                         ...(selectedMode === 'sdk' ? { exec: { ...unavailable.exec,
                             systemTools: { ...unavailable.exec.systemTools, resolve: async () => ({ executable: { kind: 'systemTool' as const, id: 'claude-cli' }, executablePath: nativePath }) },
                             // The vendor JSON-stream process is the external boundary; only that protocol is opened here.
@@ -1336,7 +1379,8 @@ describe('native Agent session host adapter', () => {
                         if (scenario === 'sdk-inflight-goal-wrong-echo') {
                             await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete()));
                             await expect(receipt).resolves.toMatchObject({ ok: false,
-                                errorCode: 'session_goal_control_work_state_unavailable' });
+                                errorCode: 'session_goal_control_work_state_unavailable',
+                                goalControlFailure: { phase: 'missing_matching_publication' } });
                         } else {
                             await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({
                                 kind: 'goal', title: 'Keep the native objective', status: 'active',
@@ -1449,6 +1493,39 @@ describe('native Agent session host adapter', () => {
                         expect(replacementSettled).toBe(true);
                         return;
                     }
+                    if (scenario.startsWith('sdk-goal-first')) {
+                        const receipt = session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_SET,
+                            { objective: 'Keep the native objective' });
+                        await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({
+                            kind: 'goal', title: 'Keep the native objective', status: 'active',
+                        })] } });
+                        expect(pendingSdkGoalResults).toHaveLength(1);
+                        let inputSettled = false;
+                        const input = created.operations.sendTurnPrompt('The first ordinary input after Set', {
+                            localId: 'goal-first-person-input', turnId: 'goal-first-person-turn', userMessageSeq: 1,
+                        }).then(() => { inputSettled = true; return 'sent'; }, () => { inputSettled = true; return 'retired'; });
+                        await new Promise<void>(resolve => setImmediate(resolve));
+                        expect(inputSettled, 'Set acknowledgement must not release an occupied native transport').toBe(false);
+                        expect(sdkUserPrompts).toHaveLength(1);
+                        expect(claudeEvents.some(event => event.kind === 'input-accepted')).toBe(false);
+                        if (scenario === 'sdk-goal-first-stop') {
+                            await created.operations.resetOrDisposeRuntime('session_closed');
+                            await expect(input).resolves.toBe('retired');
+                            expect(sdkUserPrompts).toHaveLength(1);
+                            return;
+                        }
+                        await Promise.all(pendingSdkGoalResults.splice(0).map(complete => complete(scenario === 'sdk-goal-first-failed')));
+                        await expect(input).resolves.toBe('sent');
+                        await created.operations.waitForTurnCompletion();
+                        expect(sdkUserPrompts.filter(record => isProtocolJsonObject(record)
+                            && isProtocolJsonObject(record.message) && record.message.content === 'The first ordinary input after Set')).toHaveLength(1);
+                        expect(claudeEvents.filter(event => event.kind === 'input-accepted'
+                            && event.inputIds.includes('goal-first-person-input'))).toHaveLength(1);
+                        expect(claudeEvents).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId: 'goal-first-person-turn' }));
+                        await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
+                            .resolves.toMatchObject({ workState: { items: [expect.objectContaining({ title: 'Keep the native objective' })] } });
+                        return;
+                    }
                     const setAndReadGoal = async () => {
                         let receiptSettled = false;
                         let receiptResult: unknown;
@@ -1460,8 +1537,9 @@ describe('native Agent session host adapter', () => {
                                 workState: { items: expect.arrayContaining([expect.objectContaining({ kind: 'goal', title: 'Keep the native objective' })]) },
                             });
                         });
-                        await new Promise<void>(resolve => setImmediate(resolve));
-                        expect(receiptSettled).toBe(true);
+                        // The native command is still held below: acknowledge
+                        // Set before releasing it, independently of I/O timing.
+                        await vi.waitFor(() => expect(receiptSettled).toBe(true));
                         await expect(receipt).resolves.toMatchObject({
                             workState: { items: expect.arrayContaining([expect.objectContaining({ kind: 'goal', title: 'Keep the native objective' })]) },
                         });
@@ -1976,7 +2054,7 @@ describe('native Agent session host adapter', () => {
                         sessions: {
                             ...contributions.agent.richDefinition.definition
                                 .capabilities.sessions,
-                            startupInstructions: { versions: [1] as const },
+                            startupInstructions: { versions: [1] as const, revisionChanges: 'resume' as const },
                             workspaceWrites: 'deny' as const,
                         },
                     },
@@ -1990,6 +2068,10 @@ describe('native Agent session host adapter', () => {
             instructions: 'Use the project-specific startup instructions.',
         };
         const events: string[] = [];
+        const nativePrompts: string[] = [];
+        let nativeSequence = 0;
+        let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        let fullPlan = '';
         let roleWorkspaceWrites: 'allow' | 'deny' = 'allow';
         const roleContext = createSessionRoleContext({
             readMetadata: () => ({ work: { sessionRolesV1: {
@@ -2006,7 +2088,8 @@ describe('native Agent session host adapter', () => {
         await roleContext.resolvePromptContext();
         expect(roleContext.readWorkspaceWrites()).toBe('allow');
         roleWorkspaceWrites = 'deny';
-        const open = vi.fn(async (request) => {
+        const open = vi.fn(async (request: AgentSessionOpenRequest, context: AgentSessionRuntimeContext) => {
+            if (request.kind === 'fork') throw new Error('Unexpected fork in startup fixture');
             events.push('provider-open');
             expect(request).toMatchObject({
                 kind: 'create',
@@ -2021,8 +2104,22 @@ describe('native Agent session host adapter', () => {
                 });
             } else expect(nativeSupport).toBe('unsupported');
             return {
-                send: async () => ({ status: 'admitted' as const }),
-                watch: () => ({ dispose: () => undefined }),
+                send: async (input: Parameters<AgentSessionRuntime['send']>[0]) => {
+                    nativePrompts.push(input.input.text);
+                    if (input.delivery.kind !== 'newTurn') throw new Error('Expected a new native turn');
+                    const turnId = input.delivery.turnId;
+                    emitNative?.({ kind: 'input-accepted', sessionId: context.session.id, inputIds: input.inputIds,
+                        delivery: input.delivery, emittedAtMs: 1, sequence: ++nativeSequence });
+                    emitNative?.({ kind: 'turn-start', sessionId: context.session.id, turnId,
+                        startedBy: 'host', emittedAtMs: 1, sequence: ++nativeSequence });
+                    queueMicrotask(() => emitNative?.({ kind: 'turn-complete', sessionId: context.session.id, turnId,
+                        emittedAtMs: 2, sequence: ++nativeSequence }));
+                    return { status: 'admitted' as const };
+                },
+                watch: (handler: (event: AgentSessionRuntimeEvent) => void) => {
+                    emitNative = handler;
+                    return { dispose: () => { emitNative = undefined; } };
+                },
                 dispose: async () => undefined,
             };
         });
@@ -2058,32 +2155,35 @@ describe('native Agent session host adapter', () => {
             throw new Error('expected a session runtime factory');
         }
 
+        const loopSession = createMutableApiSessionClientFixture({ sessionId: 'session-startup-instructions',
+            metadata: createTestMetadata({ path: '/tmp/acme-startup-instructions', permissionMode: 'default', permissionModeUpdatedAt: 0 }) });
+        const permission = new ProviderEnforcedPermissionHandler(loopSession, { logPrefix: '[PERF4 native seam]' });
         const created = await plan.config.createSessionRuntime({
             directory: '/tmp/acme-startup-instructions',
             metadata: {},
             machineId: 'machine-1',
-            session: createNativeSessionClientTestPort(
-                'session-startup-instructions',
-            ),
-            transcriptSession: {},
+            session: loopSession,
+            transcriptSession: loopSession,
             messageBuffer: {},
             mcpServers: {},
-            permissionHandler: {},
+            permissionHandler: permission,
             getPermissionMode: () => 'default',
             setThinking: () => undefined,
             memoryRecallGuidanceEnabled: false,
             getWorkspaceWrites: roleContext.readWorkspaceWrites,
             resolveFreshSessionSystemPrompt: async () => {
                 const { resolveEffectiveCodingPromptText } = await import('@/agent/prompting/coding/resolveEffectiveCodingPrompt');
-                return resolveEffectiveCodingPromptText({ toolDelivery: 'native_mcp',
+                fullPlan = await resolveEffectiveCodingPromptText({ toolDelivery: 'native_mcp',
                     settings: null, profileId: null, baseOverride: 'FULL_ROLE_PLAN', startupInstructions,
                     roleContext: await roleContext.resolvePromptContext(),
                 });
+                return fullPlan;
             },
         } as never);
 
         expect(created.operations.readSessionStartupInstructions?.()?.instructions.includes('FULL_ROLE_PLAN') ?? false)
             .toBe(nativeSupport === 'applied');
+        expect(created.operations.readSessionStartupInstructionsSupport?.()).toBe(nativeSupport === 'applied');
         expect(events).toEqual(nativeSupport === 'unsupported' ? [
             'attest-prepare', 'provider-open', 'attest-prepare', 'provider-open', 'attest-commit',
         ] : [
@@ -2091,6 +2191,53 @@ describe('native Agent session host adapter', () => {
             'provider-open',
             'attest-commit',
         ]);
+        // Compose the real factory's support fact through its replaceable
+        // runtime into the real input pump. Only native IO and Session
+        // persistence are substituted, and a lost forwarding method reopens
+        // the refused factory instead of delivering this full-plan prefix.
+        const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode,
+            { batcher: combinePermissionModeQueuedPrompts });
+        const consumer = createSessionProviderInputConsumer({ messageQueue: queue,
+            session: createSessionProviderInputConsumerSessionAdapter(loopSession) });
+        const accepted = new Map<string, (() => void) | null>();
+        const seamFailures: unknown[] = [];
+        if (!created.nativeRuntime) throw new Error('Missing concrete native runtime');
+        created.nativeRuntime.setOnPromptDeliveryOutcome(outcome => {
+            if (outcome.type === 'input-accepted') {
+                const localId = 'localInputId' in outcome ? outcome.localInputId : outcome.localId;
+                accepted.get(localId)?.();
+            }
+        });
+        let done = false;
+        queue.push({ text: 'PERF4_SEAM_INPUT', localId: 'perf4-input', userMessageSeq: 17,
+            causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' } },
+        { permissionMode: 'default' });
+        try {
+            await runPermissionModePromptLoop({ providerName: 'External startup Agent', agentMessageType: 'qwen',
+                explicitPermissionMode: undefined, session: loopSession, messageQueue: queue, inputConsumer: consumer,
+                permissionHandler: permission, runtime: created.operations,
+                createOverrideSynchronizer: isStarted => createRuntimeOverrideSynchronizers({
+                    agentTargetKey: `agent:${contributions.agent.pluginId}/${agentId}`, session: loopSession, isStarted,
+                    runtime: { setSessionMode: modeId => created.operations.updateSessionRuntimeConfig({ modeId }),
+                        setSessionConfigOption: (id, value) => created.operations.updateSessionRuntimeConfig({ configOption: { id, value } }),
+                        setSessionModelSelection: async selection => { await created.operations.updateSessionRuntimeConfig({ modelId: selection.modelId }); } },
+                }),
+                messageBuffer: new MessageBuffer(), shouldExit: () => done,
+                getAbortSignal: () => new AbortController().signal, keepAlive: () => undefined, setThinking: () => undefined,
+                sendReady: () => { done = true; }, currentPermissionModeUpdatedAt: 0,
+                setCurrentPermissionMode: () => undefined, setCurrentPermissionModeUpdatedAt: () => undefined,
+                resolveFreshSessionSystemPrompt: async () => fullPlan,
+                onPromptFailure: error => { seamFailures.push(error); },
+                readSessionPromptPlanDeliveryState: () => ({ startupInstructionsSupported: true, revisionChanges: 'resume' }),
+                registerProviderAcceptedEffect: (localId, effect) => { accepted.set(localId, effect); }, formatPromptErrorMessage: String,
+            });
+            expect(seamFailures).toEqual([]);
+            expect(nativePrompts).toEqual([nativeSupport === 'applied' ? 'PERF4_SEAM_INPUT' : `${fullPlan}\n\nPERF4_SEAM_INPUT`]);
+            expect(open).toHaveBeenCalledTimes(nativeSupport === 'applied' ? 1 : 2);
+        } finally {
+            await created.operations.resetOrDisposeRuntime();
+            await permission.reset();
+        }
     });
 
     it('keeps a rejected session-open prepare attestation pre-dispatch', async () => {
@@ -3617,7 +3764,7 @@ describe('native Agent session host adapter', () => {
         expect(modeLoop).not.toBeNull();
         expect(modeLoop?.startingMode).toBe('remote');
         await created.operations.prepareTerminalPresentation?.({ modelSelection: null });
-        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
+        await expect(created.nativeRuntime?.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
         const unsubscribeRuntimeEvents =
             created.operations.subscribeRuntimeEvents(() => undefined);
         let remoteSettled = false;
@@ -3769,7 +3916,7 @@ describe('native Agent session host adapter', () => {
             expect(executeFollow).toHaveBeenCalledTimes(2);
         });
         expect(stableTerminalEffectActive).toBe(true);
-        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
+        await expect(created.nativeRuntime?.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'restart_required', reason: 'launch_path_unsupported' });
         requestTerminalModelTransition({
             agentTargetKey: `backend:${agentId}`,
             providerConnectionId: 'pc_next',
@@ -3886,7 +4033,7 @@ describe('native Agent session host adapter', () => {
         await expect(processResolutionRace).resolves.toEqual({
             type: 'switch',
         });
-        await expect(created.operations.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
+        await expect(created.nativeRuntime?.refreshSkills?.(skillRefresh)).resolves.toEqual({ kind: 'applied' });
         expect(terminalModelSelection).toMatchObject({
             providerConnectionId: null,
             modelId: 'native-model-after-terminal',
@@ -4149,7 +4296,9 @@ describe('native Agent session host adapter', () => {
             processLaunchCountBeforeBaselineFailure + 1,
         );
         expect(enqueueAgentMessageCommitted).toHaveBeenCalledTimes(
-            transcriptCountBeforeBaselineFailure + 1,
+            // Rebinding admits the source again, but its already committed
+            // terminal-item-1 remains one durable transcript row.
+            transcriptCountBeforeBaselineFailure,
         );
 
         const launchCountBeforeInitialProjectionFailure =
@@ -4638,6 +4787,7 @@ describe('native Agent session host adapter', () => {
     });
 
     it.each(['live', 'retired', 'unsubscribed'] as const)('fences terminal exit delivery through the public native scope (%s)', async (scopeState) => {
+        const launchPreparation = await createNativeAgentLaunchPreparationFixture();
         const launcher = createTerminalLauncherFixture();
         const handle: TerminalHostHandle = {
             attachmentId: 'native-exit-attachment' as NonNullable<TerminalHostHandle['attachmentId']>,
@@ -4655,7 +4805,7 @@ describe('native Agent session host adapter', () => {
         const terminalHost = createPluginTerminalHostService({
             hasCapability: capability => capability === 'terminalHost',
             resolveTerminalHost: () => ({ status: 'resolved', adapter, reason: 'tmux_available' }),
-            resolveAgentCliLaunch: () => ({ command: '/external/agent', args: [] }),
+            resolveAgentCliLaunch: () => ({ command: '/external/agent', args: [], providerExitOwnership: 'direct' }),
             resolveCurrentHost: () => ({ handle, lifecycle: 'borrowed' }),
             // Only the external child-process boundary is a fixture. Both terminal
             // ownership and the native-session/public-service guards stay real.
@@ -4683,6 +4833,11 @@ describe('native Agent session host adapter', () => {
             } } },
             lease: { ...createLease(agentId), isCurrent: () => current },
             backend: contributions.backend, agent: contributions.agent,
+            createInvocationServices: async ({ signal }) => ({ ...createUnavailablePluginServices(),
+                exec: createStablePluginExecService({ allowedExecutables: [], signal, isOccurrenceCurrent: () => current,
+                    resolveExecutable: async () => { throw new Error('Terminal transport already resolved its native executable'); },
+                    resolvePath: async () => '/tmp', prepareAgentNativeLaunch: launchPreparation.prepare('/tmp', signal) }),
+            }),
             sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/tmp',
                 backendTarget: { kind: 'backend', backendId: agentId } }),
             createSessionHostServiceOwners: () => Object.freeze({ ...createSessionHostServiceOwners(), terminalHost }),
@@ -4901,7 +5056,7 @@ describe('native Agent session host adapter', () => {
         });
     });
 
-    it.each(['dispatch', 'retire'] as const)('queues an external plugin native Goal between the active turn and the next queued input (%s)', async nextDisposition => {
+    it.each(['dispatch', 'retire', 'cancel', 'readiness-failed'] as const)('queues an external plugin native Goal between the active turn and the next queued input (%s)', async nextDisposition => {
         const agentId = 'acme-queued-goal-agent';
         const contributions = createExternalContributionFixtures(agentId);
         const agent: ResolvedAgentContribution = { ...contributions.agent, richDefinition: {
@@ -4917,11 +5072,16 @@ describe('native Agent session host adapter', () => {
         let sequence = 0;
         let releaseGoal!: () => void;
         const goalEvidence = new Promise<void>(resolve => { releaseGoal = resolve; });
+        let nativeGoalBusy = false;
+        let releaseNativeGoal!: () => void;
+        const nativeGoalCompletion = new Promise<void>(resolve => { releaseNativeGoal = resolve; });
+        let refuseReadinessOnce = nextDisposition === 'readiness-failed';
         const runtime: AgentRuntime = { sessions: {
             goals: {
                 async get() { return { status: 'unchanged', revision: 'current' }; },
                 async set(mutation, context) {
                     order.push('goal');
+                    nativeGoalBusy = true;
                     await goalEvidence;
                     const publication = await context.goalSource.publish({ sourceSequence: 1, observedAtMs: 1,
                         items: [{ localId: 'native-goal', kind: 'goal', origin: 'vendor', status: 'active',
@@ -4933,6 +5093,22 @@ describe('native Agent session host adapter', () => {
                 async clear() { return { status: 'unchanged', revision: 'current' }; },
             },
             async open(_request, context) {
+                context.session.services.activeInput.bind({
+                    isTurnInFlight: () => nativeGoalBusy,
+                    waitForInputReady: async () => {
+                        if (!nativeGoalBusy) return;
+                        if (refuseReadinessOnce) {
+                            refuseReadinessOnce = false;
+                            throw new Error('External native readiness unavailable before effect');
+                        }
+                        await nativeGoalCompletion;
+                    },
+                    canSteer: () => false,
+                    onPromptQueued() {},
+                    applyPermissionIntentDuringTurn: () => ({ status: 'unsupported' }),
+                    clearTerminalComposer: () => ({ ok: false, status: 'unsupported' }),
+                    interruptPendingInputAndRun() {},
+                });
                 return {
                     async send(request) {
                         order.push(`send:${request.input.text}`);
@@ -4955,17 +5131,18 @@ describe('native Agent session host adapter', () => {
             createSessionHostServiceOwners,
         });
         let retireInput: ((localId: string) => void) | undefined;
-        const session = createNativeSessionClientTestPort('external-queued-goal', {
+        const session = createMutableApiSessionClientFixture({ sessionId: 'external-queued-goal', metadata: createTestMetadata(), overrides: {
             subscribePendingProviderInputRetirement(handler: (localId: string) => void) {
                 retireInput = handler;
                 return () => { retireInput = undefined; };
             },
-        });
+        } });
         const created = await plan.config.createSessionRuntime!({
-            directory: '/tmp/external-queued-goal', metadata: {}, machineId: 'machine-1', session,
+            directory: '/tmp/external-queued-goal', metadata: createTestMetadata(), machineId: 'machine-1', session,
+            agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: agentId }),
             transcriptSession: {}, messageBuffer: new MessageBuffer(), mcpServers: {},
             messageQueue: new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode),
-            permissionHandler: new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[ExternalGoal]' }),
+            permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[ExternalGoal]' }),
             getPermissionMode: () => 'default', memoryRecallGuidanceEnabled: false, runnerProcessIdentity: null,
             startupModelSelection: null,
             async runWithTerminalModelSelection(effect) { return { status: 'completed', value: await effect(null,
@@ -4987,18 +5164,30 @@ describe('native Agent session host adapter', () => {
             expect(order).toEqual(['send:first']);
             listener?.({ kind: 'turn-complete', sessionId: session.sessionId, turnId: 'first-turn', emittedAtMs: 2, sequence: ++sequence });
             await vi.waitFor(() => expect(order).toEqual(['send:first', 'goal']));
-            if (nextDisposition === 'retire') {
-                if (!retireInput) throw new Error('Native input retirement was not bound');
-                retireInput('second-input');
-            }
             releaseGoal();
             await expect(receipt).resolves.toMatchObject({ workState: { items: [expect.objectContaining({ title: 'External native objective' })] } });
             await expect(session.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, {}))
                 .resolves.toMatchObject({ workState: { items: [expect.objectContaining({ title: 'External native objective' })] } });
-            await expect(nextInput).resolves.toBe(nextDisposition === 'retire' ? 'retired' : 'sent');
-            expect(order).toEqual(nextDisposition === 'retire' ? ['send:first', 'goal'] : ['send:first', 'goal', 'send:second']);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(order).toEqual(['send:first', 'goal']);
+            if (nextDisposition === 'retire') {
+                if (!retireInput) throw new Error('Native input retirement was not bound');
+                retireInput('second-input');
+            } else if (nextDisposition === 'cancel') {
+                await created.operations.cancelTurn();
+            }
+            if (nextDisposition !== 'dispatch') await expect(nextInput).resolves.toBe('retired');
+            const retriedInput = nextDisposition === 'readiness-failed'
+                ? created.operations.sendTurnPrompt('second', { localId: 'second-input', turnId: 'second-turn' }).then(() => 'sent', () => 'retired')
+                : null;
+            nativeGoalBusy = false;
+            releaseNativeGoal();
+            const shouldSend = nextDisposition === 'dispatch' || nextDisposition === 'readiness-failed';
+            await expect(retriedInput ?? nextInput).resolves.toBe(shouldSend ? 'sent' : 'retired');
+            expect(order).toEqual(shouldSend ? ['send:first', 'goal', 'send:second'] : ['send:first', 'goal']);
         } finally {
             releaseGoal();
+            releaseNativeGoal();
             await created.operations.resetOrDisposeRuntime();
         }
     });
@@ -5046,6 +5235,8 @@ describe('native Agent session host adapter', () => {
                 status: 'ok' as const,
                 kind: 'skills' as const,
                 items: [{
+                    v: 1 as const,
+                    origin: 'vendor' as const,
                     id: 'skill-review',
                     name: 'review',
                     displayName: 'Review',
@@ -5282,6 +5473,7 @@ describe('native Agent session host adapter', () => {
             ok: false,
             errorCode: 'native_goal_control_unavailable',
             error: 'native_goal_control_unavailable',
+            goalControlFailure: { phase: 'native_effect' },
         });
         expect(getGoal).toHaveBeenCalledTimes(1);
 
@@ -5797,6 +5989,28 @@ describe('native Agent session host adapter', () => {
         expect(session.dispose).toHaveBeenCalledTimes(1);
     });
 
+    it('retains the exact turn-start input when a later same-turn steer changes active input', async () => {
+        let publish!: (event: AgentSessionRuntimeEvent) => void;
+        const session: AgentSessionRuntime = {
+            send: vi.fn(async () => ({ status: 'admitted' as const })),
+            watch(listener) { publish = listener; return { dispose() {} }; },
+            dispose: vi.fn(),
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'session-start-input');
+        runtime.subscribeRuntimeEvents(() => undefined);
+        await runtime.sendTurnPrompt('start', { localId: 'origin-input', turnId: 'turn-1' });
+        publish(AgentSessionRuntimeEventSchema.parse({ sequence: 1, sessionId: 'session-start-input',
+            emittedAtMs: 1, kind: 'input-accepted', inputIds: ['origin-input'],
+            delivery: { kind: 'newTurn', turnId: 'turn-1' } }));
+        publish(AgentSessionRuntimeEventSchema.parse({ sequence: 2, sessionId: 'session-start-input',
+            emittedAtMs: 2, kind: 'turn-start', turnId: 'turn-1', startedBy: 'host' }));
+        expect(runtime.readTurnStartingInputId?.('turn-1')).toBe('origin-input');
+        await runtime.steerInFlightTurn('same turn', { localId: 'steer-input', turnId: 'turn-1' });
+        expect(runtime.readTurnStartingInputId?.('turn-1')).toBe('origin-input');
+        expect(runtime.readTurnStartingInputId?.('other-turn')).toBeNull();
+        await runtime.resetOrDisposeRuntime('runtime_recovery');
+    });
+
     it('stamps immutable native runtime presentation writes with the runtime invocation owner', async () => {
         let context!: AgentSessionRuntimeContext;
         const agentId = 'acme-native-presentation-owner';
@@ -6014,6 +6228,96 @@ describe('native Agent session host adapter', () => {
                 vi.unstubAllEnvs();
             }
         });
+    });
+
+    it.each([false, true])('uses the authored workspace ceiling for native admission and later preparation (support: %s)', async (supported) => {
+        const updateConfiguration = vi.fn(async () => ({ status: 'applied' as const, changed: [] }));
+        const open = vi.fn<AgentSessionRuntimeFactory['open']>(async () => ({
+            send: async () => ({ status: 'admitted' as const }), updateConfiguration,
+            watch: () => ({ dispose: () => undefined }), dispose: async () => undefined,
+        }));
+        const agentId = 'acme-authored-workspace-policy';
+        const contributions = createExternalContributionFixtures(agentId);
+        const plan = await createNativeAgentRuntimeSessionPlan({
+            runtime: { sessions: { open } }, lease: createLease(agentId),
+            backend: contributions.backend, agent: contributions.agent,
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true,
+                ...(supported ? { workspaceWrites: 'deny' as const } : {}) },
+            createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/repo',
+                backendTarget: { kind: 'backend', backendId: agentId } }),
+        });
+        if (!plan.config.createSessionRuntime) throw new Error('Expected native Session factory');
+        const admission = plan.config.createSessionRuntime({ directory: '/repo', metadata: { workspaceWrites: 'deny' },
+            machineId: 'machine-1', session: createNativeSessionClientTestPort('authored-workspace-policy'),
+            transcriptSession: {}, messageBuffer: {}, mcpServers: {}, permissionHandler: {},
+            getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
+        } as never);
+        if (!supported) {
+            await expect(admission).rejects.toMatchObject({ code: 'role_policy_unenforceable' });
+            expect(open).not.toHaveBeenCalled();
+            return;
+        }
+        const created = await admission;
+        try {
+            expect(open.mock.calls[0]?.[0].configuration).toMatchObject({ workspaceWrites: 'deny' });
+            await expect(created.operations.updateSessionRuntimeConfig({ workspaceWrites: 'deny' }))
+                .resolves.toMatchObject({ status: 'applied' });
+            expect(updateConfiguration).toHaveBeenCalledWith(expect.objectContaining({ workspaceWrites: 'deny' }));
+        } finally { await created.operations.resetOrDisposeRuntime(); }
+    });
+
+    it.each(['applied', 'restart_required'] as const)('preserves the native %s workspace-policy outcome through identity publication and Role admission', async outcome => {
+        let nativeWorkspaceWrites: 'allow' | 'deny' | undefined;
+        // The external Agent port and durable metadata port are the only boundaries.
+        const session: AgentSessionRuntime = {
+            send: async () => ({ status: 'admitted' }),
+            updateConfiguration: async request => {
+                if (outcome === 'restart_required') return { status: 'rejected', diagnostic: {
+                    code: 'role_policy_restart_required', severity: 'error', message: 'Active sandbox cannot change',
+                } };
+                nativeWorkspaceWrites = request.workspaceWrites;
+                return { status: 'applied', changed: ['workspaceWrites'] };
+            },
+            watch: () => ({ dispose: () => undefined }),
+            dispose: () => undefined,
+        };
+        const runtime = createNativeAgentSessionOperations(session, 'published-role-policy', undefined, undefined, undefined, {
+            mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+            permissionIntent: { value: 'read-only', updatedAtMs: 0 }, options: {},
+        }, undefined, {
+            context: {} as AgentSessionRuntimeContext, cwd: '/repo', connectedAccounts: [],
+            capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true, workspaceWrites: 'deny' },
+        });
+        const plan = {
+            kind: HOST_SESSION_RUNTIME_PLAN_KIND, agentId: 'external-workspace-policy', opts: {},
+            config: { createSessionRuntime: async () => ({ operations: runtime }) },
+        } as unknown as HostSessionRuntimePlan;
+        const published = withHostSessionRuntimeIdentityPublication({ plan,
+            identity: { runtimeDescriptor: null, runtimeCapabilities: null, runtimeFacets: null } });
+        const created = await published.config.createSessionRuntime?.({} as never);
+        if (!created) throw new Error('Expected published Session runtime');
+        let metadata = createTestMetadata();
+        const execute = createRoleActionExecutor({ sessionId: 'published-role-policy', readSessionMetadata: () => metadata,
+            readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
+            prepareWorkspaceWritesPolicy: createWorkspaceWritesPolicyPreparation({
+                update: workspaceWrites => created.operations.updateSessionRuntimeConfig({ workspaceWrites }),
+            }),
+            stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+        });
+        try {
+            const action = execute({ actionId: 'session.role.set', input: { sessionId: 'published-role-policy',
+                roleId: 'orchestrator', answersWorkerQuestions: true }, context: { authority: 'present_user', surface: 'ui' } });
+            if (outcome === 'applied') {
+                await expect(action).resolves.toEqual({ updated: true });
+                expect(nativeWorkspaceWrites).toBe('deny');
+                expect(metadata.work?.sessionRolesV1).toMatchObject({ roleId: 'orchestrator', answersWorkerQuestions: true });
+            } else {
+                await expect(action).rejects.toMatchObject({ code: 'role_policy_restart_required' });
+                expect(metadata.work?.sessionRolesV1?.roleId).toBeUndefined();
+                expect(nativeWorkspaceWrites).toBeUndefined();
+            }
+        } finally { await created.operations.resetOrDisposeRuntime(); }
     });
 
     it('refuses hands-off when a native runtime can update configuration but has not declared enforcement', async () => {
@@ -6407,6 +6711,7 @@ describe('native Agent session host adapter', () => {
             sessionDirectoryKind,
             launchEnvironment: {
                 values: {
+                    ...resolveNativeAgentLaunchEnvironment({ processEnv: process.env }).values,
                     AUGMENT_SESSION_AUTH: 'host-authorized-auth',
                     KEEP_ME: 'yes',
                 },
@@ -6598,7 +6903,8 @@ describe('native Agent session host adapter', () => {
                 model: { value: 'provider-model-exact', updatedAtMs: 102 },
             }),
             launchEnvironment: {
-                values: { HAPPIER_CODEX_PROVIDER_API_KEY: 'scoped-provider-credential' },
+                values: { ...resolveNativeAgentLaunchEnvironment({ processEnv: process.env }).values,
+                    HAPPIER_CODEX_PROVIDER_API_KEY: 'scoped-provider-credential' },
                 unset: [],
             },
             providerBinding: {
@@ -6613,7 +6919,8 @@ describe('native Agent session host adapter', () => {
             },
         }), expect.any(Object));
         expect(createInvocationServices).toHaveBeenCalledWith(expect.objectContaining({
-            environment: { HAPPIER_CODEX_PROVIDER_API_KEY: 'scoped-provider-credential' },
+            environment: { ...resolveNativeAgentLaunchEnvironment({ processEnv: process.env }).values,
+                HAPPIER_CODEX_PROVIDER_API_KEY: 'scoped-provider-credential' },
             providerBindingActive: true,
         }));
 
@@ -6733,9 +7040,9 @@ describe('native Agent session host adapter', () => {
         );
         const registerHandler =
             session.rpcHandlerManager.registerHandler;
-        session.rpcHandlerManager.registerHandler = (
+        session.rpcHandlerManager.registerHandler = <TRequest, TResponse>(
             method: string,
-            handler: (input: unknown) => unknown,
+            handler: RpcHandler<TRequest, TResponse>,
         ) => {
             if (method === 'managedServices.custody.v1') {
                 events.push('custody-register');
@@ -6760,6 +7067,7 @@ describe('native Agent session host adapter', () => {
         expect(createInvocationServices).toHaveBeenCalledWith(
             expect.objectContaining({
                 environment: {
+                    ...resolveNativeAgentLaunchEnvironment({ processEnv: process.env }).values,
                     FOREGROUND_READY: 'yes',
                 },
                 agentCliLaunch: exactAgentCliLaunch,
@@ -7225,7 +7533,7 @@ describe('native Agent session host adapter', () => {
             getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
         } as never);
         try {
-            const prepareRun = created.operations.prepareRunTeamCredentialProviderBinding;
+            const prepareRun = created.nativeRuntime?.prepareRunTeamCredentialProviderBinding;
             if (!prepareRun) throw new Error('expected Run credential controls');
             await expect(prepareRun({ runId: 'run-inherited', agentId, resourceId: 'resource-direct', modelId: 'team-model' }))
                 .rejects.toMatchObject({ code: 'provider_run_credential_selection_required' });
@@ -7861,7 +8169,7 @@ describe('native Agent session host adapter', () => {
                 actionsSettingsV1: {
                     v: 1,
                     actions: {
-                        'session.discussion.list': { toolExposureModes: { agent: 'direct' } },
+                        'discussion.list': { toolExposureModes: { agent: 'direct' } },
                         'session.board.get': { toolExposureModes: { agent: 'direct' } },
                     },
                 },
@@ -7870,7 +8178,7 @@ describe('native Agent session host adapter', () => {
 
         const bridge = await services.happierTools?.resolveNativeBridge({ systemPrompt: '' });
         const names = bridge?.tools.map((tool) => tool.name) ?? [];
-        expect(names).not.toContain('session_discussion_list');
+        expect(names).not.toContain('discussion_list');
         expect(names).toContain('session_board_get');
     });
 
@@ -8315,6 +8623,7 @@ describe('native Agent session host adapter', () => {
             const releaseExecutable = vi.fn();
             let composedSession: AgentSessionRuntime | null = null;
             const generationController = new AbortController();
+            const launchPreparation = await createNativeAgentLaunchPreparationFixture();
             const invocationServices = createUnavailablePluginServices();
             const events: string[] = [];
             let finishPreparingServices: (() => void) | null = null;
@@ -8327,6 +8636,7 @@ describe('native Agent session host adapter', () => {
                     id: 'codex-acp',
                 }],
                 signal: generationController.signal,
+                prepareAgentNativeLaunch: launchPreparation.prepare(directory, generationController.signal),
                 isOccurrenceCurrent: () => !generationController.signal.aborted,
                 async resolveExecutable(executable) {
                     expect(executable).toEqual({
@@ -9167,7 +9477,7 @@ describe('native Agent session host adapter', () => {
             providerSessionId: ' provider-session-resume ',
             sessionDirectoryKind: 'path',
             launchEnvironment: {
-                values: {},
+                values: resolveNativeAgentLaunchEnvironment({ processEnv: process.env }).values,
                 unset: [],
             },
             configuration: {
@@ -11977,6 +12287,10 @@ describe('native Agent session host adapter', () => {
             input: { text: 'hello' },
             delivery: { kind: 'newTurn', turnId: 'turn-1' },
         });
+        await expect(runtime.sendTurnPrompt('duplicate before native custody settles', {
+            localId: 'queue-local-1', turnId: 'turn-1',
+        })).rejects.toThrow('cannot reuse an in-flight Queue localId');
+        expect(send).toHaveBeenCalledOnce();
 
         for (const listener of listeners) {
             listener({
@@ -14333,7 +14647,7 @@ describe('native Agent session usage bridge — full canonical UsageObservation 
                     usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 },
                 },
             }) + '\n');
-            const declaration = CLAUDE_ACCOUNTING_MANIFEST.contributes.agents.find((agent) => agent.id === 'claude');
+            const declaration = PluginAgentContributionV2Schema.parse(CLAUDE_ACCOUNTING_MANIFEST.contributes.agents?.find((agent) => agent.id === 'claude'));
             if (!declaration?.surfaces?.externalSession) throw new Error('Expected canonical Claude source declaration');
             const base = createExternalContributionFixtures('claude');
             const agent = {

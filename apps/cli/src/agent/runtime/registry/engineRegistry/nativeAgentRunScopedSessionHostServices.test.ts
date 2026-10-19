@@ -10,8 +10,9 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
     isActiveAccountSettingsSnapshotLifetimeCurrent, resetActiveAccountSettingsSnapshotForTests,
     setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { projectResolvedMcpServers } from '@/mcp/runtime/projectResolvedMcpServers';
 
 describe('createNativeAgentExecutionRunHostServices', () => {
     it('refuses a retired captured Account MCP demand instead of projecting an empty Session server set', async () => {
@@ -38,6 +39,13 @@ describe('createNativeAgentExecutionRunHostServices', () => {
                 definition: { kindVersion: 1, id: 'acme', ownedBackendIds: ['acme'] } },
             hostSession: { session: { getMetadataSnapshot: () => null }, machineId: 'machine-1', accountSettingsAuthority: 'account',
                 resolveAccountSettingsSnapshot: async () => await context.isCurrent() ? context.readSnapshot() : null,
+                // runtimeCore supplies the already-applied Session launch set;
+                // this projection must not rematerialize the Account catalog.
+                readResolvedMcpServers: () => projectResolvedMcpServers({
+                    mcpServers: { 'captured-server': { command: 'echo', args: [] } },
+                    identities: { 'captured-server': { serverId: 'captured-server', serverTitle: 'captured-server' } },
+                    scope: { sessionId: 'captured-session', directory: happyHomeDir },
+                }),
                 permissionHandler: { handleToolCall: async () => { throw new Error('Permission was not requested'); } } },
             sessionId: 'captured-session', directory: happyHomeDir, signal: controller.signal, happyHomeDir });
         try {

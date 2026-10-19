@@ -2,22 +2,20 @@ import {
   appendFile,
   mkdir,
   realpath,
-  stat,
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { resolveVendorResumeIdFromSessionMetadata } from '@happier-dev/agents';
 import { createSessionOwnerMetadataV1 } from '@happier-dev/protocol';
-import { buildPiRpcArgs } from '@happier-dev/plugins-pi/agent/runtime/rpc/args';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { executeExternalSessionCandidateQuery } from '@/session/actions/externalSessions/candidateQuery';
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
-import { resolveExecutablePluginRuntimeRegistry } from '../../../plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
 
 const PI_AGENT_ID = 'pi';
@@ -64,19 +62,16 @@ describe('engineRegistry (Pi External Sessions)', () => {
 
       const envScope = createEnvKeyScope(['PI_CODING_AGENT_DIR']);
       envScope.patch({ PI_CODING_AGENT_DIR: agentDir });
-      let runtimeRegistry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+      let admittedRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       try {
-        runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
-          contributes: createResolvedContributionRegistry(resolveBuiltInContributions()),
+        admittedRuntime = await createAdmittedPluginRuntimeFixture({
           happyHomeDir: join(directory, 'home'),
-          pluginIds: [PI_PLUGIN_ID],
-          resolveDevelopmentSourceAuthority: ({ pluginId, rootPath }) => ({
-            kind: 'development',
-            registeredRootId: `pi-external-sessions:${pluginId}`,
-            canonicalRoot: rootPath,
-            observedRevision: 1,
-          }),
+          runtimeOptions: {
+            contributes: createResolvedContributionRegistry(resolveBuiltInContributions()),
+            pluginIds: [PI_PLUGIN_ID],
+          },
         });
+        const runtimeRegistry = admittedRuntime.registry;
 
         expect(runtimeRegistry.targetActivationFacts).toEqual(expect.arrayContaining([
           expect.objectContaining({
@@ -134,16 +129,15 @@ describe('engineRegistry (Pi External Sessions)', () => {
           nextCursor: null,
         });
         const activeServerDir = join(directory, 'active-server');
-        const queriedCandidates = await executeExternalSessionCandidateQuery({
+        const sourceCustody = runtimeRegistry.agentRuntimesByAgentId.get(PI_AGENT_ID)?.sourceCustody;
+        if (!sourceCustody) throw new Error('Expected admitted Pi source custody');
+        const queryCandidates = () => executeExternalSessionCandidateQuery({
           activeServerDir,
           agentIdentity: {
             pluginId: PI_PLUGIN_ID,
             localId: PI_AGENT_ID,
           },
-          agentSourceCustody: {
-            kind: 'development',
-            registeredRootId: 'pi-external-sessions-fixture',
-          },
+          agentSourceCustody: sourceCustody,
           source,
           limit: 1,
           listCandidates: async (request) => externalSession.listCandidates!({
@@ -152,19 +146,15 @@ describe('engineRegistry (Pi External Sessions)', () => {
             ...(request.cursor ? { cursor: request.cursor } : {}),
           }),
         });
-        expect(queriedCandidates).toEqual({
-          candidates: candidates.candidates.map((candidate) => ({
+        // Discovery may return explicit index preparation before its published
+        // page. Continue through the real owner instead of treating it as empty.
+        await vi.waitFor(async () => expect(await queryCandidates()).toEqual({
+          candidates: candidates.candidates.map(({ candidateIndexState: _candidateIndexState, cwd: _cwd, ...candidate }) => ({
             ...candidate,
             candidateKey: expect.stringMatching(/^[a-f0-9]{64}$/),
           })),
           nextCursor: candidates.nextCursor,
-        });
-        expect(queriedCandidates).not.toHaveProperty('preparation');
-        await expect(stat(join(
-          activeServerDir,
-          'external-sessions',
-          'indexes',
-        ))).rejects.toMatchObject({ code: 'ENOENT' });
+        }));
         const candidate = candidates.candidates[0];
         if (!candidate?.linkData) throw new Error('Expected source-qualified Pi candidate');
 
@@ -223,11 +213,9 @@ describe('engineRegistry (Pi External Sessions)', () => {
           piSessionId: linked.remoteSessionId,
           runtimeDescriptorV1: linked.runtimeDescriptor,
         });
-        expect(resumeSessionId).toBe(canonicalSessionFile);
-        expect(buildPiRpcArgs({ resumeSessionId }).slice(-2)).toEqual([
-          '--session',
-          canonicalSessionFile,
-        ]);
+        // Host metadata retains native identity; the Pi runtime consumes the
+        // already-asserted descriptor's file preference at its own open seam.
+        expect(resumeSessionId).toBe(linked.remoteSessionId);
 
         const page = await externalSession.pageTranscript!({
           source: linked.source,
@@ -239,7 +227,7 @@ describe('engineRegistry (Pi External Sessions)', () => {
         expect(page.items).toEqual([
           expect.objectContaining({
             id: 'pi:pi-external-registry:pi-registry-user',
-            messageRole: 'user',
+            localId: 'pi:pi-external-registry:pi-registry-user',
             raw: {
               role: 'user',
               content: { type: 'text', text: 'registered prompt' },
@@ -266,7 +254,7 @@ describe('engineRegistry (Pi External Sessions)', () => {
           outcome: 'advanced',
           items: [{
             id: 'pi:pi-external-registry:pi-registry-assistant:text:0',
-            messageRole: 'agent',
+            localId: 'pi:pi-external-registry:pi-registry-assistant:text:0',
             raw: {
               role: 'agent',
               content: {
@@ -280,7 +268,7 @@ describe('engineRegistry (Pi External Sessions)', () => {
           boundary: expect.any(String),
         });
       } finally {
-        await runtimeRegistry?.dispose();
+        await admittedRuntime?.dispose();
         envScope.restore();
       }
     });

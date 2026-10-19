@@ -1,10 +1,28 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { accountSettingsParse } from '@happier-dev/protocol';
 
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { createNativeAgentCurrentSessionUiServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { clearActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog, getActiveAccountSettingsSnapshotLifetimeToken,
+    setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+beforeEach(() => {
+    const scopeKey = resolveAccountSettingsScopeKey({ token: 'realtime-permission-account', encryption: null });
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}),
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey });
+    commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+        catalog: { status: 'ready', rows: [{ revision: 1,
+            record: { key: 'role-overrides', value: { v: 1, overrides: {} } } }], tombstones: [], diagnostics: [] } });
+});
+afterEach(() => {
+    clearActiveAccountSettingsSnapshot();
+    vi.restoreAllMocks();
+});
 
 type AppServerRequestHandler = (
     params: unknown,
@@ -15,7 +33,7 @@ type AppServerBoundaryClient = Readonly<{
     launchFeatures: Readonly<{
         realtimeConversationAdvertised: boolean;
     }>;
-    request(method: string, params?: unknown): Promise<unknown>;
+    request(method: string, params?: unknown, options?: Readonly<{ timeoutMs?: number | null; signal?: AbortSignal }>): Promise<unknown>;
     notify(method: string, params?: unknown): Promise<void>;
     registerRequestHandler(method: string, handler: AppServerRequestHandler): () => void;
     registerNotificationHandler(
@@ -148,6 +166,95 @@ function createAppServerBoundary(options?: Readonly<{
     };
 }
 
+describe('Codex app-server permission-card data composition', () => {
+    it('projects a native command approval into canonical Bash card data', async () => {
+        const codex = await loadCodexAppServerOwners();
+        const session = createMutableApiSessionClientFixture<Record<string, unknown>>({
+            sessionId: 'codex-command-card-session',
+            metadata: {},
+            agentState: { requests: {}, completedRequests: {} },
+        });
+        const permissionHandler = createProviderEnforcedPermissionHandler({
+            session,
+            logPrefix: '[Codex command card composition test]',
+            onAbortRequested: async () => {},
+        });
+        const sessionLifetime = new AbortController();
+        onTestFinished(async () => {
+            sessionLifetime.abort();
+            await permissionHandler.reset();
+            await session.close();
+        });
+        const ui = createPluginInteractionsService({
+            currentSession: createNativeAgentCurrentSessionUiServices({
+                permissionHandler,
+                pluginId: 'happier.agent.codex',
+                contributionId: 'codex',
+                runtimeId: 'codex',
+                sessionId: session.sessionId,
+                occurrenceId: 'codex-command-card-occurrence',
+                interactionDeadlineMs: 1_000,
+                isCurrent: () => true,
+                signal: sessionLifetime.signal,
+            }),
+            signal: sessionLifetime.signal,
+            isOccurrenceCurrent: () => true,
+        });
+        const appServer = createAppServerBoundary();
+        codex.registerInteractionHandlers({
+            client: appServer.client,
+            ui,
+            getThreadId: () => 'thread-1',
+        });
+
+        const vendorResponse = appServer.invoke(
+            'item/commandExecution/requestApproval',
+            {
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                itemId: 'command-1',
+                startedAtMs: 1,
+                environmentId: null,
+                reason: 'The delegated turn needs permission.',
+                command: 'git fetch origin',
+                cwd: '/workspace',
+                availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
+            },
+            'vendor-command-card-request',
+        );
+
+        let permissionRequestId = '';
+        await vi.waitFor(() => {
+            const pending = Object.entries(session.__getAgentState().requests ?? {}).find(([, request]) => request.tool === 'Bash');
+            expect(pending?.[1]).toMatchObject({
+                tool: 'Bash',
+                arguments: {
+                    command: 'git fetch origin',
+                    cwd: '/workspace',
+                    reason: 'The delegated turn needs permission.',
+                },
+                kind: 'permission',
+                owner: {
+                    kind: 'plugin',
+                    pluginId: 'happier.agent.codex',
+                    runtimeId: 'codex',
+                },
+            });
+            permissionRequestId = pending![0];
+        });
+        expect(
+            session.__getAgentState().requests?.[permissionRequestId]?.arguments,
+        ).not.toHaveProperty('threadId');
+
+        appServer.publish('serverRequest/resolved', {
+            threadId: 'thread-1',
+            requestId: 'vendor-command-card-request',
+        });
+        await expect(vendorResponse).resolves.toEqual({ decision: 'cancel' });
+        sessionLifetime.abort();
+    });
+});
+
 const permissionCases = [
     {
         label: 'approve once',
@@ -188,6 +295,14 @@ describe('Codex global Voice permission custody composition', () => {
                 },
                 agentState: { requests: {}, completedRequests: {} },
             });
+            const serverRpc = new ServerBoundPermissionRpcHandlerManager(session.sessionId);
+            // Permission actors are stamped by authenticated Home ingress.
+            vi.spyOn(session.rpcHandlerManager, 'registerHandler').mockImplementation((name, handler) => serverRpc.registerHandler(name, handler));
+            const respondPermission = async (payload: unknown) => {
+                const handler = serverRpc.handlers.get(RPC_METHODS.SESSION_PERMISSION_RESPOND);
+                if (!handler) throw new Error('Permission response handler unavailable');
+                return await handler(payload);
+            };
             let abortCodingTurnCalls = 0;
             const permissionHandler = createProviderEnforcedPermissionHandler({
                 session,
@@ -197,6 +312,11 @@ describe('Codex global Voice permission custody composition', () => {
                 },
             });
             const sessionLifetime = new AbortController();
+            onTestFinished(async () => {
+                sessionLifetime.abort();
+                await permissionHandler.reset();
+                await session.close();
+            });
             const currentSessionUi = createNativeAgentCurrentSessionUiServices({
                 permissionHandler,
                 pluginId: 'happier.agent.codex',
@@ -208,12 +328,10 @@ describe('Codex global Voice permission custody composition', () => {
                 isCurrent: () => true,
                 signal: sessionLifetime.signal,
             });
-            const permissionRequestId = `post-end-${response.decision}`;
             const ui = createPluginInteractionsService({
                 currentSession: currentSessionUi,
                 signal: sessionLifetime.signal,
                 isOccurrenceCurrent: () => true,
-                createOperationId: () => permissionRequestId,
             });
             const authorizedCommandEffects: Array<{
                 command: string;
@@ -248,6 +366,7 @@ describe('Codex global Voice permission custody composition', () => {
                     threadId: 'thread-1',
                     flushTranscriptTailOnSessionEnd: false,
                 }),
+                expect.objectContaining({ timeoutMs: null }),
             ));
             appServer.publish('thread/realtime/started', {
                 threadId: 'thread-1',
@@ -297,17 +416,29 @@ describe('Codex global Voice permission custody composition', () => {
                 },
             );
 
-            await vi.waitFor(() => expect(
-                session.__getAgentState().requests?.[permissionRequestId],
-            ).toMatchObject({
-                tool: 'codex_command_execution',
-                kind: 'permission',
-                owner: {
-                    kind: 'plugin',
-                    pluginId: 'happier.agent.codex',
-                    runtimeId: 'codex',
-                },
-            }));
+            let permissionRequestId = '';
+            await vi.waitFor(() => {
+                const pending = Object.entries(session.__getAgentState().requests ?? {})
+                    .find(([, request]) => request.tool === 'Bash');
+                expect(pending?.[1]).toMatchObject({
+                    tool: 'Bash',
+                    arguments: {
+                        command: 'git fetch origin',
+                        cwd: '/workspace',
+                        reason: 'The delegated turn needs permission.',
+                    },
+                    kind: 'permission',
+                    owner: {
+                        kind: 'plugin',
+                        pluginId: 'happier.agent.codex',
+                        runtimeId: 'codex',
+                    },
+                });
+                permissionRequestId = pending![0];
+            });
+            expect(
+                session.__getAgentState().requests?.[permissionRequestId]?.arguments,
+            ).not.toHaveProperty('threadId');
             expect(vendorResponseSettlements).toBe(0);
 
             await expect(started.handle.stop()).resolves.toEqual({ status: 'stopped' });
@@ -340,21 +471,21 @@ describe('Codex global Voice permission custody composition', () => {
                 decision: 'approved';
             };
             const [firstResponse, repeatedOrStaleResponse] = await Promise.all([
-                session.rpcHandlerManager.invokeLocal(
-                    RPC_METHODS.SESSION_PERMISSION_RESPOND,
-                    wirePermissionResponse,
-                ),
-                session.rpcHandlerManager.invokeLocal(
-                    RPC_METHODS.SESSION_PERMISSION_RESPOND,
-                    staleApproval,
-                ),
+                respondPermission(wirePermissionResponse),
+                respondPermission(staleApproval),
             ]);
             expect(firstResponse).toBeUndefined();
-            expect(repeatedOrStaleResponse).toEqual({
-                ok: false,
-                errorCode: 'permission_request_not_found',
-                requestId: permissionRequestId,
-            });
+            if (response.decision === 'approved') {
+                // An identical in-flight answer rejoins the first claim; the
+                // native effect and settlement below must still happen once.
+                expect(repeatedOrStaleResponse).toBeUndefined();
+            } else {
+                expect(repeatedOrStaleResponse).toEqual({
+                    ok: false,
+                    errorCode: 'permission_request_not_found',
+                    requestId: permissionRequestId,
+                });
+            }
             await expect(vendorResponse).resolves.toEqual({ decision: appServerDecision });
             expect(vendorResponseSettlements).toBe(1);
             expect(authorizedCommandEffects).toEqual(
@@ -370,10 +501,15 @@ describe('Codex global Voice permission custody composition', () => {
                 response.decision === 'abort' ? 1 : 0,
             );
 
-            await expect(session.rpcHandlerManager.invokeLocal(
-                RPC_METHODS.SESSION_PERMISSION_RESPOND,
-                JSON.parse(JSON.stringify(staleApproval)),
-            )).resolves.toEqual({
+            // The persisted completed claim also rejoins an identical present-user
+            // retry, while a different decision cannot authorize another effect.
+            await expect(respondPermission(JSON.parse(JSON.stringify(wirePermissionResponse)))).resolves.toBeUndefined();
+            const conflictingResponse = {
+                id: permissionRequestId,
+                approved: response.decision !== 'approved',
+                decision: response.decision === 'approved' ? 'denied' : 'approved',
+            };
+            await expect(respondPermission(conflictingResponse)).resolves.toEqual({
                 ok: false,
                 errorCode: 'permission_request_not_found',
                 requestId: permissionRequestId,

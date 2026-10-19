@@ -202,7 +202,7 @@ export class SessionHostBridge implements SessionHostBridgeContract {
           ] ?? '',
         ).trim()
       );
-      const authorityFilePath = (
+      const readAuthorityFilePath = () => (
         hostOptions?.agentRuntimeDaemonServiceAuthorityFilePath?.trim()
         || String(
           process.env[
@@ -212,13 +212,16 @@ export class SessionHostBridge implements SessionHostBridgeContract {
       );
       if (
         bootstrapFilePath
-        && authorityFilePath
+        && readAuthorityFilePath()
         && resolutionParams.happyHomeDir
       ) {
         const source = await createRunnerAgentSessionRuntimeBootstrap({
           happyHomeDir: resolutionParams.happyHomeDir,
           publicReleaseRing: configuration.publicReleaseRing,
-          authorityFilePath,
+          // Profile-secret recovery may replace the admitted claim before
+          // deferred native preparation. Keep the bootstrap identity pinned,
+          // but claim the authority currently accepted by the CLI lifetime.
+          get authorityFilePath() { return readAuthorityFilePath(); },
           bootstrapFilePath,
         });
         if (source?.identity.backendId === backendId) {

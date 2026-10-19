@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AgentRuntime,
@@ -15,6 +15,8 @@ import { projectLoadedPluginContributes } from '@/plugins/projection/registry/re
 import type { PluginContributionRuntimeLifecycle, ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 import { createEmptyBackendExecutionSurfaces } from '../engineRegistryTypes';
 import { resolveBackendRuntimeCore } from './runtimeCore';
@@ -33,8 +35,13 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
+const sessions: Pick<ReturnType<typeof createMutableApiSessionClientFixture>, 'close'>[] = [];
+afterEach(async () => {
+  await Promise.all(sessions.splice(0).map(session => session.close()));
+});
+
 function createSessionClient(sessionId: string) {
-  let metadata: Record<string, unknown> = {
+  const metadata = {
     path: '/tmp/runtime-currentness',
     host: 'test',
     homeDir: '/tmp',
@@ -42,23 +49,9 @@ function createSessionClient(sessionId: string) {
     happyLibDir: '/tmp/.happier/lib',
     happyToolsDir: '/tmp/.happier/tools',
   };
-  return {
-    sessionId,
-    rpcHandlerManager: {
-      registerHandler: () => {},
-    },
-    updateAgentState: async () => {},
-    updateMetadata: async (
-      updater: (state: Record<string, unknown>) => Record<string, unknown>,
-    ) => {
-      metadata = updater(metadata);
-    },
-    getMetadataSnapshot: () => metadata,
-    getAgentStateSnapshot: () => ({}),
-    readSessionTurnsProjection: async () => null,
-    on: () => {},
-    off: () => {},
-  };
+  const session = createMutableApiSessionClientFixture({ sessionId, metadata });
+  sessions.push(session);
+  return session;
 }
 
 function createCurrentnessRegistry(params: Readonly<{
@@ -466,11 +459,14 @@ describe('resolveBackendRuntimeCore retirement signal ownership', () => {
 
     registryRetirement.abort(new Error('unrelated registry retirement'));
     expect(voiceAuthority?.isCurrent(voiceProvider)).toBe(true);
+    const apiSession = createSessionClient('session-currentness');
+    const presentation = createCurrentSessionPresentationHost({ session: apiSession, signal: new AbortController().signal });
     const created = await plan.config.createSessionRuntime({
       directory: '/tmp/runtime-currentness',
       metadata: {},
       machineId: 'machine-1',
-      session: createSessionClient('session-currentness'),
+      session: apiSession,
+      currentSessionPresentation: presentation.bindCurrentSession,
       transcriptSession: {},
       messageBuffer: {},
       mcpServers: {},

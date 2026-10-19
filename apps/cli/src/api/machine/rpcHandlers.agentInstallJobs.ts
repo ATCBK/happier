@@ -2,9 +2,13 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallCancelRequestSchema, DaemonAgentInstallListRequestSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { getDaemonAgentInstallJobOwner, type AgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 import type { RpcHandlerRegistrar, RpcHandlerContext } from '../rpc/types';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
-import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { refreshActiveAcpCatalog, refreshDaemonAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { readStoredCredentials } from '@/persistence';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 export function registerMachineAgentInstallJobRpcHandlers(params: { rpcHandlerManager: RpcHandlerRegistrar; owner?: AgentInstallJobOwner }): void {
   const owner = params.owner ?? getDaemonAgentInstallJobOwner();
@@ -31,6 +35,17 @@ export function registerMachineAgentInstallJobRpcHandlers(params: { rpcHandlerMa
           credentials: operation.credentials, operationContext: operation, signal: context?.signal,
         }));
         if (catalog.status !== 'ready' || !await operation.isCurrent() || await admittedAccount(context) !== accountId) return unavailable;
+        return owner.start(parsed.data, { accountId, catalog });
+      }
+      if (parsed.data.intent !== 'uninstall') {
+        // Registry Add writes the Account row before START. The custodian's
+        // background observation can still predate that write, just like a guest's.
+        // Capture the pin through the same hydration owner before admitting work.
+        const credentials = await readStoredCredentials();
+        if (!credentials || readAccountIdFromToken(credentials.token) !== accountId
+          || getActiveAccountSettingsSnapshot()?.scopeKey !== resolveAccountSettingsScopeKey(credentials)) return unavailable;
+        const catalog = await refreshDaemonAcpCatalog({ credentials, signal: context?.signal });
+        if (await admittedAccount(context) !== accountId) return unavailable;
         return owner.start(parsed.data, { accountId, catalog });
       }
     }

@@ -68,6 +68,51 @@ const sanitizedPreviewBySource = {
   unknown: 'Session runtime failed',
 } as const satisfies Record<SessionRuntimeIssueSourceV1, string>;
 
+/** File diagnostics retain closed preparation facts before public issue classification.
+ * Never copy messages, stacks, references, arbitrary codes or accessor values. */
+export function readSessionPreparationFailureDiagnostic(error: unknown): Readonly<{
+  originalCode: string; reason: string; contextSource: string;
+}> {
+  const readClosedField = (key: string, allowed: ReadonlySet<string>) => {
+    if (!error || typeof error !== 'object') return 'unknown';
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, key);
+      return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+        && allowed.has(descriptor.value) ? descriptor.value : 'unknown';
+    } catch { return 'unknown'; }
+  };
+  return {
+    originalCode: readClosedField('code', preparationDiagnosticCodes),
+    reason: readClosedField('reason', preparationDiagnosticReasons),
+    contextSource: readClosedField('contextSource', preparationDiagnosticSources),
+  };
+}
+
+const preparationDiagnosticCodes = new Set([
+  'account_role_overrides_unavailable',
+  'context_source_unavailable', 'role_overrides_unavailable', 'role_source_incomplete',
+  'role_target_unavailable', 'role_policy_unenforceable', 'preparation_pending', 'attachment_unavailable',
+  'profile_missing', 'invalid_target', 'identity_unobserved', 'identity_mismatch',
+  'project_requester_credentials_unavailable',
+  'metadata_tuple_ambiguous',
+  DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE,
+]);
+const preparationDiagnosticSources = new Set([
+  'account_lifetime', 'account_prompt_inventory', 'profile_prompt_inventory', 'project_association',
+]);
+const preparationDiagnosticReasons = new Set([
+  'credentials-unavailable', 'account-mismatch', 'not-current',
+  'loading', 'account-not-found', 'account-inconsistent', 'source-version-conflict', 'authority-not-confirmed',
+  'not_found', 'wrong_kind', 'malformed', 'locked', 'unavailable',
+  'scope-unavailable', 'scope-retired', 'catalog-unobserved', 'source-unavailable', 'invalid-stored-content',
+  'profile-target-unavailable', 'profile-catalog-incomplete', 'unreachable', 'unauthorized', 'forbidden',
+  'unsupported', 'account-mode-mismatch', 'encryption-material-unavailable', 'cancelled',
+  'plan-unprepared', 'account-lifetime-changed', 'prepared-settings-changed', 'profile-selection-changed',
+  ...['active', 'captured'].flatMap(prefix => ['account-snapshot-unavailable', 'account-scope-changed',
+    'account-availability-changed', 'account-settings-changed', 'account-keys-changed', 'account-profile-changed']
+    .map(reason => `${prefix}-${reason}`)),
+]);
+
 function extractErrorTextParts(error: unknown): string[] {
   if (typeof error === 'string') return [error];
   if (error instanceof Error) return [error.message];
@@ -438,9 +483,9 @@ export function classifyPrimarySessionRuntimeIssue(
     ? AgentRuntimeDiagnosticDataV1Schema.safeParse(input.error)
     : null;
   const typedDiagnostic = diagnostic?.success ? diagnostic.data : null;
-  const requestErrorCode = typedDiagnostic?.details && typeof typedDiagnostic.details === 'object'
-    && !Array.isArray(typedDiagnostic.details) && typeof typedDiagnostic.details.requestErrorCode === 'number'
-    && Number.isSafeInteger(typedDiagnostic.details.requestErrorCode) ? typedDiagnostic.details.requestErrorCode : null;
+  const diagnosticDetails = readRecord(typedDiagnostic?.details);
+  const requestErrorCode = typeof diagnosticDetails?.requestErrorCode === 'number'
+    && Number.isSafeInteger(diagnosticDetails.requestErrorCode) ? diagnosticDetails.requestErrorCode : null;
   // Reuse SessionRuntimeIssueV1.sanitizedPreview's existing 2,000-code-unit boundary.
   const diagnosticPreview = typedDiagnostic?.message?.trim()
     ? redactBugReportSensitiveText(`${requestErrorCode === null ? '' : `ACP ${requestErrorCode}: `}${typedDiagnostic.message}`).slice(0, 2_000)
@@ -467,19 +512,24 @@ export function classifyPrimarySessionRuntimeIssue(
   const catalogUnavailable = !teamCredentialDenial
     && errorCode.kind === 'string'
     && errorCode.value === DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE;
+  const metadataPrivacyUpgradeRequired = !teamCredentialDenial
+    && errorCode.kind === 'string'
+    && errorCode.value === 'metadata_privacy_upgrade_required';
   // Host turn publication reclassifies its typed diagnostic, not the original Error instance.
   const promptPreparationCode = teamCredentialDenial ? null
     : input.error instanceof PromptStackPreparationError
       ? input.error.cause instanceof HomeTargetResolutionError ? input.error.cause.code : input.error.code
     : input.cause === 'session_error' && errorCode.kind === 'string'
       && (errorCode.value === 'context_source_unavailable' || errorCode.value === 'role_overrides_unavailable'
-        || errorCode.value === 'role_source_incomplete') ? 'preparation_pending'
+        || errorCode.value === 'role_source_incomplete'
+        || errorCode.value === 'metadata_tuple_ambiguous'
+        || errorCode.value === 'project_requester_credentials_unavailable') ? 'preparation_pending'
     : declaredSource === 'dependency_failure' && errorCode.kind === 'string'
       && (errorCode.value === 'preparation_pending' || errorCode.value === 'attachment_unavailable'
         || errorCode.value === 'profile_missing' || errorCode.value === 'invalid_target'
         || errorCode.value === 'identity_unobserved' || errorCode.value === 'identity_mismatch')
     ? errorCode.value : null;
-  const source = missingCli || catalogUnavailable || promptPreparationCode
+  const source = missingCli || catalogUnavailable || metadataPrivacyUpgradeRequired || promptPreparationCode
     ? 'dependency_failure' as const
     : teamCredentialDenial
     ? 'team_credential' as const
@@ -509,6 +559,7 @@ export function classifyPrimarySessionRuntimeIssue(
     status: 'failed',
     code: missingCli ? SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       : catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
+      : metadataPrivacyUpgradeRequired ? 'metadata_privacy_upgrade_required'
       : promptPreparationCode ?? startupFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle'
         : source === 'agent_session_error' ? typedDiagnostic?.code ?? source : source),
     source,
@@ -518,6 +569,9 @@ export function classifyPrimarySessionRuntimeIssue(
     ...(agentTurnId === null ? {} : { agentTurnId }),
     sanitizedPreview: (missingCli ? AGENT_CLI_MISSING_PREVIEW : null)
       ?? (catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW : null)
+      ?? (metadataPrivacyUpgradeRequired ? 'Session startup needs a compatible Home. Update or reconnect, then retry the Session.' : null)
+      ?? (errorCode.kind === 'string' && errorCode.value === 'metadata_tuple_ambiguous'
+        ? 'Session state could not be confirmed. Check the Home connection, then retry the Session.' : null)
       ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
       ?? (startupFailureCode ? AGENT_STARTUP_FAILURE_PREVIEWS[startupFailureCode] : null)
       ?? buildSafeModelNotFoundPreview(input.error)

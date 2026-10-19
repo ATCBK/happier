@@ -1,45 +1,45 @@
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { SessionProviderInputConsumer } from './_types';
 import { registerSessionGuardNoticeRpc, type SessionGuardNoticeOwner } from './sessionGuardNoticeRpc';
 
-export const SessionInputLiveWorkSchema = z.object({
+export const SessionInputLiveWorkSchema = z.strictObject({
   session: z.enum(['active', 'settled', 'unknown']),
   input: z.enum(['active', 'settled', 'unknown']),
-  agents: z.enum(['active', 'settled', 'unknown']).optional(),
-  attention: z.enum(['active', 'settled', 'unknown']).optional(),
-  agentsActiveCount: z.number().int().nonnegative().optional(),
-  settledAt: z.number().int().nonnegative().optional(),
-}).strict();
+  agents: z.optional(z.enum(['active', 'settled', 'unknown'])),
+  attention: z.optional(z.enum(['active', 'settled', 'unknown'])),
+  agentsActiveCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  settledAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+});
 
 const groupEnforceSchema = z.object({
   action: z.literal('enforce'),
-  serviceId: z.string().trim().min(1),
-  groupId: z.string().trim().min(1),
-  reason: z.enum(['group_unavailable', 'generation_pending']).optional(),
-  epochId: z.string().trim().min(1).optional(),
+  serviceId: z.string().check(z.trim(), z.minLength(1)),
+  groupId: z.string().check(z.trim(), z.minLength(1)),
+  reason: z.optional(z.enum(['group_unavailable', 'generation_pending'])),
+  epochId: z.optional(z.string().check(z.trim(), z.minLength(1))),
 });
 const admissionRequestSchema = z.union([
   groupEnforceSchema,
   z.object({
     action: z.literal('clear'),
-    serviceId: z.string().trim().min(1),
-    groupId: z.string().trim().min(1),
-    epochId: z.string().trim().min(1).optional(),
-    applicationSettled: z.literal(true).optional(),
+    serviceId: z.string().check(z.trim(), z.minLength(1)),
+    groupId: z.string().check(z.trim(), z.minLength(1)),
+    epochId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    applicationSettled: z.optional(z.literal(true)),
   }),
-]).superRefine((request, ctx) => {
+]).check(z.superRefine((request, ctx) => {
   if (
     request.action === 'enforce'
     && 'serviceId' in request
     && request.reason === 'generation_pending'
     && !request.epochId
   ) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'generation_pending requires epochId' });
+    ctx.addIssue({ code: "custom", message: 'generation_pending requires epochId' });
   }
-});
+}));
 
 type AdmissionRequest = z.infer<typeof admissionRequestSchema>;
 
@@ -63,7 +63,7 @@ export function registerSessionProviderInputAdmissionRpc<Mode, Message>(params: 
   params.rpcHandlerRegistrar.registerHandler(
     SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION,
     async (raw: unknown) => {
-      const activityRead = z.object({ action: z.literal('activity_read') }).strict().safeParse(raw);
+      const activityRead = z.strictObject({ action: z.literal('activity_read') }).safeParse(raw);
       if (activityRead.success) return SessionInputLiveWorkSchema.parse(await params.consumer.readLiveWork());
       const request = admissionRequestSchema.parse(raw);
       if (request.action === 'enforce') {

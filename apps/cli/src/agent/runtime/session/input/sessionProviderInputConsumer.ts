@@ -4,6 +4,7 @@ import type { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import { logger } from '@/ui/logger';
 import { isSessionPendingQueueHoldBlockingPendingDrain } from '@happier-dev/protocol/sessions/metadata/sessionPendingQueueHoldV1';
+import { readSessionExplicitStopV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import type { SessionPendingQueueDeliveryTiming } from '@happier-dev/protocol';
 import { SessionAgentActivityHeadlineV1Schema, SESSION_AGENT_ACTIVITY_HEADLINE_METADATA_KEY } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineV1';
 import { isInProgressAgentActivityStatus } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityStatusV1';
@@ -1092,7 +1093,8 @@ function isSessionPendingDrainBlocked(session: SessionProviderInputConsumerSessi
     return false;
   }
   const metadata = session.getMetadataSnapshot();
-  return isSessionPendingQueueHoldBlockingPendingDrain(metadata);
+  return isSessionPendingQueueHoldBlockingPendingDrain(metadata)
+    || readSessionExplicitStopV1FromMetadata(metadata) !== null;
 }
 
 async function materializeNextPendingForDrain(

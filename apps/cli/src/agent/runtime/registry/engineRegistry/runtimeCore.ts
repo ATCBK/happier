@@ -1,4 +1,5 @@
 import type { AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type {
     ResolvedAgentRuntimeContribution,
 } from '@/plugins/projection/registry/types';
@@ -48,6 +49,7 @@ import {
 } from '@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun';
 import { selectExecutionRunSessionAdapter } from '@/agent/runtime/bridges/executionRun/retainedInteractionEligibility';
 import { createLazyExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/hostRuntime/lazy';
+import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import { resolveAgentSessionRealtimeVoiceAuthority } from '@/agent/runtime/session/realtime/resolveAgentSessionRealtimeVoiceAuthority';
 import type {
     PluginRuntimeAuthoritySnapshotV1,
@@ -493,6 +495,8 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                         };
                     },
                     createExecutionRunBackend(options) {
+                        if (options.actionRequestAttributionV1) options = { ...options,
+                            actionRequestAttributionV1: materializeActionRequestAttributionV1(options.actionRequestAttributionV1) };
                         const host = options.scope === 'session_owned' ? options.sessionInteractionHost : undefined;
                         if (options.scope === 'session_owned' && !host) {
                             throw Object.assign(
@@ -593,6 +597,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 occurrenceId: engineEntry.occurrenceId,
                                 correlationId: runId,
                                 processOwner: { kind: 'run', runId },
+                                ...(options.actionRequestAttributionV1 ? { actionRequestAttributionV1: options.actionRequestAttributionV1 } : {}),
                                 cwd: options.cwd,
                                 ...(options.isolation?.env ? { environment: options.isolation.env } : {}),
                                 signal: engineEntry.retirementSignal,
@@ -622,9 +627,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 `Agent runtime '${nativeIdentity.agentId}' does not support detached execution-run context v1`,
                             );
                         }
-                        const adapterSelection = detachedSessionPrimary
-                            ? 'native_execution_run' as const
-                            : selectExecutionRunSessionAdapter({
+                        const adapterSelection = selectExecutionRunSessionAdapter({
                                 scope: options.scope,
                                 hasParentSessionCustody: host !== undefined && host !== null,
                                 agentExposesSessionRuntime: Boolean(nativeAgentRuntime.sessions),
@@ -633,6 +636,9 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 runClass: options.start?.runClass ?? null,
                                 retentionPolicy: options.start?.retentionPolicy ?? null,
                             });
+                        if (adapterSelection === 'retained_agent_conversation' && !executionRunContextV1?.openConversation) {
+                            throw createExecutionRunCodedError('execution_run_protocol_unsupported', 'Agent does not support retained detached conversations');
+                        }
                         const transformNativeAgentRequest = async (
                             payload: Readonly<Record<string, unknown>>,
                             transformOptions: Readonly<{ signal: AbortSignal }>,
@@ -686,7 +692,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                             : null;
                         const executionPermissionHandler = runPermissionScope?.handler ?? host?.permissionHandler;
                         const createSessionContext: NativeAgentSessionContextLeaseFactory | null = host
-                            ? async ({ services: fallbackServices, signal: runtimeSignal, readActiveTurnAdmissionWitness, readSessionRuntime }) => {
+                            ? async ({ services: fallbackServices, signal: runtimeSignal, readActiveTurnAdmissionWitness, readSessionRuntime, actionRequestAttributionV1 }) => {
                                     const sourceLifetime = new AbortController();
                                     const signal = AbortSignal.any([runtimeSignal, sourceLifetime.signal]);
                                     const sessionId = host.session.sessionId;
@@ -833,6 +839,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 signal,
                                                 session: { id: sessionId, current: currentSession },
                                                 readActiveTurnAdmissionWitness,
+                                                ...(!readActiveTurnAdmissionWitness && actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
                                                 isOccurrenceCurrent: invocationIdentity.isCurrent,
                                             })
                                             : fallbackServices;
@@ -1027,6 +1034,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             currentSession,
                                             signal,
                                             readActiveTurnAdmissionWitness,
+                                            actionRequestAttributionV1,
                                         }) => await createRunInvocationServices({
                                             pluginId: invocationIdentity.pluginId,
                                             pluginVersion: invocationIdentity.pluginVersion,
@@ -1043,6 +1051,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             ...(readActiveTurnAdmissionWitness
                                                 ? { readActiveTurnAdmissionWitness }
                                                 : {}),
+                                            ...(!readActiveTurnAdmissionWitness && actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
                                             isOccurrenceCurrent: invocationIdentity.isCurrent,
                                         }),
                                     }
@@ -1095,6 +1104,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                         return retainProjectLaunch(createNativeAgentExecutionRunHostRuntime({
                             runtime: nativeAgentRuntime,
                             ...(executionRunContextV1 ? { executionRunContextV1 } : {}),
+                            ...(adapterSelection === 'retained_agent_conversation' ? { retainedConversation: true } : {}),
                             lease: runtimeLease,
                             options,
                             supportsResume: (detachedSessionPrimary ? sessionOpenCapabilities : openCapabilities)?.includes('resume') === true,

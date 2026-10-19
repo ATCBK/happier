@@ -4,7 +4,6 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import type { RuntimeCheckpointToolProtocolV1 } from '@happier-dev/agents';
 import type {
   AgentSessionRuntime,
   AgentSessionRuntimeContext,
@@ -15,7 +14,8 @@ import {
   type AgentSessionRuntimeEventV1,
 } from '@happier-dev/protocol';
 
-import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { cleanupBackendRunResources } from '@/agent/runtime/cleanupBackendRunResources';
 import type { Metadata } from '@/api/types';
@@ -50,11 +50,11 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import * as persistence from '@/persistence';
 import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequestSchema } from '@/daemon/browser/actions/controlTransport';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
-import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
-import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
-import { logger } from '@/ui/logger';
+import { createLifecycleParams, createMetadata, machineMetadata } from './lifecycle.testkit';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { buildRunScopedExecutionPermissionRequestId, createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
+import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
 import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
@@ -96,7 +96,6 @@ vi.mock('@/ui/logger', async (importOriginal) => {
 });
 
 import { runSessionLoopLifecycle, type SessionLoopLifecycleParams } from './lifecycle';
-import { createUnsettledReplaySeedRetirement } from '@/agent/runtime/replaySeed/unsettledReplaySeedRetirement';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '../process/agentRuntimeDaemonTurnContributionsBridge';
 
 const RETIRED_AGENT_RUNTIME_DAEMON_BRIDGE_TOKEN_FILE_ENV_KEY =
@@ -129,166 +128,6 @@ vi.mock('@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle', () =>
   createRepositoryCheckpointPromptLifecycle: checkpointFactory,
 }));
 
-function createMetadata(): Metadata {
-  return {
-    path: '/tmp/project',
-    host: 'test-host',
-    homeDir: '/tmp',
-    happyHomeDir: '/tmp/.happier',
-    happyLibDir: '/tmp/.happier/lib',
-    happyToolsDir: '/tmp/.happier/tools',
-  };
-}
-
-const machineMetadata = {
-  host: 'test-host',
-  platform: 'darwin',
-  happyCliVersion: '0.0.0-test',
-  homeDir: '/tmp',
-  happyHomeDir: '/tmp/.happier',
-  happyLibDir: '/tmp/.happier/lib',
-};
-
-function createLifecycleParams(overrides?: Readonly<{
-  policyAgentId?: string;
-  checkpointToolProtocol?: RuntimeCheckpointToolProtocolV1;
-  runPermissionModePromptLoopFn?: RunPermissionModePromptLoopFn;
-  hookRuntime?: SessionLoopLifecycleParams['hookRuntime'];
-}>): SessionLoopLifecycleParams {
-  const runtimeSubscribers = new Set<RuntimeTurnMessageHandler>();
-  const runtime = {
-    beginTurnLifecycle: vi.fn(),
-    sendTurnPrompt: vi.fn(async () => undefined),
-    steerInFlightTurn: vi.fn(async () => undefined),
-    waitForTurnCompletion: vi.fn(async () => undefined),
-    subscribeRuntimeEvents: vi.fn((handler: RuntimeTurnMessageHandler) => {
-      runtimeSubscribers.add(handler);
-      return () => runtimeSubscribers.delete(handler);
-    }),
-    cancelTurn: vi.fn(async () => undefined),
-    readSessionIdentity: vi.fn(() => ({ sessionId: 'provider-session-1' })),
-    updateSessionRuntimeConfig: vi.fn(async () => undefined),
-    setOnPromptDeliveryOutcome: vi.fn(),
-    resetOrDisposeRuntime: vi.fn(async () => undefined),
-  };
-  const session = {
-    ...createMutableApiSessionClientFixture({ sessionId: 'session-1', metadata: createMetadata() }),
-    sessionId: 'session-1',
-    rpcHandlerManager: {
-      sessionId: 'session-1',
-      registerHandler: vi.fn(),
-    },
-    getMetadataSnapshot: vi.fn(() => createMetadata()),
-    fetchLatestUserPermissionIntentFromTranscript: vi.fn(async () => null),
-    waitForMetadataUpdate: vi.fn((signal?: AbortSignal) => new Promise<boolean>((resolve) => {
-      if (signal?.aborted) resolve(false);
-      else signal?.addEventListener('abort', () => resolve(false), { once: true });
-    })),
-    keepAlive: vi.fn(),
-    enqueueSessionEventCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
-    enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
-    enqueueSessionTurnMutation: vi.fn(async () => undefined),
-    endSessionAndClose: vi.fn(async () => undefined),
-    close: vi.fn(async () => undefined),
-  };
-
-  return {
-    opts: {
-      credentials: {
-        token: 'test-token',
-        encryption: {
-          type: 'legacy',
-          secret: new Uint8Array(),
-        },
-      },
-    },
-    config: {
-      flavor: 'default',
-      policyAgentId: overrides?.policyAgentId ?? 'codex',
-      backendDisplayName: 'Test Agent',
-      uiLogPrefix: '[Test]',
-      providerName: 'Test Agent',
-      waitingForCommandLabel: 'Test Agent',
-      agentMessageType: overrides?.policyAgentId ?? 'codex',
-      runtimeActivityApplicability: 'not_applicable',
-      machineMetadata,
-      terminalDisplay: () => null,
-      formatPromptErrorMessage: (error: unknown) => String(error),
-      shouldRenderTerminalDisplay: () => false,
-      ...(overrides?.checkpointToolProtocol
-        ? { checkpointToolProtocol: overrides.checkpointToolProtocol }
-        : {}),
-    } as SessionLoopLifecycleParams['config'],
-    api: {
-      push: () => ({
-        sendToAllDevices: vi.fn(),
-        sendToAllDevicesAsync: vi.fn(async () => true),
-      }),
-    },
-    session: session as unknown as SessionLoopLifecycleParams['session'],
-    runtime,
-    hookRuntime: overrides?.hookRuntime ?? runtime,
-    registerProviderAcceptedEffect: vi.fn(),
-    messageBuffer: new MessageBuffer(),
-    permissionHandler: {
-      reset: vi.fn(),
-      setPermissionMode: vi.fn(),
-    },
-    permissionModeState: {
-      rebindSession: vi.fn(),
-      releaseRejectedBeforeProviderPromptIdentity: vi.fn(),
-      getCurrentPermissionMode: vi.fn(() => 'default' as const),
-      getCurrentPermissionModeUpdatedAt: vi.fn(() => 0),
-      setCurrentPermissionMode: vi.fn(),
-      setCurrentPermissionModeUpdatedAt: vi.fn(),
-      messageQueue: {
-        reset: vi.fn(),
-        size: vi.fn(() => 0),
-      } as unknown as SessionLoopLifecycleParams['permissionModeState']['messageQueue'],
-      replaySeedRetirement: createUnsettledReplaySeedRetirement(),
-    },
-    sessionSwapStrategy: {
-      requestSessionSwap: vi.fn(async () => undefined),
-    },
-    runtimeDirectory: '/tmp/project',
-    runtimeMetadata: createMetadata(),
-    machineId: 'machine-1',
-    memoryRecallGuidanceEnabled: false,
-    policyAgentId: overrides?.policyAgentId ?? 'codex',
-    setActiveAgentCompositionToolSelection: vi.fn(),
-    happyMcpServerStop: vi.fn(),
-    reconnectionHandle: null,
-    startupCoordinator: null,
-    runtimeState: {
-      thinking: false,
-    },
-    setAbortRequestedCallback: vi.fn(),
-    transitionModelSelection: vi.fn(async (selection) => ({
-      ok: true as const,
-      status: 'already_active' as const,
-      activeSelection: selection,
-    })),
-    deps: {
-      runPermissionModePromptLoopFn: overrides?.runPermissionModePromptLoopFn ?? vi.fn(async () => undefined),
-      registerRunnerTerminationHandlersFn: vi.fn(() => ({
-        dispose: vi.fn(),
-        requestTermination: vi.fn(),
-        whenTerminated: Promise.resolve({
-          event: { kind: 'exit' as const, code: 0 },
-          outcome: computeRunnerTerminationOutcome({ kind: 'exit', code: 0 }),
-        }),
-      })),
-      registerKillSessionHandlerFn: vi.fn(),
-      cleanupBackendRunResourcesFn: vi.fn(async ({ stopKeepAlive }: { stopKeepAlive: () => void }) => {
-        stopKeepAlive();
-      }),
-      startRemoteModeStaticControlFn: vi.fn(),
-      renderFn: vi.fn(),
-    },
-    initialResumeId: '',
-  };
-}
-
 function createRevokedTranscriptFailure(privateTranscript: string): object {
   const hostile = Proxy.revocable({ privateTranscript }, {});
   hostile.revoke();
@@ -300,6 +139,76 @@ function loggerReceivedIdentity(value: unknown): boolean {
 }
 
 describe('runSessionLoopLifecycle presence renewal', () => {
+  it.each(['unmount', 'terminate'] as const)('does not mount a cold terminal display after %s', async (retirement) => {
+    const base = createLifecycleParams();
+    const params = { ...base, deps: { ...base.deps } } satisfies SessionLoopLifecycleParams;
+    const modeRuns: string[] = [];
+    params.terminalRemoteModeLoop = {
+      startingMode: 'remote', remoteExitCode: 0, topology: 'shared', remoteWritable: true,
+      runTerminal: async () => { modeRuns.push('terminal'); return { type: 'exit', code: 0 }; },
+      runRemote: async () => { modeRuns.push('remote'); return 'exit'; }, onModeChange: () => undefined,
+    };
+    let releaseDisplay!: () => void;
+    const displayReady = new Promise<void>(resolve => { releaseDisplay = resolve; });
+    let loading = false;
+    Object.assign(params.config, {
+      loadTerminalDisplay: async () => {
+        loading = true;
+        await displayReady;
+        return () => null;
+      },
+    });
+    params.config.shouldRenderTerminalDisplay = () => true;
+    params.config.processLifecycleOwnership = 'caller';
+    let controller: Parameters<NonNullable<typeof params.config.onTerminalDisplayControllerReady>>[0] | undefined;
+    let stop: (() => Promise<void>) | undefined;
+    params.config.onTerminalDisplayControllerReady = value => { controller = value; };
+    params.config.onRuntimeStopReady = value => { stop = value; };
+    // Keep the real termination and cleanup owners. Only the Ink/OS renderer
+    // boundary is replaced; the deferred callback models module loading.
+    params.deps.registerRunnerTerminationHandlersFn = registerRunnerTerminationHandlers;
+    params.deps.cleanupBackendRunResourcesFn = cleanupBackendRunResources;
+    const unmount = vi.fn();
+    const renderFn: NonNullable<SessionLoopLifecycleParams['deps']['renderFn']> = vi.fn(() => ({
+      rerender: vi.fn(), unmount, waitUntilExit: async () => undefined,
+      cleanup: vi.fn(), clear: vi.fn(),
+    }));
+    params.deps.renderFn = renderFn;
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    let run: Promise<void> | undefined;
+    try {
+      run = runSessionLoopLifecycle(params);
+      expect(renderFn).not.toHaveBeenCalled();
+      await vi.waitFor(() => { expect(loading).toBe(true); });
+      expect(params.deps.runPermissionModePromptLoopFn).not.toHaveBeenCalled();
+      if (retirement === 'unmount') {
+        if (!controller) throw new Error('Terminal display controller unavailable');
+        await controller.unmount();
+      } else {
+        if (!stop) throw new Error('Runtime stop control unavailable');
+        await stop();
+      }
+      releaseDisplay();
+      await run;
+      expect(renderFn).not.toHaveBeenCalled();
+      expect(unmount).not.toHaveBeenCalled();
+      if (retirement === 'terminate') {
+        expect(params.session.endSessionAndClose).toHaveBeenCalledOnce();
+        expect(modeRuns).toEqual([]);
+      }
+    } finally {
+      releaseDisplay();
+      await run;
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+    }
+  });
+
   it('applies capability changes after a provider-owned turn settles while the host input queue remains idle', async () => {
     capabilityRestart.mockReset();
     capabilityRestart.mockResolvedValue({ ok: true, status: 'restarted', sessionId: 'session-1' });
@@ -527,6 +436,8 @@ describe('runSessionLoopLifecycle checkpoint controls', () => {
 
     expect(runPermissionModePromptLoopFn).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(baseParams.session.close).toHaveBeenCalledOnce();
+    expect(baseParams.session.endSessionAndClose).not.toHaveBeenCalled();
   });
 
   it('does not enter the provider prompt loop when initial Session creation has no durable custody', async () => {
@@ -1256,8 +1167,16 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
     await lifecycle;
   });
 
-  it('publishes exact turn identity to the daemon only after durable runtime mutation acceptance', async () => {
+  it.each(['complete', 'wait-cancel', 'wait-complete', 'other-question'] as const)('publishes exact turn identity after durable %s acceptance', async outcome => {
     const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
+    const waiting = outcome === 'wait-cancel' || outcome === 'wait-complete';
+    const cancelled = outcome === 'wait-cancel' || outcome === 'other-question';
+    let questionWaitTurnId: string | null = outcome === 'complete' ? null
+      : outcome === 'other-question' ? 'other-turn' : 'turn-exact-1';
+    Object.assign(baseParams.session, { requiresDurableTurnCompletionMarker: true,
+      readQuestionWaitTurnId(this: { sessionId: string }) {
+      return this.sessionId === 'session-1' ? questionWaitTurnId : null;
+    } });
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
     const runtime = baseParams.runtime as unknown as {
       subscribeRuntimeEvents: ReturnType<typeof vi.fn>;
@@ -1294,11 +1213,15 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
             startedBy: 'host',
           }));
           runtimeEventHandler?.(canonicalRuntimeEvent({
-            kind: 'turn-complete',
+            kind: cancelled ? 'turn-cancelled' : 'turn-complete',
             sessionId: 'session-1',
             emittedAtMs: 2,
             turnId: 'turn-exact-1',
+            ...(cancelled ? { cause: 'user' } : {}),
           }));
+          // A successor can clear live yield intent before the ordered async
+          // transcript projection runs; the original observation stays waiting.
+          questionWaitTurnId = null;
         }),
       },
     };
@@ -1313,10 +1236,19 @@ describe('runSessionLoopLifecycle daemon exact-turn custody', () => {
     });
     expect(notifyDaemonConnectedServiceTurnLifecycleFn).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1',
-      event: 'assistant_message_end',
-      terminalStatus: 'completed',
+      event: outcome === 'other-question' ? 'turn_cancelled' : 'assistant_message_end',
+      ...(outcome === 'complete' ? { terminalStatus: 'completed' } : {}),
       turnId: 'turn-exact-1',
     });
+    expect(vi.mocked(baseParams.session.enqueueSessionTurnMutation!).mock.calls.map(([mutation]) => mutation.action))
+      .toEqual(['begin', waiting ? 'wait' : cancelled ? 'cancel' : 'complete']);
+    const transcriptMarkers = vi.mocked(baseParams.session.enqueueAgentMessageCommitted!).mock.calls
+      .map(([, body]) => body.type).filter(type => type === 'turn_cancelled' || type === 'task_complete');
+    if (waiting) {
+      expect(transcriptMarkers).toEqual([]);
+    } else {
+      expect(transcriptMarkers).toEqual([cancelled ? 'turn_cancelled' : 'task_complete']);
+    }
   });
 
   it('does not finish runner cleanup until a rejected exact begin reaches marker custody', async () => {
@@ -1592,7 +1524,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
           followProviderSession: async (_request, consume) => {
             await consume({ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail', items: [
               { id: 'native-assistant-fact', localId: 'native-assistant-fact', kind: 'agent', timestampMs: 2,
-                data: buildAcpAgentMessageEnvelope({ provider: 'agent', body: { type: 'message', message: 'The authoritative change is complete.' } }) },
+                data: StrictJsonValueSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'agent', body: { type: 'message', message: 'The authoritative change is complete.' } })) },
             ] });
             return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
           },
@@ -1936,11 +1868,11 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
       cancellation: { declared: true, cancel: async ({ turnId }) => {
         listener?.(canonicalRuntimeEvent({ kind: 'turn-cancelled', sessionId: 'session-1', emittedAtMs: 2, turnId, cause: 'user' }));
-        return { status: 'requested' };
+        return { status: 'requested', turnId };
       } },
       configuration: { declared: false }, manualCompaction: { declared: false },
     });
-    let abortTurn: (() => void | Promise<void>) | null = null;
+    const abortTurn: { current?: (() => void | Promise<void>) | null } = {};
     let readTurnSignal: (() => AbortSignal) | undefined;
     const rpc = new RpcHandlerManager({ scopePrefix: 'session-1', encryptionMode: 'plain' });
     const session = Object.assign(base.session, {
@@ -1994,7 +1926,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       ...base, session, runtime, hookRuntime: runtime,
       permissionModeState: { ...base.permissionModeState, messageQueue: queue },
       setAbortRequestedCallback: (callback, signalReader?: () => AbortSignal) => {
-        abortTurn = callback; readTurnSignal = signalReader;
+        abortTurn.current = callback; readTurnSignal = signalReader;
       },
       deps: { ...base.deps, registerRunnerTerminationHandlersFn: registration => {
         const handlers = registerRunnerTerminationHandlers({ ...registration, processLifecycleOwnership: 'caller', sessionExitReport: null,
@@ -2036,7 +1968,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       }
       const signal = await Promise.race([entered, pending.then(result => { throw new Error(`Tool ended before daemon dispatch: ${JSON.stringify(result)}`); })]);
       expect(signal).toBeDefined();
-      await abortTurn?.();
+      await abortTurn.current?.();
       expect(signal?.aborted).toBe(true);
       if (entrypoint === 'native') await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
       else await expect(pending).resolves.toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('outcome_unknown') }] });
@@ -2366,10 +2298,100 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     expect(baseParams.deps.cleanupBackendRunResourcesFn).toHaveBeenCalledOnce();
   });
 
-  it('publishes the active terminal mode through the canonical keep-alive when no provider override exists', async () => {
+  it.each([false, true])('settles unresolved native input custody before closing after physical terminal exit (cleanup fails: %s)', async (cleanupFails) => {
     const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
+    const cleanupFailure = new Error('native terminal cleanup failed');
+    const native: AgentSessionRuntime = {
+      send: async () => ({ status: 'admitted' }),
+      watch: () => ({ dispose() {} }),
+      dispose: async () => { if (cleanupFails) throw cleanupFailure; },
+    };
+    const runtime = createNativeAgentSessionOperations(native, 'session-1', undefined, undefined, undefined, undefined, undefined, {
+      context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+      cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+      cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    let closed = false;
+    const outcomes: unknown[] = [];
+    runtime.setOnPromptDeliveryOutcome((outcome) => {
+      // The Session transport cannot admit new settlement after it closes.
+      if (!closed) outcomes.push(outcome);
+    });
+    await runtime.sendTurnPrompt('waiting for native trust', {
+      localId: 'terminal-exit-input', turnId: 'terminal-exit-turn',
+    });
+    const session = Object.assign(baseParams.session, {
+      endSessionAndClose: async () => { closed = true; },
+    });
+    const running = runSessionLoopLifecycle({
+      ...baseParams, session, runtime, hookRuntime: runtime,
+      opts: { ...baseParams.opts, startedBy: 'terminal', startingMode: 'terminal' },
+      terminalRemoteModeLoop: {
+        startingMode: 'terminal', remoteExitCode: 0,
+        runTerminal: async () => ({ type: 'exit', code: 0 }),
+        runRemote: async () => 'exit', onModeChange: () => undefined,
+      },
+      deps: {
+        ...baseParams.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources,
+        runPermissionModePromptLoopFn: async (params) => {
+          const signal = params.getAbortSignal();
+          if (!signal.aborted) await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        },
+      },
+    });
+    if (cleanupFails) await expect(running).rejects.toBe(cleanupFailure);
+    else await running;
+    expect(closed).toBe(true);
+    expect(outcomes).toEqual([{
+      type: 'input-custody-unknown', localId: 'terminal-exit-input', userMessageSeq: null,
+      issue: { code: 'native_runtime_disposed_with_input_in_flight', severity: 'warning' },
+    }]);
+  });
+
+  it('retires Session RPC custody before runtime cleanup after terminal follow admission fails', async () => {
+    const failure = new Error('terminal follow admission failed');
+    const baseParams = createLifecycleParams({ policyAgentId: 'codex', runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    const order: string[] = [];
+    const close = vi.mocked(baseParams.session.close);
+    close.mockImplementation(async () => { order.push('session_closed'); });
+    const runtime = baseParams.runtime;
+    vi.mocked(runtime.resetOrDisposeRuntime).mockImplementation(async () => {
+      expect(close).toHaveBeenCalledOnce();
+      order.push('runtime_disposed');
+    });
     const params: SessionLoopLifecycleParams = {
       ...baseParams,
+      opts: { ...baseParams.opts, startedBy: 'terminal', startingMode: 'terminal' },
+      permissionModeState: { ...baseParams.permissionModeState, messageQueue: queue },
+      terminalRemoteModeLoop: {
+        startingMode: 'terminal', remoteExitCode: 0,
+        runTerminal: async () => { throw failure; },
+        runRemote: async () => 'exit', onModeChange: () => undefined,
+      },
+      deps: { ...baseParams.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources,
+        onBeforeSessionClose: async () => { order.push('before_close'); } },
+    };
+    await expect(runSessionLoopLifecycle(params)).rejects.toBe(failure);
+    expect(order).toEqual(['before_close', 'session_closed', 'runtime_disposed']);
+    expect(baseParams.session.endSessionAndClose).not.toHaveBeenCalled();
+  });
+
+  it('publishes the active terminal mode through the canonical keep-alive when no provider override exists', async () => {
+    const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    Object.assign(baseParams.session, {
+      hasPendingProviderInput: () => false,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 0 }),
+    });
+    const params: SessionLoopLifecycleParams = {
+      ...baseParams,
+      permissionModeState: { ...baseParams.permissionModeState, messageQueue: queue },
       opts: {
         ...baseParams.opts,
         startedBy: 'terminal',
@@ -2386,7 +2408,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       },
       deps: {
         ...baseParams.deps,
-        runPermissionModePromptLoopFn: vi.fn(async () => undefined),
+        runPermissionModePromptLoopFn: runPermissionModePromptLoop,
       },
     };
 

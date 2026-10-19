@@ -510,6 +510,7 @@ describe('createSessionProviderInputOutcomeNormalizer', () => {
       expect.objectContaining({
         kind: 'rejected_before_effect',
         localId: 'retryable-native-rejection',
+        reason: 'provider_unavailable_before_acceptance',
         retryable: true,
       }),
       expect.objectContaining({

@@ -27,7 +27,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveRunnerSkills } from '@/prompts/skills/runtime/resolveRunnerSkills';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMetadataOverrides';

@@ -43,6 +43,30 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('projectRuntimeTranscriptEvent', () => {
+  it.each(['turn-cancelled', 'turn-complete'] as const)(
+    'flushes a yielded question without publishing a false terminal marker after %s', async kind => {
+      const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+      const { bodies, enqueueAgentMessageCommitted } = createCommittedAgentMessageCapture();
+      const session = { sessionId: 'question-session', requiresDurableTurnCompletionMarker: true as const,
+        enqueueAgentMessageCommitted };
+      const bridge = createKeyedStreamedTranscriptBridge({ provider: 'opencode', createSessionForStream: () => session });
+      const project = (input: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'opencode',
+        runtimeMessageDeltaBridge: bridge, questionWaitTurnId: 'question-turn', event: canonicalRuntimeEvent({ sessionId: session.sessionId,
+          emittedAtMs: 1, turnId: 'question-turn', ...input }) });
+      try {
+        await project({ kind: 'message-delta', channel: 'assistant', text: 'Which option should I use?' });
+        await project({ kind, ...(kind === 'turn-cancelled' ? { cause: 'user' } : {}) });
+        expect(bodies.some(body => body.type === 'message' && body.message === 'Which option should I use?')).toBe(true);
+        expect(bodies.filter(body => body.type === 'turn_cancelled' || body.type === 'task_complete')).toEqual([]);
+        // Another exact turn still carries genuine terminal evidence.
+        await project({ kind, turnId: 'other-turn', ...(kind === 'turn-cancelled' ? { cause: 'user' } : {}) });
+        expect(bodies.filter(body => body.type === 'turn_cancelled' || body.type === 'task_complete')).toEqual([
+          { type: kind === 'turn-cancelled' ? 'turn_cancelled' : 'task_complete', id: 'other-turn' },
+        ]);
+      } finally { bridge.clear(); }
+    },
+  );
+
   it('retains the checkpoint identity when native final custody is refused and retried', async () => {
     const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
@@ -167,6 +191,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     const event = canonicalRuntimeEvent({ kind: 'mcp-tool-usage', sessionId: 'session-1', turnId: 'turn',
       emittedAtMs: 200, window: { startMs: 100, endMs: 200 }, coverage: 'complete',
       servers: [{ serverName: 'private-server-name', toolCallCount: 0, schemaBytes: null }] });
+    if (event.kind !== 'mcp-tool-usage') throw new Error('Expected MCP usage fixture');
     const session = { sessionId: 'session-1', enqueueAgentMessageCommitted: capture.enqueueAgentMessageCommitted };
     await projectRuntimeTranscriptEvent({ session, provider: 'claude', event, mcpServerIdentities: {
       'private-server-name': { serverId: 'server', serverTitle: 'Private server', usage: { serverId: 'server', bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40 } },
@@ -235,7 +260,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     const session = {
       sessionId: 'session-1',
       requiresDurableTurnCompletionMarker: true as const,
-      enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: false as const })),
+      enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true as const, delivered: true as const, committedSequence: 41 })),
     };
     const runtimeMessageDeltaBridge = createKeyedStreamedTranscriptBridge({
       provider: 'claude',
@@ -249,7 +274,8 @@ describe('projectRuntimeTranscriptEvent', () => {
       event: canonicalRuntimeEvent({
         kind: 'turn-complete', sessionId: 'session-1', emittedAtMs: 3, turnId: 'turn-empty',
       }),
-    })).resolves.toEqual({ projected: true, kind: 'turn-complete' });
+    })).resolves.toEqual({ projected: true, kind: 'turn-complete',
+      terminalSourceMessage: { localId: 'turn-empty:task_complete', committedSequence: 41 } });
 
     expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'claude',
@@ -543,6 +569,8 @@ describe('projectRuntimeTranscriptEvent', () => {
       },
       {
         localId: toolIdentity.resultLocalId,
+        createdAt: 2,
+        updatedAt: 2,
         meta: {
           source: 'runtime',
           runtimeEventKind: 'tool-result',
@@ -976,6 +1004,25 @@ describe('projectRuntimeTranscriptEvent', () => {
       reason: 'admission_expired',
       eventKind: 'transcript-message-committed',
     });
+  });
+
+  it.each(['assistant', 'user'] as const)('retains the original %s durable enqueue failure as its standard cause', async (role) => {
+    const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    const failure = new Error('secret original durable failure');
+    const session = {
+      sessionId: 'session-1',
+      enqueueAgentMessageCommitted: async () => { throw failure; },
+      enqueueUserTextMessageCommitted: async () => { throw failure; },
+    };
+    const result = projectRuntimeTranscriptEvent({
+      session, provider: 'claude',
+      event: canonicalRuntimeEvent({ kind: 'transcript-message-committed', sessionId: 'session-1',
+        emittedAtMs: 1, messageId: 'failed-custody-message', role, text: 'observed output' }),
+    });
+    const error = await result.catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: 'runtime_transcript_required_admission_failed', reason: 'durable_enqueue_failed' });
+    if (!(error instanceof Error)) throw new Error('Expected the typed durable admission failure');
+    expect(error.cause).toBe(failure);
   });
 
   it.each(['assistant', 'user'] as const)('does not release ordered %s output from local custody without server delivery', async (role) => {

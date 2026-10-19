@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { createExternalSessionTerminalFollowProjector } from '@/session/external/terminalFollowProjection';
@@ -47,7 +48,7 @@ describe('native transcript finalization and live source follow', () => {
       await finalEntered;
       followed = source({ kind: 'data', fromCursor: 'before', nextCursor: 'after', items: [{
         kind: 'agent', id: messageId, localId: messageId, timestampMs: 2,
-        data: buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'message', message: 'Native final' } }),
+        data: StrictJsonValueSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'claude', body: { type: 'message', message: 'Native final' } })),
       }] }, { signal: new AbortController().signal, requireDelivery: true });
       const outcomes = Promise.allSettled([foreground, followed]);
       releaseFinal();

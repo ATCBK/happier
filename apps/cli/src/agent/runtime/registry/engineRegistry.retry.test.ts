@@ -21,7 +21,8 @@ const {
     releaseRuntimeRegistryLeaseMock: vi.fn(async () => undefined),
 }));
 
-vi.mock('../../../plugins/projection/registry/createResolvedContributionRegistry', () => ({
+vi.mock('../../../plugins/projection/registry/createResolvedContributionRegistry', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../../../plugins/projection/registry/createResolvedContributionRegistry')>(),
     resolveMergedContributionRegistry: resolveMergedContributionRegistryMock,
 }));
 
@@ -55,6 +56,9 @@ function createContributionRegistry(params?: Readonly<{
     }
 
     return {
+        voiceProviders: [],
+        connectedAccountDescriptorsById: new Map(),
+        providersByContributionKey: new Map(),
         agents: Object.freeze([]),
                 actions: Object.freeze([]),
         resources: Object.freeze([]),
@@ -68,8 +72,11 @@ function createContributionRegistry(params?: Readonly<{
     };
 }
 
-function createRuntimeRegistry(contributes: ResolvedContributionRegistry): ResolvedExecutablePluginRuntimeRegistry {
+async function createRuntimeRegistry(contributes: ResolvedContributionRegistry): Promise<ResolvedExecutablePluginRuntimeRegistry> {
+    const { resolveExecutablePluginRuntimeRegistry } = await vi.importActual<typeof import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry')>('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry');
+    const base = await resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [] });
     return {
+        ...base,
         claimReleaseLessDeclarations: async () => undefined,
         contributes,
         resolveCaptureSource: unexpectedCaptureSourceResolution,
@@ -84,7 +91,7 @@ function createRuntimeRegistry(contributes: ResolvedContributionRegistry): Resol
         addRuntimeDisposable: (_pluginId, disposable) => disposable,
         createAgentInvocationServices: async () => createUnavailablePluginServices(),
         retireConsumers: () => {},
-        dispose: async () => {},
+        dispose: base.dispose,
     };
 }
 
@@ -98,7 +105,7 @@ describe('resolveCliEngineRegistry retry cache eviction', () => {
 
     it('retries canonical runtime lease acquisition after a transient failure', async () => {
         const contributions = createContributionRegistry();
-        const runtimeRegistry = createRuntimeRegistry(createContributionRegistry());
+        const runtimeRegistry = await createRuntimeRegistry(createContributionRegistry());
         const resolution = Object.freeze({ backendId: 'acme.retry.backend', source: 'second-attempt' });
 
         resolveMergedContributionRegistryMock.mockResolvedValue(contributions);
@@ -123,7 +130,7 @@ describe('resolveCliEngineRegistry retry cache eviction', () => {
 
     it('retries backend resolution after a transient failure and reacquires the canonical lease', async () => {
         const contributions = createContributionRegistry();
-        const runtimeRegistry = createRuntimeRegistry(createContributionRegistry());
+        const runtimeRegistry = await createRuntimeRegistry(createContributionRegistry());
         const resolution = Object.freeze({ backendId: 'acme.retry.backend', source: 'retry-success' });
 
         resolveMergedContributionRegistryMock.mockResolvedValue(contributions);

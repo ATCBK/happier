@@ -16,7 +16,7 @@ export type SessionAttachSecret =
   | Readonly<{ encryptionMode: 'e2ee'; encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey'; lastObservedMessageSeq?: number; initialTranscriptAfterSeq?: number; snapshot?: SessionAttachSnapshot }>;
 
 export type SessionAttachSnapshot = Readonly<{
-  reportsTo?: import('@happier-dev/protocol').SessionReportsToV1;
+  manager?: import('@happier-dev/protocol').SessionManagerV1;
   origin?: import('@happier-dev/protocol').SessionAwarenessOriginV1;
   metadata: Metadata;
   metadataVersion: number;

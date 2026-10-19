@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { configuration } from '@/configuration';
+import { withConfiguredDaemonTestHome, writeDaemonStateFixture } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import type { AccountArtifact } from '@/api/artifacts/accountArtifactStore';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
@@ -45,6 +50,57 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it('retires a pending restart HTTP observation on disposal without publishing a failure or resending', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'happier-capability-restart-cancellation-' }, async ({ homeDir }) => {
+      let started!: () => void;
+      const requestStarted = new Promise<void>(resolve => { started = resolve; });
+      let release: (() => void) | undefined;
+      let requests = 0;
+      const server = createServer((request, response) => {
+        request.resume();
+        if (request.url !== '/session-runners/restart') { response.writeHead(404).end(); return; }
+        requests += 1;
+        release = () => response.end(JSON.stringify({ ok: true, status: 'restarted', sessionId: 'session' }));
+        started();
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing HTTP listener');
+      await writeDaemonStateFixture(homeDir, configuration.activeServerId, {
+        pid: process.pid, httpPort: address.port, controlToken: 'test-control',
+      });
+      let metadata = createTestMetadata();
+      let retired = false;
+      let latePublications = 0;
+      const sync = createCapabilitySelectionSynchronizer({
+        session: { sessionId: 'session', getMetadataSnapshot: () => metadata,
+          updateMetadataAsCurrentPublisher: async update => { if (retired) latePublications += 1; metadata = update(metadata); } },
+        agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+        isStarted: () => true, isSettled: () => true,
+      });
+      metadata = writeSessionCapabilitySelectionToMetadataV1(metadata, {
+        mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['server'] },
+      }, { sessionActive: true });
+      const applying = sync.flushAfterSettledTurn();
+      try {
+        await Promise.race([requestStarted, applying.then(() => { throw new Error('Capability apply ended before restart HTTP admission'); })]);
+        retired = true;
+        await sync.dispose();
+        const outcome = await Promise.race([applying.then(() => 'retired'), new Promise<null>(resolve => setTimeout(() => resolve(null), 150))]);
+        release?.(); await applying;
+        expect(outcome, 'Disposed synchronizer must stop observing the pending daemon request').toBe('retired');
+        expect(latePublications).toBe(0);
+        await sync.flushAfterSettledTurn('next');
+        expect(requests).toBe(1);
+      } finally {
+        await sync.dispose(); release?.(); await applying;
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+  });
+
   it.each(['retry', 'restore', 'include'] as const)('uses the captured MCP launch baseline through unavailable reads and busy settlement for %s', async scenario => {
     const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: 'project', agentId: 'codex' };
     const settings = (enabled: boolean) => ({ v: 1 as const, strictMode: false,
@@ -211,6 +267,7 @@ describe('capability selection settled-turn apply', () => {
     expect(f.metadata.mcpSelectionRestartRequiredV1).toBeDefined();
   });
   it.each(['applied', 'restart_required', 'advancing', 'ack_failed'] as const)('uses the real skill reapply owner after settlement and handles native %s', async nativeOutcome => {
+    const restoreProjectHttp = installEmptyProjectAccountRowsHttpBoundary();
     const home = await mkdtemp(join(tmpdir(), 'happier-impl-p2c-u6-skills-'));
     await mkdir(join(home, 'project'));
     const { createSkillStore } = await import('@/prompts/skills/store/skillStore');
@@ -243,11 +300,11 @@ describe('capability selection settled-turn apply', () => {
               f.changeSkills({ v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: ['second-change'], excludeNativeSkillNames: [] });
             }
             if (nativeOutcome === 'ack_failed') f.refuseNextPublication();
-            return nativeOutcome !== 'restart_required' ? { kind: 'applied' } : { kind: 'restart_required', reason: 'native_launch_owned' };
+            return nativeOutcome !== 'restart_required' ? { kind: 'applied' } : { kind: 'restart_required', reason: 'launch_path_unsupported' };
           } },
           onApplied: result => { appliedItems = result.delivery?.items ?? null; },
         },
-        skillsTransports: { artifacts: { list: async () => ({ items: nativeOutcome === 'applied' ? [artifact] : [], coverage: 'complete' }), read: async () => artifact },
+        skillsTransports: { artifacts: { list: async () => ({ items: nativeOutcome === 'applied' ? [{ ...artifact, headerVersion: artifact.revision.headerVersion }] : [], coverage: 'complete' }), read: async () => artifact },
           ensureSessionDir: input => store.ensureSkillSessionDir(input) },
       });
       f.changeSkills({ v: 1, forceIncludeSkillIds: nativeOutcome === 'applied' ? ['library'] : [], forceExcludeSkillIds: nativeOutcome === 'applied' ? [] : ['library'], excludeNativeSkillNames: [] });
@@ -269,6 +326,7 @@ describe('capability selection settled-turn apply', () => {
         expect(f.metadata.skillSelectionRestartRequiredV1).toBeDefined();
       }
     } finally {
+      restoreProjectHttp();
       await store.releaseSkillSessionDirs('session'); await store.collectSkillCache({ libraryDigests: [] });
       await rm(home, { recursive: true, force: true });
     }

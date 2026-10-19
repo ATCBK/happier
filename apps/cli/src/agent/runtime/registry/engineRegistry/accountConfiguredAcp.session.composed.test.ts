@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import axios from 'axios';
+import 'fake-indexeddb/auto';
 
 import { accountSettingsParse, sealSavedSecretResourceStoredContentV1, formatSharedSavedSecretRefV1, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,7 @@ import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/ru
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 import { createExecutionRunRuntime } from '@/agent/runtime/bridges/executionRun/runtime/create';
+import { readExecutionRunErrorCode } from '@/agent/runtime/bridges/executionRun/errors';
 import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
 import type { EngineAdapterResolution } from '../engineRegistryTypes';
 import type { StoredCredentials } from '@/persistence';
@@ -19,24 +21,27 @@ import { setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, com
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createCustomAcpAdmittedRuntimeFixture } from '@/plugins/testkit/customAcp';
 import { PLUGIN_MANIFEST } from '../../../../../../../packages/plugins/custom-acp/src/manifest';
 import type { ResolveEngineRegistryParams } from './types';
 import { resolveBackendEngineAdapterResolution, resolveCliEngineRegistry } from './registry';
 import { resolveAccountConfiguredAcpLaunch } from './accountConfiguredAcp';
+import { createNativeAgentLaunchPreparationFixture } from './nativeAgentSession.testkit';
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } from '../../../../../../../apps/ui/sources/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { flushSessionDraft, resetSessionDraftRepositoryForTests } from '../../../../../../../apps/ui/sources/sync/ops/sessionDrafts/sessionDraftRepository';
+import { prepareSessionDraftPersistenceStorage } from '../../../../../../../apps/ui/sources/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { buildNewSessionAuthoringDraftFromPersistedDraft, buildSessionSpawnNewInputV2FromAuthoringDraft } from '../../../../../../../apps/ui/sources/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 
 const mocks = vi.hoisted(() => ({
   readStoredCredentials: vi.fn(),
 }));
 
-vi.mock('@/persistence', () => ({
+vi.mock('@/persistence', async importOriginal => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: mocks.readStoredCredentials,
   readSettings: async () => ({ machineId: 'configured-machine' }),
 }));
@@ -46,6 +51,7 @@ const PROVIDER_SESSION_ID = 'configured-provider-session';
 const CUSTOM_ACP_ID = 'custom-acp';
 let observedMaterialStatus: 'ready' | 'access_removed' = 'ready';
 const runtimeCleanups: Array<() => Promise<void>> = [];
+let launchFixture: Awaited<ReturnType<typeof createNativeAgentLaunchPreparationFixture>>;
 
 async function createContributedRuntimeFixture(definitionId = BACKEND_ID, savedSecretOperationContext?: ResolveEngineRegistryParams['savedSecretOperationContext']) {
   const fixture = await createCustomAcpAdmittedRuntimeFixture();
@@ -73,7 +79,7 @@ async function resolveContributedConfiguredRuntime(definitionId = BACKEND_ID, sa
 
 function createCredentials(): StoredCredentials {
   return {
-    token: 'token-1',
+    token: 'requester-token',
     encryption: null,
   };
 }
@@ -231,9 +237,10 @@ function createComposedRuntime(resolution: EngineAdapterResolution | null, cwd: 
   const runtime = resolution.engineAdapter.runtimeCore.createExecutionRunBackend({
     cwd, backendId: resolution.backendId, runId: 'configured-host-run',
     controllerOccurrenceId: 'configured-controller', scope: 'session_owned', permissionMode: 'read_only',
+    projectLaunchContext: launchFixture.projectLaunchContext,
     start: { runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
     sessionInteractionHost: {
-      machineId: 'configured-machine',
+      machineId: 'machine',
       permissionHandler: createExecutionRunPermissionHandler({ permissionMode: 'read_only', backendId: resolution.backendId }),
       // Genuine Session transport boundary, matching the incumbent native
       // Session context testkit. All runtime/context/ACP composition is real.
@@ -249,21 +256,23 @@ function createComposedRuntime(resolution: EngineAdapterResolution | null, cwd: 
 }
 
 describe('Account-configured ACP composed Session journey', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.readStoredCredentials.mockReset();
     mocks.readStoredCredentials.mockResolvedValue(createCredentials());
+    launchFixture = await createNativeAgentLaunchPreparationFixture();
     resetActiveAccountSettingsSnapshotForTests();
     observedMaterialStatus = 'ready';
     // Genuine Home transport boundaries; admission, hydration, and resource
     // materialization remain real throughout the composed launch.
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
-      if (!String(input).endsWith('/v1/features/authenticated')) throw new Error('Unexpected Home feature request');
+    const homeFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
+      if (!String(input).endsWith('/v1/features/authenticated')) return homeFetch(input, init);
       return new Response(JSON.stringify(FeaturesResponseSchema.parse({
         features: { teams: { enabled: true } }, capabilities: {},
       })), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
-    vi.spyOn(axios, 'get').mockImplementation(async url => {
-      if (!String(url).endsWith('/v1/account/saved-secrets/resources/materials')) throw new Error('Unexpected Home materials request');
+    vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      if (!String(url).endsWith('/v1/account/saved-secrets/resources/materials')) return launchFixture.homeGet(url, config);
       const ref = formatSharedSavedSecretRefV1('acp-secret-resource');
       return { status: 200, data: SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{
         resourceId: 'acp-secret-resource', encryptionMode: 'plain', recipientEnvelope: null,
@@ -387,6 +396,7 @@ describe('Account-configured ACP composed Session journey', () => {
         ['second-definition', secondScript, 'second-environment'],
       ] as const;
       const scope = { serverId: 'server-a', accountId: 'account-a' };
+      await prepareSessionDraftPersistenceStorage();
       resetSessionDraftRepositoryForTests();
       for (const [definitionId] of definitions) {
         writeNewSessionDraftToRepository({ scope, draftId: definitionId, draft: {
@@ -489,6 +499,33 @@ describe('Account-configured ACP composed Session journey', () => {
     expect(await readDetachedResumeSupport()).toBe(false);
   });
 
+  it('terminalizes a miswired configured ACP detached launch without native preparation', async () => {
+    await withTempDir('happier-configured-acp-detached-', async dir => {
+      setConfiguredAcpAccountSettings(writeConfiguredAcpAgentScript(dir));
+      const params = await createContributedRegistryParams();
+      const registry = await resolveCliEngineRegistry(params);
+      const runtime = createExecutionRunRuntime({
+        cwd: dir, backendId: params.backendId,
+        backendTarget: { kind: 'configuredAcpBackend', backendId: BACKEND_ID },
+        engineRegistry: registry, runId: 'configured-detached-result', controllerOccurrenceId: 'detached-controller',
+        callId: 'detached-call', sidechainId: 'detached-sidechain', scope: 'detached', permissionMode: 'read_only',
+        start: { intent: 'agent', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'request_response' },
+      });
+      let completion: Promise<void> | undefined;
+      let completionCode: string | null | undefined;
+      try {
+        const { runtimeId } = await runtime.provisionRuntime();
+        await expect(runtime.deliverInput(runtimeId, { text: 'hello configured backend' }, { localId: 'detached-input' }))
+          .rejects.toMatchObject({ code: 'plugin_exec_native_launch_unavailable' });
+        completion = runtime.waitForTurnCompletion!().then(() => { completionCode = null; }, error => {
+          completionCode = readExecutionRunErrorCode(error);
+        });
+        await vi.waitFor(() => expect(completionCode).toBe('plugin_exec_native_launch_unavailable'));
+        expect(existsSync(path.join(dir, 'observed.json'))).toBe(false);
+      } finally { await runtime.dispose(); await completion; }
+    });
+  });
+
   it('migrates a selected configured execution-run target through the contributed Agent', async () => {
     await withTempDir('happier-custom-acp-selected-run-', async dir => {
       const script = writeConfiguredAcpAgentScript(dir);
@@ -500,9 +537,10 @@ describe('Account-configured ACP composed Session journey', () => {
         backendTarget: { kind: 'configuredAcpBackend', backendId: BACKEND_ID },
         engineRegistry: registry, runId: 'selected-configured-run', controllerOccurrenceId: 'selected-controller',
         scope: 'session_owned', permissionMode: 'read_only',
+        projectLaunchContext: launchFixture.projectLaunchContext,
         start: { runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
         sessionInteractionHost: {
-          machineId: 'configured-machine',
+          machineId: 'machine',
           permissionHandler: createExecutionRunPermissionHandler({ permissionMode: 'read_only', backendId: params.backendId }),
           session: {
             sessionId: 'configured-host-session', getMetadataSnapshot: () => null,
@@ -580,10 +618,6 @@ describe('Account-configured ACP composed Session journey', () => {
           () => events.some((event) => event.kind === 'turn-complete'),
           { timeoutMs: 15_000, intervalMs: 10, label: 'configured ACP turn-complete' },
         );
-        await expect(runtime.deliverInput(runtimeId, { text: 'hello configured backend' }, {
-          localId: 'configured-input-1',
-        })).rejects.toBeInstanceOf(Error);
-
         const observed = readObserved(dir);
         expect(observed.methods.filter((method) => method === 'session/prompt')).toHaveLength(1);
         expect(observed.env.CONFIGURED_ACP_LITERAL).toBe('from-account-declaration');
@@ -592,8 +626,11 @@ describe('Account-configured ACP composed Session journey', () => {
         expect(observed.methods).not.toContain('session/load');
 
         expect(events.filter((event) => event.kind === 'turn-start')).toHaveLength(1);
-        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'provider' }));
-        expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-start', startedBy: 'host' }));
+        expect(events.filter(event => event.kind === 'input-accepted')).toEqual([
+          expect.objectContaining({ inputIds: ['configured-input-1'] }),
+        ]);
+        expect(events.some(event => event.kind === 'input-custody-unknown')).toBe(false);
         expect(
           events.filter((event) => event.kind === 'provider-session-id'),
         ).toEqual([expect.objectContaining({ providerSessionId: PROVIDER_SESSION_ID })]);
@@ -634,7 +671,8 @@ describe('Account-configured ACP composed Session journey', () => {
       expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetimeToken);
       observedMaterialStatus = 'access_removed';
       try {
-        await expect(runtime.provisionRuntime()).rejects.toMatchObject({ code: 'saved_secret_resolution_failed', status: 'forbidden' });
+        await expect(runtime.provisionRuntime()).rejects.toMatchObject({ code: 'saved_secret_resolution_failed' });
+        expect(existsSync(path.join(dir, 'observed.json'))).toBe(false);
       } finally {
         await runtime.dispose();
       }
@@ -668,7 +706,7 @@ describe('Account-configured ACP composed Session journey', () => {
     });
   }, 40_000);
 
-  it('cancels one provider-observed configured ACP turn without accepting uncertain input', async () => {
+  it('cancels one provider-observed configured ACP turn after exact input acceptance', async () => {
     await withTempDir('happier-configured-acp-composed-cancel-', async (dir) => {
       setConfiguredAcpAccountSettings(writeConfiguredAcpAgentScript(dir));
       const runtime = createComposedRuntime(await resolveContributedConfiguredRuntime(BACKEND_ID), dir);
@@ -684,7 +722,10 @@ describe('Account-configured ACP composed Session journey', () => {
         await waitForCondition(() => events.some((event) => event.kind === 'turn-cancelled'), {
           timeoutMs: 15_000, intervalMs: 10, label: 'configured ACP turn-cancelled',
         });
-        expect(events.some((event) => event.kind === 'input-accepted')).toBe(false);
+        expect(events.filter(event => event.kind === 'input-accepted')).toEqual([
+          expect.objectContaining({ inputIds: ['cancelled-input'] }),
+        ]);
+        expect(events.some(event => event.kind === 'input-custody-unknown')).toBe(false);
         expect(readObserved(dir).methods.filter((method) => method === 'session/prompt')).toHaveLength(1);
       } finally {
         await runtime.dispose();

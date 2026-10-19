@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol';
 
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
 import {
@@ -266,9 +267,11 @@ describe('current Agent runtime daemon service authority client', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       ok: false, error: { code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' },
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:acme.plugin/acme-agent', providerConnectionId: 'pc_test', modelId: 'model' });
+    if (selection.providerConnectionId === null) throw new Error('Expected a Provider-bound model fixture');
     await expect(authorizeCurrentAgentRuntimeDaemonModelTransition({
       authority, requestId: 'model-transition-failure', timeoutMs: null,
-      selection: { agentTargetKey: 'agent:acme.plugin/acme-agent', providerConnectionId: 'pc_test', modelId: 'model' },
+      selection,
     })).rejects.toMatchObject({ code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' });
   });
 
@@ -1030,6 +1033,25 @@ describe('current Agent runtime daemon service authority client', () => {
           'Native Agent privileged effect authority is unavailable before dispatch',
       },
     });
+
+    // MCP keeps the same effect classification, but its file-log evidence must
+    // retain the control-route refusal before that classification collapses it.
+    for (const [status, code, effectCode, diagnosticCode] of [
+      [503, 'agent_runtime_daemon_service_admission_custody_unavailable', 'native_agent_privileged_effect_outcome_unknown', 'agent_runtime_daemon_service_admission_custody_unavailable'],
+      [403, 'agent_runtime_daemon_service_forbidden', 'native_agent_privileged_effect_authority_unavailable', 'agent_runtime_daemon_service_forbidden'],
+      [503, 'private-response-body', 'native_agent_privileged_effect_authority_unavailable', 'mcp_request_auth_unavailable'],
+    ] as const) {
+      vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: false,
+        error: { code, message: 'private-response-body' } }, { status })));
+      const refused = await dispatchCurrentAgentRuntimeDaemonServiceRequest({ authority,
+        createRequest: token => ({ v: 1, context: { token, sessionId: 'session-1' },
+          operation: { kind: 'mcp.request_auth.open', requestId: 'own-oauth', serverId: 'own-oauth',
+            resource: 'https://private-resource.example.test/mcp', materializationId: 'own-oauth' } }) });
+      expect(refused).toMatchObject({ ok: false, error: { code: effectCode,
+        cause: { code: diagnosticCode, stage: 'dispatch' } } });
+      expect(JSON.stringify(refused)).not.toContain('private-response-body');
+      expect(JSON.stringify(refused)).not.toContain('private-resource');
+    }
 
     // The effectful Plugin Services client owner consumes the same closed
     // distinction: a settled custody 503 is outcome unknown (never replayed),

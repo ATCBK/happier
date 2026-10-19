@@ -175,11 +175,14 @@ export function createHostTerminalTranscriptFollowService(params: Readonly<{
                         const isInitialReplay =
                             event.kind === 'data'
                             && event.phase === 'initial_replay';
+                        const isFreshAdmission = event.kind === 'data'
+                            && event.phase === undefined
+                            && admittingSource && request.replay === 'fresh';
                         let publishEvent = event;
-                        if (isInitialReplay) {
+                        if (isInitialReplay || isFreshAdmission) {
                             const items = event.items.filter((item) => {
                                 // Correlation belongs to the current observer even when
-                                // its historical display row already has durable custody.
+                                // its display row already has durable custody.
                                 if (item.kind === 'source_observation') return true;
                                 const localId = item.localId ?? item.id;
                                 return !committedLocalIds.has(localId);

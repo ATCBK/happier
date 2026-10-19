@@ -1,13 +1,32 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { accountSettingsParse, type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol'
 
-import { sendReadyWithPushNotification } from '@/agent/runtime/notifications/sendReadyWithPushNotification'
-import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot'
+import { sendReadyWithPushNotification as sendReadyWithPushNotificationImpl } from '@/agent/runtime/notifications/sendReadyWithPushNotification'
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot as publishSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot'
+import { createNotificationAccountSnapshotFixture } from '@/testkit/notificationAccountSnapshot'
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures'
 import * as pinnedHttp from '@/network/pinnedHttp'
+import { logger } from '@/ui/logger'
 
-const fetchSessionNotificationContext = async (sessionId: string) => createSessionNotificationContextFixture(sessionId)
+const fetchSessionNotificationContext = async (sessionId: string) => {
+  const session = createSessionNotificationContextFixture(sessionId)
+  return { ...session, viewer: { ...session.viewer!, follow: { follows: true, notificationLevel: 'all_messages' as const,
+    policy: { preset: 'everything' as const } } } }
+}
+
+function sendReadyWithPushNotification(opts: Parameters<typeof sendReadyWithPushNotificationImpl>[0]) {
+  return sendReadyWithPushNotificationImpl({ ...opts, pushSender: {
+    // Account mute reads are a transport boundary; these cases exercise unmuted delivery.
+    readAccountSessionDeliveryMutedScopes: async () => [], ...opts.pushSender,
+  } })
+}
+
+function setActiveAccountSettingsSnapshot(options: Parameters<typeof createNotificationAccountSnapshotFixture>[0] = {}) {
+  publishSnapshot(createNotificationAccountSnapshotFixture({ ...options,
+    settingsVersion: options.settingsVersion ?? (getActiveAccountSettingsSnapshot()?.settingsVersion ?? 0) + 1,
+  }))
+}
 
 function createSessionStub(sessionId = 'session-1') {
   return {
@@ -17,15 +36,10 @@ function createSessionStub(sessionId = 'session-1') {
 }
 
 describe('sendReadyWithPushNotification', () => {
+  beforeEach(() => { setActiveAccountSettingsSnapshot({}) })
   afterEach(() => {
     vi.restoreAllMocks()
-    setActiveAccountSettingsSnapshot({
-      source: 'none',
-      settings: accountSettingsParse({}),
-      settingsVersion: 0,
-      loadedAtMs: 0,
-      settingsSecretsReadKeys: [],
-    })
+    clearActiveAccountSettingsSnapshot()
     vi.unstubAllGlobals()
   })
 
@@ -46,6 +60,7 @@ describe('sendReadyWithPushNotification', () => {
       'Qwen Code',
       'Qwen Code is waiting for your command',
       { sessionId: 'session-123' },
+      expect.any(Object),
     )
   })
 
@@ -68,10 +83,14 @@ describe('sendReadyWithPushNotification', () => {
       'Review branch',
       'The branch is ready to review.',
       { sessionId: 'session-123' },
+      expect.any(Object),
     )
   })
 
   it('falls back to waiting text when assistant preview text is disabled', async () => {
+    setActiveAccountSettingsSnapshot({ channels: [
+      { v: 1, id: 'builtin:expo_push', kind: 'expo_push', topics: {}, readyIncludeMessageText: false },
+    ] })
     const sendToAllDevices = vi.fn()
     const session = createSessionStub('session-123')
 
@@ -90,10 +109,14 @@ describe('sendReadyWithPushNotification', () => {
       'Review branch',
       'Qwen Code is waiting for your command',
       { sessionId: 'session-123' },
+      expect.any(Object),
     )
   })
 
   it('can suppress push notifications while still emitting ready event', async () => {
+    setActiveAccountSettingsSnapshot({ channels: [
+      { v: 1, id: 'builtin:expo_push', kind: 'expo_push', topics: {}, enabled: false },
+    ] })
     const sendToAllDevices = vi.fn()
     const session = createSessionStub('session-999')
 
@@ -102,14 +125,13 @@ describe('sendReadyWithPushNotification', () => {
       pushSender: { fetchSessionNotificationContext, sendToAllDevices },
       waitingForCommandLabel: 'Codex',
       logPrefix: '[Codex]',
-      shouldSendPush: () => false,
     })
 
     expect(session.enqueueSessionEventCommitted).toHaveBeenCalledWith({ type: 'ready', ownerActivityDelivery: 'rich_sender' })
     expect(sendToAllDevices).not.toHaveBeenCalled()
   })
 
-  it('does not hold ready publication behind the current Follow HTTP read without settings', async () => {
+  it('does not hold ready publication behind the current Follow HTTP read', async () => {
     let resolveContext!: (context: ReturnType<typeof createSessionNotificationContextFixture>) => void
     const context = new Promise<ReturnType<typeof createSessionNotificationContextFixture>>((resolve) => { resolveContext = resolve })
     const sendToAllDevices = vi.fn()
@@ -124,7 +146,7 @@ describe('sendReadyWithPushNotification', () => {
       expect(published).toBe(true)
       expect(sendToAllDevices).not.toHaveBeenCalled()
     } finally {
-      resolveContext(createSessionNotificationContextFixture('session-1'))
+      resolveContext(await fetchSessionNotificationContext('session-1'))
       await publication
     }
     await vi.waitFor(() => expect(sendToAllDevices).toHaveBeenCalledOnce())
@@ -270,14 +292,14 @@ describe('sendReadyWithPushNotification', () => {
     const sendToAllDevices = vi.fn(() => {
       throw pushError
     })
-    const loggerDebug = vi.fn()
+    const loggerDebug = vi.spyOn(logger, 'debug')
 
     await sendReadyWithPushNotification({
       session: session as any,
       pushSender: { fetchSessionNotificationContext, sendToAllDevices },
       waitingForCommandLabel: 'OpenCode',
       logPrefix: '[OpenCode]',
-      loggerDebug,
+      loggerDebug: logger.debug,
     })
 
     expect(session.enqueueSessionEventCommitted).toHaveBeenCalledWith({ type: 'ready', ownerActivityDelivery: 'rich_sender' })
@@ -309,14 +331,14 @@ describe('sendReadyWithPushNotification', () => {
     const sendToAllDevices = vi.fn(() => {
       throw pushError
     })
-    const loggerDebug = vi.fn()
+    const loggerDebug = vi.spyOn(logger, 'debug')
 
     await sendReadyWithPushNotification({
       session: session as any,
       pushSender: { fetchSessionNotificationContext, sendToAllDevices },
       waitingForCommandLabel: 'Codex',
       logPrefix: '[Codex]',
-      loggerDebug,
+      loggerDebug: logger.debug,
     })
 
     await vi.waitFor(() => expect(loggerDebug).toHaveBeenCalled())
@@ -342,8 +364,8 @@ describe('sendReadyWithPushNotification', () => {
 
     setActiveAccountSettingsSnapshot({
       source: 'network',
-      settings: accountSettingsParse({
-        notificationChannelsV1: [
+      settings: accountSettingsParse({}),
+      channels: [
           {
             v: 1,
             id: 'webhook-primary',
@@ -356,9 +378,9 @@ describe('sendReadyWithPushNotification', () => {
               userActionRequest: false,
             },
             readyIncludeMessageText: false,
+            signingSecretRef: null,
           },
         ],
-      }),
       settingsVersion: 7,
       loadedAtMs: 123,
       settingsSecretsReadKeys: [],

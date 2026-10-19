@@ -3,9 +3,10 @@ import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendi
 import { isConditionalPendingSteerClaim } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { normalizePendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
-import { readSessionInputCausalPermissionAuthorityV1, readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputCausalPermissionAuthorityV1, readSessionMessageProvenance, readSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { resolveSessionInputPromptProvenanceV1, renderSessionInputContextBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import { readSessionMessageModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { isModelRefGrantedV1, isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol';
 import { readAdmittedHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
@@ -16,6 +17,7 @@ import { pushMessageToQueueWithSpecialCommands, type SpecialCommandQueue } from 
 import { resolveAppendSystemPromptModeOverride } from '@/agent/runtime/permissions/appendSystemPrompt';
 import { resolveProviderPromptWithReplaySeed } from '@/agent/runtime/replaySeed/replaySeedV1';
 import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/input/providerInputOutcome';
+import { isNextTurnContextQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
 import type {
   ReplaySeedSettlement,
   UnsettledReplaySeedRetirement,
@@ -113,6 +115,7 @@ export type InFlightSteerController = Readonly<{
     /** Final required steer prompt before optional Follow blocks are admitted. */
     requiredPrompt: string;
     contextOnlyWorkerUpdate?: import('@happier-dev/protocol').WorkerUpdateV1;
+    followDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
   }>) => Promise<HostPreparedContext | null>;
   /**
    * Send additional user text to the in-flight turn.
@@ -208,6 +211,19 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     }
     markHandledUserPromptIdentity(localId, userMessageSeq);
 
+    const participantMeta = message.meta?.happier;
+    if (participantMeta !== null && typeof participantMeta === 'object'
+      && 'kind' in participantMeta && participantMeta.kind === 'participant_message.v1') {
+      // Retained native input cannot fall through to primary batching or steer.
+      // Exact Run inputs are consumed separately by their Pending target owner.
+      opts.inFlightSteer?.rejectPromptBeforeProvider?.({
+        localIds, userMessageSeq,
+        ...(userMessageSeq === null ? {} : { userMessageSeqs: [userMessageSeq] }),
+        reason: 'unsupported_action',
+      });
+      return true;
+    }
+
     const rejectCallerInput = (reason: 'model_not_granted' | 'permission_mode_not_granted'): void => {
       opts.inFlightSteer?.rejectPromptBeforeProvider?.({
         localIds, userMessageSeq,
@@ -235,9 +251,36 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     // the sole path that still reaches the compatibility reader below.
     const admittedStructuredInput = readAdmittedHappierStructuredInputV1FromMeta(message.meta);
     const causalPermissionAuthority = readSessionInputCausalPermissionAuthorityV1(message.meta, 'stored');
+    const actionRequestAttributionV1 = message.actionRequestAttributionV1
+      ? materializeActionRequestAttributionV1(message.actionRequestAttributionV1) : undefined;
     const inputProvenance = readSessionMessageProvenance(message.meta, 'stored') ?? undefined;
+    const authority = readSessionInputAuthority(message.meta, 'stored');
+    const returnedAnswer = authority?.v === 1 ? authority.returnedAnswer : undefined;
+    const discussionAddressing = authority?.v === 1 ? authority.discussionAddressing : undefined;
+    if (discussionAddressing) {
+      try { assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt }); }
+      catch { return true; }
+    }
+    const followDelivery = authority?.v === 1 ? authority.followDeliveryV1 : undefined;
+    if (followDelivery && !localId) return true;
+    const admittedFollow = (() => {
+      if (!followDelivery) return undefined;
+      try {
+        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt });
+        return true;
+      } catch { return false; }
+    })();
+    if (followDelivery && !admittedFollow) {
+      try {
+        opts.inFlightSteer?.rejectPromptBeforeProvider?.({ localIds, userMessageSeq, reason: 'unsupported_action' });
+      } catch {
+        // Invalid protected input stays refused if outcome publication fails.
+      }
+      return true;
+    }
     const inputContextBlock = renderSessionInputContextBlockV1({
       provenance: resolveSessionInputPromptProvenanceV1(message.meta),
+      ...(returnedAnswer ? { returnedAnswer } : {}),
     });
     const queuedPromptIdentityFields = {
       ...(localIds.length === 0 ? {} : { localIds }),
@@ -329,6 +372,8 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ? 'conditional_steer_unavailable' as const
       : 'steering_unavailable' as const;
     const queueMode: PermissionModeQueuedPromptMode = {
+      ...(discussionAddressing ? { discussionAddressing } : {}),
+      ...(actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
       ...(message.callerInputConstraints ? { callerInputConstraints: message.callerInputConstraints } : {}),
       permissionMode: resolvedMode.queuePermissionMode,
       ...resolveAppendSystemPromptModeOverride(message.meta),
@@ -338,9 +383,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
       ...(inputContextBlock ? { inputContextBlock } : {}),
       ...(inputProvenance ? { inputProvenance } : {}),
+      ...(returnedAnswer ? { returnedAnswer } : {}),
     };
     const queuedPrompt: PermissionModeQueuedPrompt = {
-      text,
+      ...(discussionAddressing ? { discussionAddressing } : {}),
+      ...(actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
+      text: followDelivery ? '' : text,
       localId,
       ...queuedPromptIdentityFields,
       ...(structuredInput ? { structuredInput } : {}),
@@ -350,7 +398,30 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
       ...(inputContextBlock ? { inputContextBlock } : {}),
       ...(inputProvenance ? { inputProvenance } : {}),
+      ...(returnedAnswer ? { returnedAnswer } : {}),
+      ...(followDelivery && admittedFollow && localId ? { followDeliveries: [{ delivery: followDelivery, localInputId: localId, userMessageSeq }] } : {}),
     };
+
+    if (discussionAddressing) {
+      opts.queue.pushIsolate(queuedPrompt, queueMode);
+      if (opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
+      return true;
+    }
+    if (followDelivery) {
+      // Follow is information: only the policy owner can select a boundary wake.
+      // It cannot steer, clear earlier inputs or execute caller-supplied commands.
+      opts.queue.pushIsolate(queuedPrompt, queueMode);
+      if (!isNextTurnContextQueuedPrompt(queuedPrompt) && opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
+      return true;
+    }
+
+    if (returnedAnswer) {
+      // Information is never a slash command, in-flight steer, or queue-clear.
+      // Continue answers remain retained context until a real input arrives.
+      opts.queue.push(queuedPrompt, queueMode);
+      if (returnedAnswer.delivery === 'wake' && opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
+      return true;
+    }
 
     const enqueuePrompt = (): void => {
       if (structuredInput) {
@@ -642,6 +713,10 @@ export function registerPermissionModeMessageQueueBinding(opts: {
                 ? { sessionFollowUpdates: preparedSessionFollowContext.updates, workerUpdates: preparedSessionFollowContext.workerUpdates }
                 : {}),
             });
+            await preparedDispatch.assertAdmission();
+            if (stopForUnavailableSteer()) return;
+            await preparedSessionFollowContext?.commitWorkerUpdateEvents?.();
+            if (stopForUnavailableSteer()) return;
             const confirmProviderPromptAccepted = (): void => {
               const settle = settleReplaySeedOnProviderAcceptance;
               if (!settle) return;
@@ -677,6 +752,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
               localId,
               ...queuedPromptIdentityFields,
               ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
+              ...(actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
               ...(preparedDispatch.structuredInput ? { structuredInput: preparedDispatch.structuredInput } : {}),
             });
             void preparedDispatch.retainComposition({ deliveryKind: 'steer', observedAtMs: Date.now(), turnId: null });

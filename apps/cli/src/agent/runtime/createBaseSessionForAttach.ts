@@ -1,6 +1,10 @@
 import type { AgentState, Metadata, Session as ApiSession } from '@/api/types';
 import { readSessionAttachFromEnv, readSessionAttachFromFile, type SessionAttachSecret } from '@/agent/runtime/sessionAttach';
 import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionSharedMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { projectCurrentAgentSessionView, resolveAgentExecutionTargetFromSessionMetadata, resolveAgentIdFromSessionMetadata, resolveSessionMetadataAgentIdentity } from '@happier-dev/agents';
+import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import { readAcpConfiguredBackendV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1';
+import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 
 export async function createBaseSessionForAttach(opts: Readonly<{
   existingSessionId: string;
@@ -33,7 +37,7 @@ export async function createBaseSessionForAttach(opts: Readonly<{
     && attach.initialTranscriptAfterSeq >= 0
       ? Math.trunc(attach.initialTranscriptAfterSeq)
       : lastObservedMessageSeq;
-  const metadata = (() => {
+  const persistedMetadata = (() => {
     const snapshot = attach.snapshot;
     if (snapshot?.metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1) {
       return snapshot?.metadata ?? opts.metadata;
@@ -54,11 +58,32 @@ export async function createBaseSessionForAttach(opts: Readonly<{
       ownerMetadata: snapshot.ownerMetadata,
     }) as Metadata;
   })();
+  const identity = resolveSessionMetadataAgentIdentity(persistedMetadata);
+  const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(persistedMetadata.sessionCreationCorrespondenceV1);
+  const runnerAgentId = resolveAgentIdFromSessionMetadata(opts.metadata);
+  const birthTarget = correspondence.success && runnerAgentId
+    ? resolveAgentExecutionTargetFromSessionMetadata(persistedMetadata, runnerAgentId)
+    : null;
+  const runtimeDescriptor = readRuntimeDescriptorV1FromMetadata(opts.metadata);
+  // A committed birth can precede the first runtime publication. The Session
+  // client needs its admitted Agent before the ordinary startup merge runs.
+  // Seed only this initial in-process view, after matching the runner to the
+  // immutable birth target; never replace a published identity or resume key.
+  const metadata = identity.basis === 'none' && !identity.ambiguousVendorResumeKeys
+    && !readAcpConfiguredBackendV1FromMetadata(persistedMetadata)
+    && runnerAgentId && birthTarget
+    && (!birthTarget.definitionId || runtimeDescriptor?.agent.definitionId === birthTarget.definitionId)
+    ? projectCurrentAgentSessionView(persistedMetadata, {
+      agentId: runnerAgentId,
+      runtimeDescriptor,
+      configuredBackend: readAcpConfiguredBackendV1FromMetadata(opts.metadata),
+    })
+    : persistedMetadata;
   const metadataVersion = attach.snapshot?.metadataVersion ?? -1;
   const agentState = attach.snapshot?.agentState ?? opts.state;
   const agentStateVersion = attach.snapshot?.agentStateVersion ?? -1;
   const organization = {
-    ...(attach.snapshot?.reportsTo ? { reportsTo: attach.snapshot.reportsTo } : {}),
+    ...(attach.snapshot?.manager ? { manager: attach.snapshot.manager } : {}),
     ...(attach.snapshot?.origin ? { origin: attach.snapshot.origin } : {}),
   };
 

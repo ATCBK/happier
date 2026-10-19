@@ -3,6 +3,35 @@ import { describe, expect, it } from 'vitest';
 import { createAgentSessionTurnInvariant } from './agentSessionTurnInvariant';
 
 describe('createAgentSessionTurnInvariant', () => {
+    it('admits skill evidence only for its current active turn', () => {
+        const invariant = createAgentSessionTurnInvariant({ sessionId: 'session-1' });
+        let sequence = 0;
+        const observe = (event: Record<string, unknown>) => invariant.observe({
+            sessionId: 'session-1', emittedAtMs: 1, sequence: ++sequence, ...event,
+        });
+        const skillUse = (turnId: string) => ({
+            kind: 'skill-usage', turnId, skills: [{ name: 'happier:review' }],
+        });
+        expect(observe(skillUse('unknown'))).toMatchObject({
+            status: 'rejected', diagnostic: { code: 'agent_runtime_turn_unknown' },
+        });
+        expect(observe({ kind: 'turn-start', turnId: 'turn-1', startedBy: 'provider' }).status).toBe('accepted');
+        expect(observe(skillUse('turn-1')).status).toBe('accepted');
+        expect(observe(skillUse('other'))).toMatchObject({
+            status: 'rejected', diagnostic: { code: 'agent_runtime_turn_unknown' },
+        });
+        expect(observe({ kind: 'turn-complete', turnId: 'turn-1' }).status).toBe('accepted');
+        expect(observe(skillUse('turn-1'))).toMatchObject({
+            status: 'rejected', diagnostic: { code: 'agent_runtime_turn_not_active' },
+        });
+        expect(observe({ kind: 'turn-start', turnId: 'turn-2', startedBy: 'provider' }).status).toBe('accepted');
+        expect(observe(skillUse('turn-1'))).toMatchObject({
+            status: 'rejected', diagnostic: { code: 'agent_runtime_turn_not_active' },
+        });
+        expect(observe(skillUse('turn-2')).status).toBe('accepted');
+        expect(invariant.read()).toMatchObject({ activeTurnId: 'turn-2', knownTurnCount: 1 });
+    });
+
     it.each([
         { kind: 'tool-call', toolCallId: 'root-call', toolName: 'SubAgent', input: {} },
         { kind: 'tool-progress', toolCallId: 'root-call', progress: {} },

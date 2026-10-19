@@ -208,6 +208,34 @@ describe('createHostTerminalTranscriptFollowService', () => {
         await service.releaseActiveBindings();
     });
 
+    it('deduplicates fresh admission against durable custody without losing proof or later updates', async () => {
+        const published: HostExternalTranscriptFollowEvent[] = [];
+        const display = { id: 'native-row', localId: 'committed-fact', timestampMs: 10,
+            kind: 'agent' as const, data: { role: 'agent', text: 'already retained' } };
+        const sourceObservation = { id: 'proof', timestampMs: 10, kind: 'source_observation' as const,
+            data: { type: 'assistant', uuid: 'native-row' } };
+        const newDisplay = { ...display, id: 'new-row', localId: 'new-fact' };
+        let consume!: Parameters<FollowProviderSession>[1];
+        const service = createHostTerminalTranscriptFollowService({
+            loadCommittedLocalIdBaseline: async () => ({ localIds: new Set(['committed-fact']), complete: true }),
+            signal: new AbortController().signal,
+            followProviderSession: async (_request, listener) => {
+                consume = listener;
+                await listener({ kind: 'data', items: [display, sourceObservation, newDisplay],
+                    fromCursor: null, nextCursor: 'tail' });
+                return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
+            },
+            publish: async event => { published.push(event); },
+        });
+        const binding = await service.bindProviderSession({ agentId: 'plugin-agent', providerSessionId: 'native-1', replay: 'fresh' });
+        expect(binding.status).toBe('following');
+        expect(published).toEqual([{ kind: 'data', items: [sourceObservation, newDisplay], fromCursor: null, nextCursor: 'tail' }]);
+        const update = { ...display, timestampMs: 20, data: { role: 'agent', text: 'updated' } };
+        await consume({ kind: 'data', items: [update], fromCursor: 'tail', nextCursor: 'updated-tail' });
+        expect(published.at(-1)).toEqual({ kind: 'data', items: [update], fromCursor: 'tail', nextCursor: 'updated-tail' });
+        await service.releaseActiveBindings();
+    });
+
     it('restarts from committed local IDs instead of retaining an unscoped provider cursor', async () => {
         const requests: Array<Readonly<{ cursor?: string; initialReplay?: boolean }>> = [];
         const service = createHostTerminalTranscriptFollowService({
@@ -252,7 +280,42 @@ describe('createHostTerminalTranscriptFollowService', () => {
         if (second.status === 'following') await second.binding.dispose();
     });
 
-    it('fails closed before provider follow when the stable-id baseline exceeds the bounded read', async () => {
+    it('follows after reading over 5,000 committed rows without rewriting old display or losing source Activity', async () => {
+        const published: HostExternalTranscriptFollowEvent[] = [];
+        const observation = { id: 'proof', timestampMs: 10, kind: 'source_observation' as const,
+            data: { type: 'assistant', uuid: 'fact-1' } };
+        const service = createHostTerminalTranscriptFollowService({
+            signal: new AbortController().signal,
+            loadCommittedLocalIdBaseline: input => loadCommittedTranscriptLocalIdBaseline({
+                ...input,
+                // The Home page transport is the only substituted boundary.
+                fetchPage: async ({ limit, beforeSeq }) => {
+                    const newest = (beforeSeq ?? 6_002) - 1;
+                    const count = Math.min(limit, newest);
+                    return { messages: Array.from({ length: count }, (_, index) => ({
+                        seq: newest - index, localId: `fact-${newest - index}`,
+                    })), hasMore: newest > count, nextBeforeSeq: newest > count ? newest - count + 1 : null };
+                },
+            }),
+            followProviderSession: async (_request, listener) => {
+                await listener({ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail',
+                    items: [{ id: 'old-display', localId: 'fact-1', kind: 'agent', data: { role: 'agent', text: 'already committed' } }, observation,
+                        { id: 'new-display', localId: 'new-fact', kind: 'agent', data: { role: 'agent', text: 'new' } }] });
+                return { status: 'following', startingCursor: 'tail', subscription: { dispose: async () => undefined } };
+            },
+            publish: async event => { published.push(event); },
+        });
+        try {
+            await expect(service.bindProviderSession({ agentId: 'external-plugin-agent', providerSessionId: 'native-long' }))
+                .resolves.toMatchObject({ status: 'following' });
+            expect(published).toEqual([{ kind: 'data', phase: 'initial_replay', fromCursor: null, nextCursor: 'tail',
+                items: [observation, { id: 'new-display', localId: 'new-fact', kind: 'agent', data: { role: 'agent', text: 'new' } }] }]);
+        } finally {
+            await service.releaseActiveBindings();
+        }
+    });
+
+    it('fails closed before provider follow when the stable-id baseline is incomplete', async () => {
         const publish = vi.fn(async () => undefined);
         const followProviderSession = vi.fn(async (_request: Parameters<FollowProviderSession>[0], listener: Parameters<FollowProviderSession>[1]) => {
             await emitEmptyInitialReplay(listener);
@@ -264,9 +327,7 @@ describe('createHostTerminalTranscriptFollowService', () => {
         });
         const service = createHostTerminalTranscriptFollowService({
             loadCommittedLocalIdBaseline: vi.fn(async () => ({
-                localIds: new Set(
-                    Array.from({ length: 5_000 }, (_, index) => `fact-${index}`),
-                ),
+                localIds: new Set(['fact-1']),
                 complete: false,
             })),
             followProviderSession,
@@ -409,7 +470,7 @@ describe('createHostTerminalTranscriptFollowService', () => {
         vi.setSystemTime(10_000);
         let releaseBaseline!: () => void;
         const baseline = new Promise<{
-            localIds: ReadonlySet<string>;
+            localIds: Set<string>;
             complete: boolean;
         }>((resolve) => {
             releaseBaseline = () => resolve({
@@ -591,7 +652,7 @@ describe('createHostTerminalTranscriptFollowService', () => {
         vi.setSystemTime(10_000);
         let releaseBaseline!: () => void;
         const baseline = new Promise<{
-            localIds: ReadonlySet<string>;
+            localIds: Set<string>;
             complete: boolean;
         }>((resolve) => {
             releaseBaseline = () => resolve({
@@ -664,6 +725,7 @@ describe('createHostTerminalTranscriptFollowService', () => {
             },
         } satisfies PluginAgentContributionV2;
         const configured = await createConfiguredPluginExternalSessionsAdapter({
+            resolveCatalogEntry: async () => null,
             agents: [{
                 id: 'antigravity',
                 identity: {

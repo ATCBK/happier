@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
     ExecClientHandleV1,
     JsonRpcClientV1,
@@ -46,6 +46,9 @@ import type {
 } from '@/plugins/projection/registry/types';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { CreateAgentInvocationServices } from '@/plugins/runtime/invocation/services/types';
 import {
     resolveBackendEngineAdapterResolution,
@@ -61,6 +64,10 @@ import type {
 // One runtime, one lifetime: the signal must stay stable across calls so
 // subscribers do not accumulate against a fresh controller each read.
 const TEST_RUNTIME_LIFETIME_SIGNAL = new AbortController().signal;
+const placementSessions: Pick<ReturnType<typeof createMutableApiSessionClientFixture>, 'close'>[] = [];
+afterEach(async () => {
+    await Promise.all(placementSessions.splice(0).map(session => session.close()));
+});
 
 const {
     resolveMergedContributionRegistryMock,
@@ -346,7 +353,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
     }
 
     function createRuntimePlacementSessionClient(sessionId: string) {
-        let metadata: Metadata = {
+        const metadata: Metadata = {
             path: '/tmp/runtime-placement',
             host: 'test',
             homeDir: '/tmp',
@@ -354,23 +361,13 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
             happyLibDir: '/tmp/.happier/lib',
             happyToolsDir: '/tmp/.happier/tools',
         };
-        return {
-            sessionId,
-            rpcHandlerManager: {
-                registerHandler: () => {},
-            },
-            updateAgentState: async () => {},
-            updateMetadata: async (
-                updater: (state: Metadata) => Metadata,
-            ) => {
-                metadata = updater(metadata);
-            },
-            getMetadataSnapshot: () => metadata,
-            getAgentStateSnapshot: () => ({}),
-            readSessionTurnsProjection: async () => null,
-            on: () => {},
-            off: () => {},
-        };
+        const session = createMutableApiSessionClientFixture({ sessionId, metadata });
+        placementSessions.push(session);
+        return Object.assign(session, {
+            updateMetadata: session.updateMetadata.bind(session),
+            updateAgentState: session.updateAgentState.bind(session),
+            getMetadataSnapshot: session.getMetadataSnapshot.bind(session),
+        });
     }
 
     function createProviderAccountUsageSnapshotForTest(accountSubjectId = 'acct_123'): ProviderAccountUsageSnapshotV1 {
@@ -843,15 +840,13 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
             pluginId,
             daemonEntryPath: '/tmp/acme.primary/daemon.mjs',
         } satisfies ResolvedAgentContribution;
-        const contributes = {
+        const contributes = createResolvedContributionRegistry({
             agents: [agent],
             actions: [],
             resources: [],
             activationTargets: [],
-            catalogEntriesById: {},
-            agentDefinitionsById: new Map([[agentId, agent]]),
             pluginDiagnosticsByPluginId: {},
-        } satisfies ResolvedContributionRegistry;
+        });
         resolveMergedContributionRegistryMock.mockResolvedValue(contributes);
         return { agentId, backendId, pluginId, agent, contributes };
     }
@@ -913,15 +908,13 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
             manifestPath: `bundled:${pluginId}`,
             daemonEntryPath: '@happier-dev/plugins-acme',
         } satisfies ResolvedAgentContribution;
-        const registry = {
+        const registry = createResolvedContributionRegistry({
             agents: [agent],
             actions: [],
             resources: [],
             activationTargets: [],
-            catalogEntriesById: {},
-            agentDefinitionsById: new Map([[agentId, agent]]),
             pluginDiagnosticsByPluginId: {},
-        } satisfies ResolvedContributionRegistry;
+        });
         resolveMergedContributionRegistryMock.mockResolvedValue(registry);
         return registry;
     }
@@ -1128,7 +1121,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
         const nativeRuntime: AgentRuntime = Object.freeze({
             executionRuns: Object.freeze({ open }),
         });
-        const operationServices = Object.freeze({ availability: vi.fn() });
+        const operationServices = createUnavailablePluginServices();
         const createAgentInvocationServices = vi.fn(async () => operationServices);
         const contributes = await resolveMergedContributionRegistryMock();
         resolveExecutablePluginRuntimeRegistryMock.mockResolvedValue({
@@ -1177,7 +1170,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
         await expect(runtime.provisionRuntime()).resolves.toEqual({ runtimeId: 'run-1' });
         expect(open).not.toHaveBeenCalled();
         await expect(runtime.deliverInput('run-1', { text: 'Review these changes' })).resolves.toEqual({ status: 'admitted' });
-        expect(open).toHaveBeenCalledWith({
+        expect(open).toHaveBeenCalledWith(expect.objectContaining({
             kind: 'create',
             runId: 'run-1',
             cwd: '/repo',
@@ -1190,7 +1183,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
                 text: 'Review these changes',
                 structuredInput: { scope: 'changed-files' },
             },
-        }, expect.objectContaining({
+        }), expect.objectContaining({
             plugin: { id: 'acme.sample', version: '1.2.3' },
             contribution: {
                 id: 'acme.sample.backend',
@@ -1202,7 +1195,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
             ui: expect.any(Object),
             protocols: expect.any(Object),
         }));
-        expect(createAgentInvocationServices).toHaveBeenCalledWith({
+        expect(createAgentInvocationServices).toHaveBeenCalledWith(expect.objectContaining({
             pluginId: 'acme.sample',
             pluginVersion: '1.2.3',
             agentId: 'acme.sample.backend',
@@ -1211,7 +1204,7 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
             cwd: '/repo',
             signal: expect.any(AbortSignal),
             isOccurrenceCurrent: expect.any(Function),
-        });
+        }));
         const finiteOnlyContext = open.mock.calls[0]?.[1];
         expect(finiteOnlyContext).toMatchObject({
             services: operationServices,
@@ -3154,12 +3147,17 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
         if (!plan?.config.createSessionRuntime) {
             throw new Error('Expected runner-owned Agent host Session runtime plan');
         }
+        const placementSession = createRuntimePlacementSessionClient('session-placement');
+        const presentation = createCurrentSessionPresentationHost({
+            session: placementSession, signal: new AbortController().signal,
+        });
         const createdSessionRuntime = await plan.config.createSessionRuntime({
             directory: '/tmp/runtime-placement',
             metadata: {},
             machineId: 'machine-1',
             agentTargetKey: `plugin:${pluginId}:${agentId}`,
-            session: createRuntimePlacementSessionClient('session-placement'),
+            session: placementSession,
+            currentSessionPresentation: presentation.bindCurrentSession,
             transcriptSession: {},
             messageBuffer: {},
             mcpServers: {},

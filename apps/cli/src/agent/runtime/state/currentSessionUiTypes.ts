@@ -19,6 +19,7 @@ import type {
 } from '@happier-dev/protocol/sessions';
 import type { PluginDiagnosticData, PluginServices } from '@happier-dev/plugin-sdk';
 import type { PermissionRequestOwner } from '@/agent/permissions/permissionRequestOwner';
+import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
 
 /**
  * Host-private aliases of the Protocol interaction contract. These retain the
@@ -47,13 +48,14 @@ export type HostSessionInteractionOptions = Readonly<{
     signal?: AbortSignal;
     requester?: InteractionTransientRequesterV1;
     permissionContext?: Readonly<{
-        origin?: 'host_acp_fs_write';
+        origin?: AcpPermissionCallContext['origin'];
         owner?: PermissionRequestOwner;
         lifetime?: 'turn' | 'occurrence';
         /** Exact active turn, stamped by the invocation host rather than a plugin. */
         turnId?: string | null;
         /** Immutable authority carried from the exact admitted input, if any. */
         causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1 | null;
+        callerPermissionMode?: string | null;
     }>;
 }>;
 

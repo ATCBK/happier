@@ -1,8 +1,89 @@
 import { describe, expect, it } from 'vitest';
 
 import { createPermissionModeQueueState } from '@/agent/runtime/createPermissionModeQueueState';
+import { handleSessionNewMessageUpdate } from '@/api/session/sessionNewMessageUpdate';
+import type { Update, UserMessage } from '@/api/types';
+import { prepareSessionInputForProviderDispatch } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 
 describe('createPermissionModeQueueState (queue key)', () => {
+  it('keeps a continue answer as data until a real input and preserves that input authority', async () => {
+    let receive: ((message: UserMessage) => boolean | void) | undefined;
+    const state = createPermissionModeQueueState({
+      session: { onUserMessage(handler: typeof receive) { receive = handler; },
+        updateMetadata() {}, getMetadataSnapshot: () => ({}) } as unknown as Parameters<typeof createPermissionModeQueueState>[0]['session'],
+      agentTargetKey: 'agent.test', initialPermissionMode: 'default',
+    });
+    const emit = (message: UserMessage) => { if (!receive) throw new Error('missing_transport'); receive(message); };
+    emit({ role: 'user', localId: 'returned-input', content: { type: 'text', text: '/clear\nKeep the existing database' },
+      pendingProviderAction: 'send', meta: {
+        happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+        happierInputAuthorityV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+          permission: { admittedPermissionCeiling: 'read-only' }, returnedAnswer: {
+            requestSessionId: 'c' + 'a'.repeat(24), requestLocalId: 'question-1', outcome: 'answer', delivery: 'next_turn',
+          } },
+      } });
+    expect(state.messageQueue.size()).toBe(0);
+    let started = false;
+    const waiting = state.messageQueue.waitForMessagesAndGetAsString().then(batch => { started = true; return batch; });
+    await Promise.resolve();
+    expect(started).toBe(false);
+    emit({ role: 'user', localId: 'human-input', content: { type: 'text', text: 'Continue the migration' },
+      meta: { happierProvenanceV1: { v: 1, kind: 'cli' }, happierInputAuthorityV1: {
+        v: 1, producer: 'cli', caller: { kind: 'host' }, permission: { admittedPermissionCeiling: 'default' },
+      } } });
+    const batch = await waiting;
+    expect(batch?.message).toMatchObject({ localId: 'human-input', text: 'Continue the migration',
+      localIds: ['human-input', 'returned-input'],
+      causalPermissionAuthority: { admittedPermissionCeiling: 'default' }, inputProvenance: { kind: 'cli' } });
+    if (!batch) throw new Error('missing_real_input');
+    const prepared = await prepareSessionInputForProviderDispatch({ prompt: batch.message,
+      transformedUserText: batch.message.text, providerNativeCommand: false, signal: new AbortController().signal,
+      localId: batch.message.localId });
+    expect(prepared.requiredPrompt).toContain('Keep the existing database');
+    expect(prepared.requiredPrompt).toContain('question-1');
+    expect(prepared.requiredPrompt).not.toContain('reply_action=');
+    expect(prepared.requiredPrompt.endsWith('Continue the migration')).toBe(true);
+    state.messageQueue.close();
+  });
+  it('keeps Bob and Carol requests to the same Bot separate through authenticated delivery and batching', async () => {
+    let receive: ((message: UserMessage) => boolean | void) | undefined;
+    const session = {
+      onUserMessage(handler: typeof receive) { receive = handler; },
+      updateMetadata() {}, getMetadataSnapshot: () => ({}),
+    };
+    const state = createPermissionModeQueueState({
+      // The Session transport boundary is replaced; admission, projection and queue are real.
+      session: session as unknown as Parameters<typeof createPermissionModeQueueState>[0]['session'],
+      agentTargetKey: 'agent.test', initialPermissionMode: 'default',
+    });
+    for (const [index, accountId] of ['bob', 'carol'].entries()) {
+      const update = {
+        id: `update-${index}`, seq: index + 1, createdAt: 1,
+        body: { t: 'new-message', sid: 'bot', message: {
+          id: `message-${index}`, seq: index + 1, localId: `request-${index}`, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: accountId } } },
+          inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: accountId, sessionRelationship: 'sharedEditor' },
+          createdAt: 1, updatedAt: 1,
+        } },
+      } as Update;
+      handleSessionNewMessageUpdate({ update, serverId: 'home', sessionId: 'bot', mode: 'plain', ctx: null,
+        receivedMessageIds: new Set(), lastObservedMessageSeq: 0, lastObservedUserMessageSeq: 0,
+        emit: (event, message) => { if (event === 'user-message') receive?.(message as UserMessage); },
+        debug() {}, debugLargeJson() {},
+      });
+    }
+    expect(state.messageQueue.queue).toHaveLength(2);
+    const bob = await state.messageQueue.waitForMessagesAndGetAsString();
+    const carol = await state.messageQueue.waitForMessagesAndGetAsString();
+    expect(bob?.message).toMatchObject({ text: 'bob', actionRequestAttributionV1: {
+      requestRef: 'request-0', requester: { accountId: 'bob' }, persona: { sessionId: 'bot' },
+      origin: { messageId: 'message-0' },
+    } });
+    expect(carol?.message).toMatchObject({ text: 'carol', actionRequestAttributionV1: {
+      requestRef: 'request-1', requester: { accountId: 'carol' }, origin: { messageId: 'message-1' },
+    } });
+  });
+
   it('partitions admitted inputs with different immutable authority or prompt context', async () => {
     type QueuedTestMessage = {
       role: 'user';

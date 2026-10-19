@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ZodMiniType as ZodType } from 'zod/mini';
+import type { $ZodIssue } from 'zod/v4/core';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type {
     JsonValue,
@@ -315,10 +316,31 @@ function parsePreparedSnapshot(
         managedProvider !== null
         && !managedProvider.success
     ) {
+        // Keep schema locations, including the leaves of a failed union,
+        // without recording credential values or capability paths.
+        const projectIssue = (
+            issue: $ZodIssue,
+            parentPath: readonly (string | number)[] = [],
+        ): Array<{ path: (string | number)[]; code: string }> => {
+            const path = [...parentPath, ...issue.path.map(
+                (part) => typeof part === 'symbol' ? String(part) : part,
+            )];
+            return issue.code === 'invalid_union'
+                ? issue.errors.flatMap((branch) => branch.flatMap(
+                    (child) => projectIssue(child, path),
+                ))
+                : [{ path, code: issue.code }];
+        };
+        const issues = managedProvider.error.issues.flatMap(
+            (issue) => projectIssue(issue),
+        );
         throw new PluginError({
             code: 'plugin_services_prepare_invalid',
-            message:
-                'Daemon returned an invalid managed Provider preparation bootstrap',
+            message: 'Daemon returned an invalid managed Provider preparation bootstrap: '
+                + issues.map(({ path, code }) => JSON.stringify(
+                    `${path.join('.') || '<root>'}:${code}`,
+                )).join(', '),
+            details: { issues },
         });
     }
     return Object.freeze({
@@ -2049,10 +2071,17 @@ export async function prepareRunnerDaemonPluginServices(
                     kind: 'plugin_notifications.send_v1',
                     ...requestBase(),
                     request: {
+                        // Preserve unknown JS input until the closed transport
+                        // schema rejects it; never silently ignore routing intent.
+                        ...request,
                         clientRequestId:
                             request.clientRequestId,
                         categoryId: request.categoryId,
                         title: request.title,
+                        ...(request.itemId === undefined ? {} : { itemId: request.itemId }),
+                        ...(request.type === undefined ? {} : { type: request.type }),
+                        ...(request.page === undefined ? {} : { page: request.page }),
+                        ...(request.resolved === undefined ? {} : { resolved: request.resolved }),
                         ...(request.body
                             ? { body: request.body }
                             : {}),
@@ -2647,7 +2676,7 @@ export async function prepareRunnerDaemonPluginServices(
             const { stdin, release: _release, ...tuple } = launch;
             const raw = parseObjectResult(await dispatch<unknown>({
                 kind: 'plugin_exec.resolved_agent_launch.authorize_v1', ...requestBase(),
-                launch: { ...tuple, ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin).toString('base64') }) },
+                launch: { ...tuple, args: [...tuple.args], ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin).toString('base64') }) },
             }, options), 'plugin_exec_launch_authorization_invalid', 'Daemon returned an invalid process launch authorization');
             return readAuthorizedExecLaunch(raw);
         },

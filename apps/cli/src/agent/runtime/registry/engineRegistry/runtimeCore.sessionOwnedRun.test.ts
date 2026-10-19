@@ -33,7 +33,6 @@ import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountS
 import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
-import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -41,6 +40,11 @@ import { createClaudeNativeAgentSdkContext } from '../../../../../../../packages
 import { createClaudeUnifiedResumeChoiceStartupHandler } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/resumeChoice/startup';
 import { parseClaudeScreenState } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/screenState';
 import { createFakeControlPort } from '../../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/tuiControls/fakeControlPort';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { registerSessionClientRuntimeHandlers } from '@/api/session/client/executionRuns/registerSessionClientRuntimeHandlers';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
+import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
 
@@ -112,17 +116,39 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
     });
     let state: AgentState = { requests: {}, completedRequests: {} };
-    const rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager('trust-parent');
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'trust-parent', encryptionMode: 'plain', logger: () => {} });
     // Session persistence/RPC ingress and the native terminal are the boundaries.
     const parent = { sessionId: 'trust-parent', rpcHandlerManager,
       getMetadataSnapshot: () => ({ path: '/parent', machineId: 'machine-a' }),
       getAgentStateSnapshot: () => state, updateMetadata: async () => undefined,
       updateAgentState: async (update: (previous: AgentState) => AgentState) => { state = update(state); },
       enqueueAgentMessageCommitted: async () => undefined,
+      setExecutionRunWorkerUpdateSource: () => {},
     };
     const permissions = new ProviderEnforcedPermissionHandler(parent as unknown as ApiSessionClient, { logPrefix: '[ChildTrust]' });
-    const trust = 'Accessing workspace:\n/tmp/new-child\nQuick safety check: Is this a project you created or one you trust?\n❯ 1. Yes, I trust this folder\n  2. No, exit';
-    const port = createFakeControlPort({ captures: [trust, '──────────────────────────────\n❯ \n──────────────────────────────'] });
+    const token = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from('{"sub":"trust-owner"}').toString('base64url')}.`;
+    const metadata = createTestMetadata({ path: '/parent', machineId: 'machine-a' });
+    const controls: SessionRuntimeControls = {};
+    applySessionRuntimeControls(controls, { readPermissionHandler: () => permissions });
+    // Compose the actual Session RPC registrar with the existing runtime permission owner.
+    // Registration must not create a competing responder that settles only AgentState.
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager, token, serverId: 'trust-home', serverUrl: 'http://127.0.0.1:1',
+      readOwnerAccountCredentials: async () => ({ token, encryption: null }),
+      metadataPath: '/parent', metadata, sessionId: parent.sessionId,
+      session: parent as unknown as ApiSessionClient, getSessionMetadata: () => metadata,
+      sessionRuntimeControls: controls,
+      enqueueSessionUserMessage: async () => {},
+      enqueueUserTextMessageCommitted: async () => ({ persisted: true, delivered: true }),
+      enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: true }),
+      enqueueVoiceAgentTranscriptTurnCommitted: async () => ({ persisted: true, delivered: true }),
+      sendAgentMessageEphemeral: () => ({ accepted: true, epoch: 0 }),
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    const trust = 'Accessing workspace:\n/tmp/new-child\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel';
+    const focusedTrust = trust.replace('❯ No, exit', '  No, exit').replace('  Yes, I trust this folder', '❯ Yes, I trust this folder');
+    const port = createFakeControlPort({ captures: [trust, focusedTrust, '──────────────────────────────\n❯ \n──────────────────────────────'] });
     let startup: ReturnType<typeof createClaudeUnifiedResumeChoiceStartupHandler> | undefined;
     let context: AgentSessionRuntimeContext | undefined;
     const adapter = await resolveBackendRuntimeCore({
@@ -147,7 +173,7 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       scope: 'session_owned', cwd: '/tmp/new-child', runId: 'trust-child', controllerOccurrenceId: 'trust-child-occurrence',
       backendId: AGENT_ID, permissionMode: 'read_only',
       start: { intent: 'delegate', runClass: 'bounded', retentionPolicy: 'ephemeral', ioMode: 'request_response' },
-      sessionInteractionHost: { session: parent as unknown as ApiSessionClient, machineId: 'machine-a', permissionHandler: permissions,
+      sessionInteractionHost: { session: parent as unknown as ApiSessionClient, machineId: 'machine-a', permissionHandler: controls.readPermissionHandler!()!,
         readOwnerAccountCredentials: async () => ({ token: 'fixture-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } }),
       },
     });
@@ -158,10 +184,12 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       expect(requestId).toContain('execution-run:trust-child:trust-child-occurrence:');
       expect(request).toMatchObject({ tool: 'AskUserQuestion', arguments: { happierDialog: { dialogId: 'trust_folder' } } });
       expect(port.sentLiteral).toEqual([]);
-      const answer = rpcHandlerManager.handlers.get('session.user_action.answer');
-      await answer!({ id: requestId, approved: true, answers: { claudeUnifiedTerminalTrustFolder: ['trust_once'] } });
+      await rpcHandlerManager.handleRequest({ method: `${parent.sessionId}:session.user_action.answer`,
+        params: { id: requestId, approved: true, answers: { claudeUnifiedTerminalTrustFolder: ['trust_once'] } },
+        callerAuthority: 'present_user',
+      });
       await vi.waitFor(() => expect(state.requests?.[requestId]).toBeUndefined());
-      expect(port.sentLiteral).toEqual(['1']);
+      expect(port.sentKeys).toEqual(['ArrowDown', 'Enter']);
       expect(state.completedRequests?.[requestId]).toMatchObject({ status: 'approved' });
       await expect(context!.services.sessions.current!.permissions.requestDecision({ requestId: 'unadmitted-edit', toolName: 'Edit', input: {} }))
         .resolves.toEqual({ decision: 'denied' });
@@ -169,6 +197,8 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       await startup?.dispose();
       await runtime?.dispose();
       await permissions.abortPendingRequestsAndFlush('test cleanup');
+      await registration.dispose();
+      applySessionRuntimeControls(controls, null);
     }
   });
 

@@ -481,27 +481,25 @@ describe('SessionHostBridge execution surfaces', () => {
       throw new Error('Expected wrapped host session runtime result');
     }
 
-    const messages: unknown[] = [];
-    const unsubscribe = createdRuntime.operations.subscribeRuntimeEvents((message) => {
-      messages.push(message);
+    const publications: unknown[] = [];
+    const unsubscribe = createdRuntime.operations.subscribeRuntimeIdentityPublication?.((publication) => {
+      publications.push(publication);
     });
 
-    unsubscribe();
+    unsubscribe?.();
 
-    expect(messages).toEqual([
+    expect(publications).toEqual([
       {
-        type: 'event',
-        name: 'runtime.capabilities',
-        payload: {
+        fact: 'runtimeCapabilities',
+        value: {
           backend: {
             sessions: { supported: true },
           },
         },
       },
       {
-        type: 'event',
-        name: 'runtime.facets',
-        payload: {
+        fact: 'runtimeFacets',
+        value: {
           v: 1,
           transcriptSource: {
             supported: true,

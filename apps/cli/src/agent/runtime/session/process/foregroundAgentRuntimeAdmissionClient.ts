@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 
@@ -11,28 +11,28 @@ import {
   AgentRuntimeDaemonSessionDescriptorV1Schema,
 } from './agentRuntimeRunnerProtocol';
 
-const ForegroundAdmissionHandoffSchema = z.object({
+const ForegroundAdmissionHandoffSchema = z.strictObject({
   v: z.literal(1),
-  capability: z.string().min(1).max(4_096),
+  capability: z.string().check(z.minLength(1), z.maxLength(4_096)),
   descriptor: AgentRuntimeDaemonSessionDescriptorV1Schema,
-}).strict();
+});
 
 const ForegroundEnvironmentClaimResultSchema = z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     environment: z.record(z.string(), z.string()),
     unsetEnvironmentVariableNames: z.array(z.string()),
     sensitiveEnvironmentVariableNames: z.array(
-      z.string().min(1).max(256),
-    ).max(256),
-  }).strict(),
-  z.object({
+      z.string().check(z.minLength(1), z.maxLength(256)),
+    ).check(z.maxLength(256)),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     error: ProviderErrorV1Schema,
-    profileSecretRecovery: z.object({
-      requirementNames: z.array(z.string().min(1).max(256)).max(256),
-    }).strict().optional(),
-  }).strict(),
+    profileSecretRecovery: z.optional(z.strictObject({
+      requirementNames: z.array(z.string().check(z.minLength(1), z.maxLength(256))).check(z.maxLength(256)),
+    })),
+  }),
 ]);
 
 export async function claimDaemonForegroundAgentRuntimeEnvironment(

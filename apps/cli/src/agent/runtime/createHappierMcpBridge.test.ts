@@ -1,10 +1,15 @@
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createHappierMcpBridge } from '@/agent/runtime/createHappierMcpBridge'
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers'
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer'
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol'
+import { projectPath } from '@/projectPath'
+import { createApiSessionClientFixture, createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures'
+
+const cliProjectRoot = projectPath()
 
 const { requireJavaScriptRuntimeExecutableMock } = vi.hoisted(() => ({
   requireJavaScriptRuntimeExecutableMock: vi.fn(async (): Promise<string> => process.execPath),
@@ -13,6 +18,7 @@ const { startHappyServerMock } = vi.hoisted(() => ({
   startHappyServerMock: vi.fn(async (_session: HappyMcpSessionClient) => ({
     url: 'http://127.0.0.1:12345',
     supportedSessionReadActions: [],
+    readToolNames: async () => [],
     stop: vi.fn(),
   })),
 }))
@@ -24,10 +30,6 @@ vi.mock('node:fs', async (importOriginal) => {
     existsSync: vi.fn(() => false),
   }
 })
-
-vi.mock('@/projectPath', () => ({
-  projectPath: () => '/repo',
-}))
 
 vi.mock('@/utils/spawnHappyCLI', () => ({
   resolveTsxImportHookPath: vi.fn(() => '/repo/node_modules/tsx/dist/esm/index.mjs'),
@@ -55,6 +57,7 @@ describe('createHappierMcpBridge', () => {
     startHappyServerMock.mockResolvedValue({
       url: 'http://127.0.0.1:12345',
       supportedSessionReadActions: [],
+      readToolNames: async () => [],
       stop: vi.fn(),
     })
   })
@@ -71,16 +74,14 @@ describe('createHappierMcpBridge', () => {
     vi.mocked(existsSync).mockImplementation((pathLike) => (
       String(pathLike).endsWith('/package-dist/mcp/bridges/happierMcpStdioBridge.mjs')
     ))
-    const session = {
+    const sessionClient = createMutableApiSessionClientFixture({
       sessionId: 'session-a',
-      getServerBinding: () => ({ serverId: 'home-a', serverUrl: 'https://home-a.test' }),
+      serverBinding: { serverId: 'home-a', serverUrl: 'https://home-a.test' },
+      overrides: { enqueueSessionEventCommitted: createApiSessionClientFixture().enqueueSessionEventCommitted },
+    })
+    const session = Object.assign(sessionClient, {
       getWorkDepth: () => 1,
-      rpcHandlerManager: {
-        registerHandler: () => undefined,
-        invokeLocal: async () => ({}),
-      },
-      updateMetadata: () => undefined,
-    } satisfies HappyMcpSessionClient
+    }) satisfies HappyMcpSessionClient
     const binding = await resolveRunnerMcpServers({
       session,
       credentials: { token: 'plain-token', encryption: null },
@@ -104,6 +105,7 @@ describe('createHappierMcpBridge', () => {
       expect(session.getWorkDepth()).toBe(1)
     } finally {
       binding.happierMcpServer.stop()
+      await sessionClient.close()
     }
   })
 
@@ -121,7 +123,7 @@ describe('createHappierMcpBridge', () => {
       args: [
         '--no-warnings',
         '--no-deprecation',
-        '/repo/package-dist/mcp/bridges/happierMcpStdioBridge.mjs',
+        join(cliProjectRoot, 'package-dist', 'mcp', 'bridges', 'happierMcpStdioBridge.mjs'),
         '--url',
         'http://127.0.0.1:12345',
       ],
@@ -142,7 +144,7 @@ describe('createHappierMcpBridge', () => {
       args: [
         '--no-warnings',
         '--no-deprecation',
-        '/repo/package-dist/mcp/bridges/happierMcpStdioBridge.mjs',
+        join(cliProjectRoot, 'package-dist', 'mcp', 'bridges', 'happierMcpStdioBridge.mjs'),
         '--url',
         'http://127.0.0.1:12345',
       ],
@@ -261,7 +263,7 @@ describe('createHappierMcpBridge', () => {
           '--no-deprecation',
           '--import',
           '/repo/node_modules/tsx/dist/esm/index.mjs',
-          '/repo/src/mcp/bridges/happierMcpStdioBridge.ts',
+          join(cliProjectRoot, 'src', 'mcp', 'bridges', 'happierMcpStdioBridge.ts'),
           '--url',
           'http://127.0.0.1:12345',
         ],
@@ -294,7 +296,7 @@ describe('createHappierMcpBridge', () => {
         '--no-deprecation',
         '--import',
         '/repo/node_modules/tsx/dist/esm/index.mjs',
-        '/repo/src/mcp/bridges/happierMcpStdioBridge.ts',
+        join(cliProjectRoot, 'src', 'mcp', 'bridges', 'happierMcpStdioBridge.ts'),
         '--url',
         'http://127.0.0.1:12345',
       ],
@@ -317,7 +319,7 @@ describe('createHappierMcpBridge', () => {
       args: [
         '--no-warnings',
         '--no-deprecation',
-        '/repo/package-dist/mcp/bridges/happierMcpStdioBridge.mjs',
+        join(cliProjectRoot, 'package-dist', 'mcp', 'bridges', 'happierMcpStdioBridge.mjs'),
         '--url',
         'http://127.0.0.1:12345',
       ],

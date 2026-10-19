@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
@@ -7,6 +7,7 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { writeSessionPendingQueueHoldV1ToMetadata } from '@happier-dev/protocol';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 import { waitForNextPermissionModeMessage } from './waitForNextPermissionModeMessage';
 
@@ -24,11 +25,15 @@ function createQueue(): MessageQueue2<QueueMode> {
   return new MessageQueue2<QueueMode>(() => 'hash');
 }
 
+const sessions: Pick<ReturnType<typeof createMutableApiSessionClientFixture>, 'close'>[] = [];
+afterEach(async () => {
+  await Promise.all(sessions.splice(0).map(session => session.close()));
+});
+
 function asSessionClient(session: PermissionModeSessionFixture): ApiSessionClient {
-  return {
-    getMetadataSnapshot: () => null,
-    ...session,
-  } as unknown as ApiSessionClient;
+  const client = createMutableApiSessionClientFixture();
+  sessions.push(client);
+  return Object.assign(client, session);
 }
 
 describe('waitForNextPermissionModeMessage', () => {

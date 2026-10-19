@@ -17,13 +17,16 @@ import type { Credentials } from '@/persistence';
 import { isPrimaryAgentContributionDefinition } from '@/plugins/projection/registry/agentContributionDefinition';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
-import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { PluginManagedDependencyContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/managedDependencies';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
+import { createUnboundConnectedAccountsFixture } from './engineRegistry/connectedAccounts.testkit';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import { bindNativeAgentLaunchPreparationFixture, createNativeAgentLaunchPreparationFixture } from './engineRegistry/nativeAgentSession.testkit';
 
 function createTestCredentials(): Credentials {
     return {
@@ -33,25 +36,6 @@ function createTestCredentials(): Credentials {
             secret: new Uint8Array(32).fill(1),
         },
     };
-}
-
-function createUnboundConnectedAccountsOwner(): StablePluginConnectedAccountsOwner {
-    return Object.freeze({
-        getBinding: async () => null,
-        requestSelection: async () => {
-            throw new Error('Connected Account selection is outside this dispatch proof.');
-        },
-        materialize: async () => {
-            throw new Error('Connected Account materialization is outside this dispatch proof.');
-        },
-        listAccounts: async () => {
-            throw new Error('Connected Account listing is outside this fixture');
-        },
-        materializeListedAccount: async () => {
-            throw new Error('Exact-listed Connected Account materialization is outside this fixture');
-        },
-        watch: () => Object.freeze({ dispose() {} }),
-    });
 }
 
 async function createFailingProcessBoundary(params: Readonly<{
@@ -107,17 +91,20 @@ async function waitForProcessBoundary(markerPath: string, timeoutMs: number): Pr
 }
 
 describe('first-party native Agent production dispatch', () => {
-    it('routes every predecessor Agent and native-only Grok through their declared primary runtime surfaces', async () => {
-        const predecessorAgentIds = AGENT_IDS.filter((agentId) => agentId !== 'grok');
-        expect(predecessorAgentIds).toHaveLength(19);
-        expect(AGENT_IDS).toHaveLength(20);
-
+    it('routes every bundled Agent with a declared CLI tool through its primary runtime surface', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-native-agent-dispatch-'));
         const originalPath = process.env.PATH;
         process.env.PATH = happyHomeDir;
         const builtInContributions = resolveBuiltInContributions();
+        // Account-configured ACP commands have no intrinsic executable. Their
+        // admitted definition/command/environment/exit journey is covered by
+        // accountConfiguredAcp.session.composed.test.ts.
+        const executableAgentIds = AGENT_IDS.filter(agentId => {
+            const pluginId = builtInContributions.agents.find(agent => agent.id === agentId)?.pluginId;
+            return pluginId && builtInContributions.systemTools?.some(tool => tool.pluginId === pluginId);
+        });
         const processBoundaries = new Map(
-            await Promise.all(AGENT_IDS.map(async (agentId) => {
+            await Promise.all(executableAgentIds.map(async (agentId) => {
                 const canonicalExecutableName = builtInContributions.agents.find(
                     (agent) => agent.id === agentId,
                 )?.runtimeSpec?.binaryName;
@@ -164,6 +151,13 @@ describe('first-party native Agent production dispatch', () => {
                                 ...tool,
                                 executableNames: [processBoundary.executableName],
                             })),
+                            // ACP can launch a declared dependency instead of the Agent's
+                            // CLI tool. Supply the same real OS boundary through its
+                            // source declaration; keep managed-reference resolution real.
+                            managedDependencies: (target.manifest.contributes.managedDependencies ?? []).map((dependency) => ({
+                                ...dependency,
+                                sources: [{ kind: 'system' as const, executableNames: [processBoundary.executableName] }, ...dependency.sources],
+                            })),
                         },
                     },
                 };
@@ -182,8 +176,17 @@ describe('first-party native Agent production dispatch', () => {
                     }
                     : tool;
             }),
+            managedDependencies: (builtInContributions.managedDependencies ?? []).map((dependency) => {
+                const processBoundary = dependency.pluginId ? processBoundaryByPluginId.get(dependency.pluginId) : null;
+                if (!processBoundary) return dependency;
+                const definition = PluginManagedDependencyContributionV2Schema.parse(dependency.definition);
+                return { ...dependency, definition: {
+                    ...definition,
+                    sources: [{ kind: 'system' as const, executableNames: [processBoundary.executableName] }, ...definition.sources],
+                } };
+            }),
         });
-        const bundledAgents = AGENT_IDS.map((agentId) => {
+        const bundledAgents = executableAgentIds.map((agentId) => {
             const contribution = contributes.agentDefinitionsById.get(agentId);
             if (!contribution?.pluginId || !contribution.identity) {
                 throw new Error(`Missing bundled contribution identity for '${agentId}'`);
@@ -206,6 +209,7 @@ describe('first-party native Agent production dispatch', () => {
                 `${agentId}: resolved system-tool projection`,
             ).toContainEqual([processBoundary.executableName]);
         }
+        const launchPreparation = await createNativeAgentLaunchPreparationFixture();
         try {
             for (const { agentId, pluginId, contribution } of bundledAgents) {
                 const runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
@@ -224,7 +228,7 @@ describe('first-party native Agent production dispatch', () => {
                         rejectedGenerations: new Map(),
                         isCurrent: async () => true,
                     },
-                    connectedAccounts: createUnboundConnectedAccountsOwner(),
+                    connectedAccounts: createUnboundConnectedAccountsFixture(),
                 });
                 let pendingOpenAttempt: Promise<
                     | Readonly<{
@@ -240,13 +244,13 @@ describe('first-party native Agent production dispatch', () => {
                             tool.pluginId === pluginId ? [tool.definition] : []
                         )),
                     );
-                    const runtimeRegistryForResolution = Object.freeze({
+                    const runtimeRegistryForResolution = bindNativeAgentLaunchPreparationFixture(Object.freeze({
                         ...runtimeRegistry,
                         systemToolDefinitionsByPluginId: new Map([
                             ...(runtimeRegistry.systemToolDefinitionsByPluginId ?? new Map()),
                             [pluginId, systemToolDefinitions],
                         ]),
-                    });
+                    }), launchPreparation);
                     const resolution = await resolveBackendEngineAdapterResolution(agentId, {
                         runtimeRegistry: runtimeRegistryForResolution,
                     });
@@ -337,6 +341,7 @@ describe('first-party native Agent production dispatch', () => {
                         agentTargetKey: `backend:${agentId}`,
                         session,
                         transcriptSession: session,
+                        currentSessionPresentation: createCurrentSessionPresentationHost({ session, signal: new AbortController().signal }).bindCurrentSession,
                         messageBuffer: new MessageBuffer(),
                         mcpServers: {},
                         permissionHandler: createProviderEnforcedPermissionHandler({

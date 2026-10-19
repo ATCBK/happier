@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import type { Metadata } from '@/api/types';
+import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
 import {
   createPlainSessionOwnerMetadataEnvelopeV1,
   type SessionOwnerMetadataV1,
@@ -16,6 +18,34 @@ const envScope = createEnvKeyScope([
 ]);
 
 describe('createBaseSessionForAttach', () => {
+  it.each(['plain', 'e2ee'] as const)('bootstraps the admitted birth Agent before constructing its %s Session client', async (encryptionMode) => {
+    const { createBaseSessionForAttach } = await import('./createBaseSessionForAttach');
+    const correspondence = buildSessionCreationCorrespondence({
+      identity: { callerCreationNamespace: 'test', creationKey: 'failed-birth' },
+      recipe: { execution: { machineId: 'machine', directory: { kind: 'path', path: '/repo' } },
+        organization: { folderId: null, tagIds: [] },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+    });
+    const runtimeMetadata = createTestMetadata({ flavor: 'codex' });
+    const birthMetadata = { ...runtimeMetadata, flavor: undefined, sessionCreationCorrespondenceV1: correspondence };
+    const transport = encryptionMode === 'plain' ? { encryptionMode } : {
+      encryptionMode, encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'dataKey' as const,
+    };
+    const attach = (metadata: Metadata, next = runtimeMetadata) => createBaseSessionForAttach({
+      existingSessionId: 'failed-birth', metadata: next, state: { controlledByUser: false },
+      sessionAttachSecret: { ...transport, snapshot: { metadata, metadataVersion: 4, agentState: null, agentStateVersion: 1 } },
+    });
+    const recovered = await attach(birthMetadata);
+    expect(recovered.metadata).toMatchObject({ flavor: 'codex', sessionCreationCorrespondenceV1: correspondence });
+    expect(birthMetadata.flavor).toBeUndefined();
+    expect(recovered.metadataVersion).toBe(4);
+    // A later Agent cutover and a mismatched runner must never be relabeled
+    // with the original birth Agent or a fresh process default.
+    expect((await attach({ ...birthMetadata, flavor: 'claude' })).metadata.flavor).toBe('claude');
+    expect((await attach(birthMetadata, createTestMetadata({ flavor: 'claude' }))).metadata.flavor).toBeUndefined();
+    expect((await attach({ ...birthMetadata, sessionCreationCorrespondenceV1: undefined })).metadata.flavor).toBeUndefined();
+    expect((await attach({ ...birthMetadata, codexSessionId: 'codex', claudeSessionId: 'claude' })).metadata.flavor).toBeUndefined();
+  });
   it('restores the current server relation and origin independently from an inherited role snapshot', async () => {
     const { createBaseSessionForAttach } = await import('./createBaseSessionForAttach');
     const session = await createBaseSessionForAttach({ existingSessionId: 'worker',
@@ -24,10 +54,10 @@ describe('createBaseSessionForAttach', () => {
         metadata: { ...createTestMetadata(), work: { sessionRolesV1: {
           inheritedFrom: 'old-lead', overrides: {}, sessionRoles: {}, notes: '',
         } } }, metadataVersion: 1, agentState: null, agentStateVersion: 1,
-        reportsTo: { sessionId: 'current-lead' }, origin: { kind: 'run_step' },
+        manager: { sessionId: 'current-lead' }, origin: { kind: 'run_step' },
       } },
     });
-    expect(session).toMatchObject({ reportsTo: { sessionId: 'current-lead' }, origin: { kind: 'run_step' } });
+    expect(session).toMatchObject({ manager: { sessionId: 'current-lead' }, origin: { kind: 'run_step' } });
   });
   it('accepts a process-local attach secret without consulting ambient process state', async () => {
     envScope.patch({ HAPPIER_SESSION_ATTACH_FILE: '/ambient/must-not-be-read.json' });

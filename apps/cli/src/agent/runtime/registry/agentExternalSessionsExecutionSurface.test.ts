@@ -8,6 +8,8 @@ import { createAgentExternalSessionsExecutionSurface } from './agentExternalSess
 
 function createContribution(): BoundedAgentExternalSessionsContribution {
     return Object.freeze({
+        supportsAccounting: false,
+        readAccounting: async () => ({ ok: false as const, code: 'unsupported' as const }),
         resolveSource: vi.fn(async (request) => ({ ok: true as const, value: { source: request.source } })),
         listCandidates: vi.fn(async () => ({ ok: true as const, value: { candidates: [], nextCursor: null } })),
         resolveLinkIdentity: vi.fn(async (request) => ({ ok: true as const, value: {
