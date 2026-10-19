@@ -248,11 +248,6 @@ export function projectSessionAwarenessRuntimeV1(
     && normalizeAwarenessCountV1(runtime.activityActiveCount) > 0;
   const backgroundActive = !working && hasProviderRuntimeActivity;
 
-  const hasFreshPendingRequest = isFreshAwarenessTimestampV1(
-    pending.pendingRequestObservedAtMs,
-    nowMs,
-    SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS,
-  );
   // Pending facts and runtime reachability are orthogonal. A host can observe the runtime's
   // active projection without owning a presence channel (the CLI V2 row is the concrete case).
   // Preserve actionable pending evidence unless reachability is known offline; unavailable
@@ -261,12 +256,13 @@ export function projectSessionAwarenessRuntimeV1(
     && !unservable
     && runtime.active === true
     && runtime.presence !== 'offline';
+  // Pending counts are durable: runtime settlement or an agent transition clears them. Their
+  // observed-at instant is the request's creation time and is never refreshed while it waits,
+  // so its age cannot expire a request the live runtime is still blocked on.
   const freshActionRequired = waitingForAction || (pending.hasPendingUserActionRequests === true
-    && potentiallyLive
-    && (working || hasFreshPendingRequest));
+    && potentiallyLive);
   const freshPermissionRequired = pending.hasPendingPermissionRequests === true
-    && potentiallyLive
-    && (working || hasFreshPendingRequest);
+    && potentiallyLive;
 
   const runtimeObservedAtMs = normalizeAwarenessTimestampV1(runtime.lastObservedAtMs);
   const currentnessObservedAtMs = normalizeAwarenessTimestampV1(input.currentnessObservedAtMs);

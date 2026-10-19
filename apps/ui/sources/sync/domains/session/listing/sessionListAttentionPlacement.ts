@@ -229,12 +229,11 @@ function resolveLegacyAttentionReason(
     if ((session.pendingBlockedCount ?? 0) > 0) {
         return 'action_required';
     }
-    if (
-        runtimePresentation.working
-        || runtimePresentation.runtime === 'background_active'
-    ) {
+    if (runtimePresentation.working) {
         return null;
     }
+    // A finished turn or unread reply outranks background activity: the person
+    // can act on it now, while the background work needs nothing from them.
     if (isTerminalTurnAfterReadCursor(session)) {
         return 'ready';
     }
@@ -244,6 +243,9 @@ function resolveLegacyAttentionReason(
     // from, so the band and the badge can never disagree.
     if (session.hasUnreadMessages === true) {
         return 'unread';
+    }
+    if (runtimePresentation.runtime === 'background_active') {
+        return null;
     }
     // Attention standing is a FLOOR, and only the FINAL return is the floor:
     // the early `return null` above means "the working lane owns this row", not
@@ -257,7 +259,6 @@ function resolveLegacyAttentionReason(
 function resolveAttentionReason(
     session: SessionListRenderableSession,
     runtimePresentation: ReturnType<typeof deriveRuntimePresentationForSession>,
-    liveWorking: boolean,
     standingSource: SessionAttentionStandingSource = 'none',
 ): SessionListAttentionPlacementReason | null {
     const viewer = normalizeSessionViewerCompatibility(session);
@@ -268,15 +269,16 @@ function resolveAttentionReason(
     }
     if (viewer.kind === 'untracked') return null;
 
-    // Operational working placement remains an orthogonal Lane 09A concern and
-    // keeps its established precedence. Every personal reason below comes from
-    // the Protocol-owned viewer decision; raw seq/pending/runtime facts cannot
-    // override a quiet modern projection.
-    if (liveWorking) return null;
+    // A foreground turn keeps its working placement. Every personal reason below
+    // comes from the Protocol-owned viewer decision; raw seq/pending/runtime facts
+    // cannot override a quiet modern projection. Background activity yields to a
+    // projected reason, since that reason is something the person can act on now.
+    if (runtimePresentation.working) return null;
     const projected = viewer.viewer.attention;
     if (projected.needsAttention) {
         return presentCanonicalAttentionReason(projected.primary);
     }
+    if (runtimePresentation.runtime === 'background_active') return null;
     // The Account default is presentation-only and may apply only after the
     // server has established personal relevance. It cannot enroll broad Team,
     // Group, or direct-access history into attention.
@@ -307,7 +309,6 @@ function projectSessionListPlacement(params: Readonly<{
     const attentionReason = resolveAttentionReason(
         params.session,
         runtimePresentation,
-        liveWorking,
         standingSource,
     );
     const dueReminder = resolveSessionReminderPresentation(
