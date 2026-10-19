@@ -249,6 +249,15 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
         minHeight: 28,
     },
+    /** Active-facet chips under the title: they leave the field's gap and the list's rows where they were. */
+    searchChromeChipRow: {
+        flexDirection: 'row' as const,
+        flexWrap: 'wrap' as const,
+        alignItems: 'center' as const,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s4,
+    },
     searchChromeScopeRow: {
         minHeight: 24,
         flexDirection: 'row' as const,

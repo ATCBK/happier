@@ -2,6 +2,7 @@ import { resolveNewSessionGroupTarget } from './resolveSessionListHeaderActionHa
 import {
     normalizeSessionAddress,
     sessionAddressKey as audienceSessionAddressKey,
+    type SessionAddress,
 } from '@/sync/domains/session/sessionAddress';
 import * as React from 'react';
 import { Platform, useWindowDimensions, type ViewToken } from 'react-native';
@@ -66,7 +67,12 @@ import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import {
     useFocusedSessionAddress,
     useSessionSurfaceVisibilitySnapshot,
+    getSessionSurfaceVisibilityResetVersion,
+    retainVisibleSessionListSurfaces,
+    subscribeSessionSurfaceVisibilityReset,
 } from '@/sync/domains/session/sessionSurfaceVisibility';
+import { sync } from '@/sync/sync';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { Modal } from '@/modal';
@@ -104,16 +110,20 @@ import {
     stopSessionAndMaybeArchive,
 } from '../sessionStopArchiveFlow';
 import {
+    acquireSessionFolderCreationAttempt,
     buildSessionFolderMoveTargets,
     compareSessionFolderWorkspaceRefs,
     createSessionFolder,
     deleteSessionFolder,
     renameSessionFolder,
     selectAvailableSessionFolders,
+    settleSessionFolderCreationAttempt,
+    type SessionFolderCreationAttempt,
     type SessionFolderWorkspaceRefV1,
     resolveDurableWorkspaceRefForSessionListHeader,
     type SessionFoldersV1,
 } from '@/sync/domains/session/folders';
+import { shouldRetryError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import { openSessionFolderSelection } from '@/components/sessions/organization/SessionFolderSelection';
 import {
     buildSessionOrganizationListViewStateForServers,
@@ -779,6 +789,54 @@ export function useSessionListViewStateFromPaneState(
         availableSessionFoldersV1,
         orderItemAddressByItemKey,
     });
+    const folderCreationAttemptRef = React.useRef<SessionFolderCreationAttempt | null>(null);
+    const cancelFolderCreationAttempt = React.useCallback(() => {
+        const attempt = folderCreationAttemptRef.current;
+        if (attempt) folderCreationAttemptRef.current = settleSessionFolderCreationAttempt(attempt, 'cancelled');
+    }, []);
+    const runFolderCreationAttempt = React.useCallback((input: Readonly<{
+        workspace: SessionFolderWorkspaceRefV1;
+        renderWorkspaceKey?: string;
+        parentId: string | null;
+        name: string;
+        serverId: Parameters<typeof getAvailableOrganizationMutationScope>[0];
+    }>) => {
+        const attempt = acquireSessionFolderCreationAttempt({
+            current: folderCreationAttemptRef.current,
+            workspace: input.workspace,
+            parentId: input.parentId,
+            name: input.name,
+        });
+        folderCreationAttemptRef.current = attempt;
+        const created = createSessionFolder({
+            current: availableSessionFoldersV1,
+            workspace: input.workspace,
+            renderWorkspaceKey: input.renderWorkspaceKey,
+            parentId: input.parentId,
+            name: input.name,
+            now: Date.now(),
+            id: attempt.id,
+        });
+        void (async () => {
+            try {
+                await setSessionFoldersV1(created.next, await getAvailableOrganizationMutationScope(input.serverId));
+                if (folderCreationAttemptRef.current?.id === attempt.id) {
+                    folderCreationAttemptRef.current = settleSessionFolderCreationAttempt(attempt, 'succeeded');
+                }
+            } catch (error) {
+                if (folderCreationAttemptRef.current?.id === attempt.id) {
+                    folderCreationAttemptRef.current = settleSessionFolderCreationAttempt(
+                        attempt,
+                        shouldRetryError(error) ? 'retryable-failure' : 'non-retryable-failure',
+                    );
+                }
+                Modal.alert(
+                    t('common.error'),
+                    error instanceof HappyError ? error.message : t('errors.unknownError'),
+                );
+            }
+        })();
+    }, [availableSessionFoldersV1, getAvailableOrganizationMutationScope, setSessionFoldersV1]);
     // The transcript provider request is bound to one exact Home. Passing the admitted
     // ids lets the canonical adapter filter before limiting, and an unselected Home
     // resolves to an explicit empty eligibility rather than an unrestricted search.
@@ -1024,6 +1082,13 @@ export function useSessionListViewStateFromPaneState(
         focusedSessionId,
     }), [effectivePathname, focusedSessionId]);
     const [viewableSessionRowKeys, setViewableSessionRowKeys] = React.useState<ReadonlySet<string> | null>(null);
+    const surfaceDataActiveRef = React.useRef(surfaceOwnership.dataActive);
+    surfaceDataActiveRef.current = surfaceOwnership.dataActive;
+    const visibilityResetVersion = React.useSyncExternalStore(
+        subscribeSessionSurfaceVisibilityReset,
+        getSessionSurfaceVisibilityResetVersion,
+        getSessionSurfaceVisibilityResetVersion,
+    );
     const viewableSessionRowKeysRef = React.useRef<ReadonlySet<string> | null>(null);
     React.useEffect(() => {
         viewableSessionRowKeysRef.current = viewableSessionRowKeys;
@@ -1464,6 +1529,43 @@ export function useSessionListViewStateFromPaneState(
         }
         return map;
     }, [renderedListItems]);
+    const visibleSessionListAddressesRef = React.useRef<readonly SessionAddress[]>([]);
+    const visibleSessionListAddresses = React.useMemo(() => {
+        const addresses: SessionAddress[] = [];
+        for (const key of viewableSessionRowKeys ?? []) {
+            const item = sessionListItemBySelectionKey.get(key);
+            const address = item ? normalizeSessionAddress(item.serverId, item.sessionId) : null;
+            if (address) addresses.push(address);
+        }
+        addresses.sort((a, b) => a.serverId.localeCompare(b.serverId) || a.sessionId.localeCompare(b.sessionId));
+        const previous = visibleSessionListAddressesRef.current;
+        if (previous.length === addresses.length && addresses.every((address, index) => (
+            address.serverId === previous[index].serverId && address.sessionId === previous[index].sessionId
+        ))) return previous;
+        visibleSessionListAddressesRef.current = addresses;
+        return addresses;
+    }, [sessionListItemBySelectionKey, viewableSessionRowKeys]);
+    const hydratedSessionListViewportRef = React.useRef<Readonly<{
+        addresses: readonly SessionAddress[];
+        resetVersion: number;
+    }>>({ addresses: [], resetVersion: visibilityResetVersion });
+    React.useEffect(() => {
+        const previous = hydratedSessionListViewportRef.current;
+        const previousKeys = new Set(previous.resetVersion === visibilityResetVersion
+            ? previous.addresses.map(audienceSessionAddressKey)
+            : []);
+        const addresses = surfaceOwnership.dataActive ? visibleSessionListAddresses : [];
+        hydratedSessionListViewportRef.current = { addresses, resetVersion: visibilityResetVersion };
+        if (addresses.length === 0) return;
+        const entered = addresses.filter(address => !previousKeys.has(audienceSessionAddressKey(address)));
+        const release = retainVisibleSessionListSurfaces(visibleSessionListAddresses);
+        if (entered.length > 0) {
+            fireAndForget(sync.hydrateSessionListRows(entered), {
+                tag: 'sessionsList.hydrateVisibleRows',
+            });
+        }
+        return release;
+    }, [surfaceOwnership.dataActive, visibilityResetVersion, visibleSessionListAddresses]);
     const statusDemandSubscriptionItems = React.useMemo(() => {
         if (viewableSessionRowKeys !== null) {
             const visibleItems: Array<Extract<SessionListIndexItem, { type: 'session' }>> = [];
@@ -1476,14 +1578,8 @@ export function useSessionListViewStateFromPaneState(
             return visibleItems;
         }
 
-        const loadedItems: Array<Extract<SessionListIndexItem, { type: 'session' }>> = [];
-        for (const item of renderedListItems) {
-            if (item.type !== 'session') continue;
-            loadedItems.push(item);
-            if (loadedItems.length >= EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1) break;
-        }
-        return loadedItems;
-    }, [renderedListItems, sessionListItemBySelectionKey, viewableSessionRowKeys]);
+        return [];
+    }, [sessionListItemBySelectionKey, viewableSessionRowKeys]);
     // The rows' content is read by the demand publisher leaf (`SessionListExternalStatusDemandPublisher`),
     // not here: subscribing the list to every listed row re-rendered the whole list on each session write.
     const externalStatusDemand = React.useMemo(() => ({
@@ -1686,17 +1782,18 @@ export function useSessionListViewStateFromPaneState(
                 placeholder: t('sessionsList.folderNamePlaceholder'),
             },
         );
-        if (name == null) return;
-        const created = createSessionFolder({
-            current: availableSessionFoldersV1,
+        if (name == null) {
+            cancelFolderCreationAttempt();
+            return;
+        }
+        runFolderCreationAttempt({
             workspace,
             renderWorkspaceKey: item.workspaceKey,
             parentId: null,
             name,
-            now: Date.now(),
+            serverId: workspace.serverId,
         });
-        runOrganizationMutation(async () => setSessionFoldersV1(created.next, await getAvailableOrganizationMutationScope(workspace.serverId)));
-    }, [availableSessionFoldersV1, getAvailableOrganizationMutationScope, runOrganizationMutation, setSessionFoldersV1]);
+    }, [cancelFolderCreationAttempt, runFolderCreationAttempt]);
 
     const handleFocusSessionFolder = React.useCallback((item: Extract<SessionListIndexItem, { type: 'header' }>) => {
         if (!item.folderId || !item.workspace) return;
@@ -1729,17 +1826,18 @@ export function useSessionListViewStateFromPaneState(
                 placeholder: t('sessionsList.folderNamePlaceholder'),
             },
         );
-        if (name == null) return;
-        const created = createSessionFolder({
-            current: availableSessionFoldersV1,
+        if (name == null) {
+            cancelFolderCreationAttempt();
+            return;
+        }
+        runFolderCreationAttempt({
             workspace: item.workspace,
             renderWorkspaceKey: item.workspaceKey,
             parentId: item.folderId,
             name,
-            now: Date.now(),
+            serverId: item.serverId ?? item.workspace.serverId,
         });
-        runOrganizationMutation(async () => setSessionFoldersV1(created.next, await getAvailableOrganizationMutationScope(item.serverId ?? item.workspace?.serverId)));
-    }, [availableSessionFoldersV1, getAvailableOrganizationMutationScope, runOrganizationMutation, setSessionFoldersV1]);
+    }, [cancelFolderCreationAttempt, runFolderCreationAttempt]);
 
     const handleRenameFolder = React.useCallback(async (item: Extract<SessionListIndexItem, { type: 'header' }>) => {
         if (!item.folderId) return;
@@ -2109,6 +2207,7 @@ export function useSessionListViewStateFromPaneState(
         rowInteractions.handleNativeContextMenuOpenChangeSessionKey,
         rowInteractions.handleSetTagsSessionKey,
         rowInteractions.handleTogglePinnedSessionKey,
+        rowInteractions.nativeContextMenuSessionKey,
         rowInteractions.registerTreeRowBounds,
         rowInteractions.resolveTreeDropResult,
         rowInteractions.unregisterTreeRowBounds,
@@ -2206,6 +2305,7 @@ export function useSessionListViewStateFromPaneState(
     nodeByIdRef.current = nodeById;
     const viewabilityConfigRef = React.useRef({ itemVisiblePercentThreshold: 1 });
     const handleViewableItemsChangedRef = React.useRef((info: { viewableItems: ViewToken[] }) => {
+        if (!surfaceDataActiveRef.current) return;
         const nextKeys = new Set<string>();
         for (const token of info.viewableItems) {
             if (token.isViewable === false) continue;

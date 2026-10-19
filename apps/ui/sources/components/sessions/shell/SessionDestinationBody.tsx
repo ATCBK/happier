@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { useDestinationParams, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { TranscriptSameSessionHandoffProvider } from '@/components/sessions/transcript/viewport/lifecycle/transcriptSameSessionHandoff';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
@@ -214,9 +213,11 @@ export function SessionDestinationBody() {
             desiredExperience={useCockpitExperience ? 'cockpit' : 'classic'}
             sessionAddressKey={sessionSurfaceKey}
         >
-            {(experience) => experience === 'cockpit'
-                ? (
+            {(experience) => (
                     <SessionCockpitShell
+                        experience={experience}
+                        surfaceFocusedOverride={focused}
+                        surfaceVisibleOverride={visible}
                         sessionId={sessionId}
                         scopeId={scopeId}
                         surface={resolveSessionMobileSurfaceIntent({
@@ -232,20 +233,6 @@ export function SessionDestinationBody() {
                         terminalTabAvailable={terminalTabAvailable}
                         routeServerId={routeServerId.trim() || undefined}
                         routeHydrationState={routeHydrationState}
-                    />
-                )
-                : (
-                    // A split is the workspace's: this tab is one Session, and its tabs live in the title bar.
-                    <SessionView
-                        id={sessionId}
-                        routeServerId={routeServerId.trim() || undefined}
-                        routeHydrationState={routeHydrationState}
-                        jumpToSeq={jumpToSeq}
-                        paneUrlState={paneUrlState ?? undefined}
-                        initialAttachmentDrafts={recoverableAttachmentDrafts}
-                        surfaceFocusedOverride={focused}
-                        surfaceVisibleOverride={visible}
-                        routeAnchorOverride={focused && visible}
                     />
                 )}
         </TranscriptSameSessionHandoffProvider>

@@ -7,8 +7,6 @@ import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/rend
 import 'fake-indexeddb/auto';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -164,21 +162,11 @@ installSessionShellCommonModuleMocks({
     },
     storage: async importOriginal => importOriginal(),
 });
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => vi.fn(),
-}));
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
     canResumeSessionWithOptions: () => false,
 }));
 vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
     useResumeCapabilityOptions: () => [],
-}));
-vi.mock('@/sync/domains/input/reviewComments/reviewCommentPrompt', () => ({
-    buildReviewCommentsDisplayText: () => '',
-    buildReviewCommentsPromptText: () => '',
-}));
-vi.mock('@/sync/domains/input/reviewComments/reviewCommentMeta', () => ({
-    buildReviewCommentsV1MetaPayload: () => ({}),
 }));
 vi.mock('@/sync/domains/input/slashCommands/resolveSessionComposerSend', () => ({
     resolveSessionComposerSend: () => null,
@@ -188,9 +176,6 @@ vi.mock('@/sync/domains/input/slashCommands/expandPromptTemplateInvocation', () 
 }));
 vi.mock('@/sync/domains/permissions/permissionModeApply', () => ({
     applyPermissionModeSelection: vi.fn(),
-}));
-vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
-    supportsSessionModeOverrides: () => false,
 }));
 vi.mock('@/track', () => ({
     tracking: null,
@@ -312,16 +297,13 @@ describe('SessionView read cursor on blur', () => {
         await home.addHome({ name: 'Previous Home', serverUrl: 'https://home-b', accountId: 'account-a', active: false });
         await home.addHome({ name: 'Next Home', serverUrl: 'https://home-a', accountId: 'account-a', active: false });
         await loadSyncSingletonForTests();
-        account = await restoreServerAccountForTest({ serverUrl: 'https://server-1', request: async url => {
-            const path = new URL(String(url)).pathname;
-            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
-            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            if (path.endsWith('/pending')) return Response.json({ pending: [] });
-            if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
-            return new Response('{}', { status: 404 });
-        } });
+        account = await restoreServerAccountForTest({ serverUrl: 'https://server-1', accountId: 'account-a',
+            additionalRequestOrigins: ['https://home-b', 'https://home-a'], request: home.request,
+        });
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().profile.id).toBe('account-a');
+            expect(storage.getState().isDataReady).toBe(true);
+        });
         sessionState.current = createSessionFixture({ ...sessionState.current, serverId: account.home.id, accessLevel: 'owner', seq: 2 });
         storage.getState().applySessions([sessionState.current, createSessionFixture({ id: 's2', serverId: account.home.id, seq: 9 })]);
         storage.getState().applyServerScopedSessionListRows('home-b', [createSessionListRenderableSessionFixture({ id: 'same-session', seq: 2 })], { source: 'rowOnly', mode: 'append' });

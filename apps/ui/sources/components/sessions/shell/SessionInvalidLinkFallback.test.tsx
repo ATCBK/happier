@@ -21,8 +21,10 @@ describe('Session Home chooser', () => {
         const address = 'https://home.example.test';
         const unnamedId = await homes.addHome({ name: 'home.example.test', serverUrl: address, accountId: 'chooser-account' });
         const namedId = await homes.addHome({ name: 'Studio', serverUrl: 'https://studio.example.test', accountId: 'chooser-account' });
-        const features = createRootLayoutFeaturesResponse();
-        features.homePresentation = { v: 1, displayName: 'Published studio' };
+        const features = {
+            ...createRootLayoutFeaturesResponse(),
+            homePresentation: { v: 1 as const, displayName: 'Published studio' },
+        };
         primeServerFeaturesSnapshot({ serverId: namedId, snapshot: { status: 'ready', features } });
         const screen = await renderScreen(
             <InjectedAuthProvider credentials={null}>

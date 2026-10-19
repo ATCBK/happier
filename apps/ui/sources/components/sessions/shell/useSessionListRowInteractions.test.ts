@@ -299,9 +299,9 @@ describe('useSessionListRowInteractions', () => {
         const account = await restoreServerAccountForTest({ serverUrl: 'https://pointer-put-under.test', accountId: ACTIVE_SCOPE.accountId,
             credentials: { token: createAccountTokenForTests(ACTIVE_SCOPE.accountId) }, request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
-                if (path.endsWith('/reports-to/options')) {
+                if (path.endsWith('/manager/options')) {
                     const input = JSON.parse(String(init?.body)) as { candidateSessionIds: string[] };
-                    return Response.json({ sessionId: 's2', currentLeadSessionId: null,
+                    return Response.json({ sessionId: 's2', currentManagerSessionId: null,
                         candidates: input.candidateSessionIds.map(sessionId => ({ sessionId, allowed: true })) });
                 }
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -346,7 +346,7 @@ describe('useSessionListRowInteractions', () => {
                 let resolved: UseSessionInlineDragResolvedDrop | undefined;
                 act(() => { resolved = hook.getCurrent().resolveDropResult({ sessionKey, groupKey, dataIndex, pointer: { x: 10, y: 170 } }); });
                 expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().admission).toMatchObject({ status: 'allowed',
-                    effect: { actionId: 'session.reports_to.set', input: { sessionId: 's2', leadSessionId: 's1' } } });
+                    effect: { actionId: 'session.manager.set', input: { sessionId: 's2', managerSessionId: 's1' } } });
                 expect(resolved!.geometry).toMatchObject({ kind: 'outline', targetId: treeRowId.session(serverId, 's1'),
                     geometry: { top: 100, height: 40 } });
             });

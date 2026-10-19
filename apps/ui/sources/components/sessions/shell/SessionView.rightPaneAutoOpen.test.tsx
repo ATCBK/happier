@@ -135,8 +135,8 @@ describe('SessionView (right pane auto-open)', () => {
     it('keeps URL pane sync enabled when multi-pane setting is unset', async () => {
         // A missing persisted preference is normalized by the real LocalSettings owner.
         const { uiMultiPanePanelsEnabled: _removed, ...saved } = storage.getState().localSettings;
-        const { LocalSettingsSchema } = await import('@/sync/domains/settings/localSettings');
-        storage.setState({ localSettings: LocalSettingsSchema.parse(saved) });
+        const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+        storage.setState({ localSettings: localSettingsParse(saved) });
         await renderSessionView({ rightTabId: 'git' });
         expect(pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'git' });
     });

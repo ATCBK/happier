@@ -15,6 +15,8 @@ import {
     useComposerKeyboardLayout,
 } from '@/components/sessions/keyboardAvoidance';
 import { SessionViewLayout } from '@/components/sessions/shell/view/SessionViewLayout';
+import { TRANSCRIPT_TOP_GUTTER_PX } from '@/components/sessions/transcript/_constants';
+import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { EmbeddedSessionPartSlotPublication } from './EmbeddedSessionPartSlots';
@@ -86,6 +88,18 @@ function useEmbeddedSessionPartClaim(parts: readonly SessionPartKind[]): boolean
     return useSessionPartClaim(claims, parts);
 }
 
+/**
+ * An embedded transcript scrolls under whatever the mount draws above it (a toolbar, a header), and
+ * it rests at its newest turn, so the first visible row is usually cut mid-line. The region's top
+ * edge therefore fades into the surface over the transcript's own top gutter: at rest the fade sits
+ * inside the gutter, and a scrolled transcript meets the edge softly instead of being clipped.
+ */
+function EmbeddedSessionTranscriptTopEdge() {
+    const { theme } = useUnistyles();
+    return <ScrollEdgeFades color={theme.colors.surface.base} size={TRANSCRIPT_TOP_GUTTER_PX} edges={TOP_EDGE} />;
+}
+const TOP_EDGE = Object.freeze({ top: true });
+
 /** The live transcript with its prompts; fills the remaining height of its bounded flex column. */
 export function EmbeddedSessionTranscriptPart(props: Readonly<{ testID?: string }>) {
     const parts = useEmbeddedSessionParts();
@@ -110,6 +124,7 @@ export function EmbeddedSessionTranscriptPart(props: Readonly<{ testID?: string 
                     {parts.transcript}
                 </View>
             ) : null}
+            {parts.transcript ? <EmbeddedSessionTranscriptTopEdge /> : null}
             {parts.placeholder ? (
                 <View
                     style={{
@@ -195,6 +210,7 @@ export function EmbeddedSessionStandardLayout(props: Readonly<{ testID?: string 
                 onBackPress={noop}
                 chatBottomSpacing={parts.chatBottomSpacing}
             />
+            <EmbeddedSessionTranscriptTopEdge />
         </View>
     );
 }

@@ -60,7 +60,7 @@ describe('resolveSessionCompanionContentItems', () => {
             { pluginId: 'acme.review', localId: 'glance' },
             { pluginId: 'acme.review', localId: 'board-only' },
         ], { 'acme.review': widgetInstalledPackage('acme.review', 'Review') });
-        const runtime = { pluginUiProjection, pluginBrowserProjection: null, phase: 'current' as const, interactionEnabled: true, machineId: 'm1', serverId: 'home1', platform: 'web' as const };
+        const runtime = { pluginUiProjection, pluginBrowserProjection: null, phase: 'current' as const, interactionEnabled: true, machineId: 'm1', serverId: 'home1', platform: 'web' as const, accountLifetime: null };
         const direct = (localId: string) => ({ kind: 'instance' as const, instance: { v: 1 as const, id: `copy-${localId}`, definition: { kind: 'installed' as const, surface: { pluginId: 'acme.review', localId } }, bindings: {} } });
         expect(canAddSessionCompanionItem(direct('glance'), runtime)).toBe(true);
         expect(canAddSessionCompanionItem(direct('board-only'), runtime)).toBe(true);

@@ -84,6 +84,7 @@ describe('useSessionListRenderModels', () => {
             responsibleAccount: {
                 kind: 'account' as const,
                 accountId: 'account-a',
+                name: 'Alice Private',
                 firstName: 'Alice',
                 lastName: 'Private',
                 username: 'alice-private',
@@ -102,6 +103,7 @@ describe('useSessionListRenderModels', () => {
             responsibleAccount: {
                 kind: 'account' as const,
                 accountId: 'account-b',
+                name: 'Bob Current',
                 firstName: 'Bob',
                 lastName: 'Current',
                 username: 'bob-current',

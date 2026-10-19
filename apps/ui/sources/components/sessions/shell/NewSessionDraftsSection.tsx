@@ -475,9 +475,9 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
         const installedPluginIds = new Set(Object.keys(currentPluginProjection?.installedPackagesById ?? {}));
         return Object.fromEntries(drafts.map((draft) => {
             const machineId = resolveNewSessionDraftMachineId(draft);
-            const attachmentSummary = currentPluginProjection
+            const attachmentSummary = currentPluginProjection && draft.readView
                 ? summarizeComposerAttachmentDraftAvailability({
-                    values: draft.document.composer.attachments.value,
+                    values: draft.readView.composer.attachments.value,
                     catalog: { entriesById: currentPluginProjection.composerAttachmentsById },
                     installedPluginIds,
                 })

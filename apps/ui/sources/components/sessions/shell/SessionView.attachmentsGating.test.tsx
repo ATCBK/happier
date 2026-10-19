@@ -1,30 +1,41 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
-import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { MachineOperationProtocolCapabilitiesV1Schema } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { readServerEnabledBit, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { createTextModuleMock } from '@/dev/testkit/mocks/text';
-import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import type { Session } from '@/sync/domains/state/storageTypes';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const goalRequests: Array<{ method: string; params: unknown }> = [];
 const abortRequests: Array<{ method: string; params: unknown }> = [];
 let abortAcknowledgement: Promise<void> = Promise.resolve();
+let releaseAbortAcknowledgement: (() => void) | undefined;
+const agentInventory = createReadyMachineAgentInventoryFixture([{ agentId: 'codex', title: 'Codex' }]);
 installDisconnectedServerSocketBoundary((socket) => {
   vi.mocked(socket.connect).mockImplementation(() => {
     socket.connected = true;
@@ -33,12 +44,20 @@ installDisconnectedServerSocketBoundary((socket) => {
   });
   vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
     if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
-    const request = payload as { method: string; params: unknown };
+    if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
+      throw new Error('Malformed attachment-gating RPC envelope');
+    }
+    const request = { method: payload.method, params: payload.params };
+    const method = request.method.slice(request.method.indexOf(':') + 1);
+    if (method === RPC_METHODS.CAPABILITIES_DETECT) return { ok: true, result: agentInventory.capabilities };
+    if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { ok: true,
+      result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: agentInventory.projection }),
+    };
     if (request.method === `s1:${SESSION_RPC_METHODS.SESSION_GOAL_SET}`) {
       goalRequests.push({ method: request.method, params: request.params });
       return { ok: true, result: { ok: true } };
     }
-    if (request.method !== 's1:abort') throw new Error(`Unexpected attachment-gating RPC: ${request.method}`);
+    if (request.method !== 's1:abort') return { ok: false, error: 'Daemon method unavailable', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
     abortRequests.push({ method: request.method, params: request.params });
     await abortAcknowledgement;
     return { ok: true, result: null };
@@ -48,120 +67,47 @@ let sessionHomeId: string;
 let otherHomeId: string;
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 
-vi.mock('@/components/ui/code/editor/CodeEditor', () => ({ CodeEditor: () => null }));
-vi.mock('@/components/sessions/companion/presentation/SessionCompanionPresentationBridge', () => ({
-  SessionCompanionPresentationBridge: () => null,
-}));
-vi.mock('@/components/sessions/companion/SessionCompanionHost', () => ({
-  SessionCompanionHost: () => null,
-}));
-vi.mock('@/components/sessions/board/SessionBoardControllerProvider', () => ({
-  SessionBoardControllerProvider: ({ children }: React.PropsWithChildren) => children,
-  useMountedSessionBoardController: () => null,
-}));
-
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).__DEV__ = false;
-const sessionState = vi.hoisted(() => ({
-  session: {
-    id: 's1',
-    serverId: 'server-1',
-    metadata: {
-      machineId: 'm1',
-      host: 'tester.local',
-      flavor: 'codex',
-      version: '0.0.0',
-      path: '/tmp',
-      homeDir: '/tmp',
-    },
-    accessLevel: 'edit',
-    access: { level: 'edit', capabilities: { readTranscript: true, submitAgentInput: true } },
-    canApprovePermissions: true,
-    agentState: { controlledByUser: true },
-  } as any,
-}));
+const sessionState: { session: Session } = { session: createSessionFixture({ id: 's1' }) };
 
 const attachmentsTransferAvailableState = vi.hoisted(() => ({ value: true }));
 const attachmentsFeatureScopeState = vi.hoisted(() => ({ enabledForServerId: null as string | null }));
 const modalAlertSpy = vi.hoisted(() => vi.fn());
 
-installSessionShellCommonModuleMocks({
-  reactNative: async () =>
-    createReactNativeWebMock({
-      AppState: { currentState: 'active', addEventListener: vi.fn(() => ({ remove() {} })) },
-      View: 'View',
-      Text: 'Text',
-      Pressable: 'Pressable',
-      ActivityIndicator: 'ActivityIndicator',
-      Easing: {
-        bezier: vi.fn(() => ({})),
-      },
-      Animated: {
-        View: 'Animated.View',
-        Value: class {
-          private _v: number;
-
-          constructor(v: number) {
-            this._v = v;
-          }
-
-          // Minimal stub for Animated.Value used by MultiPaneHost.
-          interpolate() {
-            return this;
-          }
-        },
-        timing: () => ({
-          start: (cb?: any) => cb?.({ finished: true }),
-        }),
-      },
-      AccessibilityInfo: {
-        isReduceMotionEnabled: vi.fn(async () => false),
-        addEventListener: vi.fn(() => ({ remove: vi.fn() })),
-      },
+vi.mock('react-native', async () => {
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeNativeMock({ platformOS: 'ios' }, {
       Dimensions: {
-        get: () => ({ width: 800, height: 600, scale: 2, fontScale: 1 }),
+        get: () => ({ width: 390, height: 844, scale: 2, fontScale: 1 }),
       },
-      useWindowDimensions: () => ({ width: 1200, height: 800 }),
-      Platform: {
-        OS: 'ios',
-        select: (spec: Record<string, unknown>) =>
-          spec && Object.prototype.hasOwnProperty.call(spec, 'ios') ? (spec as any).ios : (spec as any).default,
-      },
-    }),
-  unistyles: async () =>
-    createUnistylesMock(),
-  text: async () => createTextModuleMock({ translate: (key) => key }),
-  modal: async () =>
-    createModalModuleMock({
+      useWindowDimensions: () => ({ width: 390, height: 844, scale: 2, fontScale: 1 }),
+    });
+});
+vi.mock('react-native-keyboard-controller', async () =>
+  (await import('@/dev/testkit/mocks/keyboardController')).createKeyboardControllerModuleMock());
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key) => key });
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
       spies: {
         alert: modalAlertSpy,
         confirm: vi.fn(),
         prompt: vi.fn(),
       },
-    }).module,
-  router: async () =>
-    createExpoRouterMock({
+    }).module;
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({
       router: { push: vi.fn(), back: vi.fn() },
       pathname: '/',
-    }).module,
-  registryUiBehavior: async () => ({
-    buildResumeCapabilityOptionsFromUiState: () => ({}),
-    buildNewSessionOptionsFromUiState: () => ({}),
-    canSelectAgentWithoutDetectedCli: () => false,
-    getNewSessionAgentInputExtraActionChips: () => [],
-    buildSpawnEnvironmentVariablesFromUiState: () => ({}),
-    buildResumeSessionExtrasFromUiState: () => ({}),
-    buildSpawnSessionExtrasFromUiState: () => ({}),
-    buildWakeResumeExtras: () => ({}),
-    getAgentResumeExperimentsFromSettings: () => ({ enabled: true, switches: {} }),
-    getNewSessionPreflightIssues: () => [],
-    getNewSessionRelevantInstallableDepKeys: () => [],
-    resolveAgentUiBehavior: () => ({}),
-    resolveAgentUiBehaviorFromFlavor: () => ({}),
-    resolveAgentUiBehaviorFromSessionMetadata: () => ({}),
-  }),
-  storage: async (importOriginal) => importOriginal(),
+    }).module;
 });
 
 vi.doUnmock('@/sync/domains/state/storage');
@@ -191,35 +137,7 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-vi.mock('@react-navigation/native', () => ({
-  ...createReactNavigationNativeMock(),
-  useFocusEffect: () => {},
-}));
-
-vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
-  AgentContentView: (props: any) => React.createElement('AgentContentView', props, props.input ?? null),
-}));
-vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
-  ChatHeaderView: () => null,
-}));
-vi.mock('@/components/sessions/transcript/ChatList', () => ({
-  ChatList: () => null,
-}));
-vi.mock('@/components/ui/empty/EmptyMessages', () => ({
-  EmptyMessages: () => null,
-}));
-vi.mock('@/components/ui/forms/Deferred', () => ({
-  Deferred: (props: any) => React.createElement(React.Fragment, null, props.children),
-}));
-vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', () => ({
-  SessionHeaderActionMenu: () => null,
-}));
-vi.mock('@/components/voice/surface/VoiceSurface', () => ({
-  VoiceSurface: () => null,
-}));
-vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
-  AttachmentFilePicker: () => null,
-}));
+vi.mock('@react-navigation/native', () => createReactNavigationNativeMock());
 
 const featureEnabledState: Record<string, boolean> = {
   voice: false,
@@ -227,98 +145,40 @@ const featureEnabledState: Record<string, boolean> = {
   'execution.runs': false,
   'attachments.uploads': false,
 };
-vi.mock('@/utils/platform/responsive', () => ({
-  getDeviceType: () => 'phone',
-  useDeviceType: () => 'phone',
-  useHeaderHeight: () => 0,
-  useIsLandscape: () => false,
-  useIsTablet: () => false,
-}));
-vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
-  getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
-}));
 
-vi.mock('@/voice/session/voiceSession', () => ({
-  useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
-  voiceSessionManager: {},
-}));
-
-
-
-vi.mock('@/components/sessions/agentInput', () => ({
-  AgentInput: (props: any) => React.createElement('AgentInput', props),
-}));
-
-vi.mock('@/hooks/server/useAutomationsSupport', () => ({
-  useAutomationsSupport: () => ({ enabled: false }),
-}));
-
-vi.mock('@/utils/system/versionUtils', () => ({
-  isVersionSupported: () => true,
-  MINIMUM_CLI_VERSION: '0.0.0',
-}));
-
-vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
-  useResumeCapabilityOptions: () => ({}),
-}));
-vi.mock('@/agents/runtime/resumeCapabilities', () => ({
-  canResumeSessionWithOptions: () => true,
-  getAgentVendorResumeId: () => '',
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', async (importOriginal) => {
-  const actual = await importOriginal<any>();
-  return {
-    ...actual,
-    useMachineCapabilitiesCache: () => ({ state: { status: 'loaded', snapshot: { response: { results: [] } } } }),
-    prefetchMachineCapabilities: vi.fn(),
-    getMachineCapabilitiesSnapshot: vi.fn(),
-  };
+let browser = await installBrowserRuntimeForTests({ url: 'https://attachments-session.test', userAgent: 'iPhone' });
+const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
+Object.defineProperty(globalThis, 'Image', { configurable: true, writable: true, value: browser.window.Image });
+afterAll(() => {
+  if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
+  else Reflect.deleteProperty(globalThis, 'Image');
+  browser.restore();
 });
-vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => {
-  const actual = await importOriginal<any>();
-  return {
-    ...actual,
-    useSessionStatus: () => ({ statusText: '', statusColor: '#000', statusDotColor: '#000' }),
-    shouldShowAbortButtonForSessionState: () => false,
-    getSessionAvatarId: () => '1',
-    getSessionName: () => 'Session',
-    listPendingPermissionRequests: () => [],
-    listPendingUserActionRequests: () => [],
-    formatPathRelativeToHome: () => '',
-    getSessionSubtitle: () => '',
-  };
-});
-vi.mock('@/utils/platform/platform', () => ({
-  isRunningOnMac: () => false,
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-  fireAndForget: (p: any) => void p,
-}));
-vi.mock('@/sync/domains/session/control/submitMode', () => ({
-  chooseSubmitMode: () => 'direct',
-}));
-vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/session/control/localControlSwitch')>(),
-  shouldRenderChatTimelineForSession: () => true,
-}));
-vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
-  supportsSessionModeOverrides: () => false,
-}));
-vi.mock('@/sync/ops/sessionSwitch', () => ({
-  sessionSwitch: vi.fn(),
-}));
-vi.mock('@/sync/domains/automations/automationSessionLink', () => ({
-  countEnabledAutomationDefinitionsLinkedToSession: () => 0,
-}));
+// Native's runtime singleton and Metro's call-time require bridge stay real.
+await loadSyncSingletonForTests();
+// Observe the actual detached dispatch; do not replace its work or rejection handling.
+const fireAndForgetSpy = vi.spyOn(await import('@/utils/system/fireAndForget'), 'fireAndForget');
 
 // The shared boundary factories must be configured before a storage consumer is imported.
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { SessionView } = await import('./SessionView');
+const { AgentInput } = await import('@/components/sessions/agentInput');
+const { MINIMUM_CLI_VERSION } = await import('@/utils/system/versionUtils');
 const { storage } = await import('@/sync/domains/state/storage');
 const { useSessionFileUploadAvailability } = await import('@/components/sessions/files/useSessionFileUploadAvailability');
-const { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { useSessionMachineReachability } = await import('@/components/sessions/model/useSessionMachineReachability');
+const { useServerScopedMachine, useSessionRpcAvailabilityState } = await import('@/sync/domains/state/storage');
+const { isIrohMachineTransferLifecycleAvailable } = await import('@/sync/runtime/nativeIrohTunnels/machineTransferLifecycle');
+const { getCachedServerFeaturesSnapshot, getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { useServerFeaturesSnapshotForServerId } = await import('@/sync/domains/features/featureDecisionRuntime');
+const { useFeatureEnabled } = await import('@/hooks/server/useFeatureEnabled');
+const { getFeatureBuildPolicyDecision } = await import('@/sync/domains/features/featureBuildPolicy');
+const { isMachineDaemonFiniteTransferApplicationSupported, isMachineDaemonIrohTransferApplicationSupported } = await import('@/sync/domains/transfers/runtime/transferRuntime/availability/machineDaemonTransferState');
+const { readCurrentMachineIrohEndpoint } = await import('@/sync/domains/transfers/runtime/transferRuntime/routing/resolveMachineCarrierPreselection');
 let actualUploadAvailability = false;
+let actualGoalsEnabled = false;
+let uploadPrerequisites: Record<string, unknown> = {};
 let previousStorageState: ReturnType<typeof storage.getState>;
 
 function serverFeatures(serverId: string) {
@@ -334,72 +194,161 @@ function serverFeatures(serverId: string) {
 }
 
 function TransferAvailabilityProbe() {
+  actualGoalsEnabled = useFeatureEnabled('agents.goals');
   actualUploadAvailability = useSessionFileUploadAvailability('s1', sessionState.session.serverId, 'attachment');
+  const reachability = useSessionMachineReachability('s1', sessionState.session.serverId);
+  const machine = useServerScopedMachine(sessionState.session.serverId, 'm1');
+  const session = useSessionRpcAvailabilityState('s1');
+  const scopedFeatures = useServerFeaturesSnapshotForServerId(sessionState.session.serverId);
+  uploadPrerequisites = {
+    sessionExists: session.sessionExists,
+    machinePresent: Boolean(machine),
+    machineRpcTargetAvailable: reachability.machineRpcTargetAvailable,
+    machineReachability: reachability.machineReachability,
+    serverFeaturesStatus: getCachedServerFeaturesSnapshot({ serverId: sessionState.session.serverId })?.status,
+    nativeLifecycleAvailable: isIrohMachineTransferLifecycleAvailable(),
+    applicationCarrierEligibility: storage.getState().localSettings.homeApplicationCarrierEligibility,
+    scopedServerFeaturesStatus: scopedFeatures.status,
+    transferFeatureBits: Object.fromEntries((['machines.transfer', 'machines.transfer.directPeer', 'machines.peerMediation'] as const).map(feature => [feature,
+      scopedFeatures.status === 'ready' ? readServerEnabledBit(scopedFeatures.features, feature) : null])),
+    finiteTransferApplicationSupported: isMachineDaemonFiniteTransferApplicationSupported(machine?.daemonState),
+    irohTransferApplicationSupported: isMachineDaemonIrohTransferApplicationSupported(machine?.daemonState),
+    acceptedIrohEndpointPresent: Boolean(readCurrentMachineIrohEndpoint({
+      capabilities: machine?.operationProtocolCapabilities, revision: machine?.operationProtocolCapabilitiesRevision,
+      active: machine?.active, revokedAt: machine?.revokedAt,
+    })),
+  };
   return null;
 }
 
 async function renderScreen(element: Parameters<typeof renderCanonicalScreen>[0]) {
   storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
     'attachments.uploads': featureEnabledState['attachments.uploads'] === true,
-    'agents.goals': featureEnabledState['agents.goals'] === true,
   } });
   for (const serverId of [sessionHomeId, otherHomeId]) {
     home.answer(serverId, '/v1/features', { body: serverFeatures(serverId) });
     home.answer(serverId, '/v1/features/authenticated', { body: serverFeatures(serverId) });
   }
   resetServerFeaturesClientForTests();
-  await getServerFeaturesSnapshot({ serverId: sessionState.session.serverId });
+  expect((await getServerFeaturesSnapshot({ serverId: sessionState.session.serverId })).status).toBe('ready');
+  const { sync } = await import('@/sync/sync');
+  // A store row alone is not Home admission after an empty Account snapshot.
+  // Exercise the same exact by-ID HTTP owner that the Session route uses.
+  const admission = await sync.ensureSessionVisibleForMessageRoute('s1', {
+    serverId: sessionState.session.serverId, forceRefresh: true, hydrateMessages: false,
+  });
+  expect(admission.kind).toBe('available');
+  sessionState.session = storage.getState().sessions.s1;
   const screen = await renderCanonicalScreen(<InjectedAuthProvider credentials={account.credentials}>
     <TransferAvailabilityProbe />{element}
-  </InjectedAuthProvider>);
+  </InjectedAuthProvider>, { createNodeMock: element => Object.assign(
+    document.createElement(element.type === 'TextInput' ? 'textarea' : 'div'), {
+      setNativeProps() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+    }) });
+  const metadata = readSessionOwnerMetadataView(sessionState.session);
   const expectsTransferAvailable = attachmentsTransferAvailableState.value
-    && Boolean(sessionState.session.metadata?.machineId && sessionState.session.metadata?.path);
-  await vi.waitFor(() => expect(actualUploadAvailability).toBe(expectsTransferAvailable));
+    && Boolean(metadata?.machineId && metadata.path);
+  await waitForHomeGovernance(() => expect(actualUploadAvailability, JSON.stringify(uploadPrerequisites)).toBe(expectsTransferAvailable));
   return screen;
+}
+
+function createTransferMachine() {
+  return createMachineFixture({ id: 'm1', kind: 'persistent', active: true, activeAt: Date.now(), revokedAt: null,
+    operationProtocolCapabilitiesRevision: 1,
+    operationProtocolCapabilities: MachineOperationProtocolCapabilitiesV1Schema.parse({
+      finiteTransferRpc: { protocolVersions: [1] },
+      irohMachineEndpoint: { protocolVersions: [1], endpointId: 'a'.repeat(64), directAddresses: ['127.0.0.1:48128'] },
+    }),
+    daemonState: MachinePublishedDaemonStateV1Schema.parse({ status: 'running', transfer: { supported: { import: true, export: true },
+      listenerClasses: { loopback_http: { enabled: true, configured: true, active: false }, tailscale_serve_https: { enabled: false, configured: false, active: false } },
+      lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
+    } }),
+  });
+}
+
+function createTransferMachineRow() {
+  const machine = createTransferMachine();
+  return {
+    ...createPlainMachineRowFixture({ id: machine.id, accountId: 'u1' }),
+    activeAt: machine.activeAt,
+    metadata: encodePlainMachineStoredContent(machine.metadata),
+    daemonState: encodePlainMachineStoredContent(machine.daemonState),
+    operationProtocolCapabilities: machine.operationProtocolCapabilities,
+    operationProtocolCapabilitiesRevision: machine.operationProtocolCapabilitiesRevision,
+  };
 }
 
 function applySessionFixture() {
   storage.getState().applySessions([sessionState.session]);
-  storage.getState().applyMachines([createMachineFixture({ id: 'm1', active: true, activeAt: Date.now(), revokedAt: null,
-    operationProtocolCapabilitiesRevision: 1,
-    operationProtocolCapabilities: {
-      finiteTransferRpc: { protocolVersions: [1] },
-      irohMachineEndpoint: { protocolVersions: [1], endpointId: 'a'.repeat(64), directAddresses: ['127.0.0.1:48128'], relayUrls: [] },
-    },
-    daemonState: { transfer: { supported: { import: true, export: true },
-      listenerClasses: { loopback_http: { enabled: false, configured: false, active: false }, tailscale_serve_https: { enabled: false, configured: false, active: false } },
-      lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
-    } },
-  })], true, { sourceServerId: sessionState.session.serverId });
+  storage.getState().applyMachines([createTransferMachine()], true, { sourceServerId: sessionState.session.serverId, sourceAccountId: 'u1' });
+}
+
+async function sendComposerAndWaitForTerminal(input: renderer.ReactTestInstance) {
+  const before = fireAndForgetSpy.mock.calls.length;
+  await renderer.act(async () => {
+    await input.props.onSend();
+    const dispatch = fireAndForgetSpy.mock.calls.slice(before).find(([, options]) => options?.tag === 'SessionView.composer.dispatch')?.[0];
+    if (!dispatch) throw new Error('Expected the actual composer dispatch promise');
+    await dispatch;
+  });
 }
 
 describe('SessionView attachments gating', () => {
   beforeEach(async () => {
+    // The package harness restores Node globals before each case. Install the
+    // physical browser port again before Home/Account captures its lifetime.
+    browser.restore();
+    browser = await installBrowserRuntimeForTests({ url: 'https://attachments-session.test', userAgent: 'iPhone' });
+    Object.defineProperty(globalThis, 'Image', { configurable: true, writable: true, value: browser.window.Image });
     previousStorageState = storage.getState();
     attachmentsTransferAvailableState.value = true;
     attachmentsFeatureScopeState.enabledForServerId = null;
     featureEnabledState['attachments.uploads'] = false;
     actualUploadAvailability = false;
+    actualGoalsEnabled = false;
+    uploadPrerequisites = {};
     abortRequests.length = 0;
     goalRequests.length = 0;
+    fireAndForgetSpy.mockClear();
     abortAcknowledgement = Promise.resolve();
+    releaseAbortAcknowledgement = undefined;
     await home.reset();
     sessionHomeId = await home.addHome({ name: 'Session Home', serverUrl: 'https://attachments-session.test', accountId: 'u1' });
     otherHomeId = await home.addHome({ name: 'Other Home', serverUrl: 'https://attachments-other.test', accountId: 'u1', active: false });
     await loadSyncSingletonForTests();
+    const accountHttp = createHomeHubArtifactHttpBoundary('u1');
     account = await restoreServerAccountForTest({
       serverUrl: 'https://attachments-session.test', accountId: 'u1',
-      request: async url => {
-        const path = new URL(String(url)).pathname;
+      additionalRequestOrigins: ['https://attachments-other.test'],
+      request: async (url, init) => {
+        const requestUrl = new URL(String(url));
+        const path = requestUrl.pathname;
+        const requestServerId = requestUrl.origin === 'https://attachments-other.test' ? otherHomeId : sessionHomeId;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
+          experiments: true,
+          featureToggles: {
+            'attachments.uploads': featureEnabledState['attachments.uploads'] === true,
+          },
+        } }, version: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(serverFeatures(sessionHomeId));
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(serverFeatures(requestServerId));
+        if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+          status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+        }));
+        if (path === '/v1/machines') return Response.json([createTransferMachineRow()]);
+        if (path === '/v1/machines/m1') return Response.json({ machine: createTransferMachineRow() });
+        if (path === '/v2/sessions/s1' && (init?.method ?? 'GET') === 'GET') {
+          return Response.json(createPlainSessionByIdResponseFixture(sessionState.session));
+        }
         if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
-        return Response.json({}, { status: 404 });
+        return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
       },
     });
+    await waitForHomeGovernance(() => expect(storage.getState()).toMatchObject({
+      isDataReady: true, profile: { id: 'u1' },
+    }));
     sessionState.session = createSessionFixture({
       id: 's1',
       serverId: sessionHomeId,
@@ -408,24 +357,33 @@ describe('SessionView attachments gating', () => {
         machineId: 'm1',
         host: 'tester.local',
         flavor: 'codex',
-        version: '0.0.0',
+        version: MINIMUM_CLI_VERSION,
+        codexSessionId: 'codex-session-1',
+        codexBackendMode: 'appServer',
         path: '/tmp',
         homeDir: '/tmp',
       },
       agentState: { controlledByUser: true },
     });
     storage.setState({ isDataReady: true });
-    storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false }, { persist: false });
+    // This native positive-availability fixture opts into the carrier it
+    // supplies. A retained standard_only preference disables native Iroh even
+    // when the Machine, feature discovery, and native lifecycle are all ready.
+    storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false, homeApplicationCarrierEligibility: 'automatic' }, { persist: false });
     applySessionFixture();
     modalAlertSpy.mockReset();
-    featureEnabledState['agents.goals'] = false;
   });
 
   afterEach(async () => {
+    releaseAbortAcknowledgement?.();
     standardCleanup();
     await account.dispose();
     await home.reset();
     storage.setState(previousStorageState, true);
+    vi.unstubAllEnvs();
+    browser.restore();
+    if (previousImage) Object.defineProperty(globalThis, 'Image', previousImage);
+    else Reflect.deleteProperty(globalThis, 'Image');
   });
 
   it('returns the session abort operation promise from the composer callback', async () => {
@@ -434,6 +392,7 @@ describe('SessionView attachments gating', () => {
     let resolveAbort!: () => void;
     const abortPromise = new Promise<void>((resolve) => {
       resolveAbort = resolve;
+      releaseAbortAcknowledgement = resolve;
     });
     abortAcknowledgement = abortPromise;
 
@@ -441,7 +400,7 @@ describe('SessionView attachments gating', () => {
           <SessionView id="s1" />
         </AppPaneProvider>)).tree;
 
-    const agentInput = tree.findByType('AgentInput' as any);
+    const agentInput = tree.findByType(AgentInput);
     const returnedAbort = agentInput.props.onAbort();
 
     expect(returnedAbort).toBeInstanceOf(Promise);
@@ -472,7 +431,7 @@ describe('SessionView attachments gating', () => {
           <SessionView id="s1" />
         </AppPaneProvider>)).tree;
 
-    const agentInput = tree.findByType('AgentInput' as any);
+    const agentInput = tree.findByType(AgentInput);
     expect(agentInput.props.onAttachmentsAdded).toBeUndefined();
   });
 
@@ -486,7 +445,7 @@ describe('SessionView attachments gating', () => {
           <SessionView id="s1" />
         </AppPaneProvider>)).tree;
 
-    const agentInput = tree.findByType('AgentInput' as any);
+    const agentInput = tree.findByType(AgentInput);
     expect(agentInput.props.onAttachmentsAdded).toBeUndefined();
   });
 
@@ -502,40 +461,48 @@ describe('SessionView attachments gating', () => {
           <SessionView id="s1" routeServerId={otherHomeId} />
         </AppPaneProvider>)).tree;
 
-    const agentInput = tree.findByType('AgentInput' as any);
+    const agentInput = tree.findByType(AgentInput);
     expect(agentInput.props.onAttachmentsAdded).toBeUndefined();
   });
 
   it('preserves slash-command alert titles from the command executor', async () => {
-    sessionState.session.metadata = { ...sessionState.session.metadata, agentRuntimeDescriptorV1: { v: 1, agentId: 'codex', provider: { backendMode: 'appServer' } } };
+    sessionState.session.metadata = { ...sessionState.session.metadata!, agentRuntimeDescriptorV1: { v: 1, agentId: 'codex', provider: { backendMode: 'appServer' } } };
     sessionState.session.agentState = { capabilities: { sessionGoalSetSupported: true, sessionGoalClearSupported: true } };
     applySessionFixture();
-    featureEnabledState['agents.goals'] = false;
+    // This client-only gate has no Account toggle or server bit. Exercise the
+    // supported build-policy off switch without replacing the feature decision.
+    vi.stubEnv('EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY', 'agents.goals');
     const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" /></AppPaneProvider>);
-    let input = screen.tree.findByType('AgentInput' as React.ElementType);
+    expect(getFeatureBuildPolicyDecision('agents.goals')).toBe('deny');
+    expect(actualGoalsEnabled).toBe(false);
+    let input = screen.tree.findByType(AgentInput);
+    expect((input.props.extraActionChips ?? []).some((chip: { controlId?: string }) => chip.controlId === 'goal')).toBe(false);
     await renderer.act(async () => { input.props.onChangeText('/goal set Ship goal UI'); });
-    input = screen.tree.findByType('AgentInput' as React.ElementType);
+    input = screen.tree.findByType(AgentInput);
     expect(input.props.value).toBe('/goal set Ship goal UI');
-    await renderer.act(async () => { await input.props.onSend(); });
-    await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'session.workState.unsupportedMessage'));
+    await sendComposerAndWaitForTerminal(input);
+    expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'session.workState.unsupportedMessage');
     expect(goalRequests).toEqual([]);
-    expect(screen.tree.findByType('AgentInput' as React.ElementType).props.value).toBe('/goal set Ship goal UI');
+    expect(screen.tree.findByType(AgentInput).props.value).toBe('/goal set Ship goal UI');
   });
 
   it('submits native goal mutations through the command executor when editable goals are enabled', async () => {
-    featureEnabledState['agents.goals'] = true;
-    sessionState.session.metadata = { ...sessionState.session.metadata, agentRuntimeDescriptorV1: { v: 1, agentId: 'codex', provider: { backendMode: 'appServer' } } };
+    sessionState.session.metadata = { ...sessionState.session.metadata!, agentRuntimeDescriptorV1: { v: 1, agentId: 'codex', provider: { backendMode: 'appServer' } } };
     sessionState.session.agentState = { capabilities: { sessionGoalSetSupported: true, sessionGoalClearSupported: true } };
     applySessionFixture();
     const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" /></AppPaneProvider>);
-    let input = screen.tree.findByType('AgentInput' as React.ElementType);
+    expect(getFeatureBuildPolicyDecision('agents.goals')).not.toBe('deny');
+    expect(actualGoalsEnabled).toBe(true);
+    let input = screen.tree.findByType(AgentInput);
+    await waitForHomeGovernance(() => expect((screen.tree.findByType(AgentInput).props.extraActionChips ?? [])
+      .some((chip: { controlId?: string }) => chip.controlId === 'goal')).toBe(true));
     await renderer.act(async () => { input.props.onChangeText('/goal set Ship goal UI'); });
-    input = screen.tree.findByType('AgentInput' as React.ElementType);
-    await renderer.act(async () => { await input.props.onSend(); });
-    await vi.waitFor(() => expect(goalRequests).toEqual([
+    input = screen.tree.findByType(AgentInput);
+    await sendComposerAndWaitForTerminal(input);
+    expect(goalRequests).toEqual([
       { method: `s1:${SESSION_RPC_METHODS.SESSION_GOAL_SET}`, params: { objective: 'Ship goal UI' } },
-    ]));
+    ]);
     expect(modalAlertSpy).not.toHaveBeenCalled();
-    expect(screen.tree.findByType('AgentInput' as React.ElementType).props.value).toBe('');
+    expect(screen.tree.findByType(AgentInput).props.value).toBe('');
   });
 });

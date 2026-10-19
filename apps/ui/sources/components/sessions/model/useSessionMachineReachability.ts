@@ -18,6 +18,8 @@ export function useSessionMachineReachability(sessionId: string, serverId?: stri
     machineOnline: boolean;
     machineRpcTargetAvailable: boolean;
     machineReachability: SessionMachineReachability;
+    /** The machine's last heartbeat, said only while it is unreachable: the honest time of the last known state. */
+    machineLastSeenAt: number | null;
 }> {
     const machineTarget = useSessionReachableMachineTarget(sessionId, serverId);
     const displayIdentity = useSessionMachineDisplayIdentity(sessionId, serverId);
@@ -38,10 +40,13 @@ export function useSessionMachineReachability(sessionId: string, serverId?: stri
 
     const machineRpcTargetAvailable = Boolean(machineTarget?.basePath) && machineReachable;
 
+    const machineLastSeenAt = presence.lastSeenAt ?? null;
+
     return React.useMemo(() => ({
         machineReachable,
         machineOnline,
         machineRpcTargetAvailable,
         machineReachability,
-    }), [machineReachability, machineReachable, machineRpcTargetAvailable, machineOnline]);
+        machineLastSeenAt,
+    }), [machineReachability, machineReachable, machineRpcTargetAvailable, machineOnline, machineLastSeenAt]);
 }

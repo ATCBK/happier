@@ -53,7 +53,7 @@ describe('Session list canonical carry retirement', () => {
         getStorage().setState({ profileScope: scope });
         const hook = await renderHook(() => useSessionListRowInteractions(input()));
         const runtime = hook.getCurrent().entityDragDrop.runtime;
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         expect(hook.getCurrent().draggingSessionKey).toBe(sessionKey);
         const sourceId = runtime.getSnapshot().sourceId!;
         act(() => runtime.cancel('window-blur'));
@@ -79,12 +79,12 @@ describe('Session list canonical carry retirement', () => {
         getStorage().setState({ profileScope: scope });
         const initial = input();
         const hook = await renderHook((props: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(props), { initialProps: initial });
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         await hook.rerender({ ...initial, listItems: [items[0]!] });
         expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
         expect(hook.getCurrent().activeDragSnapshot).toBeNull();
         await hook.rerender(initial);
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         act(() => hook.getCurrent().unregisterTreeRowBounds(sourceRowId));
         expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
         await hook.unmount();

@@ -4,8 +4,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { computeWorkspaceSyncPolicyDigest, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -18,11 +19,7 @@ import type { CustomModalChromeConfig } from '@/modal';
 import type { SessionHandoffPickerModalProps } from './SessionHandoffPickerModal';
 
 const pathBrowserModuleLoadedMock = vi.fn();
-const handoffCapabilityRpc = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
-    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return createServerScopedMachineRpcBoundaryMock(handoffCapabilityRpc);
-});
+const handoffCapabilityRpc = vi.fn();
 let activeServerIdState = '';
 
 
@@ -69,9 +66,19 @@ installSessionHandoffCommonModuleMocks({
     modal: async () => modalMock.module,
 });
 vi.doUnmock('@/components/ui/text/Text');
-const modalMock = createModalModuleMock();
+const modalMock = createModalModuleMock({ confirmResult: true });
 const home = createHomeGovernanceHarness();
-installDisconnectedServerSocketBoundary();
+installSessionActionRpcBoundary((request) => {
+    const separator = request.method.indexOf(':');
+    if (separator < 1) throw new Error(`Expected a Machine-addressed RPC: ${request.method}`);
+    const method = request.method.slice(separator + 1);
+    if (method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
+    if (method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
+        const input = request.params as { path: string };
+        return { ok: true, path: input.path, entries: [], truncated: false };
+    }
+    return handoffCapabilityRpc({ machineId: request.method.slice(0, separator), method, payload: request.params });
+});
 await loadSyncSingletonForTests();
 const { sync } = await import('@/sync/sync');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -124,8 +131,19 @@ async function applyFixtureState() {
             ...machine, metadata: { ...createMachineFixture().metadata!, ...machine.metadata },
         }))]));
     storage.setState({ isDataReady: true, machineListByServerId: scoped, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])) });
-    storage.getState().applySessions(Object.values(sessionsByIdState).map(session => createSessionFixture({
-        ...session, serverId: homeA.id, metadata: session.metadata,
+    for (const [serverId, inventory] of Object.entries(scoped)) {
+        for (const machine of inventory) home.answer(serverId, `/v1/machines/${machine.id}`, {
+            body: { machine: { ...createPlainMachineRowFixture({ id: machine.id,
+                accountId: serverId === homeA.id ? 'account-a' : 'account-b' }),
+                active: machine.active, activeAt: machine.activeAt,
+                metadata: encodePlainMachineStoredContent(machine.metadata),
+            } },
+        });
+    }
+    storage.getState().applySessions(Object.values(sessionsByIdState).map(session => installSessionActionFixture({
+        homes: home, storage, serverId: homeA.id, session: createSessionFixture({
+            ...session, serverId: homeA.id, metadata: session.metadata,
+        }),
     })));
     storage.setState({ sessionListRowsByServerId: { [homeA.id]: Object.fromEntries(sessionsState.map(session => [session.id,
         createSessionListRenderableSessionFixture({ ...session, metadata: session.metadata }),
@@ -165,12 +183,14 @@ describe('SessionHandoffPickerModal', () => {
         machineListByServerIdState = {};
         allMachinesState = [];
         // The package harness clears persisted profiles before every test.
-        homeA.id = await home.addHome({ name: 'Handoff A', serverUrl: 'https://handoff-a.example.test', accountId: 'account-a' });
-        homeB.id = await home.addHome({ name: 'Handoff B', serverUrl: 'https://handoff-b.example.test', accountId: 'account-b', active: false });
+        homeA.id = await home.addHome({ name: 'Handoff A', serverUrl: 'https://handoff-a.example.test', accountId: 'account-a', currentAccount: true });
+        homeB.id = await home.addHome({ name: 'Handoff B', serverUrl: 'https://handoff-b.example.test', accountId: 'account-b', active: false, currentAccount: true });
         home.answer(homeA.id, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         answerHomeMachines(homeA.id);
         answerHomeMachines(homeB.id);
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://handoff-a.example.test', accountId: 'account-a', request: home.request });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://handoff-a.example.test', accountId: 'account-a', request: home.request,
+            additionalRequestOrigins: ['https://handoff-b.example.test'],
+            credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) } });
         // Finish the real Account's memory bootstrap before seeding its projection.
         await sync.applyAuthoringMemoryDelta({});
         await waitForHomeGovernance(() => expect(storage.getState().projectAccountRows?.status).toBe('ready'));
@@ -363,7 +383,8 @@ describe('SessionHandoffPickerModal', () => {
     });
 
     it('retains the Account credential while its socket is offline and withdraws it when the runtime retires', async () => {
-        // This harness never connects the socket; offline transport must not retire the Account.
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        apiSocket.disconnect();
         expect(sync.getCredentials()).toEqual(connection!.credentials);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const credentials = connection!.credentials;
@@ -528,7 +549,7 @@ describe('SessionHandoffPickerModal', () => {
             invokeTestInstanceHandler(screen.tree.findByType(MachineSelector), 'onSelect', { id: 'machine_target', metadata: { displayName: 'Target machine' } });
             screen.changeTextByTestId('path-selection-list:header:input', '/home/target/repo');
         });
-        await act(async () => screen.tree.update(renderPicker(true)));
+        await screen.update(renderPicker(true));
         const pendingStart = findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start');
         expect((pendingStart!.props as { disabled?: boolean }).disabled).toBe(true);
         expect(findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-awaiting-admission')).toBeTruthy();
@@ -541,7 +562,7 @@ describe('SessionHandoffPickerModal', () => {
         expect(pendingMenus.find((node: any) => node.props?.itemTrigger?.title === 'settingsSession.handoff.workspaceMode.title')?.props.itemTrigger.itemProps.disabled).toBe(true);
         expect(pendingMenus.find((node: any) => node.props?.itemTrigger?.title === 'settingsSession.handoff.directTargetMode.title')?.props.itemTrigger.itemProps.disabled).toBe(true);
         invokeTestInstanceHandler(screen.tree.findByType(MachineSelector), 'onSelect', { id: 'another-machine' });
-        await act(async () => screen.tree.update(renderPicker(false)));
+        await screen.update(renderPicker(false));
         const readyStart = findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start');
         expect((readyStart!.props as { disabled?: boolean }).disabled).toBe(false);
         await act(async () => (readyStart!.props as { onPress: () => void }).onPress());
@@ -589,7 +610,7 @@ describe('SessionHandoffPickerModal', () => {
         />);
         await act(async () => {
             await vi.waitFor(() => expect(home.requests.slice(requestStart)).toEqual(expect.arrayContaining([
-                expect.objectContaining({ serverId: homeA.id, path: '/v1/machines' }),
+                expect.objectContaining({ serverId: homeA.id, path: '/v1/machines?includeRevoked=true' }),
             ])));
         });
 
@@ -1364,23 +1385,29 @@ describe('SessionHandoffPickerModal', () => {
     });
 
     it('uses only the session Home machine inventory when another Home is focused', async () => {
+        settingsState.sessionHandoffDefaultsV1.workspaceSyncMode = 'none';
         activeServerIdState = homeB.id;
         machineListByServerIdState = {
             [homeA.id]: [
-                { id: 'machine_source', metadata: { displayName: 'A source', homeDir: '/Users/tester' } },
-                { id: 'machine_shared', metadata: { displayName: 'A target' } },
+                createMachineFixture({ id: 'machine_source', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, displayName: 'A source', homeDir: '/Users/tester' } }),
+                createMachineFixture({ id: 'machine_shared', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, displayName: 'A target' } }),
             ],
             [homeB.id]: [
-                { id: 'machine_shared', metadata: { displayName: 'B collision' } },
-                { id: 'machine_b_only', metadata: { displayName: 'B only' } },
+                createMachineFixture({ id: 'machine_shared', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, displayName: 'B collision' } }),
+                createMachineFixture({ id: 'machine_b_only', activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, displayName: 'B only' } }),
             ],
         };
         allMachinesState = machineListByServerIdState[homeB.id];
+        const { recordMachineRequestFailed, recordMachineRequestSucceeded } = await import('@/sync/domains/machines/reachability/machineReachability');
+        recordMachineRequestFailed({ serverId: homeB.id, accountId: 'account-b', machineId: 'machine_shared' });
+        const onResolve = vi.fn();
+        let chrome: CustomModalChromeConfig | null = null;
 
         const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
         const screen = await renderScreen(<SessionHandoffPickerModal
             onClose={vi.fn()}
-            onResolve={vi.fn()}
+            onResolve={onResolve}
+            setChrome={next => { chrome = next; }}
             sessionId="sess_1"
             sourceMachineId="machine_source"
             serverId={homeA.id}
@@ -1390,6 +1417,45 @@ describe('SessionHandoffPickerModal', () => {
             { id: 'machine_source', metadata: { displayName: 'A source' } },
             { id: 'machine_shared', metadata: { displayName: 'A target' } },
         ]);
+        const selector = () => screen.tree.findByType(MachineSelector);
+        await vi.waitFor(() => expect(selector().findByType(DropdownMenu).props.items
+            .find((item: { id: string }) => item.id === 'machine_shared')?.disabled).toBe(false));
+        await act(async () => { invokeTestInstanceHandler(selector(), 'onSelect', selector().props.machines[1]); });
+        await act(async () => { screen.changeTextByTestId('path-selection-list:header:input', '/target/happier'); });
+        const start = () => findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start') as React.ReactElement<{ disabled: boolean; onPress: () => void }>;
+        await vi.waitFor(() => expect(start().props.disabled).toBe(false));
+        await act(async () => { recordMachineRequestFailed({ serverId: homeA.id, accountId: 'account-b', machineId: 'machine_shared' }); });
+        expect(start().props.disabled).toBe(false);
+        await act(async () => { recordMachineRequestFailed({ serverId: homeA.id, accountId: 'account-a', machineId: 'machine_shared' }); });
+        expect(start().props.disabled).toBe(true);
+        await act(async () => { start().props.onPress(); });
+        expect(onResolve).not.toHaveBeenCalled();
+        await act(async () => { recordMachineRequestSucceeded({ serverId: homeA.id, accountId: 'account-a', machineId: 'machine_shared' }); });
+        expect(start().props.disabled).toBe(false);
+        await act(async () => { recordMachineRequestFailed({ serverId: homeA.id, accountId: 'account-a', machineId: 'machine_source' }); });
+        expect(start().props.disabled).toBe(true);
+        expect(screen.tree.findAllByProps({ testID: 'session-handoff-retained-history' }).length).toBeGreaterThan(0);
+        await act(async () => { recordMachineRequestSucceeded({ serverId: homeA.id, accountId: 'account-a', machineId: 'machine_source' }); });
+        expect(start().props.disabled).toBe(false);
+        await act(async () => { start().props.onPress(); });
+        expect(onResolve).toHaveBeenCalledWith(expect.objectContaining({ targetMachineId: 'machine_shared' }));
+    });
+
+    it('rejects a previously enabled submission after its exact Home credential retires', async () => {
+        settingsState.sessionHandoffDefaultsV1.workspaceSyncMode = 'none';
+        const onResolve = vi.fn();
+        let chrome: CustomModalChromeConfig | null = null;
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()}
+            setChrome={next => { chrome = next; }} onResolve={onResolve} sessionId="sess_1" serverId={homeA.id} />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType(MachineSelector), 'onSelect', allMachinesState[0]); });
+        await act(async () => { screen.changeTextByTestId('path-selection-list:header:input', '/target/happier'); });
+        const start = () => findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start') as React.ReactElement<{ disabled: boolean; onPress: () => void }>;
+        await vi.waitFor(() => expect(start().props.disabled).toBe(false));
+        const admittedSubmit = start().props.onPress;
+        await act(async () => { await home.switchAccount(homeA.id, 'replacement-account'); });
+        await act(async () => { admittedSubmit(); });
+        expect(onResolve).not.toHaveBeenCalled();
     });
 
     it('does not start when the selected machine is structurally offline', async () => {
@@ -1535,7 +1601,6 @@ describe('SessionHandoffPickerModal', () => {
         allMachinesState = machineListByServerIdState[homeA.id];
         await act(async () => {
             await applyFixtureState();
-            tree.update(renderModal());
         });
         await act(async () => {});
 

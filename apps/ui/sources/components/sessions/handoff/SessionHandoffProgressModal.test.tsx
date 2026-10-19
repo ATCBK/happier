@@ -86,6 +86,12 @@ describe('SessionHandoffProgressModal', () => {
     });
 
     it('keeps the shared operation Stop and Collapse controls in the rich running presentation', async () => {
+        // This case exercises an accepted Stop, not the separate approval flow.
+        network.setHttpResponder(async (input) => new URL(String(input)).pathname === '/v2/account/settings'
+            ? Response.json({ content: { t: 'plain', v: {
+                actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'action.operations.cancel': ['ui'] } },
+            } }, version: 1 })
+            : null);
         const { SessionHandoffProgressModal } = await import('./SessionHandoffProgressModal');
         const setChrome = vi.fn();
         const onClose = vi.fn();
@@ -581,8 +587,7 @@ describe('SessionHandoffProgressModal', () => {
         expect(screen.findByTestId('session-handoff-progress-checkpoint-plan')).toBeTruthy();
         expect(screen.findByTestId('session-handoff-progress-checkpoint-scan_source')).toBeNull();
 
-        act(() => {
-            screen.tree.update(
+        await screen.update(
                 <SessionHandoffProgressModal
                     {...renderProps}
                     status={{
@@ -599,8 +604,7 @@ describe('SessionHandoffProgressModal', () => {
                         recoveryActions: [],
                     }}
                 />,
-            );
-        });
+        );
 
         expect(screen.findByTestId('session-handoff-progress-checkpoint-plan')).toBeTruthy();
         expect(screen.findByTestId('session-handoff-progress-checkpoint-transfer_blobs')).toBeTruthy();
@@ -919,8 +923,7 @@ describe('SessionHandoffProgressModal', () => {
         await expandProgressDetails(screen);
         expect(screen.findByTestId('session-handoff-progress-checkpoint-transfer_blobs')?.props.accessibilityState?.selected).toBe(true);
 
-        act(() => {
-            screen.tree.update(
+        await screen.update(
                 <SessionHandoffProgressModal
                     {...renderProps}
                     status={{
@@ -937,8 +940,7 @@ describe('SessionHandoffProgressModal', () => {
                         recoveryActions: [],
                     }}
                 />,
-            );
-        });
+        );
 
         expect(screen.findByTestId('session-handoff-progress-checkpoint-transfer_blobs')?.props.accessibilityState?.selected).toBe(true);
         expect(screen.findByTestId('session-handoff-progress-checkpoint-plan')?.props.accessibilityState?.selected).toBe(false);
@@ -975,8 +977,7 @@ describe('SessionHandoffProgressModal', () => {
         await expandProgressDetails(screen);
         expect(screen.findByTestId('session-handoff-progress-checkpoint-transfer_blobs')?.props.accessibilityState?.selected).toBe(true);
 
-        act(() => {
-            screen.tree.update(
+        await screen.update(
                 <SessionHandoffProgressModal
                     {...renderProps}
                     status={{
@@ -986,8 +987,7 @@ describe('SessionHandoffProgressModal', () => {
                         recoveryActions: [],
                     }}
                 />,
-            );
-        });
+        );
 
         expect(setChrome).toHaveBeenLastCalledWith(
             expect.objectContaining({

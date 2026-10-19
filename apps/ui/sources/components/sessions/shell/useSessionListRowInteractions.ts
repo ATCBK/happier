@@ -61,7 +61,7 @@ import type {
 } from './SessionListHeaderFrame';
 
 /**
- * Pointer geometry for the `reportsTo` tree (R-03): the middle of another Session on the same Home
+ * Pointer geometry for the `manager` tree (R-03): the middle of another Session on the same Home
  * means "put under". Whether that Session takes reports is the domain resolver's verdict, so a
  * refused lead still resolves here and the release preview says why instead of nothing lighting up.
  */
@@ -369,7 +369,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
                 viewport: readViewportMetrics(),
                 canReorderSessionSiblings,
                 // Geometry names a same-Home candidate from the list topology. The entity
-                // resolver alone admits reportsTo using the canonical relation projection.
+                // resolver alone admits manager using the canonical relation projection.
                 canPutSessionUnder: () => true,
             });
         } catch {

@@ -88,6 +88,7 @@ export function createSessionItemRowViewModel(
         reminder: null,
         attentionStandingEnabled: false,
         draft: null,
+        guardState: null,
         ...input.overrides,
     };
 }

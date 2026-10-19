@@ -120,10 +120,12 @@ export function buildSessionOrganizationProjectionFromLegacyTestSettings(
     return {
         schemaVersion: 1,
         version: 1,
+        orderedPinSessionIds: pinnedSessionIds,
         pinnedSessionIds,
+        railPinnedSessionIds: [],
         pinsBySessionId: Object.fromEntries(pinnedSessionIds.map((sessionId, index) => [
             sessionId,
-            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1 },
+            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1, listPinned: true, railPinned: false },
         ])),
         foldersById: Object.fromEntries(
             (fixture.sessionFoldersV1?.folders ?? []).map((folder, index) => [

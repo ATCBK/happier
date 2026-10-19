@@ -87,7 +87,7 @@ describe('SessionListHeaderItem', () => {
 
         spotlightTestState.active = true;
         await act(async () => {
-            screen.tree.update(<SessionListHeaderItem item={{ ...item } as any} {...commonProps} />);
+            await screen.update(<SessionListHeaderItem item={{ ...item } as any} {...commonProps} />);
         });
 
         expect(spotlightTestState.mounts).toBe(1);

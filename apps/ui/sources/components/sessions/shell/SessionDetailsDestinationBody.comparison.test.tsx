@@ -28,14 +28,18 @@ const runtime = installSessionPaneRuntimeTestHarness({ rpc: async (method, input
     throw new Error(`Unexpected RPC ${method}`);
 } });
 
+// The Socket boundary is installed above. Transform the real lazy SCM surface
+// during collection so cold compilation does not consume the navigation deadline.
+const { SessionDetailsDestinationBody } = await import('./SessionDetailsDestinationBody');
+const { SessionCapturedScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionCapturedScmReviewDetailsView');
+await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
+const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+
 describe('hosted comparison navigation', () => {
     it('selects This session through the real scope menu and updates the scmReview destination', async () => {
         storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'classic' });
         const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
         storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [runtime.serverId]: [machine] } });
-        const { SessionDetailsDestinationBody } = await import('./SessionDetailsDestinationBody');
-        const { SessionCapturedScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionCapturedScmReviewDetailsView');
-        const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
         const navigated: string[] = [];
         function Destination() {
             const [params, setParams] = React.useState<Record<string, string>>({ id: 's1', serverId: runtime.serverId,
@@ -53,7 +57,7 @@ describe('hosted comparison navigation', () => {
         const screen = await renderScreen(<runtime.Wrapper><Destination /></runtime.Wrapper>);
         await vi.waitFor(async () => {
             await flushHookEffects();
-            expect(screen.findHostByTestId('captured-comparison-files')).not.toBeNull();
+            expect(screen.findHostByTestId('captured-comparison-files'), screen.getTextContent()).not.toBeNull();
         });
         await screen.pressByTestIdAsync('scm-comparison-scope');
         await vi.waitFor(async () => {

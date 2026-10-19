@@ -4,7 +4,7 @@ import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/d
 
 import { filterCollapsedSessionListItems } from './filterCollapsedSessionListItems';
 
-function makeSession(id: string, groupKey: string): SessionListIndexItem {
+function makeSession(id: string, groupKey: string): Extract<SessionListIndexItem, { type: 'session' }> {
     return {
         type: 'session',
         serverId: 'server-a',
@@ -36,7 +36,7 @@ describe('filterCollapsedSessionListItems', () => {
     });
 
     it('honors a nested local fold after its Bot ancestor is revealed, without crossing Homes or headers', () => {
-        const bot = { ...makeSession('bot', 'g'), reportsDefaultCollapsed: true };
+        const bot = { ...makeSession('bot', 'g'), reportsDefaultCollapsed: true as const };
         const nested = { ...makeSession('child', 'g'), reportsDepth: 1 };
         const header: SessionListIndexItem = { type: 'header', title: 'Other Home', headerKind: 'server', serverId: 'server-b' };
         const items: SessionListIndexItem[] = [bot, nested,

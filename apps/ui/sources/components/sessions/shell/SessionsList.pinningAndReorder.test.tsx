@@ -89,6 +89,7 @@ installSessionShellCommonModuleMocks({
                     id: 'profile-1',
                     timestamp: 0,
                     firstName: null,
+                    name: null,
                     lastName: null,
                     username: null,
                     avatar: null,
@@ -149,6 +150,13 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null =
 const { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { createEmptyAccountBootstrapHttpResponse } = await import('@/dev/testkit/fixtures/accountBootstrapHttpBoundary');
+const request: typeof home.request = async (url, init) => (
+    createEmptyAccountBootstrapHttpResponse(new URL(String(url)).pathname, init)
+    ?? home.request(url, init)
+);
 const { buildSessionListIndexFromViewData } = await import('@/sync/domains/sessionList/sessionListIndex');
 const { applySessionOrganizationLegacyTestSettings } = await import('./sessionOrganizationProjectionTestFixture');
 const { buildSessionOrganizationSessionKey } = await import('@/sync/domains/session/organization/keys');
@@ -425,7 +433,14 @@ describe('SessionsList pinning + per-group ordering', () => {
         home.answer(homeA, tagsPath, { body: { sessionId: 'sess_a', tagIds: ['fixture-tag-2'] } });
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://server-a.example.test', serverIdentityId: 'srv_server_a',
-            accountId: 'account-a', request: home.request,
+            accountId: 'account-a', request,
+        });
+        await waitForHomeGovernance(() => {
+            const state = storage.getState();
+            expect(state.settingsScope).toEqual({ serverId: 'srv_server_a', accountId: 'account-a' });
+            expect(state.profileScope).toEqual({ serverId: 'srv_server_a', accountId: 'account-a' });
+            expect(state.profile.id).toBe('account-a');
+            expect(state.isDataReady).toBe(true);
         });
         home.requests.length = 0;
         pinnedSessionKeysV1 = [];
@@ -763,7 +778,7 @@ describe('SessionsList pinning + per-group ordering', () => {
         home.answer(exactHome, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 2, listPinned: true, railPinned: false } } });
         await connection?.dispose();
         connection = await restoreServerAccountForTest({
-            serverUrl: serverId, serverIdentityId: 'srv_home_url', accountId: 'account-url', request: home.request,
+            serverUrl: serverId, serverIdentityId: 'srv_home_url', accountId: 'account-url', request,
         });
         // A retained URL-shaped profile alias comes from device persistence, not a published Home identity.
         const { MMKV } = await import('react-native-mmkv');

@@ -5,6 +5,7 @@ import { normalizeActionsSettingsV1, tryWriteServerEnabledBitInPlace } from '@ha
 import { SESSION_DRAFT_V2_ROUTE_MUTATE } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { SESSION_DRAFT_ROUTE_MUTATE } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -41,17 +42,35 @@ it('marks a retained machine draft unavailable when requests fail without changi
     const account = await createSecretSettingsTestHarness({ settings: settingsParse({}) });
     const draftId = '00000000-0000-4000-8000-000000000092';
     const machine = createMachineFixture({ id: 'draft-target', activeAt: Date.now() });
+    const request = account.request.getMockImplementation();
+    if (!request) throw new Error('Expected installed Home HTTP boundary');
+    const row = createPlainMachineRowFixture({ id: machine.id, accountId: account.scope.accountId });
+    account.request.mockImplementation(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines') return Response.json([row]);
+        if (path === `/v1/machines/${machine.id}`) return Response.json({ machine: row });
+        return request(input, init);
+    });
     storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.scope.serverId]: [machine] },
         machineListStatusByServerId: { [account.scope.serverId]: 'idle' } });
     writeNewSessionDraft({ scope: account.scope, draftId, materializationIntent: 'userEdit',
         patch: { text: 'Retain target', authoring: {
             executionTarget: { kind: 'machine', target: { serverId: account.scope.serverId, machineId: machine.id } },
         } } });
+    const address = { kind: 'newSession' as const, draftId };
+    expect(getSessionDraftSnapshot(account.scope, address)?.document).toMatchObject({
+        v: 2, target: { kind: 'newSession', authoring: {
+            executionTarget: { value: { kind: 'machine', target: { serverId: account.scope.serverId, machineId: machine.id } } },
+        } },
+    });
     try {
         const screen = await renderScreen(<FocusReturnProvider><NewSessionDraftsSection /></FocusReturnProvider>);
         expect(screen.getTextContent()).not.toContain('sessionDrafts.availability.machineUnavailable');
-        await act(async () => recordMachineRequestFailed({ serverId: account.scope.serverId, machineId: machine.id }));
-        expect(screen.getTextContent()).toContain('sessionDrafts.availability.machineUnavailable');
+        await act(async () => recordMachineRequestFailed({ ...account.scope, machineId: machine.id }));
+        await vi.waitFor(() => {
+            expect(storage.getState().machineListStatusByServerId[account.scope.serverId]).toBe('idle');
+            expect(screen.getTextContent()).toContain('sessionDrafts.availability.machineUnavailable');
+        });
     } finally { standardCleanup(); await account.dispose(); }
 });
 

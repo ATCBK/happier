@@ -45,6 +45,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
 ));
 // Substitute Metro's lazy loader only; the public factory and Action admission remain real.
+
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
     const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
@@ -236,6 +237,9 @@ let resetQuotaSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
 let heldResetQuotaRead: Readonly<{ entered(): void; release: Promise<void> }> | null = null;
 let managedInspectAskFirst = false;
 let managedWakeMachine: ManagedMachineV1 | null = null;
+let pendingReadOverride: (() => Response) | null = null;
+let inventoryReadOverride: (() => Promise<Response>) | null = null;
+let managedReadGate: Promise<void> | null = null;
 let approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let projection: PluginProjectionV2 = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {} });
 
@@ -307,7 +311,9 @@ const runtime = installSessionPaneRuntimeTestHarness({
     request: async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? 'GET';
+        if (method === 'GET' && url.pathname === '/v2/sessions/s1/pending' && pendingReadOverride) return pendingReadOverride();
         if (method === 'GET' && url.pathname === '/v1/machines') {
+            if (inventoryReadOverride) return inventoryReadOverride();
             const state = storage.getState();
             const machines = state.profileScope ? state.machineListByServerId[state.profileScope.serverId] ?? [] : [];
             return Response.json(machines.map(machine => ({
@@ -334,7 +340,10 @@ const runtime = installSessionPaneRuntimeTestHarness({
                 observedAtMs: resetQuotaSnapshot.fetchedAtMs, record }], nextCursor: null });
             if (url.pathname.endsWith('/record')) return Response.json(record);
         }
-        if (url.pathname === '/v1/machines/managed/actions/get' && managedWakeMachine) return Response.json(managedWakeMachine);
+        if (url.pathname === '/v1/machines/managed/actions/get' && managedWakeMachine) {
+            await managedReadGate;
+            return Response.json(managedWakeMachine);
+        }
         if (url.pathname === '/v2/account/settings' && (sessionOpenDisabled || sessionOpenAskFirst || managedInspectAskFirst || resetStartAskFirst)) return Response.json({
             version: 1, content: { t: 'plain', v: {
                 actionsSettingsV1: { v: 1, actions: {
@@ -398,7 +407,10 @@ const runtime = installSessionPaneRuntimeTestHarness({
             }
             if (url.pathname === '/v2/sessions/s1/pending/wake-message/withdraw') return Response.json({ ok: true, outcome: 'removed' });
             if (url.pathname === '/v2/sessions/s1/pending' && method === 'POST') return enqueueResponse(write);
-            if (url.pathname.startsWith('/v2/sessions/s1/pending/') && method === 'PATCH') return Response.json({ didUpdate: true });
+            if (url.pathname.startsWith('/v2/sessions/s1/pending/') && method === 'PATCH') {
+                // The route acknowledges the stored action it accepted, as the canonical result schema requires.
+                return Response.json({ ok: true, didUpdate: true, requestedAction: write.body.requestedAction });
+            }
         }
         return null;
     },
@@ -533,6 +545,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await flushHookEffects();
     }
     beforeEach(async () => {
+
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
@@ -546,6 +559,9 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         heldResetQuotaRead = null;
         managedInspectAskFirst = false;
         managedWakeMachine = null;
+        pendingReadOverride = null;
+        inventoryReadOverride = null;
+        managedReadGate = null;
         approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
         projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {} });
         clearDaemonMergedProjectionCacheForTests();
@@ -580,6 +596,77 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
     });
 
+    it.each(['managed_power_required', null] as const)(
+        'keeps the mounted wake line loading until Sync inventory and the protected read answer (hold: %s)', async holdReason => {
+        const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
+        const controller = { machineId: 'controller', installationId: 'controller-installation' };
+        managedWakeMachine = ManagedMachineV1Schema.parse({ id: 'managed-guest', homeId: runtime.serverIdentityId, custodianAccountId: 'account-a',
+            launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
+            resource: { contributionRef: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, value: {} },
+            controller, enrolledMachineId: 'm-target', creationState: 'active', allocation: 'bound',
+            desired: 'stop', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
+            observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
+        });
+        const inventory = deferred<void>();
+        const observation = deferred<void>();
+        managedReadGate = observation.promise;
+        inventoryReadOverride = async () => {
+            await inventory.promise;
+            return Response.json(['m-target', 'controller'].map(id => ({
+                ...createPlainMachineRowFixture({ id, accountId: 'account-a' }), active: false, activeAt: 0,
+            })));
+        };
+        pendingReadOverride = () => Response.json({ pending: [{ localId: 'wake-message', messageRole: 'user',
+            requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Keep my message' } } },
+            status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 200, updatedAt: 200,
+            ...(holdReason ? { activationHoldReason: holdReason } : {}),
+        }] });
+        // A reload has no Machine inventory or pending read yet. Let the real
+        // Sync readers apply the responses rather than injecting projected rows.
+        storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {}, sessionPending: {} });
+        updateSession({ pendingActivationAuthorization: { requestId: 'wake-message', requestedAt: 200, status: 'failed', failureCode: 'runtime_start_failed',
+            managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1,
+                controller, reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
+                    pendingRequestId: 'wake-message', requestedAt: 200 } } } });
+        const inventoryRead = getSyncSingleton().refreshMachines();
+        const screen = await renderScreen(sessionViewFrame(), { wrapper: runtime.Wrapper });
+        const badge = () => (findAgentInput(screen).props.statusBadges as AgentInputStatusBadge[])
+            .find(candidate => candidate.key === 'session-managedWake');
+        try {
+            await act(async () => { await getSyncSingleton().fetchPendingMessages('s1'); });
+            expect(storage.getState().sessionPending.s1).toMatchObject({ isLoaded: true, messages: [{ localId: 'wake-message' }] });
+            expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+            expect(badge()?.label).toBe('common.loading');
+            if (holdReason) {
+                // Inventory answers first; the protected row still has not been read.
+                await act(async () => { inventory.resolve(); await inventoryRead; });
+                await vi.waitFor(() => expect(storage.getState().machineListStatusByServerId[runtime.serverId]).toBe('idle'));
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { observation.resolve(); });
+                await vi.waitFor(() => expect(queueLine(screen)?.text).toBe('managedWake.refused'));
+            } else {
+                // Protected row answers first; a stored failure must wait for inventory.
+                await act(async () => { observation.resolve(); });
+                await vi.waitFor(() => {
+                    const content = badge()?.renderPopover?.({ open: true, anchorRef: { current: null }, onRequestClose: () => {} });
+                    expect(React.isValidElement<{ projection: { observedAt?: number } }>(content) && content.props.projection.observedAt).toBe(10);
+                });
+                expect(storage.getState().machineListStatusByServerId[runtime.serverId]).not.toBe('idle');
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { inventory.resolve(); await inventoryRead; });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge'));
+                expect(badge()?.label).toBe('managedWake.agentFailed');
+            }
+            expect(pendingWrites()).toHaveLength(0);
+            expect(actionWrites()).toHaveLength(0);
+            expect(resumeCalls()).toHaveLength(0);
+        } finally {
+            inventory.resolve(); observation.resolve();
+            await inventoryRead;
+            await screen.unmount();
+        }
+    });
+
     it.each(['waiting', 'starting', 'connecting', 'resuming', 'storageLost', 'resourceAbsent', 'unknown', 'unavailable', 'deliveryUnknown', 'agentStartFailed'] as const)(
         'mounts the managed %s badge and its observed-stage popover instead of a generic pending banner', async kind => {
         const controller = { machineId: 'controller', installationId: 'controller-installation' };
@@ -607,7 +694,15 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
                 reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
                     pendingRequestId: row.localId!, requestedAt: 200 } },
         });
-        if (kind === 'waiting') writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Another unsent draft' } });
+        if (kind === 'waiting') {
+            // Check now invalidates pending through the real Sync path. The
+            // retained server row must survive that read, just as it does live.
+            pendingReadOverride = () => Response.json({ pending: [{ localId: row.localId, messageRole: 'user',
+                requestedAction: row.pendingRequestedAction, content: { t: 'plain', v: row.rawRecord },
+                status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: row.createdAt, updatedAt: row.updatedAt,
+            }] });
+            writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Another unsent draft' } });
+        }
         const screen = await renderSessionView();
         if (kind === 'resuming') await act(async () => { storage.getState().markSessionResuming('s1'); });
         let badge: AgentInputStatusBadge | undefined;
@@ -827,7 +922,9 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             });
             expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
             expect(findAgentInput(screen).props.hasSendableAttachments).toBe(false);
-        } finally { await screen.unmount(); }
+        } finally {
+
+             await screen.unmount(); }
     });
 
     it('keeps an uninstalled or incompatible persisted attachment visible, refuses its text send, and retains the draft until the exact current generation returns', async () => {
@@ -1174,6 +1271,63 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true });
         expect(resumeCalls()).toHaveLength(0);
         await screen.unmount();
+    });
+
+    it.each(['resume', 'process_when_online', 'refused'] as const)(
+        'recovers a failed stopped managed wake through the ordinary pending owner (%s)', async entry => {
+        const controller = { machineId: 'controller', installationId: 'controller-installation' };
+        managedWakeMachine = ManagedMachineV1Schema.parse({ id: 'managed-guest', homeId: runtime.serverIdentityId, custodianAccountId: 'account-a',
+            launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
+            resource: { contributionRef: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, value: {} },
+            controller, enrolledMachineId: 'm-target', creationState: 'active', allocation: 'bound',
+            desired: 'stop', desiredWhen: 'now', intentRevision: 1,
+            retention: { kind: 'unused', afterMs: 3600000, effect: 'stop' }, wakeOnAcceptedMessage: true,
+            observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
+        });
+        setMachineOnline(false);
+        const row = { ...durablePendingRow('wake-message', 'enqueue'),
+            ...(entry === 'resume' ? {} : { pendingActivationHoldReason: entry === 'refused'
+                ? 'managed_power_required' as const : 'resume_not_requested' as const }),
+        };
+        // The Home read must retain its admitted row when PATCH invalidates the
+        // pending list; the harness's ordinary empty-list default cannot model it.
+        pendingReadOverride = () => Response.json({ pending: [{ localId: row.localId, messageRole: 'user',
+            requestedAction: row.pendingRequestedAction, content: { t: 'plain', v: row.rawRecord },
+            status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: row.createdAt, updatedAt: row.updatedAt,
+            ...(row.pendingActivationHoldReason ? { activationHoldReason: row.pendingActivationHoldReason } : {}),
+        }] });
+        await publishDurablePendingState(row, { requestId: row.localId!, requestedAt: 200,
+            status: 'failed', failureCode: 'managed_start_denied',
+            managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1, controller,
+                reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
+                    pendingRequestId: row.localId!, requestedAt: 200 } },
+        });
+        writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Keep my other draft' } });
+        const screen = await renderSessionView();
+        try {
+            // Wait for the real exact-resource read, not only the retained target.
+            await vi.waitFor(() => expect((findAgentInput(screen).props.statusBadges as AgentInputStatusBadge[])
+                .some(badge => badge.testID === 'session.managedWake.agentStartFailed.badge') || queueLine(screen)?.text === 'managedWake.refused'
+                || queueLine(screen)?.action?.label === 'session.pendingActivation.actions.process_when_online').toBe(true));
+            if (entry === 'process_when_online') await pressQueueLineAction(screen, 'session.pendingActivation.actions.process_when_online');
+            else await act(async () => { await emitSessionResumeRequest('s1'); });
+            if (entry === 'refused') {
+                expect(queueLine(screen)?.text).toBe('managedWake.refused');
+                expect(actionWrites()).toHaveLength(0);
+                expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'managedWake.refused');
+            } else {
+                await vi.waitFor(() => expect(actionWrites()).toHaveLength(1));
+                expect(actionWrites()[0]?.url.pathname).toContain('/v2/sessions/s1/pending/wake-message/');
+                expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true });
+                expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
+            }
+            expect(resumeCalls()).toHaveLength(0);
+            expect(pendingWrites()).toHaveLength(0);
+            expect(httpWrites.filter(write => write.url.pathname.includes('power.set'))).toHaveLength(0);
+            expect(findAgentInput(screen).props.value).toBe('Keep my other draft');
+            expect(storage.getState().sessionPending.s1.messages).toMatchObject([{ localId: 'wake-message', pendingDeliveryStatus: 'server_queued' }]);
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
+        } finally { await screen.unmount(); }
     });
 
     it('resumes through the canonical session action from the online queued status line', async () => {

@@ -3,10 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SESSION_ACTION_EDIT_TAGS_ID } from '@/components/sessions/actions/sessionActionIds';
-import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
-import { createModelBackedSessionItemTestComponent } from './sessionItemRowViewModelTestFixture';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -59,6 +56,7 @@ installSessionShellCommonModuleMocks({
                     id: 'u1',
                     timestamp: 0,
                     firstName: null,
+                    name: null,
                     lastName: null,
                     username: null,
                     avatar: null,
@@ -75,6 +73,12 @@ installSessionShellCommonModuleMocks({
         });
     },
 });
+
+// The native menu fixture must be configured before runtime-bearing consumers
+// import react-native through the common helper.
+const { createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
+const { createSessionFixture, renderScreen, standardCleanup } = await import('@/dev/testkit');
+const { createModelBackedSessionItemTestComponent } = await import('./sessionItemRowViewModelTestFixture');
 
 vi.mock('@/components/ui/text/Text', () => ({
     Text: 'Text',
@@ -330,7 +334,7 @@ describe('SessionItem tags (layout)', () => {
         const firstItems = tagDropdown.props.items;
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionItem
                     session={createSession()}
                     serverId="server_a"
