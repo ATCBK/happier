@@ -5,9 +5,31 @@ vi.mock('axios', () => ({ default: { post } }));
 
 import { createWorkflowRunStorageClient } from './workflowRunStorageClient';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol';
+import { createWorkflowRunStorageTestkit } from './workflowRunStorage.testkit';
 
 describe('workflow Run storage client', () => {
   beforeEach(() => post.mockReset());
+
+  it('notifies Follow only after storage committed a real terminal Workflow original', async () => {
+    const transport = await import('../controlHttp');
+    const hint = vi.spyOn(transport, 'daemonPost').mockResolvedValue({ ok: true });
+    const boundary = createWorkflowRunStorageTestkit({ runId: 'workflow-follow', machineId: 'machine-1',
+      origin: { kind: 'direct', originSessionId: 'c111111111111111111111111' }, state: 'succeeded' });
+    const committed = { ...boundary.run(), revision: 4 };
+    post.mockResolvedValueOnce({ data: committed });
+    const client = createWorkflowRunStorageClient({ token: 'token', machineId: 'machine-1', serverHttpBaseUrl: 'https://home.test',
+      createPublisherHeader: async () => 'signed-publisher' });
+    try {
+      await client.execute({ operation: 'transition', runId: committed.id });
+      expect(hint.mock.calls).toContainEqual(['/session-activity-changed', { sessionId: committed.origin.originSessionId,
+        followOccurrence: { original: { source: { kind: 'workflow_run', runId: committed.id }, revision: 4 }, event: { kind: 'finished' } },
+      }]);
+      hint.mockClear();
+      post.mockResolvedValueOnce({ data: { ...committed, state: 'running' } });
+      await client.execute({ operation: 'transition', runId: committed.id });
+      expect(hint).not.toHaveBeenCalled();
+    } finally { hint.mockRestore(); }
+  });
 
   it('reads batched workflow summaries with Account credentials and no worker publication', async () => {
     const result = { summaries: [], remainingSourceArtifactIds: [] };

@@ -10,7 +10,7 @@ import { AutomationStoredWorkflowDefinitionV2ReadSchema } from '@happier-dev/pro
 import { AutomationRunExecutionInputV1Schema, toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
 import { openAutomationTemplateStoredV1 } from '@happier-dev/protocol/automations/automationTemplateStoredV1';
 import { convertLegacyAutomationRecipeToInlineWorkflowV1 } from '@happier-dev/protocol/automations/automationLegacyWorkflowV1';
-import { WorkflowAcceptedSnapshotV1Schema, WorkflowResolvedInputsV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
+import { WorkflowAcceptedSnapshotV1Schema, WorkflowResolvedInputsV1Schema, type WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 import { materializeWorkflowAcceptedSnapshotV1, workflowRequiresMachineStartCapacityV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { resolveWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionResolverV1';
 import { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1 } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
@@ -66,6 +66,9 @@ import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import type { StoredCredentials } from '@/persistence';
 import type { AgentState } from '@/api/types';
 import { createProductionWorkflowSessionContextReader } from './workflowSessionContext';
+import { createProductionWorkflowDiscussionContextReader } from './workflowDiscussion';
+import { createWorkflowDiscussionResultPublisher, WorkflowDiscussionPublicationUnavailable } from './workflowDiscussionPublication';
+import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import {
   AgentStateRequestStore,
   type AgentStateRequestPersistenceTarget,
@@ -1222,7 +1225,8 @@ export function createWorkflowRunPushNotificationClient(token: string): PushNoti
 
 export type WorkflowTriggerClaimSource =
   | Readonly<{ kind: 'inline'; definition: WorkflowDefinitionV1 }>
-  | Readonly<{ kind: 'catalog'; definition: WorkflowDefinitionV1; ref: string; version: number | string }>
+  | Readonly<{ kind: 'catalog'; definition: WorkflowDefinitionV1; ref: string; version: number | string;
+    metadata?: WorkflowDefinitionMetadataV1 }>
   | Readonly<{ kind: 'saved' } & Awaited<ReturnType<ReturnType<typeof createWorkflowDefinitionActions>['get']>>>;
 
 export type WorkflowTriggerAdmissionRefusal = Readonly<{
@@ -1305,6 +1309,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
   const onCommittedTransition = params.onCommittedTransition
     ?? createWorkflowRunCommittedNotificationHandler({
       expoPushSender: createWorkflowRunPushNotificationClient(params.token),
+      followSource: { token: params.token, serverHttpBaseUrl: resolveServerHttpBaseUrl() },
     });
   const onReviewEntered = params.onReviewEntered ?? createWorkflowRunReviewEntryNotificationHandler({
     expoPushSender: createWorkflowRunPushNotificationClient(params.token),
@@ -1458,6 +1463,11 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         }
         throw error;
       }
+      // A saved or plugin Workflow names its Run; every other source (inline,
+      // legacy, a built-in) has only the Automation that fired it to name it.
+      const automationTitle = claim.automationName?.trim();
+      const runMetadata = (source.kind === 'inline' ? undefined : source.metadata)
+        ?? (automationTitle ? { title: automationTitle } : undefined);
       const created = await materializeWorkflowAcceptedSnapshotV1({
         definition: source.definition,
         ...host,
@@ -1473,7 +1483,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
             : { kind: 'automation', automationId: claim.automationId,
               ...(source.kind === 'saved' ? { definitionId: source.definitionId, revision: source.revision,
                 savedBy: source.savedBy ?? null } : {}) },
-          ...(source.kind === 'saved' ? { metadata: source.metadata } : {}),
+          ...(runMetadata ? { metadata: runMetadata } : {}),
           ...(originSessionId ? { origin: { kind: 'direct', originSessionId } } : {}),
           ...(storedDefinition.data.onComplete?.kind === 'originating_session' && originSessionId ? {
             resultDelivery: { kind: 'originating_session', originSessionId, reportPolicy },
@@ -1737,6 +1747,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       workDepth: accepted.workDepth,
       originRunId: claim.runId,
       ...(accepted.origin?.originSessionId ? { originSessionId: accepted.origin.originSessionId } : {}),
+      ...(accepted.origin?.discussion ? { discussionOrigin: accepted.origin.discussion } : {}),
       machineAdmissionTransport: params.execution.machineAdmissionTransport,
       visibleTeamId: initial.keyCensus.visibleTeamId,
       ...(params.execution.sessionStartup ? { sessionStartup: params.execution.sessionStartup } : {}),
@@ -1826,12 +1837,27 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       ...(params.waitForNewWorkAdmission ? { waitForNewWorkAdmission: params.waitForNewWorkAdmission } : {}),
       ...(params.execution.action ? { action: params.execution.action } : {}),
       onReviewEntered: async ({ runId }) => await onReviewEntered({ runId }),
-      sessionContext: createProductionWorkflowSessionContextReader({
+      ...(accepted.resultDelivery?.kind === 'originating_discussion' ? { onInvocationCompleted: createWorkflowDiscussionResultPublisher({
+        credentials: params.execution.credentials, origin: accepted.resultDelivery,
+        isCurrent: isOpenedAuthorizationCurrent,
+        publish: createDiscussionReplyReturnPublisher({ credentials: params.execution.credentials,
+          machineId: params.machineId, serverId: params.execution.serverId,
+          serverHttpBaseUrl: resolveServerHttpBaseUrl(), signal: claim.signal ?? new AbortController().signal,
+          isCurrent: isOpenedAuthorizationCurrent }),
+        ...(claim.signal ? { signal: claim.signal } : {}),
+      }) } : {}),
+      sessionContext: { ...createProductionWorkflowSessionContextReader({
         credentials: params.execution.credentials,
         machineId: params.machineId,
         originSessionId: accepted.origin?.originSessionId,
         ...(claim.signal ? { signal: claim.signal } : {}),
-      }),
+      }), ...createProductionWorkflowDiscussionContextReader({
+        credentials: params.execution.credentials,
+        serverId: params.execution.serverId,
+        serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+        origin: accepted.origin?.discussion,
+        ...(claim.signal ? { signal: claim.signal } : {}),
+      }) },
       rootInvocationRecordId: rootInvocation.recordId,
       isAcceptedAuthorizationCurrent: async (currentness) =>
         await isOpenedAuthorizationCurrent(currentness.signal),
@@ -1935,20 +1961,26 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           ...(accepted.origin?.originSessionId ? { originSessionId: accepted.origin.originSessionId } : {}),
           ...(claim.signal ? { signal: claim.signal } : {}) });
       } catch (error) {
-        if (claim.signal?.aborted || typeof error !== 'object' || error === null
-          || !('workflowStorageOperation' in error)
-          || classifyDaemonServerWorkError(error).kind !== 'server_error') throw error;
-        // A storage 5xx can follow a committed write. Preserve every admitted
-        // identity and pending custody; never replay the failed mutation or
-        // turn an unavailable acknowledgement into a terminal effect outcome.
+        if (claim.signal?.aborted) throw error;
+        const publicationUnavailable = error instanceof WorkflowDiscussionPublicationUnavailable;
+        const storageUnavailable = typeof error === 'object' && error !== null
+          && 'workflowStorageOperation' in error
+          && classifyDaemonServerWorkError(error).kind === 'server_error';
+        if (!publicationUnavailable && !storageUnavailable) throw error;
+        // Preserve every admitted identity and completed result. Known
+        // publication refusal needs visible attention; a storage 5xx can follow
+        // a committed write. Neither permits a terminal effect reinterpretation.
         // If storage is still unavailable, this write also fails and the
         // incumbent lease-reclaim owner remains responsible for recovery.
         const root = await durableStore.readByLogicalInvocation(rootRecordId);
         if (!root) throw error;
+        const reason = publicationUnavailable ? 'workflow_discussion_publication_unavailable' : 'storage_unavailable';
         await durableStore.commitFact({ key: root.key, lifecycle: 'needs_attention',
-          reason: 'storage_unavailable',
-          reasonMessage: 'Workflow storage is temporarily unavailable. Previously saved work is preserved; review the run before continuing.' });
-        return { state: 'interrupted', reason: 'storage_unavailable' } satisfies WorkflowCoordinatorResult;
+          reason,
+          reasonMessage: publicationUnavailable
+            ? 'The accepted result is saved, but Discussion publication is unavailable. Restore access or resolve the publication request, then resume the run.'
+            : 'Workflow storage is temporarily unavailable. Previously saved work is preserved; review the run before continuing.' });
+        return { state: 'interrupted', reason } satisfies WorkflowCoordinatorResult;
       }
       finally { releaseActivity?.(); }
     };

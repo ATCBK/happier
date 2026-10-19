@@ -31,6 +31,7 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
     const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: original.requestSessionId,
       localId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId });
     const receipt: { value?: DiscussionAgentPostResponseV1 } = {};
+    const transportFailure: { value?: Readonly<{ error: unknown }> } = {};
     let phase = 'action_admission';
     const executor = createCliActionExecutor({ token: params.credentials.token, credentials: params.credentials,
       sessionId: '', mode: 'plain', ctx: null, serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl,
@@ -51,13 +52,18 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
           ...(original.workflow ? { workflow: original.workflow } : {}),
           ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
         phase = 'session_publisher';
-        receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
-          token: params.credentials.token, sessionId: transport.sessionId,
-          method: SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
-          request: { request: { ...parsed.data, replyReturn } },
-          authorityCeiling: 'account_automation', timeoutMs: null, signal,
-          ...(transport.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', ctx: transport.ctx }),
-        }));
+        try {
+          receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
+            token: params.credentials.token, sessionId: transport.sessionId,
+            method: SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
+            request: { request: { ...parsed.data, replyReturn } },
+            authorityCeiling: 'account_automation', timeoutMs: null, signal,
+            ...(transport.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', ctx: transport.ctx }),
+          }));
+        } catch (error) {
+          transportFailure.value = { error };
+          throw error;
+        }
         return receipt.value;
       },
     });
@@ -78,6 +84,9 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
       actionRequestId: localId, signal, ...(sessionInputSource ? { sessionInputSource } : {}),
       ...(original.actionRequestAttributionV1 ? { actionRequestAttributionV1: original.actionRequestAttributionV1 } : {}),
     });
+    // Action admission reports failures as values. Do not reinterpret a native
+    // append whose acknowledgement was lost as an authoritative refusal.
+    if (transportFailure.value) throw transportFailure.value.error;
     if (!receipt.value) logger.warnLocalFile('[Discussion reply return] Action has no publication receipt', {
       errorCode: result.ok ? 'publication_pending' : result.errorCode, phase,
     });

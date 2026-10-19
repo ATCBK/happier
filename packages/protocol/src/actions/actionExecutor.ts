@@ -5,7 +5,7 @@ import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawn
 import { isSessionStopConfirmed, SessionStopResultSchema } from '../sessions/control/contract.js';
 import { readActionSessionTargetField, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
 import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema,
-  type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
+  deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
 import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
 import { AutonomousExchangeObservedRevisionV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
 import { ActionResolvedSessionTargetsV1Schema, normalizeSessionTargetV1 } from './sessionTargetV1.js';
@@ -442,6 +442,7 @@ import {
   SessionInputCausalPermissionAuthorityV1Schema,
   SessionInputSourceSessionV1Schema,
   derivePluginSessionInputLocalIdV1,
+  deriveWorkflowSessionInputLocalIdV2,
   type SessionInputCausalPermissionAuthorityV1,
 } from '../sessions/messages/sessionInputAdmission.js';
 import { DiscussionSelectionSourceV1Schema } from '../discussions/content.js';
@@ -2603,7 +2604,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
   }
 
   async function readDiscussionPublicationPolicy(actionId: string, input: unknown, ctx: ActionExecutorContext,
-    originalSessionId?: string): Promise<Readonly<{ ok: true; answerPolicy: DiscussionAnswerPolicyV1 }> | ActionExecuteFailure | null> {
+    originalSessionId?: string): Promise<Readonly<{ ok: true; answerPolicy: DiscussionAnswerPolicyV1; informationalReturn: boolean }> | ActionExecuteFailure | null> {
     if (actionId !== 'discussion.post' && actionId !== 'discussion.reply') return null;
     const publisherSessionId = originalSessionId || (ctx.actionCaller?.kind === 'session' ? normalizeId(ctx.actionCaller.sessionId)
       : ctx.actionCaller?.kind === 'host' && ctx.discussionReplyReturn ? normalizeId(ctx.defaultSessionId) : '');
@@ -2626,8 +2627,28 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     const participant = roster.data.participants.find(entry => entry.participant.kind === 'session'
       ? entry.participant.sessionId === publisherSessionId : 'sessionId' in entry && entry.sessionId === publisherSessionId);
-    return participant ? { ok: true, answerPolicy: participant.answerPolicy }
-      : { ok: false, errorCode: 'discussion_participant_required', error: 'discussion_participant_required' };
+    const marker = ctx.discussionReplyReturn;
+    const parsedSource = SessionInputSourceSessionV1Schema.safeParse(ctx.sessionInputSource);
+    const source = parsedSource.success ? parsedSource.data : undefined;
+    const addressing = source?.discussionAddressing;
+    const publication = readRecord(input);
+    const target = readRecord(publication.replyTarget);
+    const parts = readRecord(publication.content).parts;
+    // Eligibility to reach the incumbent trusted publisher only. Its durable
+    // execution proof and the Home's original/G checks remain the authority.
+    const informationalReturn = Boolean(actionId === 'discussion.reply' && ctx.actionCaller?.kind === 'host' && marker?.workflow
+      && ctx.serverId === marker.serverId && marker.acceptedTurnId
+      && source?.sourceSessionId === publisherSessionId && source.sourceInputId === marker.requestLocalId
+      && source.sourceTurnId === marker.acceptedTurnId && addressing?.participantSessionId === publisherSessionId
+      && addressing.discussionId === publication.discussionId && target.kind === 'message' && target.messageId === addressing.messageId
+      && marker.requestLocalId === deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation',
+        runId: marker.workflow.runId, invocationRecordId: marker.workflow.invocationRecordId })
+      && publication.localId === deriveSessionMessageReplyReturnLocalIdV1({ sessionId: publisherSessionId,
+        localId: marker.requestLocalId, acceptedTurnId: marker.acceptedTurnId })
+      && Array.isArray(parts) && parts.length === 1 && readRecord(parts[0]).t === 'text');
+    if (participant) return { ok: true, answerPolicy: participant.answerPolicy, informationalReturn };
+    if (informationalReturn) return { ok: true, answerPolicy: 'when_addressed', informationalReturn };
+    return { ok: false, errorCode: 'discussion_participant_required', error: 'discussion_participant_required' };
   }
 
   async function requireDiscussionDraftReviewAuthority(request: ApprovalRequest, ctx: ActionExecutorContext): Promise<ActionExecuteFailure | null> {
@@ -4391,7 +4412,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     // Ordinary reversible edits stay declaration-owned. Proven publication from
     // a private surface strengthens only the shared policy's UI default.
-    const contextualSafety = !existingAdmission && visualAdmission ? visualAdmission.safety
+    let contextualSafety = !existingAdmission && visualAdmission ? visualAdmission.safety
       : actionId === 'widgets.item.network.set' ? 'danger' as const
       : actionId === 'widgets.definition.create' && readRecord(readRecord(readRecord(admittedInput).definition).body).kind === 'html' ? 'danger' as const
       : !existingAdmission && memoryAdmission ? memoryAdmission.safety
@@ -4479,6 +4500,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       : resolveBaseApprovalRouting(ctx);
     const folderApprovalRouting = folderCreateInput && !existingAdmission ? resolveActionApprovalRouting({
       actionId: 'artifact.folders.create', spec: getActionSpec('artifact.folders.create'), input: folderCreateInput,
+      // The exact Workflow original already authorized this informational
+      // answer. Keep explicit Settings Require and private draft review at
+      // their existing owners instead of applying the generic new-post default.
+      if (discussionPolicy.informationalReturn) contextualSafety = 'safe';
       context: ctx, settings: ctx.actionsSettings,
       ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
       requiredByPolicy: ctx.bypassApprovals ? false : deps.isActionApprovalRequired?.('artifact.folders.create', ctx, folderCreateInput),

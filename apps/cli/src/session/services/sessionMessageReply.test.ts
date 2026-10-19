@@ -78,6 +78,11 @@ it.each(['pass', 'failed', 'cancelled', 'terminal_no_result'] as const)('returns
   } });
   expect(publications).toEqual([expect.objectContaining({ serverId: 'home', requestSessionId, requestLocalId: 'original',
     acceptedTurnId: 'turn', discussion, outcome: { kind }, actionRequestAttributionV1 })]);
+  if (kind === 'pass') {
+    await expect(recoverSessionMessageRepliesForMachine({ ...input, publishDiscussionReply: async () => {
+      throw new Error('publication_acknowledgement_lost');
+    } })).rejects.toThrow('publication_acknowledgement_lost');
+  }
 });
 
 it.each([

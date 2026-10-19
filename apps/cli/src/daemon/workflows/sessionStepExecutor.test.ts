@@ -1035,12 +1035,41 @@ describe('workflow Session step executor', () => {
     expect(depths).toEqual([3, 3, 2, 3]);
   });
 
+  it('retains owned Discussion model birth depth when recovering the same conversation', async () => {
+    let admittedDepth: number | undefined;
+    const ref = { discussionId: 'discussion-1', participantSlotId: 'workflow:run-1:logical' };
+    const execute = createProductionWorkflowSessionStepExecutor({
+      credentials: { token: 'token', encryption: null }, machineId: 'machine-1', workDepth: 2,
+      machineAdmissionTransport: vi.fn(), createFreshConversation: async () => { throw new Error('must retain'); },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async ({ sessionId, machineId }) => ({ sessionId, machineId, directory: '/repo',
+        origin: { kind: 'discussion', discussionParticipant: ref }, workDepth: 4 }),
+      sessionInput: { enqueue: async ({ workDepth }) => { admittedDepth = workDepth; return { status: 'accepted', localId: 'input-1' }; },
+        observe: async ({ sessionId, localId }) => ({ ok: true, sessionId, localId, result: { kind: 'final_text', text: 'done' } }) },
+    });
+    await expect(execute({ runId: 'run-1',
+      step: { kind: 'step', id: 'work', document: { text: 'Work', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+      invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'work', scope: [] }, attempt: '0',
+        logicalInvocationRecordId: 'logical', recovery: { conversation: 'same_conversation', input: { kind: 'original' } } },
+      recoveryPreviousExecution: { kind: 'session', sessionId: 'model-session', localInputId: 'previous-input' },
+      recoveryPreviousWorkspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
+      origin: { kind: 'direct', discussion: { discussion: { serverId: 'server-1', discussionId: ref.discussionId }, messageId: 'question-1', throughSeq: 1 } },
+      participant: { kind: 'model', launch: { executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+        directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } },
+      input: { text: 'Work', references: [], attachments: [], values: [] }, execution: {}, executionTarget: { kind: 'session' },
+      authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+      workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' }, beforeInputAdmission: async () => {}, onInputAccepted: async () => {},
+    })).resolves.toMatchObject({ kind: 'completed' });
+    expect(admittedDepth).toBe(4);
+  });
+
   it('titles only freshly created named step Sessions with the authored name and frozen sibling ordinal', async () => {
     // The real creator forwards the title to the process-launch boundary.
     const launches = installSessionCreationTransport();
     const createFreshConversation = createProductionFreshWorkflowSessionConversation({
       credentials: { token: 'token', encryption: null }, serverId: 'server-1', machineId: 'machine-1',
       workDepth: 0, originRunId: 'run-1', machineAdmissionTransport: vi.fn(),
+      discussionOrigin: { discussion: { serverId: 'server-1', discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 },
     });
     const personallyRenamed = { sessionId: 'shared', machineId: 'machine-1', directory: '/repo', title: 'My own title',
       agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
@@ -1751,6 +1780,85 @@ describe('workflow Session step executor', () => {
       connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false,
       initialTitle: 'Chosen participant', transcriptStorage: 'direct',
     })]);
+  });
+
+  it.each([{ denied: false, boundSessionId: 'new-session' }, { denied: true, boundSessionId: 'new-session' },
+    { denied: false, boundSessionId: 'stale-run-step' }])('creates a selected Discussion model only after reserving its retained ordinary participant slot (%j)', async ({ denied, boundSessionId }) => {
+    const launches = installSessionCreationTransport();
+    const launch = { executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+      directory: { kind: 'path' as const, path: '/repo' },
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+      connectedServices: { v: 2 as const, bindingsByServiceId: {} } };
+    const creationKey = 'workflow:discussion-run:invocation-1';
+    const ref = { discussionId: 'discussion-1', participantSlotId: creationKey };
+    const reservations: unknown[] = [];
+    const births: unknown[] = [];
+    const originalPost = readiness.post.getMockImplementation()!;
+    readiness.post.mockImplementation(async (url: string, body: { sharedMetadata: { ciphertext: string }; ownerMetadata: unknown }) => {
+      if (!url.endsWith('/v1/sessions')) return originalPost(url, body);
+      births.push(body);
+      return { status: 200, data: { session: { id: 'new-session', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+        metadataLayoutVersion: 1, metadata: body.sharedMetadata.ciphertext, ownerMetadata: body.ownerMetadata, metadataVersion: 1,
+        encryptionMode: 'plain', agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null }, created: true } };
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('/features') ? {
+      features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } },
+    } : { id: 'account-1' }), { status: 200 })));
+    const originalGet = readiness.get.getMockImplementation()!;
+    readiness.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/access-keys/new-session/machine-1')) return { status: 200, data: { accessKey: 'existing' } };
+      return url.includes('/features') ? { status: 200, data: {
+        features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+      } } : originalGet(url);
+    });
+    readiness.request.mockImplementation(async ({ url, method, data }: { url: string; method: string; data?: string }) => {
+      if (url.endsWith('/v1/discussions/discussion-1') && method === 'GET') return { status: 200, data: { discussion: {
+        id: 'discussion-1', ownerAccountId: 'account-1', encryptionMode: 'plain', anchor: null, access: 'owner', keyReadiness: true,
+        dataEncryptionKey: null, creationLocalId: 'create-1', titleContent: { t: 'plain', v: { v: 1, title: 'Review' } },
+        latestMessage: { id: 'question-1', localId: 'question-local', seq: 1, authorAccountId: null,
+          accountActor: null, producerV1: null, createdAt: 1 },
+        messageSeq: 1, lastReadSeq: 0, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt: null,
+        capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+      } } };
+      if (url.endsWith('/v1/discussions/discussion-1/participants/invite') && method === 'POST') {
+        reservations.push(JSON.parse(data!));
+        return denied ? { status: 403, data: { error: 'discussion_access_forbidden' } } : { status: 200, data: {
+          discussionId: ref.discussionId, ownerAccountId: 'account-1', access: 'owner', grants: [], changed: reservations.length === 1,
+          modelParticipant: { participant: { kind: 'model', participantSlotId: creationKey }, launch,
+            sessionId: null, answerPolicy: 'when_addressed', createdAt: 1 },
+        } };
+      }
+      if (url.endsWith('/v1/discussions/discussion-1/participants') && method === 'GET') return { status: 200, data: {
+        discussionId: ref.discussionId, ownerAccountId: 'account-1', access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'model', participantSlotId: creationKey }, launch,
+          sessionId: boundSessionId, answerPolicy: 'when_addressed', createdAt: 1 }],
+      } };
+      throw new Error(`Unexpected Discussion reservation request: ${method} ${url}`);
+    });
+    const create = createProductionFreshWorkflowSessionConversation({ credentials: { token: 'token', encryption: null },
+      serverId: 'server-1', machineId: 'machine-1', workDepth: 0, originRunId: 'discussion-run',
+      discussionOrigin: { discussion: { serverId: 'server-1', discussionId: ref.discussionId }, messageId: 'question-1', throughSeq: 1 },
+      machineAdmissionTransport: vi.fn() });
+    const invoke = () => create({ selection: {}, launch, creationKey,
+      startupAuthorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+      workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } });
+    if (denied) {
+      await expect(invoke()).rejects.toMatchObject({ code: 'discussion_access_forbidden' });
+      expect(launches).toEqual([]);
+      expect(births).toEqual([]);
+    } else if (boundSessionId !== 'new-session') {
+      await expect(invoke()).rejects.toMatchObject({ code: 'discussion_subject_ineligible' });
+    } else {
+      await expect(invoke()).resolves.toMatchObject({ sessionId: 'new-session', origin: { kind: 'discussion', discussionParticipant: ref } });
+      expect(births).toEqual([expect.objectContaining({ originKind: 'discussion', discussionParticipant: ref,
+        discussionParticipantLaunch: launch, ownerMetadata: expect.objectContaining({ v: expect.objectContaining({
+          system: expect.objectContaining({ sessionCreationCorrespondenceV1: expect.objectContaining({ recipe: expect.objectContaining({ discussionParticipant: ref }) }) }),
+        }) }) })]);
+      expect(births[0]).not.toHaveProperty('originRunId');
+      expect(launches).toEqual([expect.objectContaining({ existingSessionId: 'new-session' })]);
+    }
+    expect(reservations).toEqual([{ participant: { kind: 'model', participantSlotId: creationKey, launch } }]);
   });
 
   it('launches the admitted effective Role model and profile with the frozen Team credential choice', async () => {

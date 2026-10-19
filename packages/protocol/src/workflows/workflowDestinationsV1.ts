@@ -24,10 +24,14 @@ export const WorkflowRunOnCompleteV1Schema = lazyZodSchema(() => z.discriminated
   z.strictObject({ kind: z.literal('originating_discussion') }),
 ]));
 
+export const WorkflowDiscussionResultDeliveryV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('originating_discussion'), ...WorkflowDiscussionOriginV1Schema.shape,
+}));
+
 export const WorkflowResultDeliveryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('originating_session'),
     originSessionId: preservedBoundedNfcString(191, 'Session ids'), reportPolicy: z.optional(FollowPolicyV1Schema) }),
-  z.strictObject({ kind: z.literal('originating_discussion'), ...WorkflowDiscussionOriginV1Schema.shape }),
+  WorkflowDiscussionResultDeliveryV1Schema,
 ]));
 
 /** Authored structure has one leaf traversal for admission and destination projections. */
