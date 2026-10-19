@@ -166,8 +166,7 @@ function accountNoticeOccurrence(accountId: string, notice: Pick<AccountNoticeAr
   if (notice.source.kind === 'host' && notice.notice) {
     if (notice.notice.topic === 'follow_update') {
       const original = notice.notice.follow.original;
-      return 'kind' in original ? JSON.stringify(['happier:discussion-follow-notice:v1', accountId,
-        original.discussion.discussionId, original.messageId]) : JSON.stringify(['happier:run-follow-notice:v1', accountId,
+      return JSON.stringify(['happier:run-follow-notice:v1', accountId,
         deriveSessionFollowOriginalOccurrenceKeyV1(original)]);
     }
     return usageNoticeOccurrence({ accountId, notice: notice.notice });

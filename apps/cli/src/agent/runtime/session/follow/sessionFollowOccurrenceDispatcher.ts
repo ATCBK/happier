@@ -156,7 +156,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           return Boolean(latest && latest.seq === occurrence.seq && sameStrictJsonValue(latest.source, source)
             && isFollowPolicyEqualV1(latest.personal.policy, occurrence.personal.policy));
         });
-      // Unavailable notice/progress custody holds this exact original. A read
+      // Unavailable progress custody holds this exact original. A read
       // never consumes it or spins while the same effect remains unrepresented.
       if (!settled) return;
     }

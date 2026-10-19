@@ -430,6 +430,7 @@ export function createSessionProviderInputOutcomeNormalizer(params: Readonly<{
             return pendingSettlement;
         }
         target.observeProviderInputSettlement(outcome);
+        return undefined;
     };
 
     return (evidence) => {

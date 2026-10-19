@@ -4,7 +4,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { AccountNoticePageV1Schema } from './accountNoticePageV1.js';
 export { AccountNoticePageV1Schema } from './accountNoticePageV1.js';
-import { ConnectedServiceUsageNotificationV1Schema, MachineVitalsNotificationV1Schema, SourceFollowUpdateNotificationV1Schema } from './webhookPayload.js';
+import { ConnectedServiceUsageNotificationV1Schema, MachineVitalsNotificationV1Schema, RunFollowUpdateNotificationV1Schema } from './webhookPayload.js';
 import { USAGE_NOTICE_ARTIFACT_KIND_V1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1 } from './accountNoticeArtifactKindsV1.js';
 export { USAGE_NOTICE_ARTIFACT_KIND_V1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1 } from './accountNoticeArtifactKindsV1.js';
 
@@ -36,7 +36,7 @@ defineStoredReadProjection(AccountNoticeSourceV1Schema, () => AccountNoticeSourc
 const accountNoticeContent = {
   v: z.literal(1), source: AccountNoticeSourceV1Schema, type: AccountNoticeItemTypeV1Schema,
   resolved: z.boolean(), page: z.optional(AccountNoticePageV1Schema), body: z.optional(z.string()),
-  notice: z.optional(z.union([UsageNoticeV1Schema, SourceFollowUpdateNotificationV1Schema])),
+  notice: z.optional(z.union([UsageNoticeV1Schema, RunFollowUpdateNotificationV1Schema])),
 };
 export const AccountNoticeArtifactBodyV1Schema = lazyZodSchema(() => z.strictObject(accountNoticeContent).check(z.refine(value =>
   value.source.kind === 'host' ? value.notice?.topic === value.source.topic && value.page === undefined : value.notice === undefined)));
