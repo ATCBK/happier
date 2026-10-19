@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { safeParse, type z } from 'zod/mini';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -34,7 +34,7 @@ export class ProviderActionPendingApprovalError extends Error {
     }
 }
 
-async function invoke<TSchema extends z.ZodType>(actionId: ActionId, input: unknown,
+async function invoke<TSchema extends z.core.$ZodType>(actionId: ActionId, input: unknown,
     schema: TSchema, scope: InvocationScope, approvalOptions?: ProviderActionApprovalOptions,
 ): Promise<z.output<TSchema>> {
     if (approvalOptions && (scope.serverId && !areServerProfileIdentifiersEquivalent(scope.serverId, approvalOptions.scope.serverId)
@@ -70,7 +70,7 @@ async function invoke<TSchema extends z.ZodType>(actionId: ActionId, input: unkn
             onApprovalPending: approvalOptions.onApprovalPending,
         }) : result;
         if (!settlement.ok) throw actionFailure(settlement);
-        const parsed = schema.safeParse(settlement.result);
+        const parsed = safeParse(schema, settlement.result);
         if (parsed.success) return parsed.data;
         throw getActionSpec(actionId).sideEffectClass === 'read'
             ? createProviderErrorV1('provider_rpc_response_invalid') : parsed.error;
@@ -92,9 +92,9 @@ function actionFailure(result: Readonly<{ error: string; errorCode: string; deta
 type ProviderActionInput<Id extends keyof typeof PROVIDER_ACTION_INPUT_SCHEMAS_V1> = z.input<(typeof PROVIDER_ACTION_INPUT_SCHEMAS_V1)[Id]>;
 export type ProviderConnectionActionInputV1 = ProviderActionInput<(typeof PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1)[keyof typeof PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1]>;
 export type ProviderModelSettingsActionInputV1 = ProviderActionInput<(typeof PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1)[keyof typeof PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1]>;
-export const describeProviderConnections = async (input: ProviderActionInput<'providers.connections.describe'> & Readonly<{ serverId: string | null }>, approval?: ProviderActionApprovalOptions) => {
-    const { serverId, ...request } = input;
-    return invoke('providers.connections.describe', request, outputs['providers.connections.describe'], { serverId }, approval);
+export const describeProviderConnections = async (input: ProviderActionInput<'providers.connections.describe'> & InvocationScope, approval?: ProviderActionApprovalOptions) => {
+    const { serverId, signal, accountId, onDispatched, ...request } = input;
+    return invoke('providers.connections.describe', request, outputs['providers.connections.describe'], { serverId, signal, accountId, onDispatched }, approval);
 };
 export const mutateProviderConnection = (input: Readonly<{ serverId: string | null; request: ProviderConnectionActionInputV1 }>, approval?: ProviderActionApprovalOptions) => invoke(
     PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1[input.request.action], input.request,

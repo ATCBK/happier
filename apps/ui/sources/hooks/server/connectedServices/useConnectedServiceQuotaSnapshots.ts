@@ -260,10 +260,12 @@ export function useConnectedServiceQuotaSnapshots(
                     assertOperationAllowed: (
                         operation:
                             BuiltInLegacyConnectedAccountOperation,
+                        signal?: AbortSignal,
                     ) =>
                         assertLegacyOperationAllowed(
                             quotaProfile.serviceId,
                             operation,
+                            signal,
                         ),
                 },
             }];

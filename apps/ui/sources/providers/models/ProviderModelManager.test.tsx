@@ -50,7 +50,7 @@ describe('ProviderModelManager', () => {
         const sections = buildProviderModelManagerSections({
             scope: { kind: 'agent', agentTargetKey: 'agent:happier.agent.codex/codex' },
             nativeModels: [], groups: [projected], showHidden: true, onSetVisibility: () => {},
-            grouping: { nativeTitle: 'Codex', connectionDescription: 'Shown sources',
+            grouping: { nativeTitle: 'Codex', nativeDescription: 'Native models', defaultRef: null, connectionDescription: 'Shown sources',
                 favoriteRefs: [projected.rows[0]!.ref], isSourceShown: () => false },
         });
         expect(sections.find(section => section.id === 'source:pc_a')?.options).toEqual([]);

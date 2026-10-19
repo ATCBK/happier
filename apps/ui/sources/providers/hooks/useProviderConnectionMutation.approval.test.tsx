@@ -71,17 +71,17 @@ function observeApprovalHrefMaps() {
 describe('Provider mutation deferred approval', () => {
     it.each(['settlement', 'Account retirement', 'unmount'] as const)(
         'releases approval href custody at %s', async ending => {
-            const { serverId } = await scopedAccount.restore({ accountId: 'account-href', catalog: connectionCatalog(), machines: [] });
-            installWritableCatalog(serverId);
-            await harness.requireUiApproval(serverId, 'providers.connections.delete');
-            const observed = observeApprovalHrefMaps();
+            const { serverId } = await scopedAccount.restore({ accountId: 'account-href', catalog: connectionCatalog() });
+            await harness.requireUiApproval(serverId, 'providers.probe');
             const hook = await renderHook(() => useProviderActionClient(serverId));
+            let observed: ReturnType<typeof observeApprovalHrefMaps> | undefined;
             let execution: Promise<unknown> | undefined;
             try {
                 await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+                observed = observeApprovalHrefMaps();
                 await act(async () => {
-                    execution = hook.getCurrent().mutateProviderConnection({ serverId,
-                        request: { action: 'delete', connectionId: 'pc_a' },
+                    execution = hook.getCurrent().probeProviderConnection({ serverId,
+                        machineId: 'machine-a', connectionId: 'pc_a',
                     }).then(value => ({ value }), failure => ({ failure }));
                 });
                 await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
@@ -100,55 +100,10 @@ describe('Provider mutation deferred approval', () => {
             } finally {
                 await hook.unmount();
                 await execution;
-                observed.restore();
+                observed?.restore();
             }
         },
     );
-
-    it('releases one completed href while preserving the next pending approval on its own Home', async () => {
-        const { serverId: homeA } = await scopedAccount.restore({ accountId: 'account-href-a', catalog: connectionCatalog(), machines: [] });
-        const homeB = await scopedAccount.addHome({ name: 'Approval href B', serverUrl: 'https://approval-href-b.test',
-            accountId: 'account-href-b', active: false });
-        installWritableCatalog(homeA);
-        installWritableCatalog(homeB);
-        await harness.requireUiApproval(homeA, 'providers.connections.delete');
-        await harness.requireUiApproval(homeB, 'providers.connections.delete');
-        const observed = observeApprovalHrefMaps();
-        const hook = await renderHook(() => useProviderActionClient([homeA, homeB]));
-        const executions: Promise<unknown>[] = [];
-        try {
-            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
-            const queue = async (serverId: string) => {
-                await act(async () => {
-                    executions.push(hook.getCurrent().mutateProviderConnection({ serverId,
-                        request: { action: 'delete', connectionId: 'pc_a' },
-                    }).then(value => ({ value }), failure => ({ failure })));
-                });
-                await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
-                return harness.artifacts(serverId).list()[0]!.id;
-            };
-            const artifactA = await queue(homeA);
-            const artifactB = await queue(homeB);
-            const entriesA = observed.maps.get(artifactA);
-            const entriesB = observed.maps.get(artifactB);
-            expect(hook.getCurrent().pendingApproval).toEqual({ artifactId: artifactA,
-                href: `/inbox/approvals/${artifactA}?serverId=${encodeURIComponent(homeA)}` });
-            await decideApprovalAsInbox(homeA, artifactA, 'reject');
-            await act(async () => { await executions[0]; });
-            await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).toEqual({ artifactId: artifactB,
-                href: `/inbox/approvals/${artifactB}?serverId=${encodeURIComponent(homeB)}` }));
-            expect(entriesA?.has(artifactA)).toBe(false);
-            expect(entriesB?.has(artifactB)).toBe(true);
-            await decideApprovalAsInbox(homeB, artifactB, 'reject');
-            await act(async () => { await executions[1]; });
-            expect(entriesB?.has(artifactB)).toBe(false);
-            expect(hook.getCurrent().pendingApproval).toBeNull();
-        } finally {
-            await hook.unmount();
-            await Promise.all(executions);
-            observed.restore();
-        }
-    });
 
     it('projects a manual-model approval from the real Models page hook and keeps its draft after rejection', async () => {
         const { serverId } = await scopedAccount.restore({ accountId: 'account-model-review', catalog: connectionCatalog(), machines: [] });
@@ -262,29 +217,31 @@ describe('Provider mutation deferred approval', () => {
         // The real Sync Home and both live Account scopes stay on A; B has its own
         // persisted policy and may not publish its Artifact into A's projection.
         await home.requireUiApproval(homeA, 'providers.connections.delete');
-        const onExecuted = () => {};
-        const hook = await renderHook(() => useActionApprovalContinuation({
-            scopeKey: 'provider-two-captured-homes', serverId: homeA, onExecuted,
-        }));
-        const caller = new AbortController();
+        const hook = await renderHook(() => useProviderActionClient([homeA, homeB]));
+        let observed: ReturnType<typeof observeApprovalHrefMaps> | undefined;
         const settlements = new Map<string, unknown>();
         const executions: Promise<void>[] = [];
         try {
-            const request = async (serverId: string, accountId: string) => {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            observed = observeApprovalHrefMaps();
+            const request = async (serverId: string) => {
                 await act(async () => {
-                    executions.push(mutateProviderConnection({ serverId,
+                    executions.push(hook.getCurrent().mutateProviderConnection({ serverId,
                         request: { action: 'delete', connectionId: 'pc_a' },
-                    }, { scope: { serverId, accountId }, signal: caller.signal,
-                        onApprovalPending: hook.getCurrent().requestApproval,
                     }).then(value => { settlements.set(serverId, { value }); }, failure => { settlements.set(serverId, { failure }); }));
                 });
                 await waitForHomeGovernance(() => expect(home.artifacts(serverId).list()).toHaveLength(1));
             };
-            await request(homeA, 'account-a');
+            await request(homeA);
             const artifactA = home.artifacts(homeA).list()[0]!.id;
-            await waitForHomeGovernance(() => expect(hook.getCurrent().approvalId).toBe(artifactA));
-            await request(homeB, 'account-b');
+            await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).toEqual({ artifactId: artifactA,
+                href: `/inbox/approvals/${artifactA}?serverId=${encodeURIComponent(homeA)}` }));
+            await request(homeB);
             const artifactB = home.artifacts(homeB).list()[0]!.id;
+            const entriesA = observed.maps.get(artifactA);
+            const entriesB = observed.maps.get(artifactB);
+            expect(entriesA?.get(artifactA)).toBe(`/inbox/approvals/${artifactA}?serverId=${encodeURIComponent(homeA)}`);
+            expect(entriesB?.get(artifactB)).toBe(`/inbox/approvals/${artifactB}?serverId=${encodeURIComponent(homeB)}`);
             expect(machineRpc).not.toHaveBeenCalled();
             // The second result may settle durably before the first queue head.
             await expect(decideApprovalAsInbox(homeB, artifactB, 'approve')).resolves.toMatchObject({ ok: true });
@@ -295,17 +252,20 @@ describe('Provider mutation deferred approval', () => {
             expect([...new Set(home.requestsFor(`/v1/artifacts/${artifactB}`).map(request => request.serverId))]).toEqual([homeB]);
             await waitForHomeGovernance(() => expect(settlements.size).toBe(2));
             expect(settlements.get(homeB)).toMatchObject({ value: { status: 'success', action: 'delete' } });
+            expect(entriesA?.has(artifactA)).toBe(false);
+            expect(entriesB?.has(artifactB)).toBe(false);
             expect(catalogA.catalog.connections).toEqual([]);
             expect(catalogB.catalog.connections).toEqual([]);
             expect([catalogA.writes, catalogB.writes]).toEqual([1, 1]);
             expect(machineRpc).not.toHaveBeenCalled();
         } finally {
-            await act(async () => { caller.abort(); await Promise.all(executions); });
             await hook.unmount();
+            await Promise.all(executions);
+            observed?.restore();
             await scopedAccount.reset();
         }
     });
-    it('preserves an acknowledged direct mutation after the captured Account retires', async () => {
+    it('retains a committed Account mutation with an unknown outcome when retirement aborts its receipt', async () => {
         const { serverId } = await scopedAccount.restore({ accountId: 'account-a', catalog: connectionCatalog(), machines: [],
             waivedActions: ['providers.connections.delete'] });
         let releaseResponse: () => void = () => {};
@@ -322,7 +282,9 @@ describe('Provider mutation deferred approval', () => {
             await harness.switchAccount(serverId, 'account-b');
             capturedAccount.abort();
             releaseResponse();
-            await expect(settled).resolves.toMatchObject({ value: { status: 'success', action: 'delete', deletedConnectionId: 'pc_a' } });
+            await expect(settled).resolves.toMatchObject({ failure: {
+                code: 'provider_catalog_outcome_unknown', details: { status: 'outcome_unknown' },
+            } });
         } finally {
             releaseResponse();
             await settled;

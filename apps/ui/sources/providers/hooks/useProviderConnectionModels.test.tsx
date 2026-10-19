@@ -11,7 +11,7 @@ import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/prov
 
 const describeProviderConnectionModels = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (request: Readonly<{ payload: unknown }>) => describeProviderConnectionModels(request.payload),
+    machineRpcWithServerScope: (request: Readonly<{ payload: unknown; signal?: AbortSignal }>) => describeProviderConnectionModels(request.payload, request.signal),
 }));
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
@@ -20,6 +20,48 @@ let otherServerId = '';
 const { useProviderConnectionModels } = await import('./useProviderConnectionModels');
 
 describe('useProviderConnectionModels', () => {
+    it('settles a superseded non-replying read, retries, and cancels pending reads on blur and unmount', async () => {
+        const cancelled: number[] = [];
+        let invocation = 0;
+        describeProviderConnectionModels.mockImplementation((_request: unknown, signal?: AbortSignal) => {
+            const id = ++invocation;
+            if (id === 2 || id === 4) return Promise.resolve({
+                status: 'success', connectionId: 'pc_a', connectionRevision: id,
+                manualModelPolicy: 'allowed', modelLoadAction: 'descriptor_absent',
+                models: [{ id: `model-${id}`, source: 'probe', stale: false, loadState: 'unknown', visibility: 'visible' }],
+            });
+            // The machine transport never replies; only its caller's cancellation can settle it.
+            return new Promise((_resolve, reject) => {
+                signal?.addEventListener('abort', () => {
+                    cancelled.push(id);
+                    reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+                }, { once: true });
+            });
+        });
+        const hook = await renderHook((props: { active: boolean }) => useProviderConnectionModels({
+            enabled: true, active: props.active, machineId: 'machine-a', serverId, connectionId: 'pc_a',
+        }), { initialProps: { active: true } });
+        await flushHookEffects();
+        expect(hook.getCurrent().loading).toBe(true);
+        await act(async () => { await hook.getCurrent().refresh(); });
+        expect(cancelled).toEqual([1]);
+        expect(hook.getCurrent().models[0]?.id).toBe('model-2');
+        expect(hook.getCurrent().loading).toBe(false);
+        let pending: Promise<void> | undefined;
+        await act(async () => { pending = hook.getCurrent().refresh(); });
+        await hook.rerender({ active: false });
+        await pending;
+        expect(cancelled).toEqual([1, 3]);
+        expect(hook.getCurrent().loading).toBe(false);
+        await hook.rerender({ active: true });
+        await flushHookEffects();
+        expect(hook.getCurrent().models[0]?.id).toBe('model-4');
+        await act(async () => { pending = hook.getCurrent().refresh(); });
+        await hook.unmount();
+        await pending;
+        expect(cancelled).toEqual([1, 3, 5]);
+    });
+
     it('issues no catalog request while inactive and preserves the last catalog on blur', async () => {
         describeProviderConnectionModels.mockResolvedValue({
             status: 'success', connectionId: 'pc_a', connectionRevision: 1,

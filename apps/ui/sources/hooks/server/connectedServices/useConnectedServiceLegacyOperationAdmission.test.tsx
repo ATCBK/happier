@@ -94,13 +94,13 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
             createMachineFixture({ id: 'machine-b', activeAt: Date.now() }),
         ], true, { sourceServerId: serverId });
         const hook = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
-        await act(async () => { recordMachineRequestFailed({ serverId, machineId: 'machine-a' }); });
+        await act(async () => { recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
         runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
         await hook.getCurrent()('github', 'quota_read');
         expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-b');
-        await act(async () => { recordMachineRequestFailed({ serverId, machineId: 'machine-b' }); });
+        await act(async () => { recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: 'machine-b' }); });
         await expect(hook.getCurrent()('github', 'quota_read')).rejects.toMatchObject({ code: 'connected_account_service_identity_unsupported' });
-        await act(async () => { recordMachineRequestSucceeded({ serverId, machineId: 'machine-a' }); });
+        await act(async () => { recordMachineRequestSucceeded({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
         await hook.getCurrent()('github', 'quota_read');
         expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-a');
     });

@@ -46,6 +46,7 @@ export function useProviderModelProjection(input: Readonly<{
         loading: false,
     });
     const generation = React.useRef(0);
+    const pendingRead = React.useRef<AbortController | null>(null);
     const activeRef = React.useRef(input.active !== false);
     activeRef.current = input.active !== false;
     const selectionKey = input.currentSelection
@@ -99,6 +100,9 @@ export function useProviderModelProjection(input: Readonly<{
             return null;
         }
         if (!ready) return null;
+        pendingRead.current?.abort();
+        const controller = new AbortController();
+        pendingRead.current = controller;
         setState((current) => current.scopeKey === scopeKey
             && current.accountLifetime === accountLifetime
             ? { ...current, loading: true }
@@ -115,7 +119,7 @@ export function useProviderModelProjection(input: Readonly<{
                 ...(input.currentSelection ? { currentSelection: input.currentSelection } : {}),
                 ...(input.sourceConnectionId ? { sourceConnectionId: input.sourceConnectionId } : {}),
                 ...(input.favoriteSelections ? { favoriteSelections: [...input.favoriteSelections] } : {}),
-            });
+            }, { signal: controller.signal });
             if (requestGeneration !== generation.current || !requestStillCurrent()) return null;
             if (result.status === 'success') {
                 setState({
@@ -154,6 +158,7 @@ export function useProviderModelProjection(input: Readonly<{
             }));
             return { status: 'error' as const, error: providerError };
         } finally {
+            if (pendingRead.current === controller) pendingRead.current = null;
             if (requestGeneration === generation.current && requestStillCurrent()) {
                 setState((current) => current.scopeKey === scopeKey
                     && current.accountLifetime === accountLifetime
@@ -181,7 +186,11 @@ export function useProviderModelProjection(input: Readonly<{
 
     React.useEffect(() => {
         void refreshWithResult(false);
-        return () => { generation.current += 1; };
+        return () => {
+            generation.current += 1;
+            pendingRead.current?.abort();
+            pendingRead.current = null;
+        };
     }, [accountLifetime, input.active, refreshWithResult, scopeKey]);
 
     return {

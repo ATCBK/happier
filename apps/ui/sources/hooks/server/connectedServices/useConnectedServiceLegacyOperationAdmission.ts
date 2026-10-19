@@ -10,6 +10,7 @@ import {
     runConnectedAccountControlCommand,
 } from '@/sync/ops/connectedAccounts/connectedAccountDaemon';
 import { useAllMachines } from '@/sync/store/hooks';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 function resolveQualifiedService(
     serviceId: ConnectedServiceId,
@@ -37,9 +38,11 @@ export function useConnectedAccountOperationAdmission(): (
     const machines = useAllMachines();
     const serverId = String(activeServer.serverId ?? '').trim();
     const activeServerGeneration = activeServer.generation;
-    const machine = machines.find(
+    const membership = useMachinePresenceMembership(serverId);
+    const selectableMachines = machines.filter(candidate => membership.selectableMachineIds.includes(candidate.id));
+    const machine = selectableMachines.find(
         (candidate) => candidate.active === true,
-    ) ?? machines[0] ?? null;
+    ) ?? selectableMachines[0] ?? null;
     const machineId = machine?.id ?? '';
     const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, machineId, serverId]);
     React.useEffect(() => {

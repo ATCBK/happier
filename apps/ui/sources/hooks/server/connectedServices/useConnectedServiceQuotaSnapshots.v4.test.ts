@@ -6,6 +6,7 @@ import { createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standar
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { parseServerFeatures } from '@/sync/api/capabilities/serverFeaturesParse';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -40,7 +41,7 @@ const profileInput = [{ serviceId: 'anthropic', profileId: 'work' }] as const;
 describe('useConnectedServiceQuotaSnapshots V4 transport', () => {
     let boundary: Awaited<ReturnType<typeof createQualifiedQuotaTestHarness>>;
     function Wrapper({ children }: React.PropsWithChildren) {
-        return React.createElement(InjectedAuthProvider, { credentials: boundary.account.credentials }, children);
+        return React.createElement(InjectedAuthProvider, { credentials: boundary.account.credentials, children });
     }
 
     function installAccountProfile(accountRef = ref) {
@@ -57,10 +58,17 @@ describe('useConnectedServiceQuotaSnapshots V4 transport', () => {
     function installFeatures(protocolVersion = 4) {
         const features = createRootLayoutFeaturesResponse({ capabilities: {
             serverIdentity: { serverIdentityId: boundary.account.home.serverIdentityId! },
-            connectedServices: { credentialDelete: { revisionGuard: true }, qualifiedAccounts: { protocolVersion } },
+            connectedServices: { credentialDelete: { revisionGuard: true }, qualifiedAccounts: { protocolVersion: 4 } },
         } });
-        boundary.features.mockImplementation(async () => new Response(JSON.stringify(features), { status: 200 }));
-        primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: { status: 'ready', features } });
+        // Malformed/future wire advertisements must cross the real feature decoder, not masquerade as admitted facts.
+        const advertised = { ...features, capabilities: { ...features.capabilities,
+            connectedServices: { ...features.capabilities.connectedServices, qualifiedAccounts: { protocolVersion } },
+        } };
+        boundary.features.mockImplementation(async () => new Response(JSON.stringify(advertised), { status: 200 }));
+        const parsed = parseServerFeatures(advertised);
+        primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId, snapshot: parsed
+            ? { status: 'ready', features: parsed }
+            : { status: 'unsupported', reason: 'invalid_payload' } });
         storage.getState().applySettingsLocal({ featureToggles: { connectedServices: true, 'connectedServices.quotas': true } });
     }
 

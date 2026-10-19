@@ -41,7 +41,7 @@ import {
 import { createProviderErrorV1, ProviderErrorV1Schema, providerErrorFromRpcFailure } from '@happier-dev/protocol/providers/errors';
 export { providerErrorFromRpcFailure } from '@happier-dev/protocol/providers/errors';
 import type { CustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/customTemplateV1';
-import type { z } from 'zod';
+import { safeParse, type z } from 'zod/mini';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -53,14 +53,14 @@ type ProviderRpcErrorContext = Readonly<{
 
 type ProviderRpcOperation = 'read' | 'mutation';
 
-async function requestProviderRpcResponse<TSchema extends z.ZodType>(
+async function requestProviderRpcResponse<TSchema extends z.core.$ZodType>(
     schema: TSchema,
     operation: ProviderRpcOperation,
     context: ProviderRpcErrorContext,
     request: () => Promise<unknown>,
 ): Promise<z.output<TSchema>> {
     try {
-        const parsed = schema.safeParse(await request());
+        const parsed = safeParse(schema, await request());
         if (!parsed.success) {
             throw createProviderErrorV1(
                 operation === 'mutation'

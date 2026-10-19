@@ -9,16 +9,17 @@ import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAc
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resolveMachineRpcTargetServerId } from '@/sync/runtime/orchestration/serverScopedRpc/resolveMachineRpcTargetServerId';
 import * as client from './client';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 const onExecuted = () => {};
 
 /** The Inbox page of one queued Provider approval, on the Home that holds it. */
-export function providerApprovalHref(artifactId: string, transportServerId: string): string {
+export function providerApprovalHref(artifactId: string, transportServerId: string): ReturnType<typeof buildApprovalHref> {
     return buildApprovalHref(artifactId, transportServerId);
 }
 
 /** The approval a Provider request from this client is waiting for: what to reopen, and where. */
-export type ProviderPendingApproval = Readonly<{ artifactId: string; href: string }>;
+export type ProviderPendingApproval = Readonly<{ artifactId: string; href: ReturnType<typeof buildApprovalHref> }>;
 
 /** Mounted result custody for the exact Home/Account that authored a Provider request. */
 export function useProviderActionClient(serverId: string | null | readonly (string | null)[], initiatingLifetime?: ServerAccountScopeLifetime | null) {
@@ -44,6 +45,7 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
         if (!binding) return [];
         const lifetime = {
             binding, transportServerId: getServerProfileById(id)?.id ?? id, controller: new AbortController(),
+            approvalHrefs: new Map<string, ProviderPendingApproval['href']>(),
         };
         return [[resolveServerProfileScopeIdForIdentifier(id), lifetime] as const];
     })), [bindings, requestedServerIds]);
@@ -52,8 +54,9 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
         const retirements = [...lifetimes.values()].map(lifetime => {
             if (lifetime.controller.signal.aborted) lifetime.controller = new AbortController();
             const controller = lifetime.controller;
-            const retirement = lifetime.binding.onRetire(() => controller.abort());
-            return () => { retirement.dispose(); controller.abort(); };
+            const retire = () => { lifetime.approvalHrefs.clear(); controller.abort(); };
+            const retirement = lifetime.binding.onRetire(retire);
+            return () => { retirement.dispose(); retire(); };
         });
         return () => { for (const retire of retirements) retire(); };
     }, [lifetimes]);
@@ -62,12 +65,10 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
         return binding ? [serverAccountScopeKeySuffix(binding.scope), binding.revision] : ['unbound', id];
     }));
     const approval = useActionApprovalContinuation({ scopeKey, serverId: requestedServerIds[0] ?? '', onExecuted });
-    // Where each queued approval was opened, so the author can reopen the same page.
-    const approvalHrefsRef = React.useRef(new Map<string, string>());
     const methods = React.useMemo(() => {
         function bind<Input extends Readonly<{ serverId: string | null }>, Output>(
             method: (input: Input, approval?: client.ProviderActionApprovalOptions) => Promise<Output>,
-        ): (input: Input, options?: Readonly<{ retainInvocationSignal: AbortSignal }>) => Promise<Output> {
+        ): (input: Input, options?: Readonly<{ signal?: AbortSignal; retainInvocationSignal?: AbortSignal }>) => Promise<Output> {
             return async (input, options) => {
                 const targetServerId = input.serverId ?? (requestedServerIds.length === 1 ? requestedServerIds[0] : null);
                 const lifetime = targetServerId ? lifetimes.get(resolveServerProfileScopeIdForIdentifier(targetServerId)) : undefined;
@@ -77,18 +78,27 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
                         || !areServerAccountScopesEqual(initiatingLifetime.scope, binding.scope)))) {
                     throw createProviderErrorV1('provider_authorization_changed');
                 }
-                return method(input, {
-                    scope: binding.scope,
-                    signal: lifetime.controller.signal,
-                    ...(options ? { retainInvocationSignal: options.retainInvocationSignal } : {}),
-                    onApprovalPending: registration => {
-                        if (!binding.isCurrent() || lifetime.controller.signal.aborted) return;
-                        const artifactId = typeof registration === 'string' ? registration : registration.artifactId;
-                        const href = providerApprovalHref(artifactId, lifetime.transportServerId);
-                        approvalHrefsRef.current.set(artifactId, href);
-                        approval.requestApproval(registration);
-                    },
-                });
+                // Request cancellation does not opt into retained approval delivery.
+                const cancellation = mergeAbortSignals([lifetime.controller.signal, options?.signal]);
+                const signal = cancellation.signal ?? lifetime.controller.signal;
+                let pendingArtifactId: string | null = null;
+                try {
+                    return await method(input, {
+                        scope: binding.scope,
+                        signal,
+                        ...(options?.retainInvocationSignal ? { retainInvocationSignal: options.retainInvocationSignal } : {}),
+                        onApprovalPending: registration => {
+                            if (!binding.isCurrent() || signal.aborted) return;
+                            const artifactId = typeof registration === 'string' ? registration : registration.artifactId;
+                            pendingArtifactId = artifactId;
+                            lifetime.approvalHrefs.set(artifactId, providerApprovalHref(artifactId, lifetime.transportServerId));
+                            approval.requestApproval(registration);
+                        },
+                    });
+                } finally {
+                    cancellation.dispose();
+                    if (pendingArtifactId) lifetime.approvalHrefs.delete(pendingArtifactId);
+                }
             };
         }
         return {
@@ -110,8 +120,13 @@ export function useProviderActionClient(serverId: string | null | readonly (stri
             confirmLegacyProfileMigrationConflict: bind(client.confirmLegacyProfileMigrationConflict),
         };
     }, [approval.requestApproval, initiatingLifetime, lifetimes, requestedServerIds]);
-    const pendingApprovalHref = approval.approvalPending && approval.approvalId
-        ? approvalHrefsRef.current.get(approval.approvalId) ?? null : null;
+    let pendingApprovalHref: ProviderPendingApproval['href'] | null = null;
+    if (approval.approvalPending && approval.approvalId) {
+        for (const lifetime of lifetimes.values()) {
+            const href = lifetime.approvalHrefs.get(approval.approvalId);
+            if (href) { pendingApprovalHref = href; break; }
+        }
+    }
     const pendingApproval = React.useMemo<ProviderPendingApproval | null>(() => (
         approval.approvalId && pendingApprovalHref ? { artifactId: approval.approvalId, href: pendingApprovalHref } : null
     ), [approval.approvalId, pendingApprovalHref]);

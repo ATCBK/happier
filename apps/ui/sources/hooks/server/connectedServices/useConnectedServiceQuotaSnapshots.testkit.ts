@@ -107,6 +107,6 @@ export function makeProviderAccountUsageSnapshot() {
 
 export function createLegacyQuotaAuthWrapper(readBoundary: () => Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>) {
     return function Wrapper({ children }: React.PropsWithChildren) {
-        return React.createElement(InjectedAuthProvider, { credentials: readBoundary().account.credentials }, children);
+        return React.createElement(InjectedAuthProvider, { credentials: readBoundary().account.credentials, children });
     };
 }

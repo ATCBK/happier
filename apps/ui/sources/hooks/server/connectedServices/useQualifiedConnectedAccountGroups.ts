@@ -310,6 +310,11 @@ export function useQualifiedConnectedAccountGroups(params: Readonly<{
                             state: stateRef.current,
                             basis: operationBasis,
                             group: currentGroup,
+                        }) && !isCurrentGroupRevision({
+                            state: stateRef.current,
+                            basis: operationBasis,
+                            // A same-Account refresh can already contain this exact acknowledged revision.
+                            group,
                         }))
             ) return null;
             // A same-Account list refresh cannot revoke a successful create.

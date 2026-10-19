@@ -41,7 +41,7 @@ function makeUsageSnapshot(subject = 'provider-work') {
 describe('useProviderAccountUsageSnapshots', () => {
     let boundary: Awaited<ReturnType<typeof createQualifiedQuotaTestHarness>>;
     function Wrapper({ children }: React.PropsWithChildren) {
-        return React.createElement(InjectedAuthProvider, { credentials: boundary.account.credentials }, children);
+        return React.createElement(InjectedAuthProvider, { credentials: boundary.account.credentials, children });
     }
     async function installFeatures() {
         const features = createRootLayoutFeaturesResponse({ capabilities: {

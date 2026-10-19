@@ -30,6 +30,7 @@ export function useProviderConnectionModels(input: Readonly<{
         ActiveServerAccountScopeLifetime | null
     >(null);
     const generation = React.useRef(0);
+    const pendingRead = React.useRef<AbortController | null>(null);
     const activeRef = React.useRef(input.active !== false);
     activeRef.current = input.active !== false;
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
@@ -83,6 +84,9 @@ export function useProviderConnectionModels(input: Readonly<{
             return null;
         }
         if (!ready) return null;
+        pendingRead.current?.abort();
+        const controller = new AbortController();
+        pendingRead.current = controller;
         if (
             stateScopeKeyRef.current !== scopeKey
             || stateAccountLifetimeRef.current !== accountLifetime
@@ -103,7 +107,7 @@ export function useProviderConnectionModels(input: Readonly<{
                 ...(input.machineId ? { machineId: input.machineId } : {}),
                 serverId: input.serverId,
                 connectionId: input.connectionId,
-            });
+            }, { signal: controller.signal });
             if (generation.current !== requestGeneration || !requestStillCurrent()) return null;
             if (result.status === 'success') {
                 stateAccountLifetimeRef.current = accountLifetime;
@@ -132,6 +136,7 @@ export function useProviderConnectionModels(input: Readonly<{
             setError(error);
             return { status: 'error' as const, error };
         } finally {
+            if (pendingRead.current === controller) pendingRead.current = null;
             if (generation.current === requestGeneration && requestStillCurrent()) setLoading(false);
         }
     }, [accountLifetime, binding, describeProviderConnectionModels, ready, input.connectionId, input.enabled, input.machineId, input.serverId, scopeKey]);
@@ -156,7 +161,11 @@ export function useProviderConnectionModels(input: Readonly<{
             setError(null);
         }
         void refreshWithResult();
-        return () => { generation.current += 1; };
+        return () => {
+            generation.current += 1;
+            pendingRead.current?.abort();
+            pendingRead.current = null;
+        };
     }, [accountLifetime, input.active, refreshWithResult, scopeKey]);
 
     const stateMatchesScope = stateScopeKey === scopeKey

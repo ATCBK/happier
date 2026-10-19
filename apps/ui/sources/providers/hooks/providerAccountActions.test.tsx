@@ -4,7 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
@@ -55,6 +55,12 @@ const [{ ProviderConnectionDetailScreen }, { AgentModelsScreen }] = await Promis
     import('@/components/settings/providers/ProviderConnectionDetailScreen'),
     import('@/components/settings/agents/AgentModelsScreen'),
 ]);
+const { AgentSessionDefaultsSection } = await import('@/components/settings/agents/AgentSettingsScreen');
+const { resolveAgentCatalogProjection } = await import('@/agents/backendCatalog/agentCatalogProjection');
+beforeEach(() => {
+    providerHarness.reset();
+    providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, request => machineRpcWithServerScope(request));
+});
 afterEach(async () => { standardCleanup(); clearActiveUnsavedChangesGuard(); await account.reset(); machineRpcWithServerScope.mockReset(); });
 
 function customTemplate() {
@@ -63,6 +69,24 @@ function customTemplate() {
 }
 
 describe('Account Provider UI actions without a machine', () => {
+    it('keeps external Agent model defaults renderable when the Agent declares no permission modes', async () => {
+        await account.restore({ machines: [] });
+        const identity = { pluginId: 'example.agent', localId: 'no-permission-modes' };
+        const projection = {
+            ...resolveAgentCatalogProjection('example.agent/no-permission-modes', { enabledAgentIds: [] }),
+            identity,
+            backendTargetKey: resolveBackendTargetKeyV2({ kind: 'agent', identity }),
+        };
+        const screen = await renderScreen(<AgentSessionDefaultsSection
+            projection={projection}
+            compatibilityTargetKeys={[]}
+            accountSettingsAvailable
+            onOpenModels={() => {}}
+        />);
+        expect(screen.findByTestId('settings.agents.detail.defaultModel')).not.toBeNull();
+        expect(screen.findByTestId('settings.agents.detail.permissionMode')).toBeNull();
+    });
+
     it('writes favorites through the Account Action and refuses a retained writer after Account retirement', async () => {
         const opaque = { v: 99, futureWriterField: 'keep' };
         const { serverId, accountId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [],
@@ -586,7 +610,7 @@ describe('Account Provider UI actions without a machine', () => {
     it('keeps the addressed Account Agent title when its selected same-Home machine is missing', async () => {
         const { serverId } = await account.restore({ serverIdentityId: 'srv_agent_same_home', machines: [] });
         const agent = { id: 'same-home-agent', name: 'same-home-agent', title: 'Addressed Account Agent title',
-            command: 'same-home-agent', createdAt: 1, updatedAt: 1 };
+            launch: { kind: 'command', command: 'same-home-agent' }, createdAt: 1, updatedAt: 1 };
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [agent] });
         account.home.answer(serverId, `GET ${ACP_CATALOG_ROWS_ROUTE_V1}`, {
             body: { status: 'present', revision: 1, content: { t: 'plain', v: record } },
@@ -635,7 +659,7 @@ describe('Account Provider UI actions without a machine', () => {
         const admitted = await renderHook(() => useProviderCatalogForServer(serverId));
         await waitForHomeGovernance(() => expect(admitted.getCurrent()).toMatchObject({ status: 'ready', revision: 1 }));
         const privateAgent = { id: 'private-active-agent', name: 'private-active-agent',
-            title: 'Private active Account Agent title', command: 'private-agent', createdAt: 1, updatedAt: 1 };
+            title: 'Private active Account Agent title', launch: { kind: 'command', command: 'private-agent' }, createdAt: 1, updatedAt: 1 };
         const acpRecord = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [privateAgent] });
         account.home.answer(serverId, `GET ${ACP_CATALOG_ROWS_ROUTE_V1}`, {
             body: { status: 'present', revision: 1, content: { t: 'plain', v: acpRecord } },

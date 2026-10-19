@@ -190,7 +190,7 @@ async function runLoad(
             const snapshot = read?.snapshot ?? null;
             entry.snapshot = snapshot ?? (entry.refreshing ? entry.snapshot : null);
             entry.usageRecordId = read?.recordId ?? (entry.refreshing ? entry.usageRecordId : null);
-            const diagnostic = snapshot?.diagnostics?.find((value) => value.kind === 'provider_http');
+            const diagnostic = read?.diagnostics?.find((value) => value.kind === 'provider_http');
             // POST only queues acquisition. A fresh observation or a later producer
             // failure settles it; the last-known snapshot's timestamp cannot do so.
             const observedAt = Math.max(snapshot?.fetchedAt ?? 0, diagnostic?.observedAtMs ?? 0);

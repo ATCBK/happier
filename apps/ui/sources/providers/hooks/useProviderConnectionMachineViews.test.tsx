@@ -8,19 +8,23 @@ import {
     createProviderSettingsHarness,
     installProviderSettingsRpcBoundary,
     createProviderSettingsAccountHarness,
+    installProviderConnectionsCatalogHttpBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import type { ProviderSettingsMachineRowV1 } from '@/providers/hooks/targetMachine';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
-const providerHarness = createProviderSettingsHarness();
+const machines = ['machine-a', 'machine-b', 'machine-shared'].map(id => createMachineFixture({ id, activeAt: Date.now() }));
+const providerHarness = createProviderSettingsHarness({ machines });
 installProviderSettingsRpcBoundary(providerHarness);
 // Warm the real Sync module after the transport leaves are installed, not inside a test hook's budget.
 await loadSyncSingletonForTests();
@@ -35,8 +39,13 @@ function row(
 
 describe('useProviderConnectionMachineViews', () => {
     beforeEach(async () => {
-        serverId = (await account.restore()).serverId;
-        otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
+        const currentMachines = machines.map(machine => ({ ...machine, activeAt: Date.now() }));
+        serverId = (await account.restore({ serverIdentityId: 'srv_a', currentAccount: true, machines: currentMachines })).serverId;
+        otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test',
+            serverIdentityId: 'srv_b', accountId: 'account-a', currentAccount: true, active: false });
+        await account.publishMachines(otherServerId, currentMachines);
+        installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: otherServerId,
+            catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
     });
     afterEach(async () => {
         providerHarness.reset();
@@ -47,7 +56,7 @@ describe('useProviderConnectionMachineViews', () => {
     it('refreshes peer machine facts through the connection query Account refresh without crossing Homes', async () => {
         let present = true;
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async request => (
-            createProviderConnectionsDescribeFixture({ connections: present || request.serverId === otherServerId
+            createProviderConnectionsDescribeFixture({ connections: present || request.serverId === 'srv_b'
                 ? [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: present ? 'Initially observed' : 'Foreign refresh' })] : [] })
         ));
         const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
@@ -62,7 +71,9 @@ describe('useProviderConnectionMachineViews', () => {
         await act(async () => { await hook.getCurrent().query.refresh('machine'); });
         await flushHookEffects();
         expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-a']).toMatchObject({ status: 'success', connection: null });
-        expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b']).toMatchObject({ status: 'success', connection: { displayName: 'Initially observed' } });
+        const peer = hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b'];
+        expect(peer, peer?.status === 'error' ? peer.error.code : undefined)
+            .toMatchObject({ status: 'success', connection: { displayName: 'Initially observed' } });
         await act(async () => { await hook.getCurrent().query.refresh('account'); });
         await flushHookEffects();
         expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b']).toMatchObject({ status: 'success', connection: null });
@@ -73,7 +84,7 @@ describe('useProviderConnectionMachineViews', () => {
         let settleForeign!: (value: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;
         let label = 'Initial';
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async request => {
-            if (request.serverId === otherServerId) return await new Promise(resolve => { settleForeign = resolve; });
+            if (request.serverId === 'srv_b') return await new Promise(resolve => { settleForeign = resolve; });
             return createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
                 connectionId: 'pc_a', displayName: label,
             })] });
@@ -99,6 +110,11 @@ describe('useProviderConnectionMachineViews', () => {
     });
 
     it('follows each peer describe approval on its captured Home without replaying the read', async () => {
+        for (const homeId of [serverId, otherServerId]) {
+            await installOwnMachineApprovalReplayBoundary({
+                harness: account.home, serverId: homeId, accountId: 'account-a', machineId: 'machine-shared',
+            });
+        }
         await account.home.requireUiApproval(otherServerId, 'providers.connections.describe');
         // Keep Sync's live scopes on the active Home; the peer retains its own persisted policy.
         await account.home.requireUiApproval(serverId, 'providers.connections.describe');
@@ -121,12 +137,12 @@ describe('useProviderConnectionMachineViews', () => {
         expect(Object.values(rendered.getCurrent().byTargetKey).every(value => value.status === 'loading')).toBe(true);
         const reads = () => providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE);
         expect(reads()).toHaveLength(0);
-        for (const homeId of [otherServerId, serverId]) {
-            await expect(decideApprovalAsInbox(homeId, account.home.artifacts(homeId).list()[0]!.id, 'approve'))
-                .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+        for (const [homeId, scopeId] of [[otherServerId, 'srv_b'], [serverId, 'srv_a']] as const) {
+            const decision = await decideApprovalAsInbox(scopeId, account.home.artifacts(homeId).list()[0]!.id, 'approve');
+            expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
         }
         await waitForHomeGovernance(() => expect(rendered.getCurrent().loading).toBe(false));
-        for (const [key, homeId] of [['srv_a\u0000machine-shared', serverId], ['srv_b\u0000machine-shared', otherServerId]] as const) {
+        for (const [key, homeId] of [['srv_a\u0000machine-shared', 'srv_a'], ['srv_b\u0000machine-shared', 'srv_b']] as const) {
             const state = rendered.getCurrent().byTargetKey[key];
             expect(state?.status === 'success' ? state.connection?.displayName : null).toBe(`approved on ${homeId}`);
         }
@@ -160,7 +176,7 @@ describe('useProviderConnectionMachineViews', () => {
             .filter((request) => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)
             .map((request) => request.serverId)
             .sort();
-        expect(requestedServerIds).toEqual([serverId, otherServerId].sort());
+        expect(requestedServerIds).toEqual(['srv_a', 'srv_b']);
 
         const byTargetKey = rendered.getCurrent().byTargetKey;
         expect(Object.keys(byTargetKey).sort()).toEqual([
@@ -169,8 +185,8 @@ describe('useProviderConnectionMachineViews', () => {
         ]);
         const first = byTargetKey['srv_a\u0000machine-shared'];
         const second = byTargetKey['srv_b\u0000machine-shared'];
-        expect(first?.status === 'success' ? first.connection?.displayName : null).toBe(`on ${serverId}`);
-        expect(second?.status === 'success' ? second.connection?.displayName : null).toBe(`on ${otherServerId}`);
+        expect(first?.status === 'success' ? first.connection?.displayName : null).toBe('on srv_a');
+        expect(second?.status === 'success' ? second.connection?.displayName : null).toBe('on srv_b');
     });
 
     it('issues no read and holds no rows when there is no addressable machine', async () => {

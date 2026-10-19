@@ -93,9 +93,9 @@ describe('Account Provider source visibility hook', () => {
         const oldSetShown = hook.getCurrent()?.setShown;
         expect(typeof oldSetShown).toBe('function');
         await act(async () => { await account.restore({ accountId: 'account-b', catalog, machines: [] }); });
-        const before = account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => request.method === 'POST').length;
+        const before = account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => ProviderConnectionsRowMutationV1Schema.safeParse(request.input).success).length;
         await act(async () => { oldSetShown?.(true); });
-        expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => request.method === 'POST')).toHaveLength(before);
+        expect(account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => ProviderConnectionsRowMutationV1Schema.safeParse(request.input).success)).toHaveLength(before);
     });
 
     it('does not attach Account A late settlement to Account B while its own source write is pending', async () => {

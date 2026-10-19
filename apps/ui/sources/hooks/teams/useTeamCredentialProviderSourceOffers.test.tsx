@@ -1,5 +1,6 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     createProviderErrorV1,
     ProviderConnectionIdSchema,
@@ -10,6 +11,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ProviderSettingsMachineRowV1 } from '@/providers/hooks/targetMachine';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const providerHarness = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(providerHarness);
@@ -41,8 +43,53 @@ function success(machineId: string) {
 }
 
 describe('useTeamCredentialProviderSourceOffers', () => {
+    it('cancels superseded non-replying reads through the real Action and RPC owners and recovers after pause', async () => {
+        let hold = false;
+        let requests = 0;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => {
+            requests += 1;
+            if (hold) return await new Promise<never>(() => {});
+            return success('machine-a');
+        });
+        const { useTeamCredentialProviderSourceOffers } = await import('./useTeamCredentialProviderSourceOffers');
+        const hook = await renderHook((props: { enabled: boolean }) => useTeamCredentialProviderSourceOffers({
+            enabled: props.enabled, machines: [row('machine-a')],
+        }), { initialProps: { enabled: true } });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().offers).toHaveLength(1));
+        hold = true;
+        let settled = false;
+        let pending: Promise<unknown> | undefined;
+        await act(async () => { pending = hook.getCurrent().refresh().finally(() => { settled = true; }); });
+        await waitForHomeGovernance(() => expect(requests).toBe(2));
+        hold = false;
+        await act(async () => { await hook.getCurrent().refresh(); });
+        expect(settled).toBe(true);
+        expect(hook.getCurrent().loading).toBe(false);
+        hold = true;
+        settled = false;
+        await act(async () => { pending = hook.getCurrent().refresh().finally(() => { settled = true; }); });
+        await waitForHomeGovernance(() => expect(requests).toBe(4));
+        await hook.rerender({ enabled: false });
+        await flushHookEffects();
+        expect(settled).toBe(true);
+        expect(hook.getCurrent().loading).toBe(false);
+        hold = false;
+        await hook.rerender({ enabled: true });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().offers).toHaveLength(1));
+        hold = true;
+        settled = false;
+        await act(async () => { pending = hook.getCurrent().refresh().finally(() => { settled = true; }); });
+        await waitForHomeGovernance(() => expect(requests).toBe(6));
+        await hook.unmount();
+        await flushHookEffects();
+        expect(settled).toBe(true);
+        await pending;
+    });
+
     beforeEach(async () => {
-        serverId = (await account.restore()).serverId;
+        serverId = (await account.restore({ serverIdentityId: 'srv_team_provider_offers', machines:
+            ['machine-a', 'machine-b', 'machine-c'].map(id => createMachineFixture({ id, activeAt: Date.now() })),
+        })).serverId;
     });
     afterEach(async () => {
         providerHarness.reset();

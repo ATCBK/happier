@@ -40,6 +40,7 @@ export function useProviderBindingStatus(input: Readonly<{
         loading: false,
     });
     const generation = React.useRef(0);
+    const pendingRead = React.useRef<AbortController | null>(null);
     const selectionKey = input.selection
         ? `${input.selection.ref.agentTargetKey}\0${input.selection.ref.providerConnectionId ?? ''}\0${input.selection.ref.modelId}\0${input.selection.updatedAt}`
         : '';
@@ -120,6 +121,9 @@ export function useProviderBindingStatus(input: Readonly<{
             return;
         }
         if (!ready) return;
+        pendingRead.current?.abort();
+        const controller = new AbortController();
+        pendingRead.current = controller;
         setState((current) => current.scopeKey === scopeKey
             && current.accountLifetime === accountLifetime
             ? { ...current, loading: true }
@@ -133,7 +137,7 @@ export function useProviderBindingStatus(input: Readonly<{
                     selection: input.selection,
                     launchBinding: input.launchBinding,
                 },
-            });
+            }, { signal: controller.signal });
             if (generation.current !== requestGeneration || !requestStillCurrent()) return;
             setState({ scopeKey, accountLifetime, status: result, error: null, loading: true });
         } catch (caught) {
@@ -149,6 +153,7 @@ export function useProviderBindingStatus(input: Readonly<{
                 loading: true,
             });
         } finally {
+            if (pendingRead.current === controller) pendingRead.current = null;
             if (generation.current === requestGeneration && requestStillCurrent()) {
                 setState((current) => current.scopeKey === scopeKey
                     && current.accountLifetime === accountLifetime
@@ -160,7 +165,11 @@ export function useProviderBindingStatus(input: Readonly<{
 
     React.useEffect(() => {
         void refresh();
-        return () => { generation.current += 1; };
+        return () => {
+            generation.current += 1;
+            pendingRead.current?.abort();
+            pendingRead.current = null;
+        };
     }, [accountLifetime, refresh, scopeKey]);
 
     return {

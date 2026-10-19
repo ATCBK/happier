@@ -5,6 +5,8 @@ import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderHook, flushHookEffects } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -25,6 +27,29 @@ function createDeferred<T>() {
 }
 
 describe('useProviderModelLoadAction', () => {
+    it('settles a non-replying load when the selected machine changes and permits a new load', async () => {
+        await account.publishMachines(serverId, ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, active: true, activeAt: Date.now() })));
+        machineRpcWithServerScope.mockImplementationOnce(() => new Promise<never>(() => {}))
+            .mockResolvedValueOnce({ status: 'loaded', source: 'requested' });
+        const refresh = async () => true;
+        const hook = await renderHook((props: { machineId: string }) => useProviderModelLoadAction({
+            machineId: props.machineId, serverId, refresh,
+        }), { initialProps: { machineId: 'machine-a' } });
+        let result: unknown;
+        let pending: Promise<unknown> | undefined;
+        await act(async () => { pending = hook.getCurrent().load('pc_a', 'model-a').then(value => { result = value; }); });
+        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledOnce());
+        await hook.rerender({ machineId: 'machine-b' });
+        await flushHookEffects();
+        expect(result).toEqual({ status: 'cancelled', providerMayContinue: true });
+        await pending;
+        expect(hook.getCurrent().loadingModelKey).toBeNull();
+        await act(async () => { result = await hook.getCurrent().load('pc_a', 'model-b'); });
+        expect(result).toEqual({ status: 'loaded', source: 'requested' });
+        expect(machineRpcWithServerScope).toHaveBeenLastCalledWith(expect.objectContaining({ machineId: 'machine-b' }));
+        expect(hook.getCurrent().loadingModelKey).toBeNull();
+    });
+
     afterEach(async () => {
         standardCleanup();
         await account.reset();
