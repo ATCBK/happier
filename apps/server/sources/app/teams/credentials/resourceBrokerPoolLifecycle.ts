@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { publishTeamChangedInTx } from "../teamChanges";
 
 /**
@@ -10,6 +11,7 @@ export async function clearTeamCredentialBrokerPoolReferencesInTx(
     tx: Tx,
     input: Readonly<{ custodianAccountId: string; poolId: string }>,
 ): Promise<void> {
+    await acquireAccountChangePublicationLocksInTx(tx, [input.custodianAccountId], { includeSingleAccount: true });
     const affected = await tx.teamCredentialResource.findMany({
         where: { custodianAccountId: input.custodianAccountId, brokerPoolId: input.poolId },
         select: { teamId: true },

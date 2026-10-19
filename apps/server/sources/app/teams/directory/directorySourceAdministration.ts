@@ -37,6 +37,7 @@ import {
 import type { TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import { publishTeamChangedInTx } from "../teamChanges";
+import { acquireExternalSourceAccountAdmissionInTx } from "../memberships/externalFacts";
 import { projectTeamDirectorySourceSummary } from "./directorySourceProjection";
 import {
     createDirectorySourceInTx,
@@ -967,6 +968,9 @@ export async function removeDirectorySourceForActor(input: Partial<TeamOperation
     actorAccountId: string;
 }>): Promise<DirectoryAdministrationResult<TeamDirectorySourceRemoveResultV1>> {
     return await inTx(async (tx) => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, {
+            owner: { kind: "directory_source", directorySourceId: input.sourceId }, actorAccountIds: [input.actorAccountId],
+        });
         const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({

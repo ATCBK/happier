@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -14,6 +15,7 @@ export async function deleteTeamCredentialResourceInTx(
     tx: Tx,
     input: Readonly<{ actorAccountId: string; resourceId: string; expectedRevision: number; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<DeleteTeamCredentialResourceResult> {
+    await acquireAccountChangePublicationLocksInTx(tx, [input.actorAccountId], { includeSingleAccount: true });
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) return { ok: false, error: "invalid_resource_input" };
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId } });
     if (!resource) return { ok: false, error: "not_found_or_not_visible" };

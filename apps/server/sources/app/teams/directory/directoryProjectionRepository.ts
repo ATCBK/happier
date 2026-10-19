@@ -1,7 +1,9 @@
 import { withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
 import { publishTeamChangedInTx } from "../teamChanges";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import {
+    acquireExternalSourceAccountAdmissionInTx,
     applyExternalGroupContributionInTx,
     applyExternalManagedGroupInTx,
     applyExternalTeamMembershipInTx,
@@ -728,6 +730,7 @@ export async function applyReadyDirectorySourceFactsForAccountInTx(
     tx: Tx,
     params: Readonly<{ sourceId: string; teamId: string; accountId: string }>,
 ): Promise<boolean> {
+    await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
     const current = await tx.teamDirectorySource.findFirst({
         where: {
             id: params.sourceId,
@@ -759,6 +762,7 @@ export async function commitActiveWorkosProjectionEvent(
     if (eventId.length === 0) throw new TypeError("WorkOS event ID must be non-empty");
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
         if (!await isDirectorySourceAllowedInTx(tx, { id: params.sourceId, kind: "workos_directory" }, params.expectedCurrentness, params.env)) {
             return { applied: false, reason: "stale_run" };
         }
@@ -891,6 +895,7 @@ export async function completeDirectoryProjection(params: Readonly<{
 }>): Promise<DirectoryProjectionWriteResult> {
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
         const current = await tx.teamDirectorySource.findFirst({
             where: {
                 id: params.sourceId,

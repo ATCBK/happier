@@ -15,6 +15,7 @@ import type {
 } from "@happier-dev/protocol/teams";
 import type { HomeIdentityConnectionListResultV1, HomeIdentityConnectionRemovalPreflightV1, HomeIdentityConnectionTestConsumeResultV1 } from "@happier-dev/protocol/home";
 import { isDeepStrictEqual } from "node:util";
+import { acquireExternalSourceAccountAdmissionInTx } from "../memberships/externalFacts";
 
 import { consumeIdentityConnectionTestResultInTx } from "@/app/api/routes/connect/oauthExternal/identityConnectionTestResult";
 import { createExternalAuthorizeAttempt } from "@/app/api/routes/connect/oauthExternal/createExternalAuthorizeUrl";
@@ -651,6 +652,9 @@ export async function removeTeamIdentityConnectionForActor(
             connection: IdentityConnectionV1;
         }>;
     const prepared = await inTx<RemovalPreparation>(async (tx) => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, {
+            owner: { kind: "identity_connection", teamIdentityConnectionId: input.connectionId }, actorAccountIds: [input.actorAccountId],
+        });
         const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
         if (!authority.ok) return authority;
         const current = await readTeamIdentityConnectionInTx(tx, {

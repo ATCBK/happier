@@ -23,6 +23,7 @@ import { isPrismaErrorCode } from "@/storage/prisma";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import {
+    acquireExternalSourceAccountAdmissionInTx,
     applyExternalGroupContributionInTx,
     directoryGroupContributorIdentityWhere,
     removeExternalGroupBindingInTx,
@@ -213,6 +214,7 @@ export async function setExternalGroupBindingForActor(
 ): Promise<Result<TeamExternalGroupBindingV1>> {
     try {
         return await inTx(async (tx) => {
+            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: input.owner, actorAccountIds: [input.actorAccountId] });
             const authorized = await authorizeInTx(tx, input);
             if (!authorized.ok) return authorized;
             const validOwner = await validateOwnerInTx(tx, {
@@ -364,6 +366,14 @@ export async function removeExternalGroupBindingForActor(
     input: TeamExternalGroupBindingRemoveInputV1 & Partial<TeamOperationAuthenticationContext> & Readonly<{ actorAccountId: string }>,
 ): Promise<Result<TeamExternalGroupBindingRemoveResultV1>> {
     return inTx(async (tx) => {
+        const bindingOwner = await tx.teamExternalGroupBinding.findUnique({
+            where: { id: input.bindingId }, select: { directorySourceId: true, teamIdentityConnectionId: true },
+        });
+        if (bindingOwner?.directorySourceId) {
+            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: bindingOwner.directorySourceId }, actorAccountIds: [input.actorAccountId] });
+        } else if (bindingOwner?.teamIdentityConnectionId) {
+            await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "identity_connection", teamIdentityConnectionId: bindingOwner.teamIdentityConnectionId }, actorAccountIds: [input.actorAccountId] });
+        }
         const authorized = await authorizeInTx(tx, input);
         if (!authorized.ok) return authorized;
         const removed = await removeExternalGroupBindingInTx(tx, {
