@@ -319,6 +319,25 @@ describe('projectWork', () => {
         expect(projection.sessions[2]?.status.bucket).toBe('needs_you');
     });
 
+    it('lists archived direct reports apart from live work and its counts, so an archived child is never "nothing started"', () => {
+        const projection = projectWork(input({
+            reportSessions: [
+                report({ sessionId: 'api', managerSessionId: 'lead' }),
+                report({ sessionId: 'old-child', managerSessionId: 'lead', archived: true }),
+                report({ sessionId: 'old-grandchild', managerSessionId: 'old-child', archived: true }),
+                report({ sessionId: 'elsewhere', managerSessionId: 'other-lead', archived: true }),
+            ],
+        }));
+
+        expect(projection.sessions.map((item) => item.key)).toEqual(['session:api']);
+        expect(projection.summary).toMatchObject({ sessions: 1, outstanding: 1 });
+        expect(projection.archivedSessions.map((item) => [item.key, item.level, item.status.word, item.open])).toEqual([
+            ['session:old-child', 0, 'sessionWork.states.archived', { kind: 'session', sessionId: 'old-child' }],
+        ]);
+        expect(groupWorkByState(projection).archived).toBe(projection.archivedSessions);
+        expect(projectWork(input({ reportSessions: [] })).archivedSessions).toEqual([]);
+    });
+
     it('never loops on a cycle the store transiently holds', () => {
         const projection = projectWork(input({
             reportSessions: [
@@ -495,7 +514,7 @@ describe('projectWork', () => {
         expect(groups.recent.map((item) => item.key)).toEqual([
             'session:done', 'session:quiet', 'session:gone', 'agent:run:x', 'run:paused-run',
         ]);
-        expect(Object.keys(groups)).toEqual(['needsYou', 'working', 'recent']);
+        expect(Object.keys(groups)).toEqual(['needsYou', 'working', 'recent', 'archived']);
     });
 
     it('nests a report under its lead only inside the same state group', () => {

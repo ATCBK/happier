@@ -56,6 +56,8 @@ import { useSessionWorkMenuActions } from './sessionWorkMenuActions';
 import { useSessionLineage } from './sessionLineage';
 import { createSessionWorkMapDetailsTab } from './SessionWorkMapDetailsView';
 import { WorkItemRow, WorkViewportContext, useWorkScrollViewport } from './WorkItemRow';
+import { useSessionArchivedReports } from './useSessionArchivedReports';
+import { WorkRowUnarchive } from './WorkRowUnarchive';
 import { readSessionWorkflowStepRunId, SessionStepWork } from './SessionStepWork';
 import { describeWorkPaneLine } from './workPaneLine';
 import { SessionWorkPlanRow } from './SessionWorkPlanRow';
@@ -310,10 +312,15 @@ export const SessionWorkView = React.memo((props: Readonly<{
         sessionId: props.sessionId, serverId: sessionServerId, hasReports,
     });
     const summary = projection?.summary ?? null;
-    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary) : EMPTY_LINE), [summary]);
+    // What this Session led and archived is read here, where it is shown; a closed strip never asks.
+    useSessionArchivedReports({ sessionId: props.sessionId, serverId: sessionServerId, enabled: stepRunId === null });
+    const archivedCount = projection?.archivedSessions.length ?? 0;
+    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary, archivedCount) : EMPTY_LINE), [archivedCount, summary]);
     const { nothingYet, holdWorkingPlace, managedUnavailable } = resolveWorkReadPresentation({
         projection, managedRuns: sources?.managedRuns ?? null, transcriptLoaded: useSessionTranscriptLoaded(props.sessionId),
     });
+    // The invitation is for a Session that never started anything: an archived child is something it did.
+    const nothingStarted = nothingYet && archivedCount === 0;
     // The lead this Session reports to is the pane's first fact, its "Managed by" row (lab P1w); the
     // header line says what is going on under it.
     const lineage = useSessionLineage(props.sessionId, sessionServerId);
@@ -322,8 +329,8 @@ export const SessionWorkView = React.memo((props: Readonly<{
         if (manager) router.push(buildScopedSessionRouteHref({ sessionId: manager.sessionId, serverId: sessionServerId }) as never);
     }, [manager, router, sessionServerId]);
     const headerLine = React.useMemo(
-        () => ({ segments: stepRunId ? [t('sessionWork.step.drivenBy')] : liveLine.length > 0 ? liveLine : nothingYet ? [t('sessionWork.subtitle.nothingStarted')] : [] }),
-        [liveLine, nothingYet, stepRunId],
+        () => ({ segments: stepRunId ? [t('sessionWork.step.drivenBy')] : liveLine.length > 0 ? liveLine : nothingStarted ? [t('sessionWork.subtitle.nothingStarted')] : [] }),
+        [liveLine, nothingStarted, stepRunId],
     );
     usePaneHeaderSlotContent(React.useMemo(
         () => ({ line: headerLine, action: headerAction, menuActions }),
@@ -412,7 +419,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
                     ref={scrollRef}
                     testID="session-work-scroll"
                     style={styles.scroll}
-                    contentContainerStyle={[styles.content, nothingYet ? styles.contentEmpty : null]}
+                    contentContainerStyle={[styles.content, nothingStarted ? styles.contentEmpty : null]}
                     onScroll={workViewport.onScroll}
                     scrollEventThrottle={100}
                     onLayout={workViewport.onLayout}
@@ -460,7 +467,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
                             action={sources ? { label: t('common.retry'), onPress: sources.managedRuns.retry } : undefined} />
                     ) : null}
                     {/* With no work yet the invite stands where the list will be (lab `convo-ST`). */}
-                    {nothingYet ? (
+                    {nothingStarted ? (
                         <View style={styles.empty}>
                             {/* The invite (lab `convo-ST`, "Nothing started yet"): the Agents that can take work
                                 here, one way to start and the asks. Without a way to start, the plain empty. */}
@@ -585,6 +592,8 @@ const WORK_STATE_SECTIONS: readonly WorkStateSectionSpec[] = [
     { key: 'needsYou', title: () => describeWorkStatusBucket('needs_you'), countMode: 'attention', collapsedRows: null },
     { key: 'working', title: () => describeWorkStatusBucket('working'), countMode: 'quiet', collapsedRows: null },
     { key: 'recent', title: () => t('sessionWork.states.recent'), countMode: 'none', collapsedRows: 4 },
+    // Sessions this one led and archived: after everything live, short, each with its Unarchive.
+    { key: 'archived', title: () => t('sessionWork.states.archived'), countMode: 'quiet', collapsedRows: 3 },
 ];
 
 /** What a state section needs to draw each item through its own row. */
@@ -669,6 +678,9 @@ const WorkStateSection = React.memo(function WorkStateSection(props: Readonly<{
                         key={segment.item.key}
                         item={segment.item}
                         titleTailStart={props.titleTailStartByKey.get(segment.item.key)}
+                        trailingAccessory={section.key === 'archived' && segment.item.open.kind === 'session' ? (
+                            <WorkRowUnarchive sessionId={segment.item.open.sessionId} serverId={roster.serverId} title={segment.item.title} />
+                        ) : undefined}
                         onOpen={roster.onOpenItem}
                         onShowInTranscript={roster.onShowItemInTranscript}
                     />

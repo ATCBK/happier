@@ -6,9 +6,11 @@ import { readWorkWorkingCount, type WorkSummary } from './workProjection';
 /**
  * The Work pane header's live line (lab `convo-W1`: "1 needs you · 6 working"): what waits on the
  * person first, in the attention ink, then what is still working. Once everything has settled it
- * counts what this Session leads ("4 sessions · 3 runs"). Stalled work is said by its own row, not here.
+ * counts what this Session leads ("4 sessions · 3 runs"), then what was archived ("2 archived"), so a
+ * Session whose only work was archived never reads as having started nothing. Stalled work is said by
+ * its own row, not here.
  */
-export function describeWorkPaneLine(summary: WorkSummary): PaneHeaderLineSegment[] {
+export function describeWorkPaneLine(summary: WorkSummary, archived = 0): PaneHeaderLineSegment[] {
     const working = readWorkWorkingCount(summary);
     const live: PaneHeaderLineSegment[] = [];
     if (summary.needsYou > 0) live.push({ text: t('sessionWork.strip.needsYou', { count: summary.needsYou }), attention: true });
@@ -17,5 +19,6 @@ export function describeWorkPaneLine(summary: WorkSummary): PaneHeaderLineSegmen
     const counts: PaneHeaderLineSegment[] = [];
     if (summary.sessions > 0) counts.push(t('sessionWork.subtitle.sessions', { count: summary.sessions }));
     if (summary.runs > 0) counts.push(t('sessionWork.subtitle.runs', { count: summary.runs }));
+    if (archived > 0) counts.push(t('sessionWork.subtitle.archived', { count: archived }));
     return counts;
 }

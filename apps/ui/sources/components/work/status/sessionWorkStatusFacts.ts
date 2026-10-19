@@ -38,10 +38,12 @@ export function readSessionWorkStatusFacts(
     nowMs: number,
 ): SessionWorkStatusFacts {
     const status = getSessionStatus(session, nowMs, { workingTextMode: 'static', includeTitle: false });
-    // These rows carry their own time, so a detached Session's word says only that it is offline;
-    // "Last seen 1 day ago" beside "1d" would say the same thing twice.
+    // These rows carry their own time, so a detached Session's word never says when it was last seen;
+    // "Last seen 1 day ago" beside "1d" would say the same thing twice. Offline is the runner lost with
+    // a turn in flight (stalled); a detached Session with nothing in flight has simply stopped.
     return sessionWorkStatusFactsFromStatus(session, status.state === 'disconnected'
-        ? { ...status, statusText: t('status.offline') }
+        ? { ...status, statusText: sessionWorkStalledFromStatus(session, status)
+            ? t('status.offline') : t('sessionWork.states.stopped') }
         : status);
 }
 

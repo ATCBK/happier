@@ -22,7 +22,7 @@ describe('readSessionWorkStatusFacts', () => {
         });
         const cold = buildSessionFromListRenderable(row, { serverId: 'home-a' });
         const status = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(cold, NOW) });
-        expect(status).toEqual({ bucket: 'offline', tone: 'neutral', word: 'status.offline' });
+        expect(status).toEqual({ bucket: 'offline', tone: 'neutral', word: 'sessionWork.states.stopped' });
         // The content remains unavailable during hydration; a public runtime word grants no read.
         expect(readSessionWorkStatusFacts(cold, NOW).awareness.encryption).toBe('unknown');
         const hydrated = createSessionFixture({ ...cold, encryptedContentAvailability: 'ready',
@@ -39,12 +39,17 @@ describe('readSessionWorkStatusFacts', () => {
         expect(status).toEqual({ bucket: 'idle', tone: 'neutral', word: 'status.unknownState' });
     });
 
-    it('says a detached Session is offline once, leaving when it was last seen to the row time', () => {
+    it('says a detached Session has stopped, and offline only when its runner was lost mid-turn', () => {
         // A hydrated row the Home marked inactive, with no device-observed presence.
         const detached = createSessionListRenderableSessionFixture({ active: false, presence: undefined, activeAt: NOW - 3_600_000 });
         const facts = readSessionWorkStatusFacts(detached, NOW);
-        expect(facts.word).toBe('status.offline');
+        expect(facts.word).toBe('sessionWork.states.stopped');
         expect(resolveWorkStatusTone({ kind: 'session', facts }).bucket).toBe('offline');
+
+        const lost = createSessionListRenderableSessionFixture({ active: false, activeAt: NOW, presence: 0,
+            latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: NOW });
+        expect(readSessionWorkStalled(lost, NOW)).toBe(true);
+        expect(readSessionWorkStatusFacts(lost, NOW).word).toBe('status.offline');
     });
 
     it('reads a list row the way the Session owner does: a pending permission needs you, a turn in flight is not settled', () => {

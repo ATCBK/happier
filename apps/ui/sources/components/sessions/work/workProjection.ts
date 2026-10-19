@@ -14,6 +14,7 @@ import type { ActionOperationProjection } from '@/sync/domains/actionOperations/
 import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 import { resolveActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
 import { canRequestActionOperationStop } from '@/components/inbox/actionOperations/actionOperationPresentation';
+import { t } from '@/text';
 
 /**
  * The one Work projection of a Session (ORC R-09, §3.8): every unit of work the Session leads, read from
@@ -177,6 +178,11 @@ export type WorkProjection = Readonly<{
     /** In-session agents (Task subagents, teammates): work the Session runs inside itself. */
     agents: readonly WorkItem[];
     projectCommands: readonly WorkItem[];
+    /**
+     * The Sessions this Session once led that were archived: kept apart from live work and out of every
+     * count, so "Nothing started" is only said when nothing ever was, and the person can bring one back.
+     */
+    archivedSessions: readonly WorkItem[];
     summary: WorkSummary;
 }>;
 
@@ -276,11 +282,18 @@ function isOutstandingSession(bucket: WorkBucket, stalled: boolean): boolean {
  * own reports are classified first, so a report whose subtree still has work going is never finished
  * (R-10): this projection counts that subtree and hands the count to the Session facts owner.
  */
-function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: readonly WorkItem[]; stalledKeys: ReadonlySet<string> }> {
+function projectReportSessions(input: WorkProjectionInput): Readonly<{
+    items: readonly WorkItem[]; archived: readonly WorkItem[]; stalledKeys: ReadonlySet<string>;
+}> {
     const childrenByLead = new Map<string, WorkReportSessionSource[]>();
+    const archived: WorkItem[] = [];
     for (const source of input.reportSessions) {
         const lead = normalizeId(source.managerSessionId);
-        if (!lead || source.archived || source.sessionId === input.sessionId) continue;
+        if (!lead || source.sessionId === input.sessionId) continue;
+        if (source.archived) {
+            if (lead === input.sessionId) archived.push(archivedWorkItem(source));
+            continue;
+        }
         const siblings = childrenByLead.get(lead);
         if (siblings) siblings.push(source);
         else childrenByLead.set(lead, [source]);
@@ -320,7 +333,22 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: re
         return outstanding;
     };
     walk(input.sessionId, null, 0);
-    return { items, stalledKeys };
+    return { items, archived, stalledKeys };
+}
+
+function archivedWorkItem(source: WorkReportSessionSource): WorkItem {
+    return {
+        key: `session:${source.sessionId}`,
+        kind: 'session',
+        title: source.title,
+        agentId: source.agentId,
+        facts: source.facts,
+        parentKey: null,
+        level: 0,
+        status: { bucket: 'finished', tone: 'neutral', word: t('sessionWork.states.archived') },
+        progress: null,
+        open: { kind: 'session', sessionId: source.sessionId },
+    };
 }
 
 function progressFacts(
@@ -331,7 +359,7 @@ function progressFacts(
 }
 
 export function projectWork(input: WorkProjectionInput, previous?: WorkProjection | null): WorkProjection {
-    const { items: sessions, stalledKeys } = projectReportSessions(input);
+    const { items: sessions, archived: archivedSessions, stalledKeys } = projectReportSessions(input);
 
     const headlineByRunId = new Map<string, SessionWorkflowRunHeadlineV1>();
     for (const run of input.workflowHeadlineRuns) {
@@ -460,6 +488,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
         backgroundRuns: backgroundRuns.length === 0 ? EMPTY_ITEMS : backgroundRuns,
         agents: agents.length === 0 ? EMPTY_ITEMS : agents,
         projectCommands: projectCommands.length === 0 ? EMPTY_ITEMS : projectCommands,
+        archivedSessions: archivedSessions.length === 0 ? EMPTY_ITEMS : archivedSessions,
         summary: {
             outstanding,
             needsYou,
@@ -475,6 +504,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
         backgroundRuns: retainWorkItems(next.backgroundRuns, previous.backgroundRuns),
         agents: retainWorkItems(next.agents, previous.agents),
         projectCommands: retainWorkItems(next.projectCommands, previous.projectCommands),
+        archivedSessions: retainWorkItems(next.archivedSessions, previous.archivedSessions),
         summary: areWorkSummariesEqual(next.summary, previous.summary) ? previous.summary : next.summary,
     };
     return shallow(retained, previous) ? previous : retained;
@@ -525,9 +555,11 @@ export type WorkStateGroups = Readonly<{
     needsYou: readonly WorkItem[];
     working: readonly WorkItem[];
     recent: readonly WorkItem[];
+    /** Archived Sessions this one led: after everything live, never nested under a live lead. */
+    archived: readonly WorkItem[];
 }>;
 
-type WorkStateGroupKey = keyof WorkStateGroups;
+type LiveWorkStateGroupKey = Exclude<keyof WorkStateGroups, 'archived'>;
 
 /**
  * The Work list reads by state on every surface (INT r0.5 §6 I4, lab `convo-W1/W8full`): what needs the
@@ -540,8 +572,8 @@ type WorkStateGroupKey = keyof WorkStateGroups;
  * their identity, so their rows do not re-render.
  */
 export function groupWorkByState(projection: WorkProjection, previous?: WorkStateGroups | null): WorkStateGroups {
-    const groups: Record<WorkStateGroupKey, WorkItem[]> = { needsYou: [], working: [], recent: [] };
-    const placed = new Map<string, Readonly<{ group: WorkStateGroupKey; level: number }>>();
+    const groups: Record<LiveWorkStateGroupKey, WorkItem[]> = { needsYou: [], working: [], recent: [] };
+    const placed = new Map<string, Readonly<{ group: LiveWorkStateGroupKey; level: number }>>();
     for (const item of [...projection.sessions, ...projection.backgroundRuns, ...projection.workflows, ...projection.agents, ...projection.projectCommands]) {
         const group = readSessionWorkStateGroupV1(item.status.bucket);
         const parent = item.parentKey ? placed.get(item.parentKey) : undefined;
@@ -553,9 +585,10 @@ export function groupWorkByState(projection: WorkProjection, previous?: WorkStat
         needsYou: groups.needsYou.length === 0 ? EMPTY_ITEMS : groups.needsYou,
         working: groups.working.length === 0 ? EMPTY_ITEMS : groups.working,
         recent: groups.recent.length === 0 ? EMPTY_ITEMS : groups.recent,
+        archived: projection.archivedSessions,
     };
     if (!previous) return next;
     const retained = { needsYou: retainWorkItems(next.needsYou, previous.needsYou), working: retainWorkItems(next.working, previous.working),
-        recent: retainWorkItems(next.recent, previous.recent) };
+        recent: retainWorkItems(next.recent, previous.recent), archived: retainWorkItems(next.archived, previous.archived) };
     return shallow(retained, previous) ? previous : retained;
 }
