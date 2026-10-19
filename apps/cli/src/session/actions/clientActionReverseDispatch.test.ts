@@ -125,7 +125,31 @@ describe('client Action reverse delivery', () => {
     };
     const context = { surface: 'cli', authority: 'account_automation', serverId: 'home' } as const;
     expect(await executor(client).execute(request.actionId, request.input, context)).toEqual({ ok: true, result: request.result });
-    expect(await executor(null).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await executor({
+      hasConnectedClientRpcHandler: () => false,
+      callConnectedClientRpc: async () => { throw new Error('must not issue without a registered client'); },
+    }).execute(request.actionId, request.input, context)).toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    expect(await executor(null).execute(request.actionId, request.input, context)).toEqual({
+      ok: false, errorCode: 'machine_transport_unavailable', error: 'machine_transport_unavailable',
+    });
+  });
+
+  it.each(['response', 'throw'] as const)('does not report a pre-issue reverse transport %s as noClient', async disposition => {
+    let deliveries = 0;
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async () => {
+        deliveries += 1;
+        if (disposition === 'throw') throw new Error('machine transport unavailable');
+        return { ok: false, errorCode: 'machine_socket_unavailable' };
+      },
+    };
+    await expect(executor(client).execute('ui.current_context.read', {}, {
+      surface: 'agent', authority: 'account_automation', serverId: 'home',
+    })).resolves.toEqual({
+      ok: false, errorCode: 'machine_transport_unavailable', error: 'machine_transport_unavailable',
+    });
+    expect(deliveries).toBe(1);
   });
 
   it('delivers a direct Home continuation to the App that owns its opaque current-context command', async () => {
