@@ -283,6 +283,7 @@ describe('current-session presentation wire contract', () => {
       { kind: 'board.open', mode: 'beside_chat' },
       { kind: 'board.view.select', viewId: 'overview' },
       { kind: 'board.item.reveal', widgetId: 'note-1', viewId: 'overview' },
+      { kind: 'chat.item.show', widgetId: 'note-1' },
       { kind: 'companion.show' },
       { kind: 'companion.hide' },
       { kind: 'companion.item.add', item: { kind: 'builtin', id: 'session_summary' }, index: 0 },

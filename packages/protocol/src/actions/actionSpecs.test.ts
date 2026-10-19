@@ -386,6 +386,7 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
 ] as const);
 
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
+  'reviews.comments.claimPublicationDispatch',
   'plugin.webhook.delivery.movePending',
   ...ROLE_ACTION_IDS_V1,
   'artifact.public_link.create',
@@ -606,7 +607,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'reviews.comments.setDisposition',
   'reviews.comments.attachEvidence',
   'reviews.comments.bulkTransition',
-  'reviews.comments.claimPublicationDispatch',
 ] as const;
 
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
