@@ -19,12 +19,20 @@ describe('enableErrorHandlers', () => {
             file: 'C:\\happier\\apps\\server\\sources\\storage\\inTx.ts' },
         { name: 'TypeError', code: 'private-code', errorClass: 'TypeError', prismaCode: undefined,
             file: '/srv/happier/apps/server/sources/app/machines/managed/managedRoutes.ts', serialization: true },
+        { name: 'PrismaClientKnownRequestError', code: 'P2024', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2024',
+            file: '/srv/happier/apps/server/sources/storage/prisma.ts', statusCode: 503 },
     ])('logs a correlated safe global diagnostic for $errorClass without exception or request content', async diagnostic => {
         const records: Record<string, unknown>[] = [];
         const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
         const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
         const app = Fastify({ logger: false, genReqId: () => 'qb80-http-request' });
         enableErrorHandlers(app as Parameters<typeof enableErrorHandlers>[0]);
+        // Authentication is the boundary: these fields are server-stamped only
+        // after execution-proof verification, never copied from the HTTP body.
+        app.addHook('preHandler', async request => {
+            request.externalActionExecutionRequestId = 'admit-own-action';
+            request.externalActionEffectActionId = 'session.attention.set';
+        });
         app.post('/v1/machines/managed/controller/report', async (_request, reply) => {
             const failure = Object.assign(new Error('private-driver-message'), { name: diagnostic.name, code: diagnostic.code,
                 stack: `${diagnostic.name}: private-driver-message\nSQL private-query\n    at privateFunction (${diagnostic.file}:250:18)\n    at privateFunction (https://private-host/source.js?private-token:1:2)` });
@@ -35,10 +43,12 @@ describe('enableErrorHandlers', () => {
             const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/report?token=private-url',
                 headers: { authorization: 'Bearer private-credential', 'user-agent': 'private-agent' },
                 payload: { requestId: 'private-unvalidated-id', secret: 'private-input' } });
-            expect(response.statusCode).toBe(500);
-            expect(response.json()).toMatchObject({ code: 'internal_error' });
+            expect(response.statusCode).toBe('statusCode' in diagnostic ? diagnostic.statusCode : 500);
+            expect(response.json()).toMatchObject('statusCode' in diagnostic
+                ? { error: 'database_connection_unavailable' } : { code: 'internal_error' });
             expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ module: 'fastify-error',
                 httpRequestId: 'qb80-http-request', errorClass: diagnostic.errorClass,
+                requestId: 'admit-own-action', actionId: 'session.attention.set',
                 ...(diagnostic.prismaCode ? { prismaCode: diagnostic.prismaCode } : {}),
                 stackFrames: [{ file: diagnostic.file, line: 250, column: 18 }] })]));
             expect(JSON.stringify(records)).not.toContain('private-');

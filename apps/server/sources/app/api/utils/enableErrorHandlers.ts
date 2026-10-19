@@ -49,11 +49,22 @@ export function enableErrorHandlers(app: Fastify) {
             return sendGlobalErrorResponse(reply, 401, { error: "invalid_token" });
         }
         const databaseError = readDatabaseErrorCode(error);
-        if (databaseError) return sendGlobalErrorResponse(reply, 503, { error: databaseError, statusCode: 503 });
+        const correlation = {
+            module: 'fastify-error' as const,
+            httpRequestId: request.id,
+            ...(request.externalActionExecutionRequestId ? { requestId: request.externalActionExecutionRequestId } : {}),
+            ...(request.externalActionEffectActionId ? { actionId: request.externalActionEffectActionId } : {}),
+        };
+        if (databaseError) {
+            // Expected storage refusals still need the same safe request
+            // correlation as other failures; never retain SQL or HTTP input.
+            logUnexpectedRequestError(error, correlation);
+            return sendGlobalErrorResponse(reply, 503, { error: databaseError, statusCode: 503 });
+        }
         const statusCode = error.statusCode || 500;
         const schemaMismatch = readSharedQaSchemaMismatchDiagnostic(error);
         if (statusCode >= 500) {
-            logUnexpectedRequestError(error, { module: 'fastify-error', httpRequestId: request.id });
+            logUnexpectedRequestError(error, correlation);
             captureFastifyExceptionForSentry(error, request);
             if (schemaMismatch) {
                 return sendGlobalErrorResponse(reply, statusCode, { ...schemaMismatch, statusCode });
