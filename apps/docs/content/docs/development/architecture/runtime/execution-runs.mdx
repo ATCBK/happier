@@ -123,6 +123,14 @@ input, steer, resume, use attachments, or expose a durable composer. Bounded
 jobs remain bounded; reconstructing a transcript does not grant live runtime
 authority.
 
+For detached Session-derived work, the host selects retained interaction only
+when the selected Agent generation exposes `executionRunContextV1.openConversation`.
+A generation exposing only `open` uses its finite execution facet, including
+for a fresh Workflow Judge check. The host still observes that check's exact
+accepted input and result; a long-lived Run request alone does not grant the
+Agent a multi-turn conversation capability. Keep going supplies the goal and
+recent-turn context explicitly for each fresh check.
+
 ### Workflow finalization uses the frozen result contract
 
 The Workflow adapter observes the exact accepted input turn of a retained Run,
