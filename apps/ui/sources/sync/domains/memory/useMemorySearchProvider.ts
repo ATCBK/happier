@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { HomeSearchCapabilitiesSchema } from '@happier-dev/protocol/features/payload/capabilities/homeSearchCapabilities';
-import type { MemorySearchCorpusV1 } from '@happier-dev/protocol/memory/memorySearch';
+import type { MemorySearchCorpusV1, MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -60,6 +60,8 @@ export type MemorySearchProvider = Readonly<{
      * explicit target, never an arbitrary first machine.
      */
     daemonTarget: DaemonMemorySearchTargetV1 | null;
+    /** Selected identity survives offline admission; it never authorizes a query. */
+    selectedDaemonTarget?: DaemonMemorySearchTargetV1;
     /** The only authorization to issue a transcript request for this context. */
     queryAvailable: boolean;
     unavailableReason: MemorySearchUnavailableReason | null;
@@ -117,11 +119,12 @@ export function resolveConversationSearchProviders(input: Readonly<{
  */
 export function useMemorySearchProvider(
     target: MemorySearchProviderTarget = { kind: 'ambient' },
-    options: Readonly<{ enabled?: boolean; corpora?: readonly MemorySearchCorpusV1[]; conversationSearch?: boolean }> = {},
+    options: Readonly<{ enabled?: boolean; corpora?: readonly MemorySearchCorpusV1[]; conversationSearch?: boolean; scope?: MemorySearchScope }> = {},
 ): MemorySearchProvider {
     const enabled = options.enabled !== false;
     const documentsRequested = options.corpora?.includes('documents') === true;
     const sessionsRequested = options.corpora?.includes('sessions') === true;
+    const projectRequested = options.scope?.type === 'project';
     const activeServer = useActiveServerSnapshot();
     const requestedServerId = target.kind === 'exact'
         ? resolveServerProfileScopeIdForIdentifier(target.serverId)
@@ -147,6 +150,11 @@ export function useMemorySearchProvider(
     // arbitrary first machine and never an automatic all-machine fanout.
     const daemonTargetEnabled = enabled && daemonMemorySearchEnabled && !isExplicitNone;
     const daemonTargetSelection = useDaemonMemorySearchTargetSelection(daemonTargetEnabled);
+    const selectedDaemonServerId = target.kind === 'exact' && target.machineId
+        ? requestedServerId
+        : daemonTargetSelection.selectedTarget?.serverIdentityId ?? null;
+    const selectedDaemonMachineId = target.kind === 'exact' && target.machineId
+        ? target.machineId : daemonTargetSelection.selectedTarget?.machineId ?? null;
     const daemonTarget = daemonTargetEnabled
         ? requestedServerId
             ? target.kind === 'exact' && target.machineId
@@ -179,6 +187,17 @@ export function useMemorySearchProvider(
                 ? { serverId: daemonServerId, machineId: daemonMachineId }
                 : null;
         const resolvedHomeReadiness = resolveHomeMemorySearchReadiness(capability);
+        const selectionIdentity = selectedDaemonServerId && selectedDaemonMachineId ? { selectedDaemonTarget: {
+            serverId: selectedDaemonServerId, machineId: selectedDaemonMachineId,
+        } } : {};
+        // Home transcript search has no Project admission contract. Keep the
+        // explicitly selected daemon as the only authority, including offline.
+        if (projectRequested) return {
+            provider: 'daemon', homeServerId: null, homeReadiness: null,
+            daemonTarget: nextDaemonTarget, queryAvailable: nextDaemonTarget !== null,
+            ...selectionIdentity,
+            unavailableReason: nextDaemonTarget ? null : 'daemon_no_target',
+        };
         if (options.conversationSearch) {
             const conversation = resolveConversationSearchProviders({ homeSearchEnabled: homeSearchFeatureEnabled,
                 homeCapability: capability, daemonEnabled: daemonMemorySearchEnabled });
@@ -192,6 +211,7 @@ export function useMemorySearchProvider(
         // real document support and reports unavailable coverage for old peers.
         if (documentsRequested && nextDaemonTarget) {
             return {
+                ...selectionIdentity,
                 provider: 'daemon', homeServerId: null, homeReadiness: null,
                 daemonTarget: nextDaemonTarget, queryAvailable: true, unavailableReason: null,
             };
@@ -199,6 +219,7 @@ export function useMemorySearchProvider(
         if (documentsRequested && !sessionsRequested) {
             return {
                 ...NO_MEMORY_SEARCH_PROVIDER,
+                ...selectionIdentity,
                 unavailableReason: 'documents_unavailable',
             };
         }
@@ -206,6 +227,7 @@ export function useMemorySearchProvider(
         const homeAdmitted = homeCandidate && resolvedHomeReadiness !== 'unknown';
         const homeReadiness = homeCandidate ? resolvedHomeReadiness : null;
         const readyHome: MemorySearchProvider = {
+            ...selectionIdentity,
             provider: 'home',
             homeServerId: activeServerId,
             homeReadiness,
@@ -219,6 +241,7 @@ export function useMemorySearchProvider(
         // 2. Otherwise the daemon, and only with an explicitly selected usable machine.
         if (daemonMemorySearchEnabled && nextDaemonTarget) {
             return {
+                ...selectionIdentity,
                 provider: 'daemon',
                 homeServerId: null,
                 homeReadiness: null,
@@ -231,6 +254,7 @@ export function useMemorySearchProvider(
         if (homeCandidate) return readyHome;
         if (daemonMemorySearchEnabled) {
             return {
+                ...selectionIdentity,
                 provider: 'daemon',
                 homeServerId: null,
                 homeReadiness: null,
@@ -243,6 +267,9 @@ export function useMemorySearchProvider(
     }, [
         enabled,
         options.conversationSearch,
+        projectRequested,
+        selectedDaemonServerId,
+        selectedDaemonMachineId,
         documentsRequested,
         sessionsRequested,
         activeServerId,

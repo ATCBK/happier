@@ -7,13 +7,14 @@ import { withUiPromptLibraryArtifactReader, withUiPromptLibraryArtifactStore } f
 export type PromptInvocationsListItem = ReturnType<typeof listPromptInvocationsInLibrary>['items'][number];
 export type PromptInvocationResolveResult = Awaited<ReturnType<typeof resolvePromptInvocationInLibrary>>;
 
-export type PromptInvocationActionSource = Readonly<{ invocations: unknown; store?: PromptLibraryArtifactStore;
+export type PromptInvocationActionSource = Readonly<{ invocations: unknown; revision?: number | 'absent'; store?: PromptLibraryArtifactStore;
   readArtifact?: PromptInvocationArtifactReader; assertCurrent?: () => void }>;
 
 function admittedInvocations(): PromptInvocationActionSource {
   const lifetime = captureActiveServerAccountScopeLifetime();
   const catalog = getPromptLibraryCatalogValue(lifetime?.scope ?? null, 'invocations');
   return { invocations: catalog.status === 'ready' && !catalog.stale ? catalog.value : undefined,
+    ...(catalog.status === 'ready' && !catalog.stale ? { revision: catalog.revision } : {}),
     assertCurrent: () => { if (!lifetime?.isCurrent()) throw new Error('action_account_scope_changed'); } };
 }
 
@@ -26,7 +27,7 @@ export function listPromptInvocationsForActions(args: Readonly<{ limit?: number 
   const captured = source ?? admittedInvocations();
   const invocations = captured.invocations;
   if (!isSourceCurrent(captured) || invocations === undefined || invocations === null) return { items: [], coverage: 'unavailable' as const };
-  return listPromptInvocationsInLibrary({ invocations, request: args });
+  return listPromptInvocationsInLibrary({ invocations, revision: captured.revision, request: args });
 }
 
 export async function resolvePromptInvocationForActions(args: Readonly<{

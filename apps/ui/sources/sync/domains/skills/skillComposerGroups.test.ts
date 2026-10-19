@@ -19,6 +19,22 @@ const found = { machineId: 'm', observedAt: 99, result: SkillFoundListResultV1Sc
 ] }) };
 
 describe('composer skill groups', () => {
+    it.each([undefined, true])('does not resurrect a non-invocable Session identity from weaker Found data (%s)', userInvocable => {
+        const groups = buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: 'm',
+            sessionItems: [SkillCatalogItemV1Schema.parse({ name: 'native', origin: 'vendor', backendId: 'codex', userInvocable: false })],
+            libraryItems: [skill('different-identity', 'native')],
+            found: { ...found, result: { ...found.result, items: found.result.items.map(item => ({ ...item, userInvocable })) } } });
+        expect(groups.map(group => group.kind)).toEqual(['library']);
+        expect(groups.flatMap(group => group.rows.map(row => row.identity.id))).toEqual(['different-identity']);
+    });
+    it('omits a non-invocable Found skill without a Session catalog and accepts a missing invocation flag', () => {
+        const native = found.result.items[0]!;
+        const groups = buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: 'm',
+            sessionItems: [], libraryItems: [], found: { ...found, result: { ...found.result, items: [
+                { ...native, name: 'hidden', userInvocable: false }, native,
+            ] } } });
+        expect(groups.flatMap(group => group.rows.map(row => row.name))).toEqual(['native']);
+    });
     it('unifies canonical identities, filters user invocation and machine/Agent scope, and preserves dated Found data', () => {
         const session = SkillCatalogItemV1Schema.parse({ name: 'already', id: 'library-a', origin: 'happier', backendId: 'codex' });
         const groups = buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: 'm',

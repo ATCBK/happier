@@ -58,6 +58,7 @@ export async function writeDaemonMemorySettings(args: Readonly<{
     serverId: string | null | undefined;
     machineId: string | null | undefined;
     settings: MemorySettingsV1;
+    signal?: AbortSignal;
 }>): Promise<DaemonMemorySettingsFetchResult> {
     const serverId = typeof args.serverId === 'string' ? args.serverId.trim() : '';
     const machineId = typeof args.machineId === 'string' ? args.machineId.trim() : '';
@@ -74,6 +75,7 @@ export async function writeDaemonMemorySettings(args: Readonly<{
             serverId,
             method: RPC_METHODS.DAEMON_MEMORY_SETTINGS_SET,
             payload: args.settings,
+            signal: args.signal,
         });
         return {
             supported: true,

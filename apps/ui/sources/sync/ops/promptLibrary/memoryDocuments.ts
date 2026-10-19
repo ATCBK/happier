@@ -6,7 +6,9 @@ import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/libra
 import { MEMORY_ARCHIVE_TOPIC_TITLE_V1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import type { SessionContextIntentV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
-import { MemoryMutationResultV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { MemoryMutationResultV1Schema, MemoryDuplicateChoiceRequiredV1Schema,
+  type MemoryDuplicateChoiceV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 export type MemoryCreationReceipt = Readonly<{
   ref: PromptDocArtifactRefV1;
@@ -47,6 +49,7 @@ export type MemorySessionTarget = Readonly<{
 
 export type MemoryActionOutcome =
   | 'applied'
+  | 'review'
   | 'pending'
   | 'conflict'
   | 'refused';
@@ -57,6 +60,8 @@ export function readMemoryActionOutcome(
 ): MemoryActionOutcome {
   if (!result.ok)
     return result.errorCode === 'version_mismatch' ? 'conflict' : 'refused';
+  if (readMemoryDuplicateReview(result)) return 'review';
+  if (result.result && typeof result.result === 'object' && 'ok' in result.result && result.result.ok === false) return 'refused';
   if (readMemoryCreationReceipt(result)?.attachment === 'conflict') return 'conflict';
   return ActionApprovalRequestCreatedResultSchema.safeParse(result.result)
     .success
@@ -64,9 +69,17 @@ export function readMemoryActionOutcome(
     : 'applied';
 }
 
+/** Typed candidate data for the same save sheet; a review never acknowledges a persisted fact. */
+export function readMemoryDuplicateReview(result: ActionExecuteResult) {
+  if (!result.ok) return null;
+  const review = MemoryDuplicateChoiceRequiredV1Schema.safeParse(result.result);
+  return review.success ? review.data : null;
+}
+
 async function execute(
   actionId:
     | 'memory.remember'
+    | 'memory.decision.save'
     | 'memory.update'
     | 'memory.forget'
     | 'session.memory.set'
@@ -95,23 +108,55 @@ function documentInput(target: MemoryDocumentTarget) {
   };
 }
 
-type FactDraft = Readonly<{ text: string; expiresAtMs?: number }>;
+export type MemoryFactDraft = Readonly<{ text: string; expiresAtMs?: number; duplicateChoice?: MemoryDuplicateChoiceV1 }>;
+export type MemoryScopedFactDraft = MemoryFactDraft & Readonly<{
+  topic?: string;
+  /** Preserve the reviewed document when replaying a choice through its original Session or scope. */
+  reviewedTarget?: Readonly<{ ref: PromptDocArtifactRefV1; expectedRevision: MemoryDocumentRevision }>;
+}>;
+
+/** Message menus and C1's answered lasting questions seed the same reviewed save input. */
+export type MemoryDecisionDraft = MemoryFactDraft & Readonly<{
+  reason: string;
+  sourceMessageRef: CoordinationMessageRefV1;
+}>;
+export type MemoryScopedDecisionDraft = MemoryScopedFactDraft & MemoryDecisionDraft;
 
 /**
  * The memory surfaces' only writers: the public `memory.*` and Session context Actions. Work, the
  * Context pages and the topic page never write an Artifact body or Session metadata themselves.
  */
 export const memoryDocumentActions = {
+  saveDecisionInScope: (
+    target: MemoryScopeTargetV1,
+    draft: MemoryScopedDecisionDraft,
+    serverId: string,
+    signal?: AbortSignal,
+  ) => execute('memory.decision.save', { ...target, ...draft }, target.scope === 'project' ? target.projectRef.serverId : serverId, signal),
+  saveDecision: (
+    target: MemoryDocumentTarget,
+    draft: MemoryDecisionDraft,
+    signal?: AbortSignal,
+  ) => execute('memory.decision.save', { ...documentInput(target), ...draft }, target.serverId, signal, target.accountId),
+  saveDecisionInSession: (
+    target: MemorySessionTarget,
+    draft: MemoryScopedDecisionDraft,
+    signal?: AbortSignal,
+  ) => execute('memory.decision.save', {
+    sessionRef: { serverId: target.serverId, sessionId: target.sessionId },
+    expectedMetadataRevision: target.expectedMetadataRevision,
+    ...draft,
+  }, target.serverId, signal),
   /** Account and Project Context use the same lazy memory Action without a Session. */
   rememberInScope: (
     target: MemoryScopeTargetV1,
-    draft: FactDraft & Readonly<{ topic?: string }>,
+    draft: MemoryScopedFactDraft,
     serverId: string,
     signal?: AbortSignal,
   ) => execute('memory.remember', { ...target, ...draft }, target.scope === 'project' ? target.projectRef.serverId : serverId, signal),
   remember: (
     target: MemoryDocumentTarget,
-    draft: FactDraft,
+    draft: MemoryFactDraft,
     signal?: AbortSignal,
   ) =>
     execute(
@@ -124,7 +169,7 @@ export const memoryDocumentActions = {
   /** No document is attached yet: the host picks (and lazily creates) the Session's own target. */
   rememberInSession: (
     target: MemorySessionTarget,
-    draft: FactDraft & Readonly<{ topic?: string }>,
+    draft: MemoryScopedFactDraft,
     signal?: AbortSignal,
   ) =>
     execute(
@@ -139,7 +184,7 @@ export const memoryDocumentActions = {
     ),
   update: (
     target: MemoryDocumentTarget,
-    input: Readonly<{ factId: string; text: string }>,
+    input: Readonly<{ factId: string; text: string; expiresAtMs?: number | null; duplicateChoice?: MemoryDuplicateChoiceV1 }>,
     signal?: AbortSignal,
   ) =>
     execute(
@@ -154,6 +199,7 @@ export const memoryDocumentActions = {
     factId: string,
     restoreTopic?: string,
     signal?: AbortSignal,
+    duplicateChoice?: MemoryDuplicateChoiceV1,
   ) =>
     execute(
       'memory.update',
@@ -163,6 +209,7 @@ export const memoryDocumentActions = {
         factId,
         restore: true,
         ...(restoreTopic === undefined ? {} : { restoreTopic }),
+        ...(duplicateChoice === undefined ? {} : { duplicateChoice }),
       },
       target.serverId,
       signal,

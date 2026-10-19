@@ -34,6 +34,8 @@ describe('Account-bound prompt invocations', () => {
     admit(501);
     const result = listPromptInvocationsForActions({});
     expect(result.coverage).toBe('complete');
+    expect(result.revision).toBe(7);
+    expect(result.items[0]?.target).toEqual({ kind: 'doc', artifactId: 'artifact-0' });
     expect(result.items).toHaveLength(501);
     expect(result.items.at(-1)?.id).toBe('prompt-500');
   });
@@ -44,7 +46,7 @@ describe('Account-bound prompt invocations', () => {
   it('does not resurrect stale Settings when the destination catalog is empty', async () => {
     storage.setState({ settings: settingsParse({ ...storage.getState().settings, promptInvocationsV1: { v: 1, entries: entries(2) } }) });
     admit(0);
-    expect(listPromptInvocationsForActions({})).toEqual({ items: [], coverage: 'complete' });
+    expect(listPromptInvocationsForActions({})).toEqual({ items: [], coverage: 'complete', revision: 7 });
     await expect(resolvePromptInvocationForActions({ invocationId: 'prompt-1' })).resolves.toMatchObject({ status: 'unknownInvocation' });
   });
   it('keeps unavailable Account catalog state distinct from deletion', async () => {

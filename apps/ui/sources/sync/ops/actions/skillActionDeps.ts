@@ -2,11 +2,13 @@ import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/librar
 import type { PromptLibraryArtifactStore } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { randomUUID } from '@/platform/randomUUID';
 import { createUiRegistryHostV1 } from '@/registries/registryHostDeps';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { SKILL_ACTION_INPUT_SCHEMAS_V1, SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillInstallAcknowledgedEffectsV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
-import { readSkillLockV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { isPluginSkillIdV1, readSkillLockV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { readUiPluginSkillBundleV1, readUiPluginSkillItemsV1 } from './pluginSkillActionDeps';
 
 /** Projection never rewrites a received content ACK as a failed mutation. */
 export async function refreshUiSkillActionAcknowledgements(account: LazyActionAccountContext, skillIds: readonly string[]) {
@@ -56,13 +58,33 @@ export function createUiSkillActionExecuteV1(account: LazyActionAccountContext, 
             if (actionId === 'skills.updates.apply') await refreshUiSkillActionAcknowledgements(account, [SKILL_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input).skillId]);
             return output;
         }
-        const output = await createSkillActionExecuteV1({ store, skillRules, includeInSession, readFoundSkillBundle,
+        const addressed = input && typeof input === 'object' && 'skillId' in input && typeof input.skillId === 'string'
+            && isPluginSkillIdV1(input.skillId) ? input.skillId : null;
+        // Finite reads borrow the catalog loader's admitted publication. Only
+        // mutations need the fresh rule base supplied by the write port.
+        const catalogRules = getActionSpec(actionId).sideEffectClass === 'read'
+            ? { ...skillRules, readCatalog: store.organization.readCatalog }
+            : skillRules;
+        const output = await createSkillActionExecuteV1({ store, skillRules: catalogRules, includeInSession, readFoundSkillBundle,
+            readPluginSkills: async (signal, skillIds) => Promise.all([...new Set(skillIds ?? [])].filter(isPluginSkillIdV1)
+                .map(skillId => readUiPluginSkillBundleV1(account, skillId, { ...context, signal: signal ?? context.signal }))),
             readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
             fetchRegistrySkillFiles: registry.filesForPointer,
             readLinkSkills: registry.readLinkSkills, fetchLinkSkillFiles: registry.fetchLinkSkillFiles,
             randomId: randomUUID,
         })(actionId, input, { surface: context.surface ?? null,
             ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}) }, context.signal);
+        if (actionId === 'skills.list') {
+            const local = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].safeParse(output);
+            if (!local.success) return output;
+            const pluginItems = await readUiPluginSkillItemsV1(account, context, SKILL_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input));
+            return { ...local.data, items: [...local.data.items, ...pluginItems],
+                revision: JSON.stringify([local.data.revision, pluginItems.map(item => [item.skillId, item.revision])]) };
+        }
+        if (actionId === 'skills.duplicate' && addressed) {
+            const copied = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].safeParse(output);
+            if (copied.success) await refreshUiSkillActionAcknowledgements(account, [copied.data.skillId]);
+        }
         if (actionId === 'skills.found.read') { account.assertCurrent(); context.signal?.throwIfAborted(); }
         if (actionId === 'skills.found.adopt') {
             const parsed = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].safeParse(output);

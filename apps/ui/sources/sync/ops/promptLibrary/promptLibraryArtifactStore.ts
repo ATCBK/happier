@@ -11,6 +11,8 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { randomUUID } from '@/platform/randomUUID';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 
 /** Keep reads and the writes they derive in one exact Home/Account lifetime. */
 export async function withUiPromptLibraryArtifactStore<T>(
@@ -236,6 +238,33 @@ export function createUiPromptLibraryArtifactStore(
     },
     list: async (options) => {
       throwIfAborted(options?.signal);
+      account?.assertCurrent();
+      const state = readRegisteredStorageState();
+      const scope = account?.accountLifetime.scope;
+      const rows = state?.artifactsLoaded ? Object.values(state.artifacts) : null;
+      if (account && scope && state?.artifactsLoaded
+        && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
+        && areServerAccountScopesEqual(state.settingsScope, scope)
+        // Loaded membership can still contain a failed header observation.
+        // Only complete readable coverage can answer another read without HTTP.
+        && rows?.every(artifact => artifact.isDecrypted && artifact.rawHeader && artifact.access !== undefined)) {
+        // Select pages with the existing header selector/cursor owner. An empty
+        // search requests local selection over this already complete inventory.
+        const page = await listArtifactHeadersV1({
+          options: { ...options, search: '' },
+          readPage: async () => ({
+            items: rows.map(artifact => ({ artifactId: artifact.id,
+              header: artifact.isDecrypted ? artifact.rawHeader ?? {} : {},
+              createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, access: artifact.access })),
+            coverage: 'complete',
+          }),
+          encodeCursor: item => account.encodeArtifactListCursor(item),
+        });
+        account.assertCurrent();
+        return { items: page.items.map(item => ({ id: item.artifactId, header: item.header,
+          updatedAtMs: item.updatedAt, owned: item.access === 'owner' })), coverage: page.coverage,
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
+      }
       const page = await artifacts.list({ ...options, includeBody: false });
       return {
         items: page.items.map((item) => ({

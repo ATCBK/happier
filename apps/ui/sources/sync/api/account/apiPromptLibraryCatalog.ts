@@ -1,4 +1,5 @@
 import { loadPromptLibraryCatalogV1, readPromptLibraryCatalogRecordV1, type PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { core } from 'zod/mini';
 import { applyRoleOverrideMutationV1, type RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { createRoleArtifactStoreV1, retainLegacyRoleArtifactsV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema, PromptLibraryRowMutationV1Schema,
@@ -51,7 +52,7 @@ function failure(error: unknown, signal?: AbortSignal): PromptLibraryCatalogSnap
     if (code === 'forbidden' || code === 'unsupported') return { status: 'unavailable', reason: code };
     if (code === 'account-mode-mismatch') return { status: 'unavailable', reason: code };
     if (code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable') return { status: 'unavailable', reason: 'encryption-material-unavailable' };
-    if (error instanceof Error && error.name === 'ZodError') return { status: 'unavailable', reason: 'invalid-stored-content' };
+    if (error instanceof core.$ZodError) return { status: 'unavailable', reason: 'invalid-stored-content' };
     return { status: 'unavailable', reason: 'unreachable' };
 }
 async function readRows(context: PromptLibraryAccountContext, signal?: AbortSignal) {

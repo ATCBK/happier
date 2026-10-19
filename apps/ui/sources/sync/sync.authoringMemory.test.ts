@@ -17,6 +17,7 @@ import { createAccountSettingsScope, type AccountSettingsScope } from './domains
 import type { Settings } from './domains/settings/settings';
 import { profileDefaults } from './domains/profiles/profile';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
 // MMKV/native SDK and the prepared HTTP adapter are the real system boundaries.
 vi.mock('react-native-mmkv', () => {
@@ -116,9 +117,8 @@ describe('Sync authoring-memory runtime', () => {
                 await settingsResponse;
                 return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             }
-            if (/^\/v2\/sessions(?:\/active)?(?:\?|$)/.test(path)) {
-                return Response.json({ sessions: [], nextCursor: null, hasNext: false });
-            }
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+            if (bootstrapResponse) return bootstrapResponse;
             // Refused optional reads settle at the genuine HTTP boundary; all Sync
             // orchestration, queues, parsing, and state owners remain real.
             return Response.json({ error: 'not_authorized' }, { status: 401 });
@@ -128,14 +128,14 @@ describe('Sync authoring-memory runtime', () => {
         try {
             await vi.waitFor(() => expect(requests).toContain('/v2/account/settings'));
             await vi.waitFor(() => expect(requests).toContain('/v1/account/profile'));
-            expect(requests.some(path => /^\/v[12]\/sessions(?:\/active)?(?:\?|$)/.test(path))).toBe(false);
+            expect(requests.some(path => /^\/v[12]\/sessions(?:\/(?:active|query))?(?:\?|$)/.test(path))).toBe(false);
             expect(storage.getState().isDataReady).toBe(false);
         } finally {
             releaseSettings();
             await bootstrap;
         }
-        expect(requests.some(path => /^\/v[12]\/sessions(?:\?|$)/.test(path))).toBe(true);
         expect(storage.getState().isDataReady).toBe(true);
+        await vi.waitFor(() => expect(requests.some(path => /^\/v[12]\/sessions(?:\/(?:active|query))?(?:\?|$)/.test(path))).toBe(true));
     });
 
     it('loads accepted Project rows when optional authoring-memory storage returns 404, while memory writes still fail', async () => {

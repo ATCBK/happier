@@ -7,6 +7,7 @@ import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus'
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol';
 import { SESSION_MACHINE_TARGET_UNAVAILABLE_ERROR_CODE } from '@/sync/runtime/sessionMachineRpcErrorCodes';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 // Only HTTP, credentials and Socket acknowledgements are substituted.
 const network = await installSessionOpsNetworkBoundary();
 const reply = vi.fn<(request: SessionOpsRpcRequest) => Promise<unknown>>();
@@ -30,7 +31,7 @@ describe('searchDaemonMemory', () => {
         summary: 'A matching past Session', score: 0.5,
     };
     const documentHit = {
-        type: 'artifact', ref: { kind: 'doc', serverId: '', artifactId: 'doc-1' },
+        type: 'artifact', ref: { kind: 'doc' as const, serverId: '', artifactId: 'doc-1' },
         revision: { headerVersion: 1, bodyVersion: 2 }, location: 'archive', factId: 'fact-1',
         summary: 'A matching archived fact', score: 0.8,
     };
@@ -61,6 +62,23 @@ describe('searchDaemonMemory', () => {
                     ...(errorCode ? { errorCode } : {}) };
             }
         });
+    });
+
+    it('negotiates Project support on the selected daemon and never falls back to a global query', async () => {
+        const { searchDaemonMemory } = await import('./searchDaemonMemory');
+        const scope = { type: 'project' as const, projectRef: { serverId: home.id, projectKey: 'payments' } };
+        reply.mockResolvedValueOnce(status);
+        expect(await searchDaemonMemory({ ...query, scope })).toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
+        expect(reply.mock.calls.map(([request]) => request.method)).toEqual([RPC_METHODS.DAEMON_MEMORY_STATUS]);
+        reply.mockReset();
+        reply.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
+            ? { ...status, projectSearchSupported: true, documentSearchSupported: true }
+            : { v: 1, ok: true, hits: [documentHit], documents: { state: 'ready' }, project: { state: 'partial' } });
+        expect(await searchDaemonMemory({ ...query, scope, corpora: ['sessions', 'documents'] })).toMatchObject({
+            ok: true, hits: [documentHit], project: { state: 'partial' },
+        });
+        expect(reply.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0].payload)
+            .toMatchObject({ scope });
     });
 
     it('reads scoped preparation and exact-revision fact coverage, with old peers explicitly unavailable', async () => {
@@ -111,6 +129,47 @@ describe('searchDaemonMemory', () => {
         });
         expect(result).toEqual({ v: 1, ok: true, hits: [documentHit], documents: { state: 'ready' } });
         expect(MemorySearchResultV1Schema.parse(result)).toEqual(result);
+    });
+
+    it('waits for admitted document status and global search beyond the default transport deadline', async () => {
+        const statusIssued = createDeferred<void>();
+        const statusResponse = createDeferred<unknown>();
+        const searchIssued = createDeferred<void>();
+        const searchResponse = createDeferred<unknown>();
+        const supportedStatus = { ...status, documentSearchSupported: true };
+        const result = { v: 1, ok: true, hits: [documentHit], documents: { state: 'ready' } };
+        reply.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.DAEMON_MEMORY_STATUS) {
+                statusIssued.resolve();
+                return statusResponse.promise;
+            }
+            searchIssued.resolve();
+            return searchResponse.promise;
+        });
+        const { searchDaemonMemory } = await import('./searchDaemonMemory');
+        const controller = new AbortController();
+        vi.useFakeTimers();
+        let settled = false;
+        const outcome = searchDaemonMemory({ ...query, corpora: ['documents', 'sessions'], signal: controller.signal })
+            .then(value => ({ value }), error => ({ error }));
+        void outcome.then(() => { settled = true; });
+        try {
+            await statusIssued.promise;
+            await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
+            expect(settled).toBe(false);
+            statusResponse.resolve(supportedStatus);
+            await searchIssued.promise;
+            await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
+            expect(settled).toBe(false);
+            searchResponse.resolve(result);
+            expect(await outcome).toEqual({ value: result });
+        } finally {
+            controller.abort();
+            statusResponse.resolve(supportedStatus);
+            searchResponse.resolve(result);
+            await outcome;
+            vi.useRealTimers();
+        }
     });
 
     it('preserves old-peer transcripts and reports unavailable documents without sending an ignorable corpus field', async () => {
@@ -314,14 +373,18 @@ describe('searchDaemonMemory', () => {
         reply.mockImplementationOnce(async () => { issued.resolve(); return response.promise; });
         const controller = new AbortController();
         const { searchDaemonMemory } = await import('./searchDaemonMemory');
+        vi.useFakeTimers();
         const pending = searchDaemonMemory({ ...query, signal: controller.signal });
-        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        const outcome = pending.then(value => ({ value }), error => ({ error }));
         try {
             await issued.promise;
+            await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
             controller.abort();
-            await cancelled;
+            expect(await outcome).toMatchObject({ error: { name: 'AbortError' } });
         } finally {
             response.resolve({ v: 1, ok: true, hits: [transcriptHit] });
+            await outcome;
+            vi.useRealTimers();
         }
     });
 

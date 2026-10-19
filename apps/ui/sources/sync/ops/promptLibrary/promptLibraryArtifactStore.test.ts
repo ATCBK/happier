@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptDocInLibrary, listPromptLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
   encodePlainArtifactStoredContent,
@@ -74,6 +74,130 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it('keeps decision source admission metadata through the captured store on create and update', async () => {
+    const { CoordinationMessageRefV1Schema } = await import('@happier-dev/protocol/discussions/messageRefs');
+    const memoryDecisionSource = CoordinationMessageRefV1Schema.parse({ kind: 'discussion',
+      discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'committed' });
+    const writes: unknown[] = [];
+    const f: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> = fixture = await createPlainArtifactHomeFixture('https://memory-decision.test', {
+      handleRequest: async (path, init) => {
+        if (path.startsWith('/v1/artifacts') && init?.method === 'POST') writes.push(JSON.parse(String(init.body)));
+        // Persistence boundary for the dedicated source-admitted operations;
+        // the server suite exercises the real source/disclosure predicate.
+        if (path === '/v1/artifacts/memory-decision/create') return f.boundary.handle('/v1/artifacts', init);
+        if (/^\/v1\/artifacts\/[^/]+\/memory-decision$/.test(path)) return f.boundary.handle(path.slice(0, -'/memory-decision'.length), init);
+        return null;
+      },
+    });
+    await withUiPromptLibraryArtifactStore(async store => {
+      const header = { v: 1, kind: 'memory_doc.v1', title: 'Memory' };
+      const created = await store.create!({ header, body: 'saved decision', memoryDecisionSource });
+      if (typeof created === 'string') throw new Error('Expected acknowledged creation revision');
+      await store.update({ artifactId: created.artifactId, expectedRevision: created.revision,
+        header, body: 'corrected decision', memoryDecisionSource });
+      expect((await store.read(created.artifactId))?.body).toBe('corrected decision');
+    }, { serverId: f.home.id });
+    expect(writes).toMatchObject([{ memoryDecisionSource }, { memoryDecisionSource }]);
+  });
+  it('lists synced headers without HTTP or repeated opening, with live membership and Account fencing', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
+    const { fetchAndApplyArtifactsList } = await import('@/sync/engine/artifacts/syncArtifacts');
+    const codec = await import('@/sync/engine/artifacts/syncArtifacts');
+    const opening = vi.spyOn(codec, 'decryptArtifactListItems');
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      storage.setState({ artifactsLoaded: false });
+      await store.list!({ limit: 500 });
+      expect(opening).toHaveBeenCalled();
+      const readStartedWith = storage.getState().artifacts;
+      await fetchAndApplyArtifactsList({ credentials: { token: 'token' }, encryption: null, artifactDataKeys: new Map(),
+        request: account.request,
+        applyArtifacts: (rows, source) => storage.getState().applyArtifacts(rows, source === 'inventory' ? readStartedWith : undefined) });
+      const requestsBefore = f.requests.length;
+      opening.mockClear();
+      const read = () => listPromptLibrary({ store, request: {} });
+      expect(await read()).toMatchObject({ coverage: 'complete', items: [{ artifactId: 'current', title: 'Current' }] });
+      const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+      const action = await executeDefaultActionInCapturedAccount(account, 'prompts.library.list', {},
+        { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId });
+      expect(action).toMatchObject({ ok: true, result: { coverage: 'complete', items: [{ artifactId: 'current' }] } });
+      expect(f.requests.slice(requestsBefore).filter(request => request.method === 'GET' && request.path.startsWith('/v1/artifacts'))).toEqual([]);
+      const current = storage.getState().artifacts.current!;
+      if (!current.isDecrypted) throw new Error('Expected readable header');
+      storage.getState().updateArtifact({ ...current, headerVersion: 2,
+        rawHeader: { ...current.rawHeader, title: 'Updated' } });
+      storage.getState().addArtifact({ ...current, id: 'new', rawHeader: { ...current.rawHeader, title: 'New' } });
+      expect((await read()).items.map(item => item.title).sort()).toEqual(['New', 'Updated']);
+      storage.getState().deleteArtifact('current');
+      expect((await read()).items.map(item => item.artifactId)).toEqual(['new']);
+      expect(f.requests.slice(requestsBefore).filter(request => request.method === 'GET' && request.path.startsWith('/v1/artifacts'))).toEqual([]);
+      expect(opening).not.toHaveBeenCalled();
+      // A new Account must use its own inventory; an already captured reader must retire.
+      const oldScope = storage.getState().settingsScope;
+      storage.setState({ settingsScope: { serverId: f.home.id, accountId: 'different-account' },
+        profileScope: { serverId: f.home.id, accountId: 'different-account' } });
+      await expect(read()).rejects.toMatchObject({ code: 'action_account_scope_changed' });
+      storage.setState({ settingsScope: oldScope, profileScope: oldScope });
+    }, { serverId: f.home.id });
+  });
+  it('reuses complete granted header pages and re-observes unreadable coverage over HTTP', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
+    storage.setState({ artifactsLoaded: false });
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      expect((await listPromptLibrary({ store, request: {} })).items.map(item => item.artifactId)).toEqual(['current']);
+      expect(f.requests.some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
+      const current = await account.fetchArtifact('current');
+      if (!current?.isDecrypted) throw new Error('Expected readable prompt');
+      const heads = Array.from({ length: 502 }, (_, index) => ({ ...current, id: `prompt-${index}`,
+        updatedAt: index, access: index === 0 ? 'view' as const : 'owner' as const,
+        rawHeader: { ...current.rawHeader, title: `Prompt ${index}` } }));
+      const locked: DecryptedArtifact = { id: 'locked', createdAt: 0, updatedAt: 0, headerVersion: 1, seq: 0,
+        title: null, storageMode: 'e2ee', isDecrypted: false, availability: { kind: 'locked', reason: 'decryption_failed' } };
+      storage.getState().applyArtifacts(heads, storage.getState().artifacts);
+      const requestsBefore = f.requests.length;
+      const result = await listPromptLibrary({ store, request: {} });
+      expect(result.coverage).toBe('complete');
+      expect(result.items).toHaveLength(502);
+      expect(new Set(result.items.map(item => item.artifactId)).size).toBe(502);
+      expect(result.items.at(-1)?.artifactId).toBe('prompt-0');
+      expect(f.requests.slice(requestsBefore).filter(request => request.path.startsWith('/v1/artifacts'))).toEqual([]);
+      storage.getState().addArtifact(locked);
+      const recovered = await listPromptLibrary({ store, request: {} });
+      expect(recovered).toMatchObject({ coverage: 'complete', items: [{ artifactId: 'current' }] });
+      expect(recovered.items).toHaveLength(1);
+      expect(f.requests.slice(requestsBefore).some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
+      // A background Home's complete store cannot stand in for this captured Account.
+      storage.setState({ settingsScope: { serverId: 'another-home', accountId: account.accountId } });
+      expect((await listPromptLibrary({ store, request: {} })).items.map(item => item.artifactId)).toEqual(['current']);
+      expect(f.requests.slice(requestsBefore).some(request => request.path.startsWith('/v1/artifacts?'))).toBe(true);
+    }, { serverId: f.home.id });
+  });
+  it('reads the replacement Account inventory after reset instead of the previous Account projection', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const first = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
+    const { fetchAndApplyArtifactsList } = await import('@/sync/engine/artifacts/syncArtifacts');
+    await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      const basis = storage.getState().artifacts;
+      await fetchAndApplyArtifactsList({ credentials: account.credentials, request: account.request,
+        encryption: null, artifactDataKeys: new Map(),
+        applyArtifacts: (rows, source) => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) });
+    }, { serverId: first.home.id });
+    expect(storage.getState().artifacts.current).toBeDefined();
+    await first.dispose();
+    fixture = undefined;
+    const nextCatalog = createPromptLibraryCatalogBoundary();
+    const next = fixture = await createPlainArtifactHomeFixture(first.home.serverUrl,
+      { accountId: 'replacement-account', handleRequest: nextCatalog.handle });
+    storage.setState({ artifacts: {}, artifactsLoaded: false });
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      expect(account.accountId).toBe('replacement-account');
+      const created = await createPromptDocInLibrary({ store, request: { title: 'Next Account prompt', markdown: 'New content' } });
+      const result = await listPromptLibrary({ store, request: {} });
+      expect(result).toMatchObject({ coverage: 'complete', items: [{ artifactId: created.artifactId, title: 'Next Account prompt' }] });
+      expect(result.items).toHaveLength(1);
+    }, { serverId: next.home.id });
+  });
   it('returns the real bundle creation revision even when a subsequent content read is unavailable', async () => {
     const f = fixture = await createPlainArtifactHomeFixture('https://creation-receipt.test', {
       handleRequest: async (path, init) => path.startsWith('/v1/artifacts/') && (!init?.method || init.method === 'GET')
