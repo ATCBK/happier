@@ -66,7 +66,8 @@ function directoryInput(
 }
 
 export function useTeamsDirectory(options?: Readonly<{
-    archived?: TeamsListInputV1['archived'];
+    /** `all` observes both protocol sequences, each with its own cursor. */
+    archived?: TeamsListInputV1['archived'] | 'all';
     enabled?: boolean;
     /**
      * `member` is what a person's own Teams destination asks for. `administered`
@@ -107,8 +108,10 @@ export function useTeamsDirectory(options?: Readonly<{
         return out.length > 0 ? Object.freeze(out) : EMPTY_SCOPES;
     }, [capableServerIds, scopeResolutions]);
 
-    const input = React.useMemo(() => directoryInput(scope, archived), [scope, archived]);
-    const queryKey = React.useMemo(() => teamDirectoryQueryKeyV1(input), [input]);
+    const inputs = React.useMemo(() => archived === 'all'
+        ? [directoryInput(scope, 'active'), directoryInput(scope, 'archived')]
+        : [directoryInput(scope, archived)], [scope, archived]);
+    const queryKeys = React.useMemo(() => inputs.map(teamDirectoryQueryKeyV1), [inputs]);
 
     // Observing is what declares this surface a live consumer of each Home. The
     // engine owns first load, Account-change wake and retry; this never decides
@@ -116,26 +119,26 @@ export function useTeamsDirectory(options?: Readonly<{
     const scopesKey = serverAccountScopeListKey(scopes);
     React.useEffect(() => {
         if (!enabled) return;
-        const releases = scopes.map((scope) => observeTeamsDirectory(scope, input));
+        const releases = scopes.flatMap((scope) => inputs.map((input) => observeTeamsDirectory(scope, input)));
         return () => {
             for (const release of releases) release();
         };
         // `scopesKey` is the identity of the observed Home/Account set.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [enabled, input, scopesKey]);
+    }, [enabled, inputs, scopesKey]);
 
     const getSnapshots = React.useCallback(() => {
-        const byServerId: Record<string, TeamsDirectorySnapshot | undefined> = {};
+        const byServerId: Record<string, readonly (TeamsDirectorySnapshot | undefined)[]> = {};
         // Credential/snapshot keys use the published Home identity; the view
         // keeps the requested profile identifier, including its navigation address.
         for (const serverId of capableServerIds) {
             const resolution = scopeResolutions.get(resolveServerProfileScopeIdForIdentifier(serverId));
             if (resolution?.kind === 'bound') {
-                byServerId[serverId] = getTeamsDirectorySnapshot(resolution.scope, queryKey) ?? undefined;
+                byServerId[serverId] = queryKeys.map((queryKey) => getTeamsDirectorySnapshot(resolution.scope, queryKey) ?? undefined);
             }
         }
         return byServerId;
-    }, [capableServerIds, queryKey, scopeResolutions]);
+    }, [capableServerIds, queryKeys, scopeResolutions]);
 
     // The store publishes an immutable snapshot per key, so a serialized
     // identity of the observed keys is a sound change signal without
@@ -143,17 +146,18 @@ export function useTeamsDirectory(options?: Readonly<{
     const snapshotsVersion = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
         () => {
-            return JSON.stringify(scopes.map((scope) => {
+            return JSON.stringify(scopes.flatMap((scope) => queryKeys.map((queryKey) => {
                 const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
                 return [
                     serverAccountScopeKeySuffix(scope),
+                    queryKey,
                     snapshot?.status ?? 'none',
                     snapshot?.lastObservedAt ?? null,
                     snapshot?.stale === true,
                     snapshot?.error?.kind ?? null,
                     snapshot?.data?.length ?? -1,
                 ];
-            }));
+            })));
         },
         () => '',
     );
@@ -194,26 +198,30 @@ export function useTeamsDirectory(options?: Readonly<{
     );
 
     const hasMore = React.useMemo(
-        () => scopes.some((scope) => (getTeamsDirectorySnapshot(scope, queryKey)?.nextCursor ?? null) !== null),
+        () => scopes.some((scope) => queryKeys.some((queryKey) => (getTeamsDirectorySnapshot(scope, queryKey)?.nextCursor ?? null) !== null)),
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [queryKey, scopesKey, snapshotsVersion],
+        [queryKeys, scopesKey, snapshotsVersion],
     );
 
     const unreadableServerIdsKey = JSON.stringify(homes
         .filter((home) => home.state === 'unresolved' && home.reason === 'credential_unreadable')
         .map((home) => home.serverId));
     const refresh = React.useCallback(() => {
-        for (const scope of scopes) void refreshTeamsDirectory(scope, input);
+        for (const scope of scopes) {
+            for (const input of inputs) void refreshTeamsDirectory(scope, input);
+        }
         for (const serverId of JSON.parse(unreadableServerIdsKey) as string[]) {
             retryServerCredentialAccountScope(serverId);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [input, scopesKey, unreadableServerIdsKey]);
+    }, [inputs, scopesKey, unreadableServerIdsKey]);
 
     const loadMore = React.useCallback(() => {
-        for (const scope of scopes) void loadMoreTeamsDirectory(scope, input);
+        for (const scope of scopes) {
+            for (const input of inputs) void loadMoreTeamsDirectory(scope, input);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [input, scopesKey]);
+    }, [inputs, scopesKey]);
 
     return React.useMemo(
         () => Object.freeze({ ...state, scopes, hasMore, refresh, loadMore }),

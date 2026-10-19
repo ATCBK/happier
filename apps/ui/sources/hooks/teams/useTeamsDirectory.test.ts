@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
+import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamsListInputV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
 
@@ -29,7 +29,7 @@ import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook } from '@/dev/testkit';
+import { createDeferred, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook } from '@/dev/testkit';
 import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     primeServerFeaturesSnapshot,
@@ -121,6 +121,86 @@ afterEach(() => {
 });
 
 describe('useTeamsDirectory', () => {
+    it('combines all directory sequences and continues each cursor independently', async () => {
+        const home = await addHome('Home A', 'https://home-a.example', true);
+        await setActiveServerId(home, { scope: 'device' });
+        runtimeFetchMock.mockImplementation(async (request) => {
+            const input = TeamsListInputV1Schema.parse(JSON.parse(String(request.init.body)));
+            const archived = input.archived === 'archived';
+            const id = `${input.archived}-${input.cursor ? '2' : '1'}`;
+            return new Response(JSON.stringify({
+                items: [team(id, id, archived ? 1 : null)],
+                nextCursor: input.cursor ? null : `${input.archived}-next`,
+            }), { status: 200 });
+        });
+        const rendered = await renderHook(() => useTeamsDirectory({ archived: 'all' }));
+        try {
+            await vi.waitFor(() => {
+                expect(rendered.getCurrent().rows.map((row) => row.team.name)).toEqual(['active-1']);
+                expect(rendered.getCurrent().archivedRows.map((row) => row.team.name)).toEqual(['archived-1']);
+            });
+            expect(rendered.getCurrent().partial).toBe(false);
+            expect(rendered.getCurrent().hasMore).toBe(true);
+            await act(async () => { rendered.getCurrent().loadMore(); });
+            await vi.waitFor(() => {
+                expect(rendered.getCurrent().rows.map((row) => row.team.name)).toEqual(['active-1', 'active-2']);
+                expect(rendered.getCurrent().archivedRows.map((row) => row.team.name)).toEqual(['archived-1', 'archived-2']);
+                expect(rendered.getCurrent().hasMore).toBe(false);
+            });
+            const continuations = runtimeFetchMock.mock.calls
+                .map(([request]) => TeamsListInputV1Schema.parse(JSON.parse(String(request.init.body))))
+                .filter((input) => input.cursor)
+                .map((input) => [input.archived, input.cursor]);
+            expect(continuations).toEqual(expect.arrayContaining([
+                ['active', 'active-next'], ['archived', 'archived-next'],
+            ]));
+        } finally {
+            await rendered.unmount();
+        }
+    });
+
+    it('keeps answered rows while the other sequence loads, fails and retries', async () => {
+        const home = await addHome('Home A', 'https://home-a.example', true);
+        await setActiveServerId(home, { scope: 'device' });
+        const archivedPage = createDeferred<Response>();
+        let retrying = false;
+        runtimeFetchMock.mockImplementation(async (request) => {
+            const input = TeamsListInputV1Schema.parse(JSON.parse(String(request.init.body)));
+            if (input.archived === 'archived' && !retrying) {
+                return archivedPage.promise;
+            }
+            return new Response(JSON.stringify({
+                items: [team(input.archived, input.archived, input.archived === 'archived' ? 1 : null)],
+                nextCursor: null,
+            }), { status: 200 });
+        });
+        const rendered = await renderHook(() => useTeamsDirectory({ archived: 'all' }));
+        try {
+            await vi.waitFor(() => expect(rendered.getCurrent().rows).toHaveLength(1));
+            expect(rendered.getCurrent().kind).toBe('ready');
+            expect(rendered.getCurrent().partial).toBe(true);
+            expect(rendered.getCurrent().unavailableHomes).toEqual([
+                expect.objectContaining({ serverId: home, reason: 'loading' }),
+            ]);
+            await act(async () => { archivedPage.reject(new Error('network down')); });
+            await vi.waitFor(() => expect(rendered.getCurrent().unavailableHomes).toEqual([
+                expect.objectContaining({ serverId: home, reason: 'offline', retryable: true }),
+            ]));
+            expect(rendered.getCurrent().rows).toHaveLength(1);
+            retrying = true;
+            await act(async () => { rendered.getCurrent().refresh(); });
+            await vi.waitFor(() => {
+                expect(rendered.getCurrent().archivedRows).toHaveLength(1);
+                expect(rendered.getCurrent().partial).toBe(false);
+                expect(rendered.getCurrent().unavailableHomes).toEqual([]);
+            });
+            expect(rendered.getCurrent().rows).toHaveLength(1);
+        } finally {
+            archivedPage.resolve(new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 }));
+            await rendered.unmount();
+        }
+    });
+
     it('binds a local Home alias to its published identity without borrowing the focused Home Account', async () => {
         const home = createHomeGovernanceHarness();
         const named = await home.addHome({ name: 'Named Home', serverUrl: 'https://team-alias.example',

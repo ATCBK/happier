@@ -14,7 +14,7 @@ import type {
     TeamCredentialRequestPolicySupportOutputV1,
 } from '@happier-dev/protocol/teams';
 import { teamCredentialResourcesQueryKeyV1, mergeTeamCredentialUsagePages } from '@happier-dev/protocol/teams';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
