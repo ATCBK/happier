@@ -11,7 +11,7 @@ export type PersonalHomeBackupManifestV1 = Readonly<{
 export const PERSONAL_HOME_BACKUP_FORMAT = 'happier-personal-home-backup' as const;
 export const PERSONAL_HOME_BACKUP_VERSION = 1 as const;
 const HEX_64 = /^[a-f0-9]{64}$/u;
-const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|clock\$|com[0-9１-９]|lpt[0-9１-９])(?:\..*)?$/iu;
+const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|clock\$|com[0-9\uff11-\uff19]|lpt[0-9\uff11-\uff19])(?:\..*)?$/iu;
 // Backup v1 is portable across the supported local filesystems. 4096 bytes is the
 // common POSIX path ceiling and 255 bytes is the common directory-entry ceiling;
 // these are filesystem interoperability bounds, not limits on Home content bytes.
