@@ -13,7 +13,6 @@ import {
   Stack,
   Status,
   Text,
-  useListMultiSelectionRow,
   usePluginHostApi,
   usePluginTranslation,
   useSurfaceContext,
@@ -86,34 +85,15 @@ export function readTriagePinActionLabelV1(
 }
 
 /**
- * The row's own way into a bulk selection, and the ONLY one a touch reader has.
- *
- * The shared `List` already turns a modified press into a set and an unmodified
- * press into a toggle once a set is being built — but a finger has no Command
- * key, so without a stated affordance the whole capability is desktop-only. It
- * lives in the row's existing secondary-action overflow rather than as a new
- * control: that owner already handles focus, keyboard activation and the touch
- * target, and it keeps the press target of the row itself unchanged.
- */
-export const TRIAGE_ROW_SELECT_ACTION_ID_V1 = 'toggle-selected';
-
-/**
- * The row's secondary actions, in the order a reader meets them.
- *
- * Select comes first because it is the affordance a touch reader has no other
- * way to reach, while Pin is also reachable from the entry's own detail. The
- * order is decided here rather than inline so it can be stated and falsified
- * rather than re-derived from a JSX literal.
+ * The row's secondary actions. Select is not among them: the shared `List` owns the row menu's Select/Deselect
+ * (the only way a finger builds a bulk set) for every Collection, so a second Triage copy would list it twice.
+ * The menu already names its row ("More actions for {title}"), so each item is a short verb.
  */
 export function triageListRowSecondaryActionsV1(input: Readonly<{
-  selectLabel: string;
   pinLabel: string;
   pinDisabled: boolean;
 }>): readonly Readonly<{ id: string; label: string; disabled?: boolean }>[] {
-  return [
-    { id: TRIAGE_ROW_SELECT_ACTION_ID_V1, label: input.selectLabel },
-    { id: PIN_ACTION_ID, label: input.pinLabel, disabled: input.pinDisabled },
-  ];
+  return [{ id: PIN_ACTION_ID, label: input.pinLabel, disabled: input.pinDisabled }];
 }
 
 /**
@@ -348,20 +328,9 @@ export function useTriageListRowActions(item: TriageListItemV1): CollectionRowAc
   const busy = handlers.busyKey === row.key;
   const disabled = handlers.unavailableReason !== null;
   const label = readTriagePinActionLabelV1(row, text);
-  const selection = useListMultiSelectionRow(row.key);
-  const selectLabel = selection.isSelected
-    ? text('plugins.triage.surface.row.deselect', 'Deselect {title}', { title: row.title })
-    : text('plugins.triage.surface.row.select', 'Select {title}', { title: row.title });
   const onSecondaryAction = React.useCallback((actionId: string) => {
-    // `replace` rather than `toggle` for the first row: turning selection mode on AND choosing the row the reader
-    // pressed is one gesture, and entering an empty selection mode would make the bar appear with nothing in it.
-    if (actionId === TRIAGE_ROW_SELECT_ACTION_ID_V1) {
-      if (selection.isSelectionMode) selection.toggle();
-      else selection.replace();
-      return;
-    }
-    handlers.onSetPinned(row);
-  }, [handlers, row, selection]);
+    if (actionId === PIN_ACTION_ID) handlers.onSetPinned(row);
+  }, [handlers, row]);
   if (!row.materialized) {
     return {
       busy,
@@ -380,7 +349,12 @@ export function useTriageListRowActions(item: TriageListItemV1): CollectionRowAc
   }
   return {
     busy,
-    secondaryActions: triageListRowSecondaryActionsV1({ selectLabel, pinLabel: label, pinDisabled: disabled }),
+    secondaryActions: triageListRowSecondaryActionsV1({
+      pinLabel: row.pinned
+        ? text('plugins.triage.surface.row.unpinShort', 'Unpin')
+        : text('plugins.triage.surface.row.pinShort', 'Pin'),
+      pinDisabled: disabled,
+    }),
     // Kept as an explicit override: plugin-ui's default resolves against the MOUNTED plugin's catalog, which
     // Triage does not declare, so dropping this would degrade to English rather than inherit a translation.
     secondaryActionAccessibilityLabel: text('plugins.triage.surface.row.moreActions', 'More actions for {title}', { title: row.title }),

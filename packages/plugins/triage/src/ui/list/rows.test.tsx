@@ -7,7 +7,6 @@ import {
   readTriageWindowStatementV1,
 } from './continuation.js';
 import {
-  TRIAGE_ROW_SELECT_ACTION_ID_V1,
   readTriageAgentBadgeV1,
   readTriageRowPlaceV1,
   readTriageRowBylinePlaceV1,
@@ -60,34 +59,12 @@ function displayRow(
 }
 
 describe('a PRs & Issues entry row\u2019s secondary actions', () => {
-  it('offers Select first, because it is the only way a finger reaches a bulk selection', () => {
-    // A finger has no Command key. Without this affordance the whole
-    // multi-selection capability \u2014 and the bulk bar, executor and three
-    // destinations behind it \u2014 is desktop-only.
-    const actions = triageListRowSecondaryActionsV1({
-      selectLabel: 'Select Replace the duplicated normalizer',
-      pinLabel: 'Pin Replace the duplicated normalizer',
-      pinDisabled: false,
-    });
+  it('offers Pin by its short verb and leaves Select to the shared row menu', () => {
+    // The shared List adds Select/Deselect to every selectable row; a Triage copy listed it twice. The menu is
+    // already named for its row, so the item is the verb alone.
+    const actions = triageListRowSecondaryActionsV1({ pinLabel: 'Pin', pinDisabled: true });
 
-    expect(actions.map((action) => action.id)).toEqual([
-      TRIAGE_ROW_SELECT_ACTION_ID_V1,
-      'set-pinned',
-    ]);
-  });
-
-  it('never disables Select because the PIN store is unreachable', () => {
-    // Pin needs the Account; choosing rows needs nothing but the list. Letting
-    // an unreachable pin store take the selection affordance away would make a
-    // reader who cannot pin unable to bulk-act either.
-    const actions = triageListRowSecondaryActionsV1({
-      selectLabel: 'Select it',
-      pinLabel: 'Pin it',
-      pinDisabled: true,
-    });
-
-    expect(actions[0]).toEqual({ id: TRIAGE_ROW_SELECT_ACTION_ID_V1, label: 'Select it' });
-    expect(actions[1]?.disabled).toBe(true);
+    expect(actions).toEqual([{ id: 'set-pinned', label: 'Pin', disabled: true }]);
   });
 });
 
