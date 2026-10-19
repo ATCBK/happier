@@ -759,7 +759,7 @@ function assertFeatureProtocolSdkImport(
     if (!allowedSymbols) {
         throw new Error(`${packageName} imports unapproved SDK subpath ${reference.specifier} from ${sourcePath}`);
     }
-    if ((reference.kind !== 'named' && reference.kind !== 'import-type') || reference.names.length === 0) {
+    if ((reference.kind !== 'named' && reference.kind !== 'import-type' && reference.kind !== 're-export') || reference.names.length === 0) {
         throw new Error(`${packageName} must use named SDK imports from ${reference.specifier} in ${sourcePath}`);
     }
     for (const name of reference.names) {

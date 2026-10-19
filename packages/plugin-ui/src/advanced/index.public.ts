@@ -6,6 +6,9 @@
  * or Resource-store construction and therefore also own the corresponding
  * host/context boundary.
  */
+/** Core host geometry, not ordinary plugin author presentation choices. */
+export { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '../presentation/layout/pageMetrics.js';
+export { resolveHappierRowTitleMetaPlacement } from '../presentation/layout/pageMetrics.js';
 export {
   PluginUiHostPresentationScope,
   PluginUiProvider,

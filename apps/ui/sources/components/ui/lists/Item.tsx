@@ -54,6 +54,7 @@ import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOptica
 import { useListPresentation } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
 import { HAPPIER_RADIUS_V1 } from '@happier-dev/plugin-ui/environment';
+import { resolveHappierRowTitleMetaPlacement } from '@happier-dev/plugin-ui/advanced';
 import { useSectionLeadingColumn } from './sectionLeadingColumn';
 import {
     HAPPIER_COLLECTION_LIST_METRICS,
@@ -69,7 +70,6 @@ import {
     useHappierPageSection,
     useHappierMaterialColorResolver,
     HAPPIER_ROW_TITLE_META_GAP_PX,
-    resolveHappierRowTitleMetaPlacement,
 } from '@happier-dev/plugin-ui/presentation';
 
 /** A title that carries a search match is the content of its row, so it wraps to this many lines rather than clipping the match. */

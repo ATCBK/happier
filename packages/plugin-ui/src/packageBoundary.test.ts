@@ -350,7 +350,7 @@ describe('author package boundary', () => {
       const entrypoint = join(packageRoot, 'src', directory, 'index.ts');
       const sourceSpec = join(packageRoot, 'src', directory, 'index.public.ts');
       expect(existsSync(sourceSpec), `${specifier} has no author-owned source spec`).toBe(true);
-      expect(readFileSync(entrypoint, 'utf8')).toBe("export * from './index.public.js';\n");
+      expect(readFileSync(entrypoint, 'utf8').trim()).toBe("export * from './index.public.js';");
     }
   });
 

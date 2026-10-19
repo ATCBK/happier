@@ -1,6 +1,25 @@
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierCollectionLayoutMode } from '../collection/collectionLayout.js';
 
+/** The gap between a row's title and its title-line meta (one owner with the gap the renderers draw). */
+export const HAPPIER_ROW_TITLE_META_GAP_PX = 12;
+
+/**
+ * The title gives way to its readable minimum before the whole meta moves beneath it.
+ * Shared by core Item and Collection; unmeasured input stays inline. Pure geometry
+ * lives here so host composition need not initialize native typography to use it.
+ */
+export function resolveHappierRowTitleMetaPlacement(input: Readonly<{
+  rowContentWidthPx: number;
+  titleNaturalWidthPx: number;
+  metaNaturalWidthPx: number;
+  titleMinWidthPx: number;
+}>): 'inline' | 'beneath' {
+  if (input.rowContentWidthPx <= 0) return 'inline';
+  const titleNeeds = Math.min(input.titleNaturalWidthPx, input.titleMinWidthPx);
+  return titleNeeds + HAPPIER_ROW_TITLE_META_GAP_PX + input.metaNaturalWidthPx <= input.rowContentWidthPx ? 'inline' : 'beneath';
+}
+
 /**
  * Geometry of the configuration-page anatomy, for Happier core and plugin pages.
  *
