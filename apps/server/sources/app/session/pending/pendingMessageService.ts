@@ -4,6 +4,7 @@ import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer, r
 import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor, type SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
 import { markPendingStateChangedRecipients } from "@/app/session/pending/markPendingStateChangedRecipients";
 import { pendingPublicationResult, type PendingPublicationFields } from "./pendingPublicationResult";
+import { isRetainedPendingContextForPublisherInTx } from './retainedPendingContext';
 import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { reconcileSessionPendingQueueStateInTx } from "@/app/session/pending/reconcileSessionPendingQueueState";
 import { applyPendingSessionStateChange } from "@/app/session/pending/applyPendingSessionStateChange";
@@ -3813,17 +3814,20 @@ export async function resolveAcceptedPendingDelivery(params: {
 
                 const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(existing.requestedAction);
                 const isExactAction = requestedAction.success && requestedAction.data.kind !== "enqueue";
-                const earlierUnresolved = isExactAction ? null : await tx.sessionPendingMessage.findFirst({
+                const earlierUnresolved = isExactAction ? [] : await tx.sessionPendingMessage.findMany({
                     where: {
                         sessionId,
                         targetExecutionRunId,
                         status: "queued",
                         position: { lt: existing.position },
                     },
-                    select: { localId: true },
+                    select: { status: true, targetExecutionRunId: true, deliveryState: true, deliveryBlockedReason: true,
+                        inputAdmissionReceipt: true, autonomousExchangeCause: true },
                 });
-                if (earlierUnresolved) {
-                    return { ok: false, error: "blocked-by-earlier-pending" } as const;
+                for (const row of earlierUnresolved) {
+                    if (!await isRetainedPendingContextForPublisherInTx(tx, row, params.publisherAuthority)) {
+                        return { ok: false, error: "blocked-by-earlier-pending" } as const;
+                    }
                 }
 
                 const resolved = await commitResolvedPendingDelivery(tx, {

@@ -390,6 +390,14 @@ to server settlement. The server transaction
 commits or updates the transcript message and removes that Pending row.
 Transcript and Pending state are then published through separate events.
 
+Retained next-turn Follow originals and returned answers are informational
+context, not additional native Turn or permission witnesses. The current host
+binds only the exact originals represented in its final dispatched prompt to
+the primary input's actual native outcome. Their existing Pending settlements
+precede the primary's settlement; an omitted original is not thereby accepted.
+Exact claim, publisher and target checks still precede settlement. The operation-scoped retained-context
+proof is described in [compatibility](compatibility.md#retained-quiet-input-03-development).
+
 For ACP in 0.3 development source, provider effect correlated to the exact
 dispatched prompt witnesses consumption even before `session/prompt` responds.
 The public ACP producer emits `input-accepted` through the existing host

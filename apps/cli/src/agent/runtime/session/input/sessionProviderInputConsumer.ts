@@ -766,7 +766,18 @@ async function pumpPendingWhileActive(
         || result.stoppedReason === 'auth_failure'
       ) return;
       if (passDirty) continue;
-      if (!await armedWake) return;
+      const didWake = result.retryAfterMs === undefined
+        ? await armedWake
+        : await Promise.race([
+          armedWake,
+          // Rejoin the retained claim under its owner's delay, just as the idle
+          // consumer does; a missing metadata event cannot strand active input.
+          waitForSessionMetadataRetryBackoff({
+            abortSignal: wakeController.signal,
+            backoffMs: result.retryAfterMs,
+          }).then(() => true),
+        ]);
+      if (!didWake) return;
     } finally {
       opts.abortSignal.removeEventListener('abort', onAbort);
       wakeController.abort('active-turn-pending-pass-complete');
@@ -1123,13 +1134,10 @@ async function drainPendingMessages(
       }
     }
 
-    const result = await materializeNextPendingForDrain(
+    return await materializeNextPendingForDrain(
       opts.session,
       opts,
     );
-    return result === 'materialized'
-      ? { materialized: 1, stoppedReason: 'max_pop_per_wake' }
-      : { materialized: 0, stoppedReason: result };
   } catch (error) {
     return { materialized: 0, stoppedReason: readDrainErrorStoppedReason(error, opts) };
   }
@@ -1157,7 +1165,7 @@ async function materializeNextPendingForDrain(
     pendingQueueDeliveryTiming: SessionPendingQueueDeliveryTiming;
     resolvePendingQueueDeliveryTiming?: () => SessionPendingQueueDeliveryTiming;
   },
-): Promise<Exclude<DrainPendingResult['stoppedReason'], 'aborted' | 'drain_disallowed' | 'materialization_blocked' | 'max_pop_per_wake'> | 'materialized'> {
+): Promise<DrainPendingResult> {
     try {
       const reconcileWhenEmpty = 'force';
       const deliveryTiming = opts.resolvePendingQueueDeliveryTiming?.() ?? opts.pendingQueueDeliveryTiming;
@@ -1175,22 +1183,23 @@ async function materializeNextPendingForDrain(
         deliveryTiming,
         result,
       });
-      if (result.type === 'materialized') return 'materialized';
+      if (result.type === 'materialized') return { materialized: 1, stoppedReason: 'max_pop_per_wake' };
       if (result.type === 'auth_failure') {
         logTerminalAuthDrainStop(opts, null);
-        return 'auth_failure';
+        return { materialized: 0, stoppedReason: 'auth_failure' };
       }
       if (result.type === 'deferred') {
         if (result.reason === 'supervisor_auth_failed') {
           logTerminalAuthDrainStop(opts, null);
-          return 'auth_failure';
+          return { materialized: 0, stoppedReason: 'auth_failure' };
         }
-        return 'deferred';
+        return { materialized: 0, stoppedReason: 'deferred' };
       }
-      if (result.type === 'retryable_transport') return 'error';
-      return 'no_pending';
+      if (result.type === 'retryable_transport') return { materialized: 0, stoppedReason: 'error',
+        ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }) };
+      return { materialized: 0, stoppedReason: 'no_pending' };
     } catch (error) {
-      return readDrainErrorStoppedReason(error, opts);
+      return { materialized: 0, stoppedReason: readDrainErrorStoppedReason(error, opts) };
     }
 }
 

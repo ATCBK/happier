@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import type { ExecutionRunAdmittedPendingInputV1 } from '@/api/session/client/transport/sessionClientInteractionApi';
 import type {
@@ -25,6 +26,7 @@ type QueuedRow = Readonly<{
  */
 function createPortFake(rows: QueuedRow[], options: { commitDurableAnchorOnSettlement?: boolean } = {}) {
     const commitDurableAnchorOnSettlement = options.commitDurableAnchorOnSettlement ?? true;
+    const metadata = createTestMetadata();
     const settlements: SessionProviderInputOutcome[] = [];
     let consume: ((input: ExecutionRunAdmittedPendingInputV1) => boolean) | null = null;
     const custody = new Set<string>();
@@ -33,7 +35,7 @@ function createPortFake(rows: QueuedRow[], options: { commitDurableAnchorOnSettl
     let disposed = false;
 
     const port: ExecutionRunPendingInputPortLike = {
-        getMetadataSnapshot: () => null,
+        getMetadataSnapshot: () => metadata,
         waitForMetadataUpdate: async () => await new Promise<boolean>((resolve) => {
             metadataWaiters.push(() => resolve(true));
         }),

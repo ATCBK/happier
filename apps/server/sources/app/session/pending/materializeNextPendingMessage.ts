@@ -38,6 +38,7 @@ import { reconcilePendingActivationAuthorizationForRemovedRequestInTx } from "@/
 import { readStoredSessionInputAdmissionReceipt, isSessionInputTargetCurrentForPublisherInTx } from '@/app/session/messages/sessionInputAdmission';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { RetainedPendingContextV1Schema, type RetainedPendingContextV1 } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
+import { isRetainedPendingContextForPublisherInTx } from './retainedPendingContext';
 
 type RecipientCursor = SessionRecipientCursor;
 class PublisherAuthorityLostError extends Error {}
@@ -492,19 +493,14 @@ async function materializePendingTargetInTx(
     if (retainedContextLocalIds.length) {
         const retainedRows = await tx.sessionPendingMessage.findMany({
             where: { sessionId, targetExecutionRunId: null, localId: { in: retainedContextLocalIds } },
-            select: { localId: true, status: true, deliveryState: true, deliveryBlockedReason: true,
+            select: { localId: true, status: true, targetExecutionRunId: true, deliveryState: true, deliveryBlockedReason: true,
                 inputAdmissionReceipt: true, autonomousExchangeCause: true },
         });
         if (retainedRows.length !== retainedContextLocalIds.length) return { ok: false, error: 'invalid-params' };
         for (const row of retainedRows) {
-            const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
             // Local custody alone cannot skip arbitrary FIFO work. Home independently
             // confirms this is an admitted informational input, already claimed.
-            if (row.status !== 'queued'
-                || !(row.deliveryState === 'delivering' || (row.deliveryState === 'blocked'
-                    && row.deliveryBlockedReason === 'delivery_outcome_uncertain'))
-                || !(receipt?.followDeliveryV1?.delivery === 'next_turn' || row.autonomousExchangeCause === 'returned_answer')
-                || !await isSessionInputTargetCurrentForPublisherInTx(tx, row.inputAdmissionReceipt, params.publisherAuthority)) {
+            if (!await isRetainedPendingContextForPublisherInTx(tx, row, params.publisherAuthority)) {
                 return { ok: false, error: 'invalid-params' };
             }
         }

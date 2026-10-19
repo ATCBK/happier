@@ -13,7 +13,8 @@ import { createMutableApiSessionClientFixture } from '@/testkit/backends/session
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { registerPermissionModeMessageQueueBinding } from '@/agent/runtime/permissions/bindModeQueue';
 import type { UserMessage } from '@/api/types';
-import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputRequest, settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputRequest, settleSessionInputRequestV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 
 const axiosGetMock = vi.hoisted(() => vi.fn());
 const axiosPostMock = vi.hoisted(() => vi.fn());
@@ -992,21 +993,41 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       expect.objectContaining({ decision: expect.objectContaining({ kind: 'reject', code: 'session_input_muted' }) }));
   });
 
-  it.each((['valid', 'revoked', 'muted', 'held', 'unavailable', 'changed-cutoff', 'missing-service'] as const)
-    .flatMap(state => (['normal', 'steer'] as const).map(delivery => ({ state, delivery }))))(
-    'rechecks the original queued Discussion input after checkpoint preparation ($state, $delivery)', async ({ state, delivery }) => {
+  it.each((['valid', 'revoked', 'muted', 'held', 'unavailable', 'changed-cutoff', 'missing-service',
+    'invalid-receipt', 'invalid-authority', 'settlement-unknown', 'permission-broadened', 'permission-narrowed'] as const)
+    .flatMap(state => (['normal', 'steer'] as const).flatMap(delivery =>
+      (state === 'valid' ? ['plain', 'e2ee'] as const : ['plain'] as const).map(mode => ({ state, delivery, mode }))))) (
+    'rechecks the original queued Discussion input after checkpoint preparation ($state, $delivery, $mode)', async ({ state, delivery, mode }) => {
       const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 's1' };
       const localId = 'original-discussion-input';
       const socket = createSocketStub();
       let checkpointFinished = false;
       let readBeforePreparationFinished = false;
-      const original = { id: 'committed-input', seq: 9, localId, createdAt: 1_000, updatedAt: 1_000, messageRole: 'user',
+      const requestedOriginal = { id: 'committed-input', seq: 9, localId, createdAt: 1_000, updatedAt: 1_000, messageRole: 'user',
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Answer the original question' }, meta: {
           happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
           happierInputRequestV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, discussionAddressing,
-            replyIntent: { mode: 'return' }, permission: { requestedPermissionCeiling: 'read-only' } },
+            replyIntent: { mode: 'return' }, permission: state === 'permission-broadened' ? {}
+              : { requestedPermissionCeiling: state === 'permission-narrowed' ? 'default' : 'read-only' } },
         } } }, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing,
           admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 's1', machineId: 'machine', installationId: 'installation' } } };
+      const request = readSessionInputRequest(requestedOriginal.content.v.meta, 'stored');
+      if (!request || request.v !== 1) throw new Error('Expected the original protected request fixture');
+      const authority = settleSessionInputRequestV1({ request,
+        currentSessionPermissionCeiling: state === 'permission-broadened' ? 'read-only' : 'default',
+        inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt });
+      // This is the actual target materialization producer: committed input has
+      // immutable authority and deliberately no caller request metadata.
+      const settledPayload = { ...requestedOriginal.content.v, meta: withSessionInputAuthority(requestedOriginal.content.v.meta, authority) };
+      expect(settledPayload.meta).not.toHaveProperty('happierInputRequestV1');
+      if (state === 'invalid-authority') settledPayload.meta.happierInputAuthorityV1 = { ...authority,
+        permission: { admittedPermissionCeiling: 'invalid' } };
+      const ctx = { encryptionKey: new Uint8Array(32).fill(9), encryptionVariant: 'dataKey' as const };
+      const original = { ...requestedOriginal, content: mode === 'e2ee'
+        ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: settledPayload }) }
+        : { t: 'plain', v: settledPayload },
+        inputAdmissionReceipt: state === 'invalid-receipt' ? { ...requestedOriginal.inputAdmissionReceipt,
+          discussionAddressing: { ...discussionAddressing, throughSeq: 4 } } : requestedOriginal.inputAdmissionReceipt };
       axiosGetMock.mockImplementation(async (url: string) => {
         if (!checkpointFinished) readBeforePreparationFinished = true;
         if (url.includes('/messages/by-local-id/')) return { status: state === 'unavailable' ? 503 : 200, data: { message: original } };
@@ -1016,9 +1037,13 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       });
       socketAckMock.mockImplementation(async () => {
         return { v: 1, result: state === 'revoked' || state === 'muted' ? { status: 'rejected', code: 'session_input_cancelled' }
-          : state === 'held' ? { status: 'held', localId, code: 'autonomous_check_in' } : { status: 'alreadyAccepted', localId } };
+          : state === 'held' ? { status: 'held', localId, code: 'autonomous_check_in' }
+          : state === 'settlement-unknown' ? { status: 'outcomeUnknown', localId, code: 'settlement_unavailable' }
+          : { status: 'alreadyAccepted', localId } };
       });
-      const api = createApi({ getSocket: () => socket as never, getStoredContentCryptoContext: () => ({ mode: 'plain', ctx: null }),
+      const api = createApi({ getSocket: () => socket as never,
+        getStoredContentCryptoContext: () => mode === 'e2ee' ? { mode, ctx } : { mode, ctx: null },
+        getMetadata: () => createTestMetadata({ permissionMode: state === 'permission-narrowed' ? 'read-only' : 'default' }),
         // Human-origin watch inputs have no sourceSession. The current Account
         // preference must still reach the server's persisted watch admission.
         readCurrentAutonomousCheckIn: async () => ({ afterTurns: 10 }),
@@ -1049,11 +1074,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         resetOrDisposeRuntime: async () => {}, shouldResumeAfterPermissionModeChange: () => true } as unknown as PermissionModePromptLoopTurnOperations;
       let shouldExit = false;
       if (delivery === 'steer') {
-        const request = readSessionInputRequest(original.content.v.meta, 'stored');
-        if (!request || request.v !== 1) throw new Error('Expected the original protected request fixture');
-        const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default',
-          inputAdmissionReceipt: original.inputAdmissionReceipt });
-        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: original.inputAdmissionReceipt });
+        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt });
         registerPermissionModeMessageQueueBinding({ session, queue, getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {},
           inFlightSteer: { isTurnInFlight: () => true, supportsInFlightSteer: () => true, steerText: nativeSteer,
             readActivePermissionMode: () => 'read-only',
@@ -1066,7 +1087,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
           },
         });
         receiveUserMessage?.({ role: 'user', localId, content: { type: 'text', text: 'Answer the original question' },
-          inputAdmissionReceipt: original.inputAdmissionReceipt,
+          inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt,
           pendingProviderAction: 'steer', pendingRequestedAction: { v: 1, kind: 'steer_if_active' }, meta: {
             happierInputAuthorityV1: { ...authority, discussionAddressing: queuedAddressing },
           } });
@@ -1095,9 +1116,10 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       expect(checkpointFinished).toBe(true);
       expect(readBeforePreparationFinished).toBe(false);
       expect(nativeSteer).not.toHaveBeenCalled();
-      expect(nativeSend).toHaveBeenCalledTimes(state === 'valid' ? 1 : 0);
-      if (state !== 'valid') {
-        const retryable = state === 'held' || state === 'unavailable' || state === 'missing-service';
+      const admitted = state === 'valid' || state === 'permission-broadened';
+      expect(nativeSend).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      if (!admitted) {
+        const retryable = state === 'held' || state === 'unavailable' || state === 'missing-service' || state === 'settlement-unknown';
         expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
           kind: 'rejected_before_effect', localId, retryable,
           reason: retryable ? 'provider_unavailable_before_acceptance' : 'provider_rejected_before_acceptance',
@@ -1106,11 +1128,17 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       }
       if (state === 'missing-service') expect(axiosGetMock).not.toHaveBeenCalled();
       else expect(axiosGetMock).toHaveBeenCalledWith(expect.stringContaining(`/messages/by-local-id/${localId}`), expect.any(Object));
-      if (state === 'valid' || state === 'revoked' || state === 'muted' || state === 'held') {
+      if (admitted || state === 'revoked' || state === 'muted' || state === 'held' || state === 'settlement-unknown') {
         expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
           expect.objectContaining({ sessionId: 's1', localId,
             decision: expect.objectContaining({ validation: { reply: { mode: 'return', discussion: discussionAddressing },
               ...(state === 'muted' ? {} : { autonomousCheckIn: { afterTurns: 10 } }) } }) }));
+        if (state !== 'muted') expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
+          expect.objectContaining({ decision: expect.objectContaining({ kind: 'admit', finalContent: original.content }) }));
+      } else if (state === 'permission-narrowed') {
+        expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1', expect.objectContaining({
+          decision: expect.objectContaining({ kind: 'reject', code: 'session_input_permission_ceiling_rejected' }),
+        }));
       } else expect(socketAckMock).not.toHaveBeenCalled();
     });
 

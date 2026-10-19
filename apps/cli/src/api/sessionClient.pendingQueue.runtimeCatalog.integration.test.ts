@@ -1621,18 +1621,21 @@ describe('ApiSessionClient pending queue materialization', () => {
         }
     });
 
-    it('rejoins an active-turn Pending claim after the server retry delay without another wake or duplicate input', async () => {
+    it.each(['recover', 'cancel'] as const)('rejoins an active-turn Pending claim after the server retry delay without another wake or duplicate input (%s)', async outcome => {
         const localId = 'active-turn-retained-claim';
         const claimRequests: unknown[] = [];
+        let claimAvailable = false;
         const session = createMockSession({ encryptionMode: 'plain', pendingCount: 1, pendingVersion: 3,
             latestTurnStatus: 'in_progress' });
         const sessionSocket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
             if (event !== 'pending-materialize-next') return resolveApiSessionSocketDefaultAck(event, payload);
+            if (!claimAvailable) return { ok: true, didMaterialize: false,
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3 };
             claimRequests.push(payload);
             if (claimRequests.length === 1) return { ok: false, error: 'transaction-unavailable', retryAfterMs: 750 };
             return {
                 ok: true, didMaterialize: true, didWrite: false,
-                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3,
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 4,
                 deliveryState: { mode: 'provider', unresolved: true },
                 message: { id: null, seq: null, localId, messageRole: 'user',
                     content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'send this once' },
@@ -1640,7 +1643,8 @@ describe('ApiSessionClient pending queue materialization', () => {
                     requestedAction: { v: 1, kind: 'send_now' }, providerAction: 'send', createdAt: 1, updatedAt: 1 },
             };
         } });
-        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+        const userSocket = createApiSessionSocketStub();
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
         const client = createClient(session);
         const delivered: string[] = [];
         client.onUserMessage(message => { delivered.push(message.content.text); });
@@ -1658,17 +1662,25 @@ describe('ApiSessionClient pending queue materialization', () => {
         vi.useFakeTimers();
         const pump = consumer.pumpPendingWhileActive({ abortSignal: controller.signal });
         try {
+            // Settle attach/contract wakes before introducing the retained claim.
+            await vi.advanceTimersByTimeAsync(0);
+            claimAvailable = true;
+            userSocket.trigger('update', { id: 'new-pending-claim', seq: 1, createdAt: 1,
+                body: { t: 'pending-changed', sid: session.id, pendingCount: 1,
+                    pendingBlockedCount: 0, pendingVersion: 4 } });
             await vi.advanceTimersByTimeAsync(0);
             expect(claimRequests).toHaveLength(1);
             await vi.advanceTimersByTimeAsync(749);
             expect(claimRequests).toHaveLength(1);
             expect(delivered).toEqual([]);
+            if (outcome === 'cancel') controller.abort();
             await vi.advanceTimersByTimeAsync(1);
-            expect(delivered).toEqual(['send this once']);
-            expect(claimRequests).toHaveLength(2);
-            expect(claimRequests[1]).toEqual(claimRequests[0]);
+            const expectedDelivered = outcome === 'recover' ? ['send this once'] : [];
+            expect(delivered).toEqual(expectedDelivered);
+            expect(claimRequests).toHaveLength(outcome === 'recover' ? 2 : 1);
+            if (outcome === 'recover') expect(claimRequests[1]).toEqual(claimRequests[0]);
             await vi.advanceTimersByTimeAsync(1_500);
-            expect(delivered).toEqual(['send this once']);
+            expect(delivered).toEqual(expectedDelivered);
         } finally {
             controller.abort();
             await pump;
