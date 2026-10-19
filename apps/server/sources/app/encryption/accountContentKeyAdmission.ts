@@ -7,6 +7,10 @@ import tweetnacl from "tweetnacl";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import type { Tx } from "@/storage/inTx";
 import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
+import {
+    acquireAccountSessionOwnerMetadataFenceInTx,
+    AccountSessionOwnerMetadataFenceAccountNotFoundError,
+} from "./accountSessionOwnerMetadataFence";
 
 type AccountContentKeyClient = Tx;
 
@@ -147,6 +151,14 @@ export async function admitAccountContentKey(
         contentPublicKeySignature: Uint8Array;
     }>,
 ): Promise<AccountContentKeyAdmissionResult> {
+    try {
+        await acquireAccountSessionOwnerMetadataFenceInTx(client, params.accountId, "exclusive");
+    } catch (error) {
+        if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
+            return { status: "account_not_found" };
+        }
+        throw error;
+    }
     const readAccount = async () => await client.account.findUnique({
         where: { id: params.accountId },
         select: {

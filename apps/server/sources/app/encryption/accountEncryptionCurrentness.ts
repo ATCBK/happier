@@ -6,6 +6,7 @@ import { deriveAccountRecipientEnvelopeReadinessFromRow } from './accountRecipie
 import { buildUpdateAccountUpdate, eventRouter } from '@/app/events/eventRouter';
 import { afterTx, type Tx } from '@/storage/inTx';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
+import { afterAccountChangePublication } from '@/app/changes/markAccountChanged';
 
 type AccountEncryptionCurrentnessRow = Readonly<{
     publicKey: string | null;
@@ -36,22 +37,24 @@ export function projectAccountEncryptionCurrentnessFromRow(
     });
 }
 
-/** Capture the final row in its writing transaction; publish only if that transaction commits. */
+/** Read the completed publication's Account fact; emit only after its transaction commits. */
 export async function publishAccountEncryptionCurrentnessAfterTx(tx: Tx, accountId: string): Promise<void> {
-    const account = await tx.account.findUniqueOrThrow({
-        where: { id: accountId },
-        select: {
-            publicKey: true, encryptionMode: true,
-            contentPublicKey: true, contentPublicKeySig: true,
-            encryptionModeUpdatedAt: true, seq: true, settingsVersion: true,
-        },
-    });
-    const payload = buildUpdateAccountUpdate(
-        accountId, {}, account.seq, randomKeyNaked(12),
-        projectAccountEncryptionCurrentnessFromRow(account),
-    );
-    afterTx(tx, () => {
-        eventRouter.emitUpdate({ userId: accountId, payload, recipientFilter: { type: 'user-scoped-only' } });
-        eventRouter.emitUpdate({ userId: accountId, payload, recipientFilter: { type: 'user-machine-scoped-only' } });
+    afterAccountChangePublication(tx, async (publicationTx) => {
+        const account = await publicationTx.account.findUniqueOrThrow({
+            where: { id: accountId },
+            select: {
+                publicKey: true, encryptionMode: true,
+                contentPublicKey: true, contentPublicKeySig: true,
+                encryptionModeUpdatedAt: true, seq: true, settingsVersion: true,
+            },
+        });
+        const payload = buildUpdateAccountUpdate(
+            accountId, {}, account.seq, randomKeyNaked(12),
+            projectAccountEncryptionCurrentnessFromRow(account),
+        );
+        afterTx(publicationTx, () => {
+            eventRouter.emitUpdate({ userId: accountId, payload, recipientFilter: { type: 'user-scoped-only' } });
+            eventRouter.emitUpdate({ userId: accountId, payload, recipientFilter: { type: 'user-machine-scoped-only' } });
+        });
     });
 }

@@ -13,6 +13,7 @@ import { isE2eePasswordCredentialBoundToAccount } from "@/app/auth/password/e2ee
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
+    type AccountAdmissionIntent,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Tx } from "@/storage/inTx";
 import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
@@ -39,9 +40,10 @@ export type AccountEncryptionTransitionFenceResult =
 export async function acquireAccountEncryptionTransitionFenceInTx(
     tx: Tx,
     accountId: string,
+    intent: AccountAdmissionIntent,
 ): Promise<AccountEncryptionTransitionFenceResult> {
     try {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, intent);
     } catch (error) {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
             return { status: "account_not_found" };

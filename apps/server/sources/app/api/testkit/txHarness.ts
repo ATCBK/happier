@@ -111,6 +111,11 @@ export async function flushAfterTxCallbacks(
     }
 }
 
+/** Fake only Prisma's transaction entry point, leaving inTx and publication real. */
+export function createPrismaTransactionBoundary<TTx extends object>(createTxState: () => TTx) {
+    return async <T>(callback: (tx: TTx) => Promise<T>): Promise<T> => callback(createTxState());
+}
+
 export function createInTxHarness<TTx extends object>(createTxState: () => TTx) {
     const afterTx = (tx: any, callback: AfterTxCallback) => {
         registerAfterTxCallback(tx, callback);

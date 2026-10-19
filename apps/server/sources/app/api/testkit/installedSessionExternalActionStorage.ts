@@ -29,7 +29,10 @@ export function createInstalledSessionExternalActionStorage() {
         ...inTxPostgresControlStatementMock,
         account: { findUnique: async ({ where }: { where: { id: string } }) =>
             where.id === account.id ? account : where.id === otherAccount.id ? otherAccount : null },
-        machine: { findUnique: readMachine, findFirst: readMachine },
+        machine: { findUnique: readMachine, findFirst: readMachine,
+            findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+                where.id.in.includes(state.machineId) ? [machine()] : [],
+        },
         session: {
             findFirst: async ({ where }: { where: { id: string; accountId?: string } }) => state.bound
                 && where.id === state.sessionId && (where.accountId === undefined || where.accountId === state.accountId)

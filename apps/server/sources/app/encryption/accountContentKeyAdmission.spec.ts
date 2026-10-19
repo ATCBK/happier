@@ -60,6 +60,8 @@ function createAccountClient(params: Readonly<{
     }
     // Narrow deterministic Prisma Account-delegate boundary fixture.
     const client = {
+        $queryRawUnsafe: vi.fn(async () => [{ id: "account-1" }]),
+        $executeRawUnsafe: vi.fn(async () => 1),
         account: {
             findUnique,
             updateMany,

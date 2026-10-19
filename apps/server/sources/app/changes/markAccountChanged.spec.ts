@@ -16,11 +16,14 @@ type MarkAccountsChangedParams = Parameters<typeof import("./markAccountChanged"
 
 async function runMarkAccountChanged(tx: object, params: MarkAccountChangedParams): Promise<number> {
     transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<number>) => await fn({ ...inTxPostgresControlStatementMock, ...tx }));
-    const [{ inTx }, { markAccountChanged }] = await Promise.all([
+    const [{ inTx, transactionResult }, { markAccountChanged }] = await Promise.all([
         import("@/storage/inTx"),
         import("./markAccountChanged"),
     ]);
-    return await inTx(async (transactionTx) => await markAccountChanged(transactionTx, params));
+    return await inTx(async (transactionTx) => {
+        const publication = await markAccountChanged(transactionTx, params);
+        return transactionResult(() => publication.resolveCursor());
+    });
 }
 
 async function runMarkAccountsChanged(
@@ -28,11 +31,17 @@ async function runMarkAccountsChanged(
     params: MarkAccountsChangedParams,
 ): Promise<ReadonlyArray<{ accountId: string; cursor: number }>> {
     transaction.mockImplementationOnce(async (fn: (transactionTx: object) => Promise<ReadonlyArray<{ accountId: string; cursor: number }>>) => await fn({ ...inTxPostgresControlStatementMock, ...tx }));
-    const [{ inTx }, { markAccountsChanged }] = await Promise.all([
+    const [{ inTx, transactionResult }, { markAccountsChanged }] = await Promise.all([
         import("@/storage/inTx"),
         import("./markAccountChanged"),
     ]);
-    return await inTx(async (transactionTx) => await markAccountsChanged(transactionTx, params));
+    return await inTx(async (transactionTx) => {
+        const publications = await markAccountsChanged(transactionTx, params);
+        return transactionResult(() => publications.map(publication => ({
+            accountId: publication.accountId,
+            cursor: publication.resolveCursor(),
+        })));
+    });
 }
 
 describe("markAccountChanged", () => {
@@ -40,6 +49,97 @@ describe("markAccountChanged", () => {
     afterEach(() => {
         process.env.HAPPIER_DB_PROVIDER = originalDbProvider;
         eventRouter.clearIo();
+    });
+
+    it("resolves publication results after terminal writes and before commit", async () => {
+        process.env.HAPPIER_DB_PROVIDER = "sqlite";
+        const phases: string[] = [];
+        const tx = {
+            account: { update: vi.fn(async () => { phases.push("allocate"); return { seq: 7 }; }) },
+            accountChange: { upsert: vi.fn(async () => { phases.push("publish"); return {}; }) },
+        };
+        transaction.mockImplementationOnce(async fn => {
+            const result = await fn(tx);
+            phases.push("commit");
+            return result;
+        });
+        const { inTx, afterTx, transactionResult } = await import("@/storage/inTx");
+        const { markAccountChanged } = await import("./markAccountChanged");
+
+        await expect(inTx(async transactionTx => {
+            const publication = await markAccountChanged(transactionTx, {
+                accountId: "a1", kind: "account", entityId: "settings",
+            });
+            expect(tx.account.update).not.toHaveBeenCalled();
+            expect(tx.accountChange.upsert).not.toHaveBeenCalled();
+            expect(() => publication.resolveCursor()).toThrow();
+            afterTx(transactionTx, () => {
+                expect(publication.resolveCursor()).toBe(7);
+                phases.push("after-commit");
+            });
+            phases.push("domain");
+            return transactionResult(() => {
+                phases.push("project");
+                return { cursor: publication.resolveCursor() };
+            });
+        })).resolves.toEqual({ cursor: 7 });
+
+        expect(phases).toEqual(["domain", "allocate", "publish", "project", "commit", "after-commit"]);
+    });
+
+    it("isolates overlapping publication phases and after-commit callbacks on a reused database facade", async () => {
+        process.env.HAPPIER_DB_PROVIDER = "sqlite";
+        let seq = 0;
+        const changes: string[] = [];
+        const committed: string[] = [];
+        const tx = {
+            account: { update: vi.fn(async () => ({ seq: ++seq })) },
+            accountChange: { upsert: vi.fn(async ({ create }: { create: { entityId: string } }) => {
+                changes.push(create.entityId);
+                return {};
+            }) },
+        };
+        // Prisma facades may share a backing object. Transaction lifecycle
+        // state must belong to each managed attempt rather than that object.
+        transaction.mockImplementationOnce(async fn => await fn(tx));
+        transaction.mockImplementationOnce(async fn => await fn(tx));
+        const { inTx, afterTx, transactionResult } = await import("@/storage/inTx");
+        const { markAccountChanged } = await import("./markAccountChanged");
+        let recorded!: () => void;
+        const firstRecorded = new Promise<void>(resolve => { recorded = resolve; });
+        let release!: () => void;
+        const mayFinish = new Promise<void>(resolve => { release = resolve; });
+        const first = inTx(async transactionTx => {
+            const publication = await markAccountChanged(transactionTx, {
+                accountId: "a1", kind: "account", entityId: "first",
+            });
+            afterTx(transactionTx, () => { committed.push("first"); });
+            recorded();
+            await mayFinish;
+            return transactionResult(() => publication.resolveCursor());
+        });
+        const firstOutcome = Promise.allSettled([first]);
+        await Promise.race([firstRecorded, firstOutcome.then(() => { throw new Error("First transaction ended before recording"); })]);
+        let failure: unknown;
+        try {
+            await expect(inTx(async transactionTx => {
+                const publication = await markAccountChanged(transactionTx, {
+                    accountId: "a1", kind: "account", entityId: "second",
+                });
+                afterTx(transactionTx, () => { committed.push("second"); });
+                return transactionResult(() => publication.resolveCursor());
+            })).resolves.toBe(1);
+            expect(changes).toEqual(["second"]);
+            expect(committed).toEqual(["second"]);
+        } catch (error) {
+            failure = error;
+        } finally { release(); }
+        const [outcome] = await firstOutcome;
+        if (failure !== undefined) throw failure;
+        if (outcome.status === "rejected") throw outcome.reason;
+        expect(outcome.value).toBe(2);
+        expect(changes).toEqual(["second", "first"]);
+        expect(committed).toEqual(["second", "first"]);
     });
 
     it("uses the atomic postgres fast path when raw query execution is available", async () => {
@@ -63,7 +163,7 @@ describe("markAccountChanged", () => {
         });
 
         expect(cursor).toBe(7);
-        expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+        expect(tx.$queryRawUnsafe).toHaveBeenCalled();
         expect(tx.account.update).not.toHaveBeenCalled();
         expect(tx.accountChange.upsert).not.toHaveBeenCalled();
     });

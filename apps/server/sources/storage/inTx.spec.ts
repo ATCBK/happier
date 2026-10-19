@@ -35,7 +35,7 @@ vi.mock("@/app/monitoring/metrics/sessionWriteMetrics", () => ({
 // module reads the environment per call (`inTx.ts:115-116`), so one load here,
 // during collection, serves every case.
 const inTxModule = await import("./inTx");
-const { inTx, afterTx } = inTxModule;
+const { inTx, afterTx, transactionResult } = inTxModule;
 
 describe("inTx", () => {
     const envSnapshot = snapshotEnv();
@@ -48,6 +48,56 @@ describe("inTx", () => {
         delayMock.mockClear();
         logMock.mockClear();
         recordDatabaseTransactionRetry.mockClear();
+    });
+
+    it("resolves an explicit transaction result once before commit and exposes it after commit", async () => {
+        const phases: string[] = [];
+        transaction.mockImplementationOnce(async fn => {
+            const result = await fn(transactionBoundary());
+            phases.push("commit");
+            return result;
+        });
+        const project = vi.fn(() => {
+            phases.push("project");
+            return { cursor: 7 };
+        });
+
+        await expect(inTx(async tx => {
+            afterTx(tx, () => { phases.push("after-commit"); });
+            phases.push("domain");
+            return transactionResult(project);
+        })).resolves.toEqual({ cursor: 7 });
+
+        expect(project).toHaveBeenCalledTimes(1);
+        expect(phases).toEqual(["domain", "project", "commit", "after-commit"]);
+    });
+
+    it("rolls back a failing transaction result without running after-commit work", async () => {
+        let committed = false;
+        transaction.mockImplementationOnce(async fn => {
+            const result = await fn(transactionBoundary());
+            committed = true;
+            return result;
+        });
+        const afterCommit = vi.fn();
+        const failure = new Error("publication result unavailable");
+
+        await expect(inTx(async tx => {
+            afterTx(tx, afterCommit);
+            return transactionResult(() => { throw failure; });
+        })).rejects.toBe(failure);
+
+        expect(committed).toBe(false);
+        expect(afterCommit).not.toHaveBeenCalled();
+    });
+
+    it("preserves ordinary function and object transaction results", async () => {
+        const ordinaryFunction = vi.fn(() => "caller-owned");
+        const ordinaryObject = { resolve: ordinaryFunction };
+
+        await expect(inTx(async () => ordinaryFunction)).resolves.toBe(ordinaryFunction);
+        await expect(inTx(async () => ordinaryObject)).resolves.toBe(ordinaryObject);
+        expect(ordinaryFunction).not.toHaveBeenCalled();
     });
 
     it("reports a failed after-commit callback instead of discarding it", async () => {

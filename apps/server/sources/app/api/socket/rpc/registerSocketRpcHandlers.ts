@@ -791,18 +791,6 @@ function emitMachineScopedRpcAvailability(params: Readonly<{
     params.io.to(getMachineSocketRoom(params.userId, parsed.machineId)).emit(params.event, { method: params.method });
 }
 
-async function emitMachineScopedRpcRegisteredIfAvailable(params: Readonly<{
-    userId: string;
-    io: Server;
-    method: string;
-}>): Promise<void> {
-    if (!await isMachineScopedRpcMethodAvailable(params)) return;
-    emitMachineScopedRpcAvailability({
-        ...params,
-        event: SOCKET_RPC_EVENTS.REGISTERED,
-    });
-}
-
 async function hasRegisteredRpcTargets(params: Readonly<{
     userId: string;
     io: Server;
@@ -1013,10 +1001,14 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 }
             }
             if (machineScopedSocketMachineId === null) {
-                await emitMachineScopedRpcRegisteredIfAvailable({
+                // Registration advertises an Account/Machine-scoped address, not
+                // execution authority. Reverse calls recheck the exact Machine's
+                // availability at admission; no DB read is needed per UI method.
+                emitMachineScopedRpcAvailability({
                     userId: params.userId,
                     io: params.io,
                     method,
+                    event: SOCKET_RPC_EVENTS.REGISTERED,
                 });
             }
         } catch (error) {

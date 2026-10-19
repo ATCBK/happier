@@ -59,10 +59,16 @@ export type DbMockFromShape<TShape> =
 
 type TransactionalDb<TDb extends object, TTx extends object> = TDb & {
     $transaction: {
-        <T>(fn: (tx: TTx) => Promise<T>): Promise<T>;
+        <T>(fn: (tx: TTx) => Promise<T>, options?: DbTransactionMockOptions): Promise<T>;
         <T extends readonly unknown[]>(operations: T): Promise<{ [K in keyof T]: Awaited<T[K]> }>;
     };
 };
+
+export type DbTransactionMockOptions = Readonly<{
+    isolationLevel?: string;
+    timeout?: number;
+    maxWait?: number;
+}>;
 
 function isDbMockLeaf(value: DbMockValue): value is DbMockLeaf {
     return Array.isArray(value);
@@ -142,14 +148,14 @@ export const inTxPostgresControlStatementMock = {
     },
 };
 
-export function createDbTransactionMock<TTx extends object>(createTxState: () => TTx): {
+export function createDbTransactionMock<TTx extends object>(createTxState: (options?: DbTransactionMockOptions) => TTx): {
     transaction: ReturnType<typeof vi.fn>;
     readSnapshot: <T>(read: (reader: TTx) => Promise<T>) => Promise<T>;
     wrapDb: <TDb extends object>(db: TDb) => TransactionalDb<TDb, TTx>;
 } {
-    const transaction = vi.fn(async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> => {
+    const transaction = vi.fn(async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[], options?: DbTransactionMockOptions): Promise<T> => {
         if (typeof fnOrOperations === "function") {
-            return await fnOrOperations(createTxState());
+            return await fnOrOperations(createTxState(options));
         }
 
         return await Promise.all(fnOrOperations) as T;
@@ -164,8 +170,8 @@ export function createDbTransactionMock<TTx extends object>(createTxState: () =>
         wrapDb<TDb extends object>(db: TDb): TransactionalDb<TDb, TTx> {
             return {
                 ...db,
-                $transaction: async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> =>
-                    await transaction(fnOrOperations) as T,
+                $transaction: async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[], options?: DbTransactionMockOptions): Promise<T> =>
+                    await transaction(fnOrOperations, options) as T,
             };
         },
     };
