@@ -4,7 +4,7 @@ import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/lis
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { db } from '@/storage/db';
-import { inTx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
 import { readSessionFollowRuleProgressInTx, writeSessionFollowRuleProgressInTx } from './sessionFollowRuleProgress';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { getAccountFollowRule, listAccountFollowRules, removeAccountFollowRule, setAccountFollowRule } from './accountFollowRuleService';
@@ -12,6 +12,7 @@ import { createSessionMessage } from '@/app/session/sessionWriteService';
 import { buildSessionFollowRulePhysicalKeyV1, ListSessionFollowRulesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { encodeAccountScopedKvJson } from '@/app/kv/accountScopedKv';
 import { decodeBase64 } from 'privacy-kit';
+import { updateAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
 
 describe('private Follow rule service (SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -199,6 +200,36 @@ describe('private Follow rule service (SQLite)', () => {
         expect(await listAccountFollowRules(scope)).toEqual({ ok: true, value: { rules: [expected] } });
     });
 
+    it('refuses progress without publishing when its existing rule loses the physical revision CAS', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const scope = { accountId: account.id, authentication: createPresentUserSessionAccessAuthentication(), ruleId: randomUUID() };
+        const created = await setAccountFollowRule({ ...scope, mutation: {
+            receiver: { kind: 'account' }, expectedVersion: -1,
+            content: { t: 'plain', v: { v: 1, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' } } },
+        } });
+        if (!created.ok) throw new Error(created.error);
+        const before = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+        const changed = await inTx(async tx => {
+            const admission = await readSessionFollowRuleProgressInTx(tx, { accountId: account.id,
+                rule: { ruleId: scope.ruleId, ruleVersion: created.value.rule.version }, sourceSessionId: source.id });
+            if (!admission) throw new Error('Expected current rule progress');
+            // The persistent DB boundary reports a refused existing-row CAS;
+            // Account admission, rule validation and publication remain real.
+            const rows = new Proxy(tx.userKVStore, { get(target, key, receiver) {
+                return key === 'updateMany' ? async () => ({ count: 0 }) : Reflect.get(target, key, receiver);
+            } });
+            const losingTx = new Proxy(tx, { get(target, key, receiver) {
+                return key === 'userKVStore' ? rows : Reflect.get(target, key, receiver);
+            } });
+            return writeSessionFollowRuleProgressInTx(losingTx, admission,
+                { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null });
+        });
+        expect(changed).toBe(false);
+        expect(await getAccountFollowRule(scope)).toEqual({ ok: true, value: { rule: created.value.rule } });
+        expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(before);
+    });
+
     it('restores only the acknowledged deletion and refuses stale Undo after a later edit', async () => {
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
         const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(),
@@ -229,5 +260,58 @@ describe('private Follow rule service (SQLite)', () => {
             mutation: { receiver, content, expectedVersion: stopped.value.version } }))
             .toEqual({ ok: false, error: 'version_conflict' });
         expect(await getAccountFollowRule(scope)).toEqual({ ok: true, value: { rule: edited.value.rule } });
+    });
+    it.each(['set', 'remove'] as const)('returns version_conflict after a late physical rule CAS refusal during %s', async operation => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const scope = { accountId: account.id, authentication: createPresentUserSessionAccessAuthentication(), ruleId: randomUUID() };
+        const receiver = { kind: 'account' as const };
+        const content = { t: 'plain' as const, v: { v: 1 as const, enabled: true,
+            filter: normalizeSessionListFilterV1(), policy: { preset: 'important' as const } } };
+        const created = await setAccountFollowRule({ ...scope, mutation: { receiver, content, expectedVersion: -1 } });
+        if (!created.ok) throw new Error(created.error);
+        const before = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+        const transact = db.$transaction;
+        const physicalKey = buildSessionFollowRulePhysicalKeyV1(scope.ruleId);
+        // Instrument only the persistent transaction transport: all admission,
+        // validation and publication logic executes against the real SQLite DB.
+        const transport = async (work: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof db.$transaction>[1]) => transact(async tx => {
+            const rows = new Proxy(tx.userKVStore, { get(target, key, receiver) {
+                if (key !== 'updateMany') return Reflect.get(target, key, receiver);
+                return (input: Parameters<Tx['userKVStore']['updateMany']>[0]) => input?.where?.key === physicalKey
+                    ? Promise.resolve({ count: 0 }) : target.updateMany(input);
+            } });
+            return work(new Proxy(tx, { get(target, key, receiver) {
+                return key === 'userKVStore' ? rows : Reflect.get(target, key, receiver);
+            } }));
+        }, options);
+        // Prisma exposes array and callback overloads; this test intercepts only
+        // the interactive callback boundary used by the public service.
+        db.$transaction = transport as typeof db.$transaction;
+        try {
+            const result = operation === 'set'
+                ? await setAccountFollowRule({ ...scope, mutation: { receiver, content: { ...content, v: { ...content.v, enabled: false } },
+                    expectedVersion: created.value.rule.version } })
+                : await removeAccountFollowRule({ ...scope, receiver, expectedVersion: created.value.rule.version });
+            expect(result).toEqual({ ok: false, error: 'version_conflict' });
+        } finally {
+            db.$transaction = transact;
+        }
+        expect(await getAccountFollowRule(scope)).toEqual({ ok: true, value: { rule: created.value.rule } });
+        expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(before);
+    });
+    it('preserves the creation-preferences refusal code when its physical revision CAS loses', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: account.id, patch: { managerPolicy: { preset: 'quiet' } } }));
+        await expect(inTx(async tx => {
+            // The real persistent boundary refuses the write; the owning
+            // preference merge and KV validation remain unmocked.
+            const rows = new Proxy(tx.userKVStore, { get(target, key, receiver) {
+                return key === 'updateMany' ? async () => ({ count: 0 }) : Reflect.get(target, key, receiver);
+            } });
+            const losingTx = new Proxy(tx, { get(target, key, receiver) {
+                return key === 'userKVStore' ? rows : Reflect.get(target, key, receiver);
+            } });
+            return updateAccountFollowCreationPreferencesInTx(losingTx, { accountId: account.id, patch: { managerPolicy: { preset: 'important' } } });
+        })).rejects.toMatchObject({ code: 'follow_preferences_unavailable' });
     });
 });

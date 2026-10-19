@@ -27,6 +27,7 @@ import {
     type ReservedAccountScopedKvRowDomain,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { inTx, transactionResult, type Tx } from '@/storage/inTx';
+import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 
 function domainForKey(key?: ProjectAccountRowKeyV1): ReservedAccountScopedKvRowDomain<ProjectAccountRowContentV1> {
     const parse = (input: unknown, stored: boolean): ProjectAccountRowContentV1 | null => {
@@ -169,6 +170,11 @@ export async function mutateProjectAccountRows(input: Readonly<{ accountId: stri
         });
     } catch (error) {
         if (error instanceof ProjectAccountRowTransactionAbort) return error.result;
+        const conflict = await readUserKvMutationConflict(error);
+        if (conflict) {
+            const key = parseProjectAccountRowPhysicalKeyV1(conflict.key);
+            if (key) return { status: 'conflict', key, revision: conflict.version };
+        }
         throw error;
     }
 }

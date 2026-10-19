@@ -25,12 +25,14 @@ export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input
 }>): Promise<SessionFollowDiscussionOccurrenceV1 | null> {
     const { source, messageId } = input.request;
     const follow = await readAccountOtherFollowInTx(tx, { ...input, source });
-    if (!follow) return null;
+    // A missing seed is unavailable custody, never an implicit history replay.
+    if (!follow || follow.deliveredDiscussionSeq === null) return null;
+    const deliveredSeq = follow.deliveredDiscussionSeq;
     const context = await resolveDiscussionContextInTx(tx, { discussionId: source.discussionId,
         accountId: input.accountId, authentication: input.authentication });
     const discussion = await tx.discussion.findUnique({ where: { id: source.discussionId }, select: { archivedAt: true } });
     if (!context?.keyReadiness || !discussion || discussion.archivedAt !== null) return null;
-    let afterSeq = follow.deliveredDiscussionSeq;
+    let afterSeq = deliveredSeq;
     for (;;) {
         const rows = await tx.discussionMessage.findMany({ where: { discussionId: source.discussionId,
             ...(messageId ? { id: messageId } : { seq: { gt: afterSeq } }) },
@@ -51,7 +53,7 @@ export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input
             if (await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
                 candidate: { source, ...(producer ? { senderSessionId: producer.sessionId } : {}) } }) !== false) return null;
             return { source, messageId: message.id, seq: message.seq, event,
-                personal: { policy: follow.policy, alreadyRepresented: follow.deliveredDiscussionSeq >= message.seq } };
+                personal: { policy: follow.policy, alreadyRepresented: deliveredSeq >= message.seq } };
         }
         if (messageId || rows.length < DISCUSSION_DEFAULT_PAGE_SIZE_V1) return null;
         afterSeq = rows[rows.length - 1]!.seq;
