@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, ScrollView, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_MENU_ROW_TEXT, HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
@@ -14,9 +14,11 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import type {
   SessionCapabilitiesModel,
@@ -60,6 +62,24 @@ export type SessionCapabilitiesContentProps = Readonly<{
 /** A group shows this many rows before "n more" (layout density, not a data cap; L3 §12). */
 const GROUP_PREVIEW_ROWS = 6;
 
+/** The placeholder rows each group holds while the first preview loads (layout reservation, not a data cap). */
+const SKELETON_ROWS = { skills: 3, mcp: 2 } as const;
+/** A placeholder row stands in a loaded menu row's box: two lines, so the real rows land without a jump. */
+const SKELETON_ROW_BOX = {
+  minHeight: MENU_ROW_METRICS.minHeightPx,
+  paddingVertical: MENU_ROW_METRICS.paddingVerticalPx,
+} as const;
+const SKELETON_ROW_LINES = [
+  HAPPIER_MENU_ROW_TEXT.label.lineHeight,
+  HAPPIER_MENU_ROW_TEXT.subtitle.lineHeight + MENU_ROW_METRICS.subtitleGapPx,
+] as const;
+const SKELETON_ROW_GEOMETRY = {
+  insetStart: MENU_ROW_METRICS.paddingHorizontalPx,
+  insetEnd: MENU_ROW_METRICS.paddingHorizontalPx,
+  glyphColumn: 0,
+  gap: 0,
+} as const;
+
 /**
  * "This session gets": the one body for the composer chip's popover and its phone sheet (the shared
  * `AgentInputContentPopover` owns the title band and the presentation). Rows are P5's menu-density
@@ -69,6 +89,9 @@ export function SessionCapabilitiesContent(
   props: SessionCapabilitiesContentProps,
 ): React.ReactElement {
   const { model } = props;
+  // The phone sheet's title band sits on the 16 px gutter; menu rows start 12 px in, so the sheet's own
+  // content takes the difference and the rows' text meets the title's edge.
+  const onPhone = useDeviceType() === 'phone';
   const [adding, setAdding] = React.useState(false);
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(
     () => new Set(),
@@ -83,7 +106,8 @@ export function SessionCapabilitiesContent(
   const resolvingWithoutRows = model.state === 'resolving' && !hasRows;
   // Without a preview there is nothing to list: an offline machine or a failed check says so once, and
   // never as "No skills yet" groups, which would claim the session gets nothing.
-  const groupsUnknown = !hasRows && model.state !== 'ready';
+  const groupsUnknown =
+    !hasRows && model.state !== 'ready' && model.state !== 'resolving';
 
   const body = (
     <View testID={`${props.testID}:lists`}>
@@ -123,15 +147,6 @@ export function SessionCapabilitiesContent(
               : {})}
           />
         </View>
-      ) : resolvingWithoutRows ? (
-        <View style={styles.stateLine}>
-          <SurfaceStateCard
-            testID={`${props.testID}:resolving`}
-            kind="loading"
-            size="line"
-            title={t('capabilities.session.sheet.checking')}
-          />
-        </View>
       ) : null}
       {groupsUnknown
         ? null
@@ -141,8 +156,12 @@ export function SessionCapabilitiesContent(
               ? group.rows
               : group.rows.slice(0, GROUP_PREVIEW_ROWS);
             const hidden = group.rows.length - visible.length;
-            const count =
-              group.kind === 'skills' ? model.counts.skills : model.counts.mcp;
+            // Unknown is never zero: the heading of a group still loading carries no count.
+            const count = resolvingWithoutRows
+              ? undefined
+              : group.kind === 'skills'
+                ? model.counts.skills
+                : model.counts.mcp;
             return (
               <View
                 key={group.kind}
@@ -164,6 +183,18 @@ export function SessionCapabilitiesContent(
                     </Text>
                   }
                 />
+                {resolvingWithoutRows ? (
+                  <SkeletonRows
+                    testID={`${props.testID}:resolving${index === 0 ? '' : `:${group.kind}`}`}
+                    rows={SKELETON_ROWS[group.kind]}
+                    rowBox={SKELETON_ROW_BOX}
+                    lineHeights={SKELETON_ROW_LINES}
+                    geometry={SKELETON_ROW_GEOMETRY}
+                    {...(index === 0
+                      ? { accessibilityLabel: t('capabilities.session.sheet.checking') }
+                      : {})}
+                  />
+                ) : null}
                 <View role="list" accessibilityLabel={group.title}>
                   {visible.map((row) => (
                     <SessionCapabilityRow
@@ -185,7 +216,9 @@ export function SessionCapabilitiesContent(
                     />
                   </View>
                 ) : null}
-                {group.rows.length === 0 && group.nativeRow === null ? (
+                {group.rows.length === 0 &&
+                group.nativeRow === null &&
+                !resolvingWithoutRows ? (
                   <View style={styles.stateLine}>
                     <SurfaceStateCard
                       testID={`${props.testID}:empty:${group.kind}`}
@@ -277,6 +310,7 @@ export function SessionCapabilitiesContent(
       testID={props.testID}
       style={[
         styles.root,
+        onPhone ? styles.rootPhone : null,
         props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : null,
       ]}
     >
@@ -563,6 +597,10 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
+  },
+  rootPhone: {
+    paddingHorizontal:
+      theme.space.s16 - MENU_ROW_METRICS.paddingHorizontalPx,
   },
   scroll: { flexShrink: 1 },
   scrollContent: { paddingBottom: theme.space.s4 },

@@ -7,6 +7,9 @@ import { PageHeader, type PageHeaderPrimaryAction } from '@/components/ui/layout
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 
+/** A purpose comes from the capability's own text (a skill's frontmatter), so it stops at two lines. */
+const PURPOSE_MAX_LINES = 2;
+
 /**
  * A capability's detail header (P5 detail grammar): its mark, name and purpose, then the facts that
  * distinguish it on the header's one meta line (source, transport, cost; a registry id in mono), a
@@ -37,9 +40,10 @@ export function CapabilityDetailHeader(props: Readonly<{
             alwaysShowTitle
             title={props.title}
             description={props.purpose}
+            descriptionLines={PURPOSE_MAX_LINES}
             meta={meta}
             leading={props.mark ? <PageHeaderMarkSlot>{props.mark}</PageHeaderMarkSlot> : undefined}
-            titleAccessory={speaks && props.status ? <CapabilityStatusChip status={props.status} placement="header" /> : undefined}
+            titleAccessory={speaks && props.status ? <CapabilityStatusChip status={props.status} placement="header" testID={`${props.testID}.status`} /> : undefined}
             actions={props.menuItems && props.menuItems.length > 0
                 ? <PageHeaderMenu testID={`${props.testID}.menu`} actions={props.menuItems} />
                 : undefined}

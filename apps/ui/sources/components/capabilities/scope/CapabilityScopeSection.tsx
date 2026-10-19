@@ -176,8 +176,8 @@ export const ScopeSheet = React.memo(function ScopeSheet(
     list: ScopeListData;
     place: Place;
     data: Pick<CapabilityScopeData, 'machines' | 'names' | 'open'>;
-    /** The machine the sheet reads from is offline: its list comes when it runs, so a failed read is not an error. */
-    offline: boolean;
+    /** The name of the covered machine that is offline: its list comes when it runs, so a failed read is not an error. */
+    offlineMachine: string | null;
   }>,
 ) {
   const { list, data, kind } = props;
@@ -190,15 +190,15 @@ export const ScopeSheet = React.memo(function ScopeSheet(
         {list.total > 0 ? <Text variant="meta" style={styles.count}>{String(list.total)}</Text> : null}
       </View>
       {/* A read that failed while its machine is offline is not an error: the list comes when the machine runs. */}
-      {list.state !== 'ready' && props.offline ? (
+      {list.state !== 'ready' && props.offlineMachine !== null ? (
         <Item
           testID={`${props.testID}.offline`}
           mode="info"
           showChevron={false}
-          title={t('capabilities.scopeSection.whenRunning', { machine: props.place.label })}
+          title={t('capabilities.scopeSection.whenRunning', { machine: props.offlineMachine })}
         />
       ) : null}
-      {list.state === 'unavailable' && !props.offline ? (
+      {list.state === 'unavailable' && props.offlineMachine === null ? (
         <EmptyLine
           testID={`${props.testID}.unavailable`}
           title={t('capabilities.scopeSection.loadFailed')}
@@ -206,7 +206,7 @@ export const ScopeSheet = React.memo(function ScopeSheet(
           onPress={list.retry}
         />
       ) : null}
-      {list.state === 'loading' && !props.offline ? (
+      {list.state === 'loading' && props.offlineMachine === null ? (
         <CollectionSkeletonRows count={SCOPE_ROW_LIMIT} />
       ) : null}
       {list.state === 'ready' && list.total === 0 ? (
@@ -323,7 +323,7 @@ export const CapabilityScopeSection = React.memo(
       [data.machines, data.names, data.open],
     );
     const migratedNames = data.migrated.names;
-    const placeOffline = data.unreachable;
+    const offlineMachine = data.unreachableMachineName;
     const offlineNote = describeOfflineMachines(data.offlineNames);
     return (
       <ItemGroup
@@ -360,7 +360,7 @@ export const CapabilityScopeSection = React.memo(
                 list={data.skills}
                 place={place}
                 data={rowData}
-                offline={placeOffline}
+                offlineMachine={offlineMachine}
               />
             </ItemGroupColumn>
             <ItemGroupColumn>
@@ -371,7 +371,7 @@ export const CapabilityScopeSection = React.memo(
                 list={data.mcp}
                 place={place}
                 data={rowData}
-                offline={placeOffline}
+                offlineMachine={offlineMachine}
               />
             </ItemGroupColumn>
           </ItemGroupColumns>

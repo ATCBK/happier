@@ -86,4 +86,19 @@ describe('CapabilityRow', () => {
         expect(order.indexOf('row:status')).toBeLessThan(order.indexOf('row:scope'));
         expect(screen.findAll((node) => node.props?.testID === 'action').length).toBeGreaterThan(0);
     });
+    it('joins the scope to the facts on one narrow line, scope first ("Everywhere · 1.2k tokens")', async () => {
+        const { act } = await import('react');
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const screen = await renderScreen(
+            <CapabilityRow title="pdf" whereSummary="Everywhere" facts={{ presentation: 'row', cost: { tokensWhenUsed: 1200 } }} density="menu" testID="row" />,
+        );
+        const outer = screen.findAll((node) => typeof node.type === 'string' && typeof node.props?.onLayout === 'function')[0]!;
+        await act(async () => {
+            outer.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 64 } } });
+        });
+        const words = texts(screen);
+        expect(words).toContain('Everywhere');
+        expect(words).toMatch(/tokens/);
+        expect(words.indexOf('Everywhere')).toBeLessThan(words.search(/tokens/));
+    });
 });

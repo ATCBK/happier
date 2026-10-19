@@ -23,26 +23,27 @@ const { ScopeSheet } = await import('./CapabilityScopeSection');
 
 afterEach(() => standardCleanup());
 
-function renderUnavailableSheet(offline: boolean, retry = vi.fn(), state: 'unavailable' | 'loading' = 'unavailable') {
+function renderUnavailableSheet(offlineMachine: string | null, retry = vi.fn(), state: 'unavailable' | 'loading' = 'unavailable') {
   return renderScreen(
     <ScopeSheet
       testID="scope.skills"
       kind="skill"
       title="Skills"
       list={{ state, total: 0, rows: [], retry }}
-      place={{ place: { t: 'machine', machineId: 'guest' }, label: 'studio' }}
+      place={{ place: { t: 'project', projectKey: 'invoice-client' }, label: 'invoice-client' }}
       data={{ machines: [], names: {} as never, open: () => {} }}
-      offline={offline}
+      offlineMachine={offlineMachine}
     />,
   );
 }
 
 describe('capability scope sheet when its list could not be read', () => {
-  it('says an offline machine lists them once it runs, with no error and no Retry', async () => {
-    const screen = await renderUnavailableSheet(true);
+  it('names the offline machine, not the project, as what the list waits for, with no error and no Retry', async () => {
+    const screen = await renderUnavailableSheet('studio');
     expect(screen.getTextContent()).toContain(
       t('capabilities.scopeSection.whenRunning', { machine: 'studio' }),
     );
+    expect(screen.getTextContent()).not.toContain('invoice-client');
     expect(screen.findByTestId('scope.skills.unavailable')).toBeNull();
     expect(screen.getTextContent()).not.toContain(
       t('capabilities.scopeSection.loadFailed'),
@@ -52,7 +53,7 @@ describe('capability scope sheet when its list could not be read', () => {
 
   it('keeps a failed read of a running machine an error with its Retry', async () => {
     const retry = vi.fn();
-    const screen = await renderUnavailableSheet(false, retry);
+    const screen = await renderUnavailableSheet(null, retry);
     expect(screen.findByTestId('scope.skills.offline')).toBeNull();
     expect(screen.getTextContent()).toContain(
       t('capabilities.scopeSection.loadFailed'),
@@ -62,7 +63,7 @@ describe('capability scope sheet when its list could not be read', () => {
   });
 
   it('never holds a skeleton for a list its unreachable machine has not answered', async () => {
-    const screen = await renderUnavailableSheet(true, vi.fn(), 'loading');
+    const screen = await renderUnavailableSheet('studio', vi.fn(), 'loading');
     expect(screen.getTextContent()).toContain(
       t('capabilities.scopeSection.whenRunning', { machine: 'studio' }),
     );

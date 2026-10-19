@@ -130,5 +130,7 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
             nativeRow: nativeRows?.length && input.nativeSkills ? { machineName: input.nativeSkills.machineName, agentName: input.nativeSkills.agentName, rows: nativeRows } : null },
             { kind: 'mcp', title: t('capabilities.session.mcpServers'), trailing: trailing(mcp, t('capabilities.session.toolsEveryTurn')), rows: mcp, nativeRow: null }],
         addItems, applyNotice: notice, pendingNote: notice?.text ?? null, costKnown: costKnown && perTurn > 0,
-        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) }) : t('capabilities.session.costUnknown'), state: input.state };
+        // Before the first preview there is nothing to be unknown about: the footer waits silently.
+        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) })
+            : input.view === null && input.state === 'resolving' ? '' : t('capabilities.session.costUnknown'), state: input.state };
 }

@@ -232,6 +232,23 @@ describe('SessionCapabilitiesContent', () => {
     ).toHaveLength(0);
   });
 
+  it('holds the groups open while the first preview loads: both headings, placeholder rows, a silent footer cost, and no empty claim', async () => {
+    const loading = await render([], 'resolving', { preview: false });
+    const ids = new Set(
+      loading.screen
+        .findAll((node) => typeof node.props?.testID === 'string')
+        .map((node) => node.props.testID as string),
+    );
+    expect(ids.has('caps:group:skills')).toBe(true);
+    expect(ids.has('caps:group:mcp')).toBe(true);
+    expect(ids.has('caps:resolving')).toBe(true);
+    expect([...ids].filter((id) => id.startsWith('caps:empty:'))).toEqual([]);
+    const { t } = await import('@/text');
+    expect(
+      loading.screen.findAll((node) => node.props?.children === t('capabilities.session.costUnknown')),
+    ).toHaveLength(0);
+  });
+
   it('says an offline machine once and never claims empty groups it could not check', async () => {
     const offline = await render([], 'machine_unreachable', { preview: false });
     const ids = new Set(

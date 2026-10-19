@@ -531,7 +531,8 @@ const LegendRow = React.memo(function LegendRow(
       density="rail"
       divider={false}
       // A problem's fix is the row's one button (a pressable row cannot hold a button); a healthy row opens its page.
-      {...(status ? { stackActionWhenNarrow: true } : { onPress: fix })}
+      // A legend row is a name and its fix, so its chip and button stay on the name's line (lab hm-A2).
+      {...(status ? {} : { onPress: fix })}
       onPreviewChange={(active) => onPreview(active ? server.id : null)}
     />
   );

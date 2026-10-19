@@ -76,8 +76,8 @@ export type CapabilityScopeData = Readonly<{
   machines: readonly ScopeMachine[];
   /** Covered machines that cannot be reached right now, by name. */
   offlineNames: readonly string[];
-  /** A covered machine cannot be reached now (its checkout banner may already say so): its lists wait for it. */
-  unreachable: boolean;
+  /** The name of a covered machine that cannot be reached now (its checkout banner may already say so): the lists wait for it. */
+  unreachableMachineName: string | null;
   names: WhereItsOnNames;
   skills: ScopeListData;
   mcp: ScopeListData;
@@ -201,7 +201,10 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     [announcedMachineId, coveredMachines, names],
   );
 
-  const unreachable = coveredMachines.some((machine) => machine.offline === true);
+  const unreachableMachineName = React.useMemo(() => {
+    const offline = coveredMachines.find((machine) => machine.offline === true);
+    return offline ? names.machineName(offline.machineId) : null;
+  }, [coveredMachines, names]);
 
   const open = React.useCallback(
     (href: string) => {
@@ -396,14 +399,14 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     () => ({
       machines,
       offlineNames,
-      unreachable,
+      unreachableMachineName,
       names,
       skills,
       mcp,
       migrated: { names: migratedNames, dismiss },
       open,
     }),
-    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills, unreachable],
+    [dismiss, machines, mcp, migratedNames, names, offlineNames, open, skills, unreachableMachineName],
   );
 }
 
