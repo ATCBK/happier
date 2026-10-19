@@ -211,10 +211,10 @@ export function useDocCollaboration(
     const proposal =
       model.threads.find(
         (thread) =>
-          thread.proposal?.docEditProposalDispositionV1?.state === 'accepted' &&
-          thread.proposal.docEditProposalDispositionV1.decidedBy.atMs ===
+          thread.acceptedProposal?.docEditProposalDispositionV1?.state === 'accepted' &&
+          thread.acceptedProposal.docEditProposalDispositionV1.decidedBy.atMs ===
             value.atMs,
-      )?.proposal ?? null;
+      )?.acceptedProposal ?? null;
     const proposer = proposal
       ? resolveDiscussionMessageAuthorLabel(proposal)
       : t('session.collaboration.discussion.collaborator');

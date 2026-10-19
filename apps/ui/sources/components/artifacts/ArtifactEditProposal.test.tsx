@@ -11,6 +11,7 @@ vi.mock('@/text', async () => {
   return createTextModuleMock();
 });
 
+const { getStorage } = await import('@/sync/domains/state/storage');
 const { createArtifactActionsClient } = await import('./artifactActionsClient');
 const { ArtifactEditProposal } = await import('./ArtifactEditProposal');
 
@@ -86,7 +87,39 @@ async function render(
   return screen;
 }
 
+const storedDoc = (revision: { headerVersion: number; bodyVersion: number }) => ({
+  id: 'runbook', title: 'Runbook', header: { title: 'Runbook' }, isDecrypted: true as const, body: 'Two rows.! Rest.',
+  ...revision, seq: 1, createdAt: 1, updatedAt: 2, ownerAccountId: 'alice', access: 'owner' as const, storageMode: 'plain' as const,
+});
+
 describe('ArtifactEditProposal', () => {
+  it('follows the Doc to a newer revision: an open suggestion stops saying it is current and offers Decline, not Accept', async () => {
+    getStorage().getState().addArtifact(storedDoc(base));
+    let current = base;
+    const door = frontDoor({
+      'doc.read': () => docRead(current)(),
+      'doc.edit.decline': () => ({
+        ok: true,
+        result: { proposalRef, docEditProposalDispositionV1: { state: 'declined', decidedBy: { accountId: 'alice', atMs: 6 } } },
+      }),
+    });
+    const screen = await render(door.client);
+    expect(screen.findByTestId('proposal.current')).not.toBeNull();
+    // Another suggestion on this Doc is accepted: the Doc's revision moves on.
+    current = { headerVersion: 3, bodyVersion: 15 };
+    await act(async () => { getStorage().getState().updateArtifact(storedDoc(current)); });
+    await flushHookEffects();
+    expect(screen.findByTestId('proposal.current')).toBeNull();
+    expect(screen.findByTestId('proposal.movedOn')).not.toBeNull();
+    expect(screen.findByTestId('proposal.accept')).toBeNull();
+    expect(screen.findByTestId('proposal.compare')).not.toBeNull();
+    // A suggestion that can no longer apply can still be declined; that needs no Doc rewrite.
+    await act(async () => { await screen.pressByTestIdAsync('proposal.decline'); });
+    await flushHookEffects();
+    expect(door.calls.find((call) => call.actionId === 'doc.edit.decline')?.input).toEqual({ proposalRef });
+    expect(screen.findByTestId('proposal.declined')).not.toBeNull();
+  });
+
   it('accepts the reviewed revision and shows the receipt at the revision the Home acknowledged', async () => {
     const accepted = { headerVersion: 3, bodyVersion: 15 };
     const door = frontDoor({
@@ -162,12 +195,13 @@ describe('ArtifactEditProposal', () => {
     expect(screen.findByTestId('proposal.movedOn')).not.toBeNull();
     expect(screen.findByTestId('proposal.accept')).toBeNull();
     expect(screen.findByTestId('proposal.compare')).not.toBeNull();
+    expect(screen.findByTestId('proposal.decline')).not.toBeNull();
   });
 
   it('turns a refused stale Accept into the moved-on state instead of a receipt', async () => {
     const door = frontDoor({
       'doc.read': docRead(base),
-      'doc.edit.accept': () => ({ ok: false, errorCode: 'version-mismatch' }),
+      'doc.edit.accept': () => ({ ok: false, errorCode: 'version_mismatch' }),
     });
     const screen = await render(door.client);
     await act(async () => {
@@ -184,7 +218,7 @@ describe('ArtifactEditProposal', () => {
       'doc.read': docRead(accepted),
       'artifact.revisions.restore': () => ({
         ok: false,
-        errorCode: 'version-mismatch',
+        errorCode: 'version_mismatch',
       }),
     });
     const screen = await render(door.client, {

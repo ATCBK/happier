@@ -12,6 +12,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import { Text } from '@/components/ui/text/Text';
+import { getStorage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -22,6 +23,9 @@ import { artifactViewRoute } from './artifactBrowserModel';
 type Revision = Readonly<{ headerVersion: number; bodyVersion: number }>;
 type Currency = 'unknown' | 'current' | 'movedOn';
 type Busy = 'accept' | 'decline' | 'undo' | null;
+
+/** The Action's typed refusal when the Doc is no longer at the revision the person reviewed. */
+const VERSION_MISMATCH = 'version_mismatch';
 
 const sameRevision = (left: Revision, right: Revision) =>
   left.headerVersion === right.headerVersion &&
@@ -60,6 +64,12 @@ export function ArtifactEditProposal(
     props.disposition && props.disposition.state !== 'open'
       ? props.disposition
       : (acknowledged ?? props.disposition ?? { state: 'open' as const });
+  // The Doc's revision as the app already holds it (kept current by sync, as the Doc page reads it): when
+  // another edit lands, this suggestion's currency is read again rather than left as it was on mount.
+  const docRevisionKey = getStorage()((state) => {
+    const stored = state.artifacts[artifactId];
+    return stored ? `${stored.headerVersion}.${stored.bodyVersion ?? ''}` : '';
+  });
   const [currency, setCurrency] = React.useState<Currency>('unknown');
   const [refusal, setRefusal] = React.useState<
     'movedOn' | 'cantEdit' | 'failed' | null
@@ -91,7 +101,7 @@ export function ArtifactEditProposal(
     return () => {
       live = false;
     };
-  }, [client, artifactId, base, disposition.state]);
+  }, [client, artifactId, base, disposition.state, docRevisionKey]);
 
   const decide = React.useCallback(
     async (kind: 'accept' | 'decline') => {
@@ -114,7 +124,7 @@ export function ArtifactEditProposal(
         return;
       }
       const code = outcome.failure.code;
-      if (code === 'version-mismatch') {
+      if (code === VERSION_MISMATCH) {
         setCurrency('movedOn');
         setRefusal('movedOn');
         return;
@@ -141,7 +151,7 @@ export function ArtifactEditProposal(
     setUndo(
       outcome.ok
         ? { state: 'done', revision: outcome.value.revision }
-        : outcome.failure.code === 'version-mismatch'
+        : outcome.failure.code === VERSION_MISMATCH
           ? { state: 'conflict' }
           : { state: 'failed' },
     );
@@ -279,12 +289,27 @@ export function ArtifactEditProposal(
           testID={`${testID}.movedOn`}
           tone="warning"
           icon="warning"
-          text={t('artifacts.browser.proposal.movedOn')}
+          text={
+            refusal === 'failed'
+              ? t('artifacts.browser.proposal.failed')
+              : t('artifacts.browser.proposal.movedOn')
+          }
           action={{
             label: t('artifacts.browser.proposal.compare'),
             onPress: openDocument,
             testID: `${testID}.compare`,
           }}
+          // A suggestion that can no longer apply can still be declined: that needs no Doc rewrite.
+          before={
+            proposalRef && refusal !== 'cantEdit'
+              ? {
+                  label: t('artifacts.browser.proposal.decline'),
+                  busy: busy === 'decline',
+                  onPress: () => void decide('decline'),
+                  testID: `${testID}.decline`,
+                }
+              : undefined
+          }
         />
       ) : refusal === 'cantEdit' ? (
         <Line
@@ -385,6 +410,8 @@ function Line(
     tone?: 'warning' | 'danger';
     strong?: boolean;
     action?: LineAction;
+    /** A quieter choice that sits before `action` (Decline beside Compare). */
+    before?: LineAction;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -412,6 +439,18 @@ function Line(
       >
         {props.text}
       </Text>
+      {props.before ? (
+        <RoundButton
+          testID={props.before.testID}
+          size="small"
+          display="inverted"
+          title={props.before.label}
+          textStyle={{ color: theme.colors.text.secondary }}
+          loading={props.before.busy}
+          disabled={props.before.busy}
+          onPress={props.before.onPress}
+        />
+      ) : null}
       {props.action ? (
         <RoundButton
           testID={props.action.testID}
@@ -483,7 +522,7 @@ function announceAccepted(client: ArtifactActionsClient, artifactId: string, bas
           if ('approvalId' in outcome) return;
           publishPresentationNotice(outcome.ok
             ? { key: ACCEPTED_NOTICE_KEY, severity: 'info', message: t('artifacts.browser.proposal.undone', { n: outcome.value.revision.bodyVersion }) }
-            : { key: ACCEPTED_NOTICE_KEY, severity: 'warning', message: outcome.failure.code === 'version-mismatch'
+            : { key: ACCEPTED_NOTICE_KEY, severity: 'warning', message: outcome.failure.code === VERSION_MISMATCH
               ? t('artifacts.browser.proposal.undoConflict') : t('artifacts.browser.proposal.failed') });
         });
       },
