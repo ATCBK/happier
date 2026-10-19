@@ -200,7 +200,7 @@ function resolveFieldOptionPaints(
             ...(option.description ? { description: option.description } : {}),
         }));
         return resolveFieldOptions.state?.(field, context).status === 'failed'
-            ? [...options, { label: t('common.error') }] : options;
+            ? [...options, { label: t('workflows.start.choicesFailed') }] : options;
     } catch {
         return null;
     }

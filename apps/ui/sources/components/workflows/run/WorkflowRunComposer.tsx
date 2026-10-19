@@ -60,6 +60,10 @@ const styles = StyleSheet.create((theme) => ({
     /** Readiness, not an error: quiet warning tone, aligned with the composer card's content edge. */
     readiness: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
     readinessText: { color: theme.colors.state.warning.foreground, flexShrink: 1 },
+    // Popover and sheet content carries its own ink; a bare Text has no colour and reads black on dark.
+    body: { color: theme.colors.text.primary },
+    // The request is typed in the composer; its readiness leads the Inputs fields at their own rhythm.
+    mainReadiness: { paddingHorizontal: theme.space.s12, paddingTop: theme.space.s12 },
     visibilityStatus: { color: theme.colors.text.secondary, flexShrink: 1 },
 }));
 
@@ -232,7 +236,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         ...(props.workflowChip ? [props.workflowChip] : [createExecutionRunStartContentChip({
             key: 'workflow-start-definition', icon: 'git-branch', label: workflowLabel,
             title: t('workflows.start.workflow'), testID: `${prefix}-workflow-chip`,
-            renderContent: <View style={styles.fields}><Text>{props.preview ?? props.workflowName ?? t('workflows.start.preview')}</Text></View>,
+            renderContent: <View style={styles.fields}><Text style={styles.body}>{props.preview ?? props.workflowName ?? t('workflows.start.preview')}</Text></View>,
         })]),
         ...(remaining.length === 0 && missing === 0 ? [] : [createExecutionRunStartContentChip({
             key: 'workflow-start-inputs', icon: 'sliders-horizontal',
@@ -241,8 +245,10 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
             title: t('workflows.start.inputs'), testID: `${prefix}-inputs-chip`,
             revision: JSON.stringify([props.values, rawTextValues]),
             renderContent: <View>
-                {main?.errorCode === 'missing_required_input' ? <View style={styles.fields}>
-                    <Text>{inputTitle(main.definition)}</Text><Text style={styles.readinessText}>{t('workflows.start.required')}</Text>
+                {main?.errorCode === 'missing_required_input' ? <View style={styles.mainReadiness}>
+                    <FieldItem label={inputTitle(main.definition)}>
+                        <Text style={styles.readinessText}>{t('workflows.start.required')}</Text>
+                    </FieldItem>
                 </View> : null}
                 <WorkflowRunInputs fields={remaining} values={props.values} rawTextValues={rawTextValues}
                 onChangeText={changeText} onChangeValue={changeValue} pending={props.pending === true}
@@ -257,7 +263,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
             key: 'workflow-start-visibility', icon: 'users', label: visibilityLabel,
             title: t('workflows.start.visibility.title'), testID: `${prefix}-visibility-chip`, revision: visibleTeamId ?? '',
             renderContent: <View style={styles.fields}>
-                {visibility.teams.length === 1 ? <Text>{visibilityLabel}</Text>
+                {visibility.teams.length === 1 ? <Text style={styles.body}>{visibilityLabel}</Text>
                     : <WorkflowRunVisibilityChoice teams={visibility.teams} selectedId={visibleTeamId}
                         onSelect={visibility.onChange} pending={props.pending === true} />}
                 <Text style={styles.secondary}>{t('workflows.start.visibility.transcripts')}</Text>
@@ -290,7 +296,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     ? walkWorkflowBlocks(props.definition.blocks).find((candidate) => candidate.id === leaf.blockId) : null;
                 return <FieldItem key={JSON.stringify([leaf.sourceKey, leaf.blockId])}
                     label={block ? workflowBlockReferenceLabel(block) : t('workflows.start.workflow')}>
-                    <Text>{leaf.executionTarget.kind === 'session' ? t('workflows.page.sections.aSession') : t('workflows.page.sections.aBackgroundRun')}</Text>
+                    <Text style={styles.body}>{leaf.executionTarget.kind === 'session' ? t('workflows.page.sections.aSession') : t('workflows.page.sections.aBackgroundRun')}</Text>
                 </FieldItem>;
             })}</View>,
         })]),
