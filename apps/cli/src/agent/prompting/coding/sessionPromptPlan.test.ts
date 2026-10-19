@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { BUILT_IN_ROLES_V1, accountSettingsParse } from '@happier-dev/protocol';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { DaemonAgentRuntimeTurnContributionsBridge } from '@/agent/runtime/session/process/agentRuntimeDaemonTurnContributionsBridge';
 
 import { createSessionPromptPlanResolver } from './sessionPromptPlan';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { resolveSessionNativeToolDescriptors } from '@/agent/tools/happierTools/resolveSessionNativeToolBridge';
 import { shouldDenyAgentSessionTitleToolCall } from '@/agent/permissions/codingPromptTitlePermission';
@@ -48,6 +49,7 @@ function createProjectedIdentityTestMetadata(params: Parameters<typeof projectSe
 }
 
 describe('session prompt-plan producer', () => {
+  beforeEach(() => { installEmptyProjectAccountRowsHttpBoundary(); });
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
   it('withdraws the prepared turn while optional or required selected context is unavailable, then recovers', async () => {
@@ -62,12 +64,12 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'optional-context-token', encryption: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'optional-context-session', getMetadataSnapshot: () => createTestMetadata({ work: {
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'optional-context-session', getMetadataSnapshot: () => createTestMetadata({ work: {
         memoryEnabled: true, promptStack: [{ id: 'private-entry', ref: { kind: 'doc', artifactId: 'private-document' },
           enabled: true, required, placement: 'system_append' }] } }),
         enqueueSessionEventCommitted: async (event: unknown) => {
           events.push(event); return { persisted: true as const, delivered: false as const };
-        } },
+        } }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -87,7 +89,7 @@ describe('session prompt-plan producer', () => {
   it('keeps opaque plan evidence scoped to the prepared Session and withdraws it with the current Profile', async () => {
     let metadata = createTestMetadata();
     const params = { opts: { credentials: { token: 'context-token', encryption: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'composition-session', getMetadataSnapshot: () => metadata },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'composition-session', getMetadataSnapshot: () => metadata }),
       agentId: 'codex', machineId: 'test-machine', directory: '/private/repo',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge };
     const resolve = createSessionPromptPlanResolver(params);
@@ -121,7 +123,7 @@ describe('session prompt-plan producer', () => {
       opts: { credentials: { token: 'creation-context-token', encryption: null }, agentSessionStartupInstructionsV1: {
         v: 1 as const, id: 'caller.startup', revision: 9, instructions: 'Original caller instructions',
       } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'created-bot', getMetadataSnapshot: () => metadata },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'created-bot', getMetadataSnapshot: () => metadata }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => nativeSessionId, daemonBridge,
     };
@@ -157,7 +159,7 @@ describe('session prompt-plan producer', () => {
       sharedMetadata: projectSessionSharedMetadataV1({ metadata: { bot: { kind: 'bot' } } }) });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'promotion-context-token', encryption: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'promoted-session', getMetadataSnapshot: () => metadata },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'promoted-session', getMetadataSnapshot: () => metadata }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -165,7 +167,7 @@ describe('session prompt-plan producer', () => {
   });
 
   it.each(['network', 'none'] as const)('demand-loads the current Account prompt rows before the first preparation from %s Settings', async source => {
-    const credentials = { token: 'first-context-token', encryption: null };
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'first-context-account' })).toString('base64url')}.signature`, encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const settings = accountSettingsParse({});
     setActiveAccountSettingsSnapshot({ source, settings, ...(source === 'network' ? { rawSettings: {} } : {}), scopeKey,
@@ -198,7 +200,7 @@ describe('session prompt-plan producer', () => {
     } } : daemonBridge;
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { ...snapshot, whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge: preparationBridge,
       ...(operationContext ? { readOperationContext: () => operationContext } : {}),
@@ -249,7 +251,7 @@ describe('session prompt-plan producer', () => {
   });
 
   it.each([false, true])('keeps coding preparation current across unrelated Account preferences (captured: %s)', async captured => {
-    const credentials = { token: 'preference-context-token', encryption: null };
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'preference-context-account' })).toString('base64url')}.signature`, encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const snapshot = { source: 'network' as const, settings: accountSettingsParse({ memoryUseInNewSessions: false }), rawSettings: {}, scopeKey,
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
@@ -272,10 +274,10 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { ...snapshot, whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'preference-context-session', getMetadataSnapshot: () => createTestMetadata({
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'preference-context-session', getMetadataSnapshot: () => createTestMetadata({
         work: { promptStack: [{ id: 'instructions', ref: { kind: 'doc', artifactId: 'current' },
           enabled: true, required: true, placement: 'system_append' }] },
-      }) },
+      }) }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
       ...(captured ? { readOperationContext: () => operation } : {}),
@@ -302,7 +304,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata() }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -334,8 +336,8 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true,
-        promptStack: [{ id: 'current', ref: { kind: 'doc', artifactId: 'current' }, enabled: true, placement: 'system_append' }] } }) },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true,
+        promptStack: [{ id: 'current', ref: { kind: 'doc', artifactId: 'current' }, enabled: true, placement: 'system_append' }] } }) }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -369,7 +371,7 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId }) },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId }) }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -432,7 +434,7 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token, encryption: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: metadata },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: metadata }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -573,7 +575,7 @@ describe('session prompt-plan producer', () => {
       opts: { credentials,
         accountSettingsContext: { source: 'network', scopeKey, settingsVersion: 1, loadedAtMs: 1,
           settingsSecretsReadKeys: [], whenRefreshed: null, settings } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => null },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => null }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native-conversation',
       daemonBridge,
@@ -615,7 +617,7 @@ describe('session prompt-plan producer', () => {
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'fresh-instructions-token', encryption: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'fresh-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true, promptStack: entries } }) },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'fresh-session', getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: true, promptStack: entries } }) }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'native', daemonBridge,
     });
@@ -647,7 +649,7 @@ describe('session prompt-plan producer', () => {
           v: 1, id: 'voice.caller', revision: 9, instructions: 'Caller startup guidance',
         },
       },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => null },
+      session: Object.assign(createApiSessionClientFixture(), { sessionId: 'test-session', getMetadataSnapshot: () => null }),
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
       memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native-conversation',

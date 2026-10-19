@@ -1,7 +1,7 @@
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildCodingSessionPromptPlanBaseV1 } from '@happier-dev/protocol/prompts/buildAppendSystemPromptBaseV1';
 import { buildPromptPlanDiagnosticsV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
-import { buildPromptPlanV1, renderPromptPlanV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
+import { buildPromptPlanV1, renderSessionInputPromptPlanV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderSessionRoleBlockV1 } from '@happier-dev/protocol/prompts/roles/renderSessionRoleBlockV1';
 import { resolveEffectiveCodingPromptBehaviorV1 } from '@happier-dev/protocol/prompts/effectiveCodingPromptBehaviorV1';
@@ -240,7 +240,7 @@ export function resolveAgentCompositionPromptText(
       text: instruction.text,
     }),
   }));
-  return renderPromptPlanV1(buildPromptPlanV1({
+  return renderSessionInputPromptPlanV1(buildPromptPlanV1({
     modality: 'coding',
     blocks: [
       ...resolveAgentCompositionPromptAssetBlocks(args.promptAssetBlocks),
@@ -380,7 +380,7 @@ export async function resolveEffectiveCodingPromptPlan(
     composition: measurePromptPlanComposition(plan, args.compositionScope ?? createPromptCompositionScope()),
     codingPromptBehavior,
     admittedEntries: stackResult.admittedEntries,
-    text: renderPromptPlanV1(plan),
+    text: renderSessionInputPromptPlanV1(plan),
     diagnostics: buildPromptPlanDiagnosticsV1(plan),
   };
 }

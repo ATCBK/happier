@@ -20,11 +20,12 @@ import {
   type StoredCredentials,
 } from '@/persistence';
 import { resolveCliHomeTarget, resolveCurrentCliHomeTarget } from '@/server/homeTarget';
-import { getServerProfile } from '@/server/serverProfiles';
+import { getServerProfile, isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { logger } from '@/ui/logger';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { classifyHomeReadPreparationError } from './homeReadPreparationError';
 
 const promptReadErrorCodes = new Set([
   'artifact_read_unavailable', 'artifact_read_invalid', 'artifact_encryption_material_unavailable',
@@ -60,8 +61,6 @@ export async function withCliPromptLibraryArtifactReader<T>(
   const resolveTarget = (serverId: string) => serverId === activeServerId
     ? resolveCurrentCliHomeTarget()
     : resolveCliHomeTarget({ kind: 'saved_profile', profileRef: serverId });
-  let boundProfileId: Promise<string | null> | undefined;
-  const resolveBoundProfileId = () => boundProfileId ??= resolveTarget(defaultServerId).then((target) => target.profileId);
   const assertOperationCurrent = async () => {
     options?.signal?.throwIfAborted();
     const operation = options?.operationContext;
@@ -100,12 +99,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
         const operation = options?.operationContext;
         if (operation) {
           await assertOperationCurrent();
-          if (serverId !== defaultServerId) {
-            const target = await resolveTarget(serverId);
-            if (!target.profileId || target.profileId !== await resolveBoundProfileId()) {
-              throw new ArtifactEncryptionMaterialUnavailableError();
-            }
-          }
+          if (!await isServerProfileHomeIdentity(defaultServerId, serverId)) throw new ArtifactEncryptionMaterialUnavailableError();
           // The captured invocation owns transport and Account credentials. Saved
           // profiles only resolve same-Home aliases; they never supply private material.
           return { serverId, serverUrl: operation.serverHttpBaseUrl,
@@ -114,9 +108,9 @@ export async function withCliPromptLibraryArtifactReader<T>(
         }
         const requesterScope = options?.credentials?.requesterSessionCredentialScope;
         if (requesterScope) {
-          if (serverId !== requesterScope.serverId) throw new ArtifactEncryptionMaterialUnavailableError();
+          if (!await isServerProfileHomeIdentity(requesterScope.serverId, serverId)) throw new ArtifactEncryptionMaterialUnavailableError();
           // Exact Home was established by the private credential owner. Do not
-          // consult the daemon's saved profile or another Account's credentials.
+          // use another Account's credentials; saved bindings only prove aliases.
           return { serverId: requesterScope.serverId, serverUrl: requesterScope.serverHttpBaseUrl,
             accountId: readAccountIdFromToken(options.credentials!.token),
             store: createCredentialedAccountArtifactStore(options.credentials!) };
@@ -125,8 +119,8 @@ export async function withCliPromptLibraryArtifactReader<T>(
         if (!target.profileId && serverId !== activeServerId)
           throw new Error('prompt_library_home_unavailable');
         const profileId = target.profileId ? (await getServerProfile(target.profileId)).id : activeServerId;
-        const useBoundCredentials = options?.credentials !== undefined && (serverId === defaultServerId
-          || (target.profileId !== null && profileId === await resolveBoundProfileId()));
+        const isBoundHome = await isServerProfileHomeIdentity(defaultServerId, serverId);
+        const useBoundCredentials = options?.credentials !== undefined && isBoundHome;
         const credentials =
           useBoundCredentials
             ? options?.credentials
@@ -136,7 +130,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
           serverId: profileId,
           // Saved profiles establish Home/Account identity. The current Home's
           // admitted invocation/runtime route is owned by session transport.
-          serverUrl: profileId === activeServerId ? activeServerHttpBaseUrl : target.applicationUrl,
+          serverUrl: profileId === activeServerId && isBoundHome ? activeServerHttpBaseUrl : target.applicationUrl,
           accountId: credentials ? readAccountIdFromToken(credentials.token) : null,
           store: credentials ? createCredentialedAccountArtifactStore(credentials) : null,
         };
@@ -175,7 +169,7 @@ export async function withCliPromptLibraryArtifactReader<T>(
         const reason = operation !== 'scope' && error.code === 'profile_missing' ? 'not_found' : 'unavailable';
         throw Object.assign(new PromptStackPreparationError(reason, ref), { cause: error });
       }
-      throw error;
+      throw classifyHomeReadPreparationError(error, ref);
     }
   };
   return run({

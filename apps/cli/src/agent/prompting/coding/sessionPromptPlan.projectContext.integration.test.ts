@@ -213,7 +213,7 @@ async function resolver(withAccount: boolean, withProject: boolean, worker = fal
       path: withProject ? '/tmp/project' : '/tmp/unassociated',
       ...(withAccount && selectedProfileId ? { profileId: worker ? 'worker-profile' : selectedProfileId } : {}),
       ...(withProject ? { workspaceId: 'checkout', projectId: 'project' } : {}),
-      ...(worker ? { reportsTo: { sessionId: 'lead' } } : {}),
+      ...(worker ? { manager: { sessionId: 'lead' } } : {}),
       work: { memoryEnabled, promptStack: worker ? [] : sessionEntryIds.map(entry) },
     }) },
     agentId: 'codex', machineId: 'context-machine', directory: withProject ? '/tmp/project' : '/tmp/unassociated', serverId, memoryRecallGuidanceEnabled: false,
@@ -388,6 +388,7 @@ it('keeps the first input waiting for real Account inventory and dispatches it a
     runtime: {
       beginTurnLifecycle: () => undefined,
       sendTurnPrompt: async text => { delivered.push(text); },
+      subscribeRuntimeEvents: () => () => undefined,
       isProviderNativeCommand: () => false,
       steerInFlightTurn: async () => undefined,
       waitForTurnCompletion: async () => undefined,

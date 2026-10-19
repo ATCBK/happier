@@ -16,7 +16,7 @@ import {
   setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { prepareSessionPromptStackInputs } from './sessionPromptStack';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createDeferred } from '@/testkit/async/deferred';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCliVoicePromptStackBlocks } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
