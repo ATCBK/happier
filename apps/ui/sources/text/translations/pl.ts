@@ -7005,16 +7005,24 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Rozpocznij nową sesję",
-    selectAiProfileTitle: "Wybierz profil AI",
+    wizardSection: {
+      profile: "Profil",
+      agent: "Agent",
+      model: "Model",
+      machine: "Maszyna",
+      folder: "Folder",
+      permission: "Uprawnienia",
+    },
+    selectAiProfileTitle: "Wybierz profil",
     selectAiProfileDescription:
-      "Wybierz profil AI, aby zastosować zmienne środowiskowe i domyślne ustawienia do sesji.",
+      "Profil stosuje zmienne środowiskowe i ustawienia domyślne do tej sesji.",
     changeProfile: "Zmień profil",
     aiBackendSelectedByProfile:
-      "Backend AI jest wybierany przez profil. Aby go zmienić, wybierz inny profil.",
-    selectAiBackendTitle: "Wybierz backend AI",
+      "Twój profil określa agenta. Aby go zmienić, wybierz inny profil.",
+    selectAiBackendTitle: "Wybierz agenta",
     aiBackendLimitedByProfileAndMachineClis:
-      "Ograniczone przez wybrany profil i dostępne CLI na tej maszynie.",
-    aiBackendSelectWhichAiRuns: "Wybierz, które AI uruchamia Twoją sesję.",
+      "Ograniczone przez twój profil i agentów zainstalowanych na tej maszynie.",
+    aiBackendSelectWhichAiRuns: "Wybierz agenta, który uruchomi tę sesję.",
     aiBackendNotCompatibleWithSelectedProfile: "Niezgodne z wybranym profilem.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
       `Nie wykryto CLI ${cli} na tej maszynie.`,
@@ -7035,7 +7043,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     selectPermissionModeTitle: "Wybierz tryb uprawnień",
     selectPermissionModeDescription:
       "Określ, jak ściśle akcje wymagają zatwierdzenia.",
-    selectModelTitle: "Wybierz model AI",
+    selectModelTitle: "Wybierz model",
     selectModelDescription: "Wybierz model używany przez tę sesję.",
 	    checkout: {
 	      selectTitle: "Wybierz punkt startowy",

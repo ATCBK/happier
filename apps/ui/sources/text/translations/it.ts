@@ -7378,16 +7378,24 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Avvia nuova sessione",
-    selectAiProfileTitle: "Seleziona profilo IA",
+    wizardSection: {
+      profile: "Profilo",
+      agent: "Agente",
+      model: "Modello",
+      machine: "Macchina",
+      folder: "Cartella",
+      permission: "Permessi",
+    },
+    selectAiProfileTitle: "Scegli un profilo",
     selectAiProfileDescription:
-      "Seleziona un profilo IA per applicare variabili d’ambiente e valori predefiniti alla sessione.",
+      "Un profilo applica variabili d’ambiente e valori predefiniti a questa sessione.",
     changeProfile: "Cambia profilo",
     aiBackendSelectedByProfile:
-      "Il backend IA è determinato dal profilo. Per cambiarlo, seleziona un profilo diverso.",
-    selectAiBackendTitle: "Seleziona backend IA",
+      "Il tuo profilo definisce l’agente. Per cambiarlo, scegli un altro profilo.",
+    selectAiBackendTitle: "Scegli un agente",
     aiBackendLimitedByProfileAndMachineClis:
-      "Limitato dal profilo selezionato e dalle CLI disponibili su questa macchina.",
-    aiBackendSelectWhichAiRuns: "Seleziona quale IA esegue la sessione.",
+      "Limitato dal tuo profilo e dagli agenti installati su questa macchina.",
+    aiBackendSelectWhichAiRuns: "Scegli quale agente esegue questa sessione.",
     aiBackendNotCompatibleWithSelectedProfile:
       "Non compatibile con il profilo selezionato.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -7409,7 +7417,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     selectPermissionModeTitle: "Seleziona modalità di permessi",
     selectPermissionModeDescription:
       "Controlla quanto rigidamente le azioni richiedono approvazione.",
-    selectModelTitle: "Seleziona modello IA",
+    selectModelTitle: "Scegli un modello",
     selectModelDescription: "Scegli il modello usato da questa sessione.",
     checkout: {
       selectTitle: "Seleziona checkout",

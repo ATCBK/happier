@@ -832,7 +832,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         <View style={styles.wizardSectionHeaderRow}>
                                             {renderIconNode('person', 18, theme.colors.text.primary)}
                                             <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
-                                                {t('newSession.selectAiProfileTitle')}
+                                                {t('newSession.wizardSection.profile')}
                                             </Text>
                                         </View>
                                         <Text style={styles.sectionDescription}>
@@ -856,8 +856,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             compactContent={(
                                                 <NewSessionWizardPopoverItem
                                                     testID="new-session-profile-dropdown-trigger"
-                                                    title={t('newSession.selectAiProfileTitle')}
-                                                    subtitle={
+                                                    title={
                                                         selectedProfileId
                                                             ? (resolvedProfileMap.get(selectedProfileId)?.name ?? getBuiltInProfile(selectedProfileId)?.name ?? selectedProfileId)
                                                             : t('profiles.noProfile')
@@ -880,7 +879,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             <View style={styles.wizardSectionHeaderRow}>
                                                 {renderIconNode('cpu', 18, theme.colors.text.primary)}
                                                 <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
-                                                    {t('newSession.selectAiBackendTitle')}
+                                                    {t('newSession.wizardSection.agent')}
                                                 </Text>
                                             </View>
                                         </View>
@@ -1051,8 +1050,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                     compactContent={(
                                                         <NewSessionWizardDropdownSelectionItem
                                                             testID="new-session-agent-dropdown-trigger"
-                                                            title={t('newSession.selectAiBackendTitle')}
-                                                            subtitle={agentLabel ?? dropdownItems.find((item) => item.id === selectedBackendRowId)?.title ?? t('newSession.aiBackendSelectWhichAiRuns')}
+                                                            title={agentLabel ?? dropdownItems.find((item) => item.id === selectedBackendRowId)?.title ?? t('newSession.selectAiBackendTitle')}
                                                             icon={renderIconNode('cpu', 24, theme.colors.text.secondary)}
                                                             items={dropdownItems}
                                                             selectedId={selectedBackendRowId}
@@ -1079,7 +1077,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                 rowStyle={styles.wizardSectionHeaderRow}
                                                 iconName="sparkle"
                                                 iconColor={theme.colors.text.primary}
-                                                title={t('newSession.selectModelTitle')}
+                                                title={t('newSession.wizardSection.model')}
                                                 titleStyle={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}
                                                 action={hasModelOptionsProbeAffordance ? {
                                                     accessibilityLabel: modelOptionsProbe?.refreshAccessibilityLabel ?? t('common.refresh'),
@@ -1146,7 +1144,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                 rowStyle={styles.wizardSectionHeaderRow}
                                                 iconName="desktop"
                                                 iconColor={theme.colors.text.primary}
-                                                title={t('newSession.selectMachineTitle')}
+                                                title={t('newSession.wizardSection.machine')}
                                                 titleStyle={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}
                                                 action={onRefreshMachines ? {
                                                     accessibilityLabel: t('common.refresh'),
@@ -1172,8 +1170,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                 compactContent={(
                                                     <NewSessionWizardPopoverItem
                                                         testID="new-session-machine-dropdown-trigger"
-                                                        title={t('newSession.selectMachineTitle')}
-                                                        subtitle={machineDisplayName ?? t('newSession.selectMachineDescription')}
+                                                        title={machineDisplayName ?? t('newSession.selectMachineTitle')}
                                                         icon={<Icon name="desktop" size={24} color={theme.colors.text.primary} />}
                                                         popover={props.footer.machinePopover}
                                                         boundaryRef={props.popoverBoundaryRef}
@@ -1216,7 +1213,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         <View onLayout={registerWizardSectionOffset('path')}>
                                             <View style={styles.wizardSectionHeaderRow}>
                                                 {renderIconNode('folder', 18, theme.colors.text.primary)}
-                                                <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectWorkingDirectoryTitle')}</Text>
+                                                <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.wizardSection.folder')}</Text>
                                             </View>
                                         </View>
                                         <Text style={styles.sectionDescription}>
@@ -1258,7 +1255,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 <View onLayout={registerWizardSectionOffset('permission')}>
                                     <View style={styles.wizardSectionHeaderRow}>
                                         {renderIconNode('shield', 18, theme.colors.text.primary)}
-                                        <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectPermissionModeTitle')}</Text>
+                                        <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.wizardSection.permission')}</Text>
                                     </View>
                                 </View>
                                 <Text style={styles.sectionDescription}>
@@ -1288,8 +1285,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                     compactContent={(
                                         <NewSessionWizardDropdownSelectionItem
                                             testID="new-session-permission-dropdown-trigger"
-                                            title={t('newSession.selectPermissionModeTitle')}
-                                            subtitle={permissionOptions.find((option) => option.value === permissionMode)?.label ?? t('newSession.selectPermissionModeDescription')}
+                                            title={permissionOptions.find((option) => option.value === permissionMode)?.label ?? t('newSession.selectPermissionModeTitle')}
                                             icon={renderIconNode('shield', 24, theme.colors.text.secondary)}
                                             items={permissionOptions.map((option) => ({
                                                 id: option.value,

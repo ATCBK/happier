@@ -7153,16 +7153,24 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Iniciar nueva sesión",
-    selectAiProfileTitle: "Seleccionar perfil de IA",
+    wizardSection: {
+      profile: "Perfil",
+      agent: "Agente",
+      model: "Modelo",
+      machine: "Máquina",
+      folder: "Carpeta",
+      permission: "Permisos",
+    },
+    selectAiProfileTitle: "Elegir un perfil",
     selectAiProfileDescription:
-      "Selecciona un perfil de IA para aplicar variables de entorno y valores predeterminados a tu sesión.",
+      "Un perfil aplica variables de entorno y valores predeterminados a esta sesión.",
     changeProfile: "Cambiar perfil",
     aiBackendSelectedByProfile:
-      "El backend de IA lo selecciona tu perfil. Para cambiarlo, selecciona un perfil diferente.",
-    selectAiBackendTitle: "Seleccionar backend de IA",
+      "Tu perfil define el agente. Para cambiarlo, elige otro perfil.",
+    selectAiBackendTitle: "Elegir un agente",
     aiBackendLimitedByProfileAndMachineClis:
-      "Limitado por tu perfil seleccionado y los CLI disponibles en esta máquina.",
-    aiBackendSelectWhichAiRuns: "Selecciona qué IA ejecuta tu sesión.",
+      "Limitado por tu perfil y los agentes instalados en esta máquina.",
+    aiBackendSelectWhichAiRuns: "Elige qué agente ejecuta esta sesión.",
     aiBackendNotCompatibleWithSelectedProfile:
       "No es compatible con el perfil seleccionado.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -7184,7 +7192,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     selectPermissionModeTitle: "Seleccionar modo de permisos",
     selectPermissionModeDescription:
       "Controla qué tan estrictamente las acciones requieren aprobación.",
-    selectModelTitle: "Seleccionar modelo de IA",
+    selectModelTitle: "Elegir un modelo",
     selectModelDescription: "Elige el modelo usado por esta sesión.",
     checkout: {
       selectTitle: "Seleccionar copia de trabajo",

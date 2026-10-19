@@ -6915,17 +6915,25 @@ const ruValues = {
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Начать новую сессию",
-    selectAiProfileTitle: "Выбрать профиль ИИ",
+    wizardSection: {
+      profile: "Профиль",
+      agent: "Агент",
+      model: "Модель",
+      machine: "Машина",
+      folder: "Папка",
+      permission: "Разрешения",
+    },
+    selectAiProfileTitle: "Выбрать профиль",
     selectAiProfileDescription:
-      "Выберите профиль ИИ, чтобы применить переменные окружения и настройки по умолчанию к вашей сессии.",
+      "Профиль применяет переменные окружения и настройки по умолчанию к этой сессии.",
     changeProfile: "Сменить профиль",
     aiBackendSelectedByProfile:
-      "Бэкенд ИИ выбирается вашим профилем. Чтобы изменить его, выберите другой профиль.",
-    selectAiBackendTitle: "Выбрать бэкенд ИИ",
+      "Агент задаётся вашим профилем. Чтобы изменить его, выберите другой профиль.",
+    selectAiBackendTitle: "Выбрать агента",
     aiBackendLimitedByProfileAndMachineClis:
-      "Ограничено выбранным профилем и доступными CLI на этой машине.",
+      "Ограничено вашим профилем и агентами, установленными на этой машине.",
     aiBackendSelectWhichAiRuns:
-      "Выберите, какой ИИ будет работать в вашей сессии.",
+      "Выберите агента, который запустит эту сессию.",
     aiBackendNotCompatibleWithSelectedProfile:
       "Несовместимо с выбранным профилем.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -6947,7 +6955,7 @@ const ruValues = {
     selectPermissionModeTitle: "Выбрать режим разрешений",
     selectPermissionModeDescription:
       "Настройте, насколько строго действия требуют подтверждения.",
-    selectModelTitle: "Выбрать модель ИИ",
+    selectModelTitle: "Выбрать модель",
     selectModelDescription: "Выберите модель, используемую этой сессией.",
 	    checkout: {
 	      selectTitle: "Выбрать checkout",

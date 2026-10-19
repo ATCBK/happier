@@ -7265,16 +7265,24 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Iniciar nova sessão",
-    selectAiProfileTitle: "Selecionar perfil de IA",
+    wizardSection: {
+      profile: "Perfil",
+      agent: "Agente",
+      model: "Modelo",
+      machine: "Máquina",
+      folder: "Pasta",
+      permission: "Permissões",
+    },
+    selectAiProfileTitle: "Escolher um perfil",
     selectAiProfileDescription:
-      "Selecione um perfil de IA para aplicar variáveis de ambiente e padrões à sua sessão.",
+      "Um perfil aplica variáveis de ambiente e padrões a esta sessão.",
     changeProfile: "Trocar perfil",
     aiBackendSelectedByProfile:
-      "O backend de IA é selecionado pelo seu perfil. Para alterar, selecione um perfil diferente.",
-    selectAiBackendTitle: "Selecionar backend de IA",
+      "O seu perfil define o agente. Para alterar, escolha outro perfil.",
+    selectAiBackendTitle: "Escolher um agente",
     aiBackendLimitedByProfileAndMachineClis:
-      "Limitado pelo perfil selecionado e pelos CLIs disponíveis nesta máquina.",
-    aiBackendSelectWhichAiRuns: "Selecione qual IA roda sua sessão.",
+      "Limitado pelo seu perfil e pelos agentes instalados nesta máquina.",
+    aiBackendSelectWhichAiRuns: "Escolha qual agente executa esta sessão.",
     aiBackendNotCompatibleWithSelectedProfile:
       "Não compatível com o perfil selecionado.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -7296,7 +7304,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     selectPermissionModeTitle: "Selecionar modo de permissões",
     selectPermissionModeDescription:
       "Controle o quão estritamente as ações exigem aprovação.",
-    selectModelTitle: "Selecionar modelo de IA",
+    selectModelTitle: "Escolher um modelo",
     selectModelDescription: "Escolha o modelo usado por esta sessão.",
     checkout: {
       selectTitle: "Selecionar checkout",

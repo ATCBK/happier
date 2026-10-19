@@ -8413,16 +8413,24 @@ const enNewSession = {
   ...acpCatalogTranslationExtension.newSession,
   // Used by new-session screen and launch flows
   title: 'Start New Session',
-  selectAiProfileTitle: 'Select AI profile',
+  wizardSection: {
+    profile: 'Profile',
+    agent: 'Agent',
+    model: 'Model',
+    machine: 'Machine',
+    folder: 'Folder',
+    permission: 'Permissions',
+  },
+  selectAiProfileTitle: 'Choose a profile',
   selectAiProfileDescription:
-    'Select an AI profile to apply environment variables and defaults to your session.',
+    'A profile applies environment variables and defaults to this session.',
   changeProfile: 'Change Profile',
   aiBackendSelectedByProfile:
-    'AI backend is selected by your profile. To change it, select a different profile.',
-  selectAiBackendTitle: 'Select AI backend',
+    'Your profile sets the agent. To change it, choose a different profile.',
+  selectAiBackendTitle: 'Choose an agent',
   aiBackendLimitedByProfileAndMachineClis:
-    'Limited by your selected profile and available CLIs on this machine.',
-  aiBackendSelectWhichAiRuns: 'Select which AI runs your session.',
+    'Limited by your profile and the agents installed on this machine.',
+  aiBackendSelectWhichAiRuns: 'Choose which agent runs this session.',
   aiBackendNotCompatibleWithSelectedProfile:
     'Not compatible with the selected profile.',
   aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -8444,7 +8452,7 @@ const enNewSession = {
   selectPermissionModeTitle: 'Select permission mode',
   selectPermissionModeDescription:
     'Control how strictly actions require approval.',
-  selectModelTitle: 'Select AI model',
+  selectModelTitle: 'Choose a model',
   selectModelDescription: 'Choose the model used by this session.',
   checkout: {
     selectTitle: 'Select Worktree',

@@ -6871,16 +6871,24 @@ const zhHansValues = {
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "启动新会话",
-    selectAiProfileTitle: "选择 AI 配置",
+    wizardSection: {
+      profile: "配置",
+      agent: "智能体",
+      model: "模型",
+      machine: "设备",
+      folder: "文件夹",
+      permission: "权限",
+    },
+    selectAiProfileTitle: "选择配置",
     selectAiProfileDescription:
-      "选择一个 AI 配置，以将环境变量和默认值应用到会话。",
+      "配置会将环境变量和默认值应用到此会话。",
     changeProfile: "更改配置",
     aiBackendSelectedByProfile:
-      "AI 后端由所选配置决定。如需更改，请选择其他配置。",
-    selectAiBackendTitle: "选择 AI 后端",
+      "智能体由你的配置决定。要更改，请选择其他配置。",
+    selectAiBackendTitle: "选择智能体",
     aiBackendLimitedByProfileAndMachineClis:
-      "受所选配置和此设备上可用的 CLI 限制。",
-    aiBackendSelectWhichAiRuns: "选择由哪个 AI 运行会话。",
+      "受你的配置和此设备上已安装的智能体限制。",
+    aiBackendSelectWhichAiRuns: "选择运行此会话的智能体。",
     aiBackendNotCompatibleWithSelectedProfile: "与所选配置不兼容。",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
       `此设备未检测到 ${cli} CLI。`,
@@ -6899,7 +6907,7 @@ const zhHansValues = {
     selectWorkingDirectoryDescription: "选择用于命令和上下文的文件夹。",
     selectPermissionModeTitle: "选择权限模式",
     selectPermissionModeDescription: "控制操作需要批准的严格程度。",
-    selectModelTitle: "选择 AI 模型",
+    selectModelTitle: "选择模型",
     selectModelDescription: "选择此会话使用的模型。",
     checkout: {
       selectTitle: "选择检出",

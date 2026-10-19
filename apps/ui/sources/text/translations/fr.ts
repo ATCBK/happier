@@ -6985,16 +6985,24 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "Nouvelle session",
-    selectAiProfileTitle: "Choisir un profil IA",
+    wizardSection: {
+      profile: "Profil",
+      agent: "Agent",
+      model: "Modèle",
+      machine: "Machine",
+      folder: "Dossier",
+      permission: "Permissions",
+    },
+    selectAiProfileTitle: "Choisir un profil",
     selectAiProfileDescription:
-      "Choisis un profil IA pour appliquer des variables d’environnement et des valeurs par défaut à ta session.",
+      "Un profil applique des variables d’environnement et des valeurs par défaut à cette session.",
     changeProfile: "Changer de profil",
     aiBackendSelectedByProfile:
-      "Le backend IA est défini par ton profil. Pour en changer, choisis un autre profil.",
-    selectAiBackendTitle: "Choisir un backend IA",
+      "Ton profil définit l’agent. Pour en changer, choisis un autre profil.",
+    selectAiBackendTitle: "Choisir un agent",
     aiBackendLimitedByProfileAndMachineClis:
-      "Limité par le profil sélectionné et les CLI disponibles sur cette machine.",
-    aiBackendSelectWhichAiRuns: "Choisis quelle IA fait tourner ta session.",
+      "Limité par ton profil et les agents installés sur cette machine.",
+    aiBackendSelectWhichAiRuns: "Choisis quel agent exécute cette session.",
     aiBackendNotCompatibleWithSelectedProfile:
       "Incompatible avec le profil sélectionné.",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -7016,7 +7024,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     selectPermissionModeTitle: "Choisir le mode de permissions",
     selectPermissionModeDescription:
       "Définis à quel point les actions doivent être approuvées.",
-    selectModelTitle: "Choisir un modèle IA",
+    selectModelTitle: "Choisir un modèle",
     selectModelDescription: "Choisis le modèle utilisé par cette session.",
     checkout: {
       selectTitle: "Choisir un worktree",

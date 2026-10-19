@@ -309,8 +309,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
             <View ref={anchorRef} collapsable={false}>
                 <Item
                     testID="new-session-model-dropdown-trigger"
-                    title={modelFieldLabel}
-                    subtitle={selectedPresentation.subtitle}
+                    title={selectedPresentation.subtitle ?? modelFieldLabel}
                     detail={selectedPresentation.detail}
                     accessibilityLabel={selectedPresentation.accessibilityLabel}
                     leftElement={normalizeNodeForView(

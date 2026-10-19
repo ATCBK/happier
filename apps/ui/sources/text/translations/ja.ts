@@ -7465,16 +7465,24 @@ localTailscale: {
     ...acpCatalogTranslationExtension.newSession,
     // Used by new-session screen and launch flows
     title: "新しいセッションを開始",
-    selectAiProfileTitle: "AIプロファイルを選択",
+    wizardSection: {
+      profile: "プロファイル",
+      agent: "エージェント",
+      model: "モデル",
+      machine: "マシン",
+      folder: "フォルダ",
+      permission: "権限",
+    },
+    selectAiProfileTitle: "プロファイルを選択",
     selectAiProfileDescription:
-      "環境変数とデフォルト設定をセッションに適用するため、AIプロファイルを選択してください。",
+      "プロファイルは、環境変数とデフォルト設定をこのセッションに適用します。",
     changeProfile: "プロファイルを変更",
     aiBackendSelectedByProfile:
-      "AIバックエンドはプロファイルで選択されています。変更するには別のプロファイルを選択してください。",
-    selectAiBackendTitle: "AIバックエンドを選択",
+      "エージェントはプロファイルで決まります。変更するには別のプロファイルを選択してください。",
+    selectAiBackendTitle: "エージェントを選択",
     aiBackendLimitedByProfileAndMachineClis:
-      "選択したプロファイルと、このマシンで利用可能なCLIによって制限されます。",
-    aiBackendSelectWhichAiRuns: "セッションで実行するAIを選択してください。",
+      "プロファイルと、このマシンにインストールされているエージェントによって制限されます。",
+    aiBackendSelectWhichAiRuns: "このセッションを実行するエージェントを選択します。",
     aiBackendNotCompatibleWithSelectedProfile:
       "選択したプロファイルと互換性がありません。",
     aiBackendCliNotDetectedOnMachine: ({ cli }: { cli: string }) =>
@@ -7495,7 +7503,7 @@ localTailscale: {
       "コマンドとコンテキストに使用するフォルダを選択してください。",
     selectPermissionModeTitle: "権限モードを選択",
     selectPermissionModeDescription: "操作にどの程度承認が必要かを設定します。",
-    selectModelTitle: "AIモデルを選択",
+    selectModelTitle: "モデルを選択",
     selectModelDescription:
       "このセッションで使用するモデルを選択してください。",
       checkout: {
