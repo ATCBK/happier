@@ -67,6 +67,12 @@ own that decision: the launcher tries healthy targets and runs locally when none
 Use `--script=` only for an actual repository package script. Direct tools such as `rg`, `find`,
 `node --test`, or a test-runner binary use the `-- <command>` form.
 
+Use `--cwd=REPO_RELATIVE_PATH` before `--` to run from a package directory while
+retaining AUTO placement. The selected target resolves the path against its
+repository; retries and configured local fallback preserve that directory.
+`--env` and `--tty` still require an explicit target. Admission refusals identify
+the deciding memory figures, queue holder, or contended decision lock.
+
 Run that path from the checkout root. On POSIX, the no-target path replaces itself with the
 requested command without starting Node, Yarn, Mutagen, SSH, or a load probe. Node validates target
 configuration and refreshes a private shell-safe projection only after configuration changes;
@@ -177,7 +183,7 @@ Independent commands may run concurrently, but preserve the repository's existin
 
 The canonical QA browser launcher uses `--no-sandbox` under the approved QA-host policy for Happier's own QA app. Attach controller automation to that browser; do not introduce a separate per-lane launch policy. Retain a TTY-backed foreground tool handle and verify cleanup after SIGINT: cancelling a non-TTY checkout launcher can leave the actual command and forward running.
 
-New controlled `--qa`/`agent-qa-*` stacks use the configured linux3, linux2 and linux1 QA pool. `service_placement.mjs` chooses the host with the largest actually available memory budget after live reservations, then writes one explicit daemon pin; command pools never reselect the Machine. Live Expo/browser/daemon RSS is already reflected in available memory, not deducted twice. Include windows1-linux only after its outer Windows C: disk is healthy; it is not a default candidate. Heavy validation stays on hosts fitting its existing class envelopes, independently of this QA pool. Existing stacks change only at an owner-requested next restart, through `dev-targets placement set daemon <target> --stack=<qa-stack>`. This QA default does not change development-daemon placement.
+New controlled `--qa`/`agent-qa-*`/`qa-*` stacks in the shared 0.3 checkout use nl3 for server, daemon, QA browser and QA commands by default. The producer's `HAPPIER_STACK_QA_DEFAULT_TARGET=nl3` env setting seeds the existing consumer placement fields at creation, including stacks created outside this skill. Follow [happier-controlled-stack-qa](../happier-controlled-stack-qa/SKILL.md#default-placement-for-the-shared-03-checkout-2026-10-17) for shared development Postgres and borrowed development Expo before first start. The existing config and `service_placement.mjs` remain the placement owners. Heavy validation stays in its separately authorized build pool. Existing QA stacks move only at their owners' next explicit restart; do not operate running stacks to apply this default. The 0.3 development stack and owner-managed 0.2 stack keep their local placement.
 
 Use `dev-targets qa setup <target> --stack=<qa-stack>` for idempotent managed JS, Claude Code/Codex CLI, Chromium, scratch, power and disk-retention preparation. Never copy user Agent credentials: the paired daemon owns connected-service materialization. Service-memory observation reserves live daemon/browser trees alongside server/Expo trees through the existing admission input; small jobs may use spare capacity and heavy classes retain their canonical envelopes.
 
