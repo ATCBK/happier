@@ -13,9 +13,9 @@ export type LocalServicePublicRateLimitCheck = (
 /**
  * Ceiling on simultaneously tracked client buckets per exposure (F-3/F-PLAN-08).
  *
- * The resource this protects is the relay process's memory. `clientKey` is `request.ip`, which
- * honours the server's `trustProxy` setting, so on a reverse-proxy deployment an UNAUTHENTICATED
- * visitor to a public exposure controls the key through `X-Forwarded-For`. A bucket is a short key
+ * The resource this protects is the relay process's memory. `clientKey` uses the client IP
+ * resolved through the server's proxy trust policy; untrusted peers cannot choose it through
+ * `X-Forwarded-For`. Many distinct client addresses can still create buckets. A bucket is a short key
  * plus two numbers — order 150 bytes — so this ceiling bounds each exposure to a couple of megabytes
  * while sitting far above the distinct-client count a single-process V1 self-hosted relay serves
  * inside one window.

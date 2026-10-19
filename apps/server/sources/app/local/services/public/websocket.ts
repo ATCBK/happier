@@ -1,3 +1,4 @@
+import type { ApiProxyTrust } from '@/app/api/utils/apiRateLimitPolicy';
 import { readOptionalPublicAuthDisposition } from "@/app/api/utils/optionalPublicAuth";
 import proxyAddr from '@fastify/proxy-addr';
 import type { IncomingMessage } from 'node:http';
@@ -56,7 +57,7 @@ export type LocalServicePublicWebSocketUpgradeOptions = Readonly<{
     }>) => LocalServicePublicRuntimeAccessResult;
     resolveExposure?: (exposureId: string) => LocalServicePublicExposureV1 | null | undefined;
     resolveExposureByHost?: (hostname: string) => LocalServicePublicExposureV1 | null | undefined;
-    trustProxy?: boolean | number;
+    trustProxy?: ApiProxyTrust;
     externalProtocol?: "http" | "https";
     retainConnection?: (exposureId: string, close: () => void, actorAccountId?: string) => () => void;
     resolvePreview?: (previewId: string) => LocalServicePreviewResourceV1 | null | undefined;
@@ -241,9 +242,7 @@ export async function handleLocalServicePublicWebSocketUpgrade(
         // Same proxy-addr implementation and trust function as Fastify's request.ip.
         // Project Node's prototype-backed headers explicitly at the external library boundary.
         clientKey: readLocalServicePublicClientKey([proxyAddr({ headers: request.headers ?? {}, socket } as IncomingMessage,
-            trustProxy === true ? () => true
-                : typeof trustProxy === 'number' ? (_address, hop) => hop < trustProxy
-                    : () => false)]),
+            typeof trustProxy === "function" ? trustProxy : () => trustProxy === true)]),
     });
     if (!access.ok) {
         await sendUpgradeError(socket, 403, "Forbidden");

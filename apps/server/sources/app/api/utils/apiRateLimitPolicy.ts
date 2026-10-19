@@ -1,3 +1,4 @@
+import proxyAddr from '@fastify/proxy-addr';
 import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { parseIntEnv } from "@/config/env";
 
@@ -155,12 +156,19 @@ export function resolveRouteRateLimit(
     };
 }
 
-export function resolveApiTrustProxy(env: Record<string, string | undefined>): boolean | number | undefined {
-    const raw = readServerConfig(env, RATE_LIMIT_CONFIG.HAPPIER_SERVER_TRUST_PROXY)?.toLowerCase();
-    if (!raw) return undefined;
-    if (["true", "yes", "on"].includes(raw)) return true;
-    if (["false", "no", "off"].includes(raw)) return false;
-    const hops = parseInt(raw, 10);
-    if (Number.isFinite(hops) && hops >= 0) return hops;
-    return undefined;
+export type ApiProxyTrust = boolean | ((address: string, hop: number) => boolean);
+
+export function resolveApiTrustProxy(env: Record<string, string | undefined>): ApiProxyTrust | undefined {
+    const value = readServerConfig(env, RATE_LIMIT_CONFIG.HAPPIER_SERVER_TRUST_PROXY)?.trim();
+    if (!value) return undefined;
+    const keyword = value.toLowerCase();
+    if (["true", "yes", "on"].includes(keyword)) return true;
+    if (["false", "no", "off"].includes(keyword)) return false;
+    if (/^\d+$/.test(value)) {
+        throw new Error(
+            `Invalid HAPPIER_SERVER_TRUST_PROXY: ${value}. Hop counts are not supported; ` +
+                "list your proxies' addresses or CIDRs instead, comma-separated (for example 127.0.0.1 or 10.0.0.0/8).",
+        );
+    }
+    return proxyAddr.compile(value.split(",").map((address) => address.trim()));
 }
