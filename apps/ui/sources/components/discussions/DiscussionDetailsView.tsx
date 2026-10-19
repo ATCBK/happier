@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { canonicalSessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { deriveDocCommentDiscussionCreationLocalIdV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { prepareDiscussionContentForPassage, readDiscussionContentPassage } from './discussionComposerDocument';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
@@ -48,6 +49,9 @@ import { useArtifact } from '@/sync/domains/state/storage';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { SaveMemoryDecisionSheet, seedMemoryDecisionFromMessage } from '@/components/memory/SaveMemoryDecisionSheet';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import { useSessionAgentActivityRoster } from '@/hooks/session/useSessionAgentActivity';
@@ -92,6 +96,10 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { DiscussionAgentActivityReference } from '@/components/discussions/DiscussionAgentActivityReference';
 import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
 import { useOpenSessionAgentConversation } from '@/components/sessions/conversations/useOpenSessionAgentConversation';
+import { DiscussionWorkflowRunRow } from '@/components/discussions/DiscussionWorkflowRunRow';
+import { useDiscussionManagedWorkflowRuns } from '@/components/discussions/useDiscussionManagedWorkflowRuns';
+import { useDiscussionRunChips } from '@/components/discussions/useDiscussionRunChips';
+import { buildDiscussionContent } from '@/components/discussions/discussionComposerDocument';
 import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
@@ -126,6 +134,8 @@ const styles = StyleSheet.create((theme) => ({
     meta: {  color: theme.colors.text.secondary, ...Typography.variant('meta') },
     timestamp: {  color: theme.colors.text.tertiary, ...Typography.variant('meta'), fontVariant: ['tabular-nums'] },
     selectAffordance: { alignSelf: 'center' },
+    rowActions: { flexDirection: 'row', alignItems: 'center' },
+    savedDecision: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
     stateLine: { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
     deliveryStatus: { color: theme.colors.text.secondary, fontSize: 12 },
     error: { color: theme.colors.text.destructive, textAlign: 'center' },
@@ -307,13 +317,15 @@ export function DiscussionDetailsView(props: Readonly<{
         /></DiscussionPhoneChrome>;
     }
     return props.target.kind === 'new'
-        ? <NewDiscussion target={props.target} scope={binding.scope} accountLifetime={binding} onCreated={props.onCreated} />
+        ? <NewDiscussion key={JSON.stringify([binding.scope.serverId, binding.scope.accountId, props.target.draftId ?? null])}
+            target={props.target} scope={binding.scope} accountLifetime={binding} onCreated={props.onCreated} />
         : <Discussion target={props.target} scope={binding.scope} accountLifetime={binding} active={props.active} standaloneSurface={props.standaloneSurface === true} hostSessionAddress={props.hostSessionAddress} onClose={props.onClose} onOpened={props.onOpened} />;
 }
 
 function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget, { kind: 'new' }>; scope: ServerAccountScope; accountLifetime: ServerCredentialAccountScopeBinding; onCreated?: (discussion: DiscussionOpenedSummaryV1, passageRoot?: DiscussionMessageRefV1) => void }>) {
     const { theme } = useUnistyles();
-    const draftAddress = React.useMemo(() => ({ kind: 'newDiscussion' as const }), []);
+    const draftAddress = React.useMemo(() => ({ kind: 'newDiscussion' as const,
+        ...(props.target.draftId === undefined ? {} : { draftId: props.target.draftId }) }), [props.target.draftId]);
     const draft = useDiscussionDraft({ scope: props.scope, address: draftAddress });
     const [repository, snapshot] = useRepository(props.scope, props.target.address, props.accountLifetime);
     const restoredAttempt = draft.pendingMutationAttempt?.kind === 'create' ? draft.pendingMutationAttempt : null;
@@ -325,7 +337,10 @@ function NewDiscussion(props: Readonly<{ target: Extract<DiscussionDetailsTarget
     const completed = React.useRef(false);
     const [titleRequired, setTitleRequired] = React.useState(false);
     const phone = useSurfaceStateSize() === 'phone';
-    const recoveredMutation = Object.values(snapshot.mutations).find((item) => item.kind === 'create') ?? null;
+    const draftKey = canonicalSessionDraftAddressV2(draftAddress);
+    const recoveredMutation = Object.values(snapshot.mutations).find((item) => item.kind === 'create'
+        && (item.draftSubmission ? canonicalSessionDraftAddressV2(item.draftSubmission.address) === draftKey
+            : props.target.draftId === undefined)) ?? null;
     const activeCreationLocalId = recoveredMutation?.localId ?? ids.current.creationLocalId;
     const mutation = snapshot.mutations[activeCreationLocalId] ?? null;
     const composerBlocked = mutationBlocksComposer(mutation);
@@ -723,6 +738,26 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         setLocalId(id);
         await repository.post({ discussionId: props.target.discussionId, localId: id, content, ...readDiscussionMentionedParticipantIdsV1(content), ...(replyTarget ? { replyTarget } : {}), draftSubmission });
     }, [composerBlocked, discussion?.capabilities.postMessages, dismissRefusal, draft, mutation, props.target.discussionId, props.target.messageId, repository, rootPassage, threadRoot]);
+    // Run… posts the reviewed question as an ordinary unaddressed message through the same post owner, and
+    // hands the Pattern start only the message the Home actually committed.
+    const prepareAddressingMessage = React.useCallback(async (request: Readonly<{ localId: string; submittedDraft: string }>) => {
+        if (!discussion?.capabilities.postMessages || composerBlocked) throw new Error('discussion_post_unavailable');
+        const content = buildDiscussionContent(request.submittedDraft, []);
+        if (mutation && mutation.localId !== request.localId) dismissRefusal();
+        const draftSubmission = draft.captureSubmittedCurrentness({ kind: 'post', discussionId: props.target.discussionId, localId: request.localId }, { content });
+        setLocalId(request.localId);
+        const outcome = await repository.post({ discussionId: props.target.discussionId, localId: request.localId, content, draftSubmission });
+        if (outcome.kind === 'succeeded') return { messageId: outcome.value.message.id };
+        if (outcome.kind === 'checking') return { messageId: await observeCommittedPost(repository, props.target.discussionId, request.localId) };
+        throw new Error(outcome.kind === 'failed' ? outcome.errorCode : 'discussion_post_approval_pending');
+    }, [composerBlocked, discussion?.capabilities.postMessages, dismissRefusal, draft, mutation, props.target.discussionId, repository]);
+    const discussionAddress = React.useMemo(() => ({ serverId: props.target.address.serverId, discussionId: props.target.discussionId }), [props.target.address.serverId, props.target.discussionId]);
+    const managedRuns = useDiscussionManagedWorkflowRuns({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
+        enabled: props.active && !accessRevoked && thread?.status !== 'revoked' });
+    const readComposerDraft = React.useCallback(() => draft.text, [draft.text]);
+    const runChips = useDiscussionRunChips({ discussion: discussionAddress, accountLifetime: props.accountLifetime,
+        readDraft: readComposerDraft, prepareAddressingMessage, onStarted: managedRuns.retry,
+        disabled: !discussion?.capabilities.postMessages || composerBlocked || mutationsDisabled || discussion?.archivedAt !== null });
     const lifecycle = React.useCallback(async (kind: 'rename' | 'archive' | 'restore') => {
         if (!discussion) return; setLifecycleFailure(null);
         const result = kind === 'rename' ? await repository.rename(discussion.id, rename?.trim() ?? '') : kind === 'archive' ? await repository.archive(discussion.id) : await repository.restore(discussion.id);
@@ -750,7 +785,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     }, [messages, mutation, props.scope.accountId, props.target.discussionId, thread?.messageSeq]);
     const sourceSubagents = props.source?.activity.subagents ?? NO_SOURCE_SUBAGENTS;
     const readSourceExecutionRunEntry = props.source?.activity.readExecutionRunEntry ?? readNoSourceExecutionRunEntry;
-    const items = React.useMemo(() => buildDiscussionTimelineItems({ serverId: props.target.address.serverId, discussionId: props.target.discussionId, messages: displayMessages, subagents: sourceSubagents, readExecutionRunEntry: readSourceExecutionRunEntry }), [displayMessages, props.target.address.serverId, props.target.discussionId, readSourceExecutionRunEntry, sourceSubagents]);
+    const items = React.useMemo(() => buildDiscussionTimelineItems({ serverId: props.target.address.serverId, discussionId: props.target.discussionId, messages: displayMessages, subagents: sourceSubagents, readExecutionRunEntry: readSourceExecutionRunEntry, workflowRuns: managedRuns.runs }), [displayMessages, managedRuns.runs, props.target.address.serverId, props.target.discussionId, readSourceExecutionRunEntry, sourceSubagents]);
     const messageGroupStarts = React.useMemo(() => new Set(items.flatMap((item, index) => {
         if (item.kind !== 'human_message') return [];
         const previous = items[index - 1];
@@ -1052,7 +1087,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     data={items}
                     frame={frame}
                     webDomObservation={observation}
-                    keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
+                    keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : item.kind === 'workflow_run' ? `workflow:${item.run.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
                     onViewableItemsChanged={onVisible}
                     viewabilityConfig={VIEWABILITY}
                     onStartReached={thread.hasMoreOlder ? () => void repository.loadOlderMessages(props.target.discussionId) : undefined}
@@ -1064,6 +1099,13 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                         ? <View testID="session-discussion-loading" style={[styles.loadingRows, threadColumn]}><SkeletonRows rows={4} /></View>
                         : <SurfaceStateCard testID="session-discussion-empty" kind="empty" title={t('session.collaboration.discussion.emptyActive')} /> : null}
                     renderItem={({ item }) => {
+                        if (item.kind === 'workflow_run') {
+                            return <DiscussionWorkflowRunRow run={item.run} metadata={managedRuns.metadataByRunId?.[item.run.id]}
+                                supportsAnotherRound={managedRuns.supportsAnotherRoundByRunId?.[item.run.id]}
+                                canEdit={managedRuns.callerAccessByRunId?.[item.run.id]?.canEdit === true}
+                                attention={managedRuns.attentionRunIds.has(item.run.id)}
+                                accountLifetime={props.accountLifetime} onStarted={managedRuns.retry} />;
+                        }
                         if (item.kind === 'agent_activity_reference') {
                             return <View style={styles.reference}>
                                 <DiscussionAgentActivityReference entry={item.entry} subagent={item.subagent} onPress={() => openRun(item)} />
@@ -1122,7 +1164,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
             {discussion.archivedAt !== null
                 ? <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
-                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} />
+                    ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} extraActionChips={runChips} />
                     : <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
         </View>
     </TranscriptMessageSelectionBoundary>;
@@ -1210,6 +1252,13 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
         coarsePrimaryPointer: readCoarsePrimaryPointer(),
         selectionModeActive: selection.isSelectionMode,
     });
+    // Save as decision opens from this message's action, as on a Session answer; its state lives out here
+    // because the revealed action slot hides as soon as the pointer leaves the row for the sheet.
+    const decisionAnchorRef = React.useRef<View>(null);
+    const [decisionOpen, setDecisionOpen] = React.useState(false);
+    const [decisionSaved, setDecisionSaved] = React.useState(false);
+    const decisionSource = props.selectable && message.messageRef && message.content
+        && !isDiscussionDocEditProposalContentV1(message.content) ? message.messageRef : null;
     const contentWidth = useLayoutMaxWidthStyle();
     const actor = message.accountActor;
     const faceAccountId = actor !== null && actor.accountId === message.authorAccountId ? actor.accountId : message.authorAccountId;
@@ -1246,8 +1295,22 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                 {message.producerV1 ? <Text testID={`session-discussion-message-producer-${message.id}`} style={styles.meta}>{t('session.collaboration.discussion.viaAgent')}</Text> : null}
                 {message.createdAt > 0 ? <Text testID={`session-discussion-message-timestamp-${message.id}`} accessibilityRole="text" accessibilityLabel={new Date(message.createdAt).toLocaleString()} style={styles.timestamp}>{formatShortRelativeTime(message.createdAt)}</Text> : null}
         </> : null}
-        trailing={props.selectable ? <RowActionRevealSlot revealed={selectRevealed} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
-            <SelectMessageButton messageId={message.id} enabled visible role="user" previewText={textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel)} testID={`session-discussion-select-${message.id}`} />
+        trailing={props.selectable ? <RowActionRevealSlot revealed={selectRevealed || decisionOpen} style={styles.selectAffordance} testID={`session-discussion-select-slot-${message.id}`}>
+            <View style={styles.rowActions}>
+                {decisionSource && !selection.isSelectionMode ? decisionSaved
+                    ? <View testID={`session-discussion-saved-decision-${message.id}`} style={styles.savedDecision} accessible
+                        accessibilityRole="text" accessibilityLabel={t('memoryContext.memory.savedAsDecision')} accessibilityLiveRegion="polite">
+                        <Icon name="check" size={ICON_SIZE.xs} color={theme.colors.state.success.foreground} />
+                    </View>
+                    : <View ref={decisionAnchorRef} collapsable={false}>
+                        <IconButton testID={`session-discussion-save-decision-${message.id}`} size={28} variant="plain"
+                            icon={<Icon name="check-circle" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
+                            accessibilityLabel={t('memoryContext.memory.saveAsDecision')} tooltip={t('memoryContext.memory.saveAsDecision')}
+                            minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                            onPress={() => setDecisionOpen(true)} />
+                    </View> : null}
+                <SelectMessageButton messageId={message.id} enabled visible role="user" previewText={textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel)} testID={`session-discussion-select-${message.id}`} />
+            </View>
         </RowActionRevealSlot> : null}
     >
             {props.repeatsPassage ? null : passage || message.replyTarget?.kind === 'doc_passage'
@@ -1277,6 +1340,10 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                 participant: props.resolveSessionLabel(delivery.participantSessionId) ?? t('session.collaboration.discussion.heldParticipant'),
             })}</Text>)}
             {props.footer}
+            {decisionOpen && decisionSource ? <SaveMemoryDecisionSheet
+                seed={seedMemoryDecisionFromMessage(decisionSource, textOf(message.content, props.resolveAccountLabel, props.resolveSessionLabel))}
+                anchorRef={decisionAnchorRef} onClose={() => setDecisionOpen(false)}
+                onSaved={() => { setDecisionOpen(false); setDecisionSaved(true); }} /> : null}
     </HappierThreadMessage>;
 });
 
@@ -1285,6 +1352,25 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
  * retries the same identity; a definitive refusal is dismissed and the draft
  * stays for a fresh attempt.
  */
+/** Waits for the post owner's reconciliation to observe this exact local id as a committed message. */
+function observeCommittedPost(repository: DiscussionRepository, discussionId: string, localId: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const check = (): boolean => {
+            const snapshot = repository.getSnapshot();
+            const committed = snapshot.threads[discussionId]?.messages.find((message) => message.localId === localId);
+            if (committed) { resolve(committed.id); return true; }
+            const status = snapshot.mutations[localId]?.status;
+            if (status === 'failed' || status === 'approval_pending' || status === undefined) {
+                reject(new Error(snapshot.mutations[localId]?.errorCode ?? 'discussion_post_unresolved'));
+                return true;
+            }
+            return false;
+        };
+        if (check()) return;
+        const unsubscribe = repository.subscribe(() => { if (check()) unsubscribe(); });
+    });
+}
+
 function MutationRecovery(props: Readonly<{ mutation: DiscussionRepositoryMutation; onRetry: () => void; onDismiss: () => void }>) {
     const dismissable = props.mutation.status === 'failed' && props.mutation.recovery === 'dismiss';
     const retryable = props.mutation.status === 'outcome_unknown' || (props.mutation.status === 'failed' && !dismissable);
