@@ -77,11 +77,20 @@ the selected Machine, Agent and current permission to submit input. The result
 reports ready, unavailable or unknown and its cause. Missing or stale evidence
 stays unknown.
 
-The current CLI status reader checks conversation readiness only. It does not prove that
-an external credential can perform a write, grant permission, or run a repair.
-If it reports a repair, that uses the normal setup Action and still needs its
-own authority. People and Bot readiness rendering is still being built; this
-section describes the unreleased diagnostic contract.
+The default checks conversation readiness. A caller can also request a credential
+operation with `operation: 'credential'` and its qualified `credentialPurpose`.
+That checks the operation's selected personal connection through its setup owner.
+A Team operation also supplies that owner's exact `credentialTeamSelection`.
+The diagnostic checks the purpose, service and resource binding against current
+admitted facts, retaining the resource owner's reason and recovery when unavailable.
+Another Account's private setup remains unknown when
+the reader cannot inspect it; Happier does not substitute the viewer's connection.
+An optional integration does not block ordinary conversation.
+
+The diagnostic grants no permission to write or repair. A reported repair opens
+the normal setup flow for its exact target and still needs its own authority.
+People and Bot readiness rendering is still being built; this section describes
+the unreleased diagnostic contract.
 
 ## Selecting several at once
 

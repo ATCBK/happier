@@ -77,8 +77,9 @@ Session is not proof that it can execute. The default operation is conversation.
 For a credential operation, callers additionally supply `operation: 'credential'`
 and its qualified `credentialPurpose`. Personal operations read their selected
 purpose binding. A Team operation also carries the setup owner's exact
-`credentialTeamSelection`; the status owner checks that selection against the
-current declaration and entitled resource catalog. It never substitutes the
+`credentialTeamSelection`; the status owner checks its purpose, service and
+resource binding against the current declaration and entitled catalog. Unavailable
+resources retain their owner's failure and recovery facts. It never substitutes the
 viewer's setup for another Account's binding;
 inaccessible or incomplete evidence stays unknown. An optional integration does
 not veto ordinary conversation, and a diagnostic never grants write authority.
@@ -5550,7 +5551,8 @@ from the current Machine/Agent inventory and invocation access. It defaults to
 `credentialPurpose` additionally reads the operation's actual selected credential
 through its personal purpose owner. A Team operation supplies the existing
 qualified `credentialTeamSelection` from its setup selection, checked against the
-same purpose, current declaration and entitled catalog. The result reports
+same purpose, service and entitled resource. Unavailable resources retain their
+owner's failure and recovery facts. The result reports
 `configured:true` and `status:'ready'|'unavailable'|'unknown'` with a cause.
 Saved configuration alone does not prove readiness; inaccessible or incomplete
 evidence stays unknown. This read performs no repair. Each effect still rechecks

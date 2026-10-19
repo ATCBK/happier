@@ -2823,8 +2823,9 @@ with operation, Machine/Agent evidence, invocation access and cause. Omitted
 `operation` means conversation, with credential `not_required`. Requesting
 `operation:'credential'` and a qualified `credentialPurpose` reads the existing
 personal purpose binding. A Team operation also supplies the existing qualified
-`credentialTeamSelection` from its setup owner; the current declaration and
-entitled catalog must still offer that exact binding for the same purpose. Missing or
+`credentialTeamSelection` from its setup owner; the purpose, service and resource
+binding are checked against the current declaration and entitled catalog.
+Unavailable resources retain the owner's diagnostic and recovery facts. Missing or
 inaccessible binding evidence stays unknown, including another Account's private
 setup; the viewer's credentials cannot stand in for it. A result without the
 requested readiness is not evidence of readiness. This diagnostic performs no
