@@ -1012,6 +1012,7 @@ describe.skipIf(runInstalledArtifactIntegration)(
       };
       const relationships = [first, second];
       const targetAgents: Array<Awaited<ReturnType<typeof launchWorkspaceSyncLocalAgent>>> = [];
+      const betaCarrierPorts: number[] = [];
       await Promise.all([alphaRoot, betaRoot, gammaRoot].map(async (path) => await mkdir(path, { recursive: true })));
       const snapshot = {
         source: 'network' as const,
@@ -1077,6 +1078,7 @@ describe.skipIf(runInstalledArtifactIntegration)(
           targetMachineId: request.targetMachineId,
           ...(request.signal ? { signal: request.signal } : {}),
         });
+        if (request.targetMachineId === machineIds.beta) betaCarrierPorts.push(ingress.port);
         return { localPort: ingress.port, localCapability: ingress.localCapability, observedPath: 'direct', close: ingress.close };
       }
       let runtime: DaemonWorkspaceSyncRuntime | null = null;
@@ -1157,6 +1159,13 @@ describe.skipIf(runInstalledArtifactIntegration)(
         await waitForContents(join(gammaRoot, 'offline.txt'), 'hub while beta offline\n');
         await assertStillAbsent(join(betaRoot, 'offline.txt'));
         targets.set(machineIds.beta, await createTarget(machineIds.beta));
+        // Preparation must flush through the replacement peer's fresh ingress
+        // while the source manager/controller and relationship remain alive.
+        await runtime.managedWorkspaceSync.flush(first.relationshipId).catch((error: unknown) => {
+          // The engine may still be reconnecting at this instant. Its existing
+          // typed refusal is valid; silent reuse of a retired stream is not.
+          expect(error).toMatchObject({ code: 'engine_unavailable' });
+        });
         try {
           await Promise.all([
             waitForContents(join(betaRoot, 'offline.txt'), 'hub while beta offline\n'),
@@ -1166,6 +1175,8 @@ describe.skipIf(runInstalledArtifactIntegration)(
           const current = await runtime.managedWorkspaceSync.get(first.relationshipId);
           throw new Error(`Remote beta reconnect failed: ${JSON.stringify(current)}`, { cause: error });
         }
+        expect(betaCarrierPorts.length).toBeGreaterThan(1);
+        expect(betaCarrierPorts.at(-1)).not.toBe(betaCarrierPorts[0]);
 
         await writeFile(join(alphaRoot, 'three-versions.txt'), 'common bytes\n');
         await Promise.all([
