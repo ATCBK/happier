@@ -49,6 +49,23 @@ import {
 } from './encryptionMigrate.js';
 
 describe('account/encryptionMigrate', () => {
+  it('includes private Follow rules in the complete signed Account conversion', () => {
+    const item = { ruleId: 'rule-a', expectedVersion: 3, receiver: { kind: 'account' }, content: { t: 'plain', v: {
+      v: 1, enabled: true, policy: { preset: 'important' }, filter: { show: 'both', startedBy: ['you'], scope: 'all_accessible',
+        attention: 'any', homeServerIds: ['home'], audiences: [], tagIds: [], source: 'all' },
+    } } };
+    const candidate = { ...createPlainRequest(), sessionFollowRules: { items: [item] } };
+    expect(AccountEncryptionMigrateRequestSchema.safeParse(candidate).success).toBe(true);
+    const request = AccountEncryptionMigrateRequestSchema.parse(candidate);
+    const binding = { accountId: 'account', sourceMode: 'e2ee' as const };
+    const digest = createAccountEncryptionMigrateRequestBindingDigestV1({ request, ...binding });
+    const changed = AccountEncryptionMigrateRequestSchema.parse({ ...candidate,
+      sessionFollowRules: { items: [{ ...item, expectedVersion: 4 }] } });
+    expect(createAccountEncryptionMigrateRequestBindingDigestV1({ request: changed, ...binding })).not.toBe(digest);
+    expect(AccountEncryptionMigrateRequestSchema.safeParse({ ...candidate,
+      sessionFollowRules: { items: [{ ...item, content: { t: 'encrypted', c: 'cipher' } }] } }).success).toBe(false);
+    expect(AccountEncryptionMigrateRequestSchema.safeParse({ ...candidate, sessionFollowRules: { items: [item, item] } }).success).toBe(false);
+  });
   it('binds all five D9 catalog revisions and content into the signed Account conversion', () => {
     const domains = [
       ['providerConnections', 'account_provider_connections'],
@@ -117,7 +134,7 @@ describe('account/encryptionMigrate', () => {
         [AccountEncryptionMigrateSuccessResponseSchema.shape[field], 'revision'],
       ] as const) {
         expect(schema.parse(undefined)).toBeUndefined();
-        expect(schema.nullable().parse(null)).toBeNull();
+        expect(z.nullable(schema).parse(null)).toBeNull();
         for (const target of ['draft-7', 'draft-2020-12'] as const) {
           const projected = zodSchemaToJsonSchemaObject(z.strictObject({ catalog: schema }), { target });
           expect(projected).toMatchObject({ type: 'object', additionalProperties: false, properties: {
@@ -483,6 +500,7 @@ describe('account/encryptionMigrate', () => {
           machineId: 'machine-1',
           expectedMetadataVersion: 2,
           expectedDaemonStateVersion: 3,
+          expectedDataEncryptionKey: null,
           metadata: 'plain-metadata',
           daemonState: null,
           dataEncryptionKey: 'plain-marker',
@@ -1248,6 +1266,7 @@ describe('account/encryptionMigrate', () => {
             machineId: 'machine-1',
             expectedMetadataVersion: 2,
             expectedDaemonStateVersion: 3,
+            expectedDataEncryptionKey: null,
             metadata: 'encrypted-machine',
             daemonState: null,
             dataEncryptionKey: 'encrypted-key',

@@ -4,10 +4,90 @@ import {
   AttentionDeliveryEventIdSchema,
   DEFAULT_ATTENTION_DELIVERY_POLICY_V1,
   REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS,
+  type ResolveAttentionDeliveryPolicyDecisionParams,
 } from './attentionDeliveryPolicy.js';
 import { parseAccountSettings, resolveAttentionDecision } from './attentionDeliveryPolicy.testkit.js';
+import {
+  resolveAttentionDeliveryPolicyDecision,
+  resolveAttentionDeliveryPreviewBehavior,
+} from './attentionDeliveryPolicyDecision.js';
 
 describe('attentionDeliveryPolicyV1 resolver', () => {
+  it('keeps update and mention notices quiet while retaining their badge and respects quiet hours for needs-you', () => {
+    for (const inboxItemType of ['update', 'mention'] as const) {
+      const request = { policy: {}, event: 'notify_me', now: new Date('2026-05-03T12:00:00Z'), inboxItemType };
+      for (const channel of ['expo_push', 'plugin', 'local_notification', 'desktop_overlay', 'webhook']) {
+        expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel }).delivery).toBe('suppress');
+      }
+      expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel: 'badge' }).badgeBehavior.include).toBe(true);
+    }
+    const request = { event: 'user_action_request', now: new Date('2026-05-03T00:30:00Z'),
+      inboxItemType: 'decision' as const, policy: { quietHours: { enabled: true, timezone: 'UTC',
+        windows: [{ startLocalTime: '00:00', endLocalTime: '01:00' }] } } };
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel: 'expo_push' }).reason).toBe('quiet_hours');
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel: 'badge' }).badgeBehavior.include).toBe(true);
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, now: new Date('2026-05-03T01:00:00Z'), channel: 'expo_push' }).delivery).toBe('deliver');
+  });
+
+  it('keeps Important completion in Inbox while allowing selected urgent events to interrupt', () => {
+    const request: ResolveAttentionDeliveryPolicyDecisionParams = {
+      policy: {}, event: 'ready', channel: 'expo_push', now: new Date('2026-05-03T12:00:00Z'),
+      follow: { policies: [{ preset: 'important' }], event: { kind: 'finished' } },
+    };
+    expect(resolveAttentionDeliveryPolicyDecision(request).delivery).toBe('suppress');
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel: 'badge' }).badgeBehavior.include).toBe(true);
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, follow: {
+      policies: [{ preset: 'important' }], event: { kind: 'failed_or_stopped' },
+    } }).delivery).toBe('deliver');
+  });
+
+  it('keeps continue-mode and manager-handled questions quiet without losing Inbox attention', () => {
+    const request: ResolveAttentionDeliveryPolicyDecisionParams = {
+      policy: {}, event: 'user_action_request', channel: 'expo_push', now: new Date('2026-05-03T12:00:00Z'),
+      follow: { policies: [{ preset: 'important' }], event: {
+        kind: 'needs_you', type: 'decision', mode: 'continue',
+      } },
+    };
+    expect(resolveAttentionDeliveryPolicyDecision(request).delivery).toBe('suppress');
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, channel: 'badge' }).badgeBehavior.include).toBe(true);
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, follow: {
+      policies: [{ preset: 'everything' }], event: { kind: 'needs_you', type: 'decision', mode: 'continue' },
+    } }).delivery).toBe('deliver');
+    expect(resolveAttentionDeliveryPolicyDecision({ ...request, follow: {
+      policies: [{ preset: 'everything' }], event: { kind: 'needs_you', type: 'decision', handling: 'manager' },
+    } }).delivery).toBe('suppress');
+  });
+
+  it('resolves a large policy decision within one policy-normalization pass', () => {
+    const policy = {
+      events: Object.fromEntries(Array.from({ length: 2_000 }, (_, index) => [
+        `extension_event_${index}`, { enabled: true, previewBehavior: 'title_only' },
+      ])),
+    };
+    const request = { policy, event: 'ready', channel: 'badge', now: new Date('2026-05-03T12:00:00Z') };
+    const measure = (operation: () => unknown) => {
+      const started = performance.now();
+      for (let index = 0; index < 8; index += 1) operation();
+      return performance.now() - started;
+    };
+    const preview = () => resolveAttentionDeliveryPreviewBehavior(request);
+    const decide = () => resolveAttentionDeliveryPolicyDecision(request);
+    // Compare against the same public boundary's one-pass preview, rather than a device-time budget.
+    // Alternate warm runs and use minima so unrelated executor scheduling/GC cannot be the RED cause.
+    preview(); decide();
+    const previewTimes: number[] = [];
+    const decisionTimes: number[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      previewTimes.push(measure(preview));
+      decisionTimes.push(measure(decide));
+    }
+    const ratio = Math.min(...decisionTimes) / Math.min(...previewTimes);
+    console.info('[QA25 policy normalization]', JSON.stringify({ previewTimes, decisionTimes, ratio }));
+    expect(decide()).toMatchObject({ delivery: 'deliver', previewBehavior: preview(), badgeBehavior: { include: true } });
+    // A second full traversal costs about twice the reference; ordinary decision logic is constant work.
+    expect(ratio).toBeLessThan(1.75);
+  });
+
   it('applies Notify me event privacy and quiet hours to plugin delivery', () => {
     expect(resolveAttentionDecision({ policy: {
       events: { notify_me: { previewBehavior: 'title_only', quietHoursBehavior: 'suppress' } },
@@ -22,6 +102,7 @@ describe('attentionDeliveryPolicyV1 resolver', () => {
       'permission_request',
       'user_action_request',
       'follow_update',
+      'machine_offline',
     ]);
 
     for (const eventId of REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS) {

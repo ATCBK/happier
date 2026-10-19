@@ -4,12 +4,9 @@ import { z } from 'zod/mini';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
 import { SESSION_FOLLOW_ERROR_CODES_V1 } from './api.js';
+import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
 
 const FollowSessionIdSchema = asProtocolZod(SessionIdSchema);
-
-export const SESSION_FOLLOW_SOURCE_MODES_V1 = ['next_turn', 'wake_on_human_change'] as const;
-export const SessionFollowSourceModeV1Schema = lazyZodSchema(() => z.enum(SESSION_FOLLOW_SOURCE_MODES_V1));
-export type SessionFollowSourceModeV1 = z.infer<typeof SessionFollowSourceModeV1Schema>;
 
 /**
  * Authoring contracts for the `SessionFollowEdge` source relation.
@@ -59,9 +56,11 @@ export const SessionFollowSourceDeliveryStateV1Schema = lazyZodSchema(() => z.en
 export const SessionFollowSourceV1Schema = lazyZodSchema(() => z.strictObject({
     sourceSessionId: FollowSessionIdSchema,
     destinationSessionId: FollowSessionIdSchema,
-    mode: z._default(SessionFollowSourceModeV1Schema, 'next_turn'),
+    policy: FollowPolicyV1Schema,
     deliveryState: SessionFollowSourceDeliveryStateV1Schema,
     hasPendingUpdates: z.boolean(),
+    /** Reverse inspection distinguishes configured intents on the same pair. */
+    relation: z.optional(z.enum(['follower', 'manager'])),
   }));
 export type SessionFollowSourceV1 = z.infer<typeof SessionFollowSourceV1Schema>;
 
@@ -72,12 +71,12 @@ export type ListSessionFollowSourcesResponse = z.infer<typeof ListSessionFollowS
 /**
  * `PUT /v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId`.
  *
- * V1 natural-turn delivery is implicit, so the body is empty. Creation seeds
+ * The caller supplies the shared event policy. Creation seeds
  * every delivered component from the source's current frontier, so enabling
  * Follow never emits historical context and the caller never supplies a
  * frontier or an execution Account.
  */
-export const SetSessionFollowSourceRequestSchema = lazyZodSchema(() => z.strictObject({ mode: z.optional(SessionFollowSourceModeV1Schema) }));
+export const SetSessionFollowSourceRequestSchema = lazyZodSchema(() => z.strictObject({ policy: FollowPolicyV1Schema }));
 export type SetSessionFollowSourceRequest = z.infer<typeof SetSessionFollowSourceRequestSchema>;
 
 export const SetSessionFollowSourceResponseSchema = lazyZodSchema(() => z.strictObject({
@@ -95,6 +94,9 @@ export const RemoveSessionFollowSourceResponseSchema = lazyZodSchema(() => z.str
 export type RemoveSessionFollowSourceResponse = z.infer<typeof RemoveSessionFollowSourceResponseSchema>;
 
 export const SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 = Object.freeze({
+  occurrenceRoutes: '/v2/sessions/:sourceSessionId/follows/occurrence-routes',
+  inactiveObservations: '/v2/sessions/:destinationSessionId/follows/inactive-observations',
   list: '/v2/sessions/:destinationSessionId/follows/sessions',
+  followers: '/v2/sessions/:sourceSessionId/follows/followers',
   source: '/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId',
 });

@@ -1,11 +1,14 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 
 import {
   AttentionPreviewBehaviorSchema,
   type RemoteAlertAttentionDeliveryEventId,
 } from '../account/settings/attentionDeliveryPolicy.js';
 import type { SessionPersonalEventKindV1 } from '../sessions/personal/eventEligibility.js';
+import { SessionFollowStalledOccurrenceV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
+import { resolveActivityStalledEventIdentityV1 } from '../activity/eventIdentity.js';
 import {
   resolveActivityRequestEventIdentityV1,
   resolveActivitySequenceEventIdentityV1,
@@ -13,8 +16,8 @@ import {
   resolveLegacyActivitySequenceEventIdentityV1,
 } from '../activity/eventIdentity.js';
 import {
-  SessionDiscussionIdSchema,
-  type SessionDiscussionId,
+  DiscussionIdSchema,
+  type DiscussionId,
 } from '../sessions/idsV1.js';
 
 /**
@@ -55,7 +58,7 @@ const SessionTranscriptSequenceV2Schema = lazyZodSchema(() => z.object({
 }));
 const DiscussionSequenceV2Schema = lazyZodSchema(() => z.object({
   sequenceDomain: z.literal('discussion'),
-  discussionId: SessionDiscussionIdSchema,
+  discussionId: asProtocolZod(DiscussionIdSchema),
   messageSeq: z.number().check(z.int(), z.positive(), z.maximum(2_147_483_647)),
 }));
 
@@ -93,7 +96,7 @@ export const ActivityRemoteAlertEventV2Schema = lazyZodSchema(() => z.union([
   z.strictObject({ type: z.literal('assigned') }),
   z.strictObject({ type: z.literal('failed'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
   z.strictObject({ type: z.literal('cancelled'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
-  z.strictObject({ type: z.literal('source_unavailable') }),
+  z.strictObject({ type: z.literal('source_unavailable'), stalledOccurrence: z.optional(SessionFollowStalledOccurrenceV1Schema) }),
 ]));
 export type ActivityRemoteAlertEventV2 = z.infer<typeof ActivityRemoteAlertEventV2Schema>;
 
@@ -105,7 +108,7 @@ export type ActivityRemoteAlertEventV2 = z.infer<typeof ActivityRemoteAlertEvent
  * directly instead of maintaining another same-concept registry.
  */
 export const ACTIVITY_REMOTE_ALERT_EVENT_TYPES_V1: readonly ActivityRemoteAlertEventV1['type'][] =
-  ActivityRemoteAlertEventV1Schema._zod.def.options.map((option) => option.shape.type.value);
+  ActivityRemoteAlertEventV1Schema._zod.def.options.map((option) => option.shape.type._zod.def.values[0]);
 
 /** The reference is the committed ready SessionMessage, never a delivery receipt. */
 export const ActivityRemoteAlertV1Schema = lazyZodSchema(() => z.strictObject({
@@ -171,6 +174,7 @@ export function resolveActivityRemoteAlertEventIdentity(
 
 /** One identity projection shared by Home, rich and device-local V2 event references. */
 export function resolveActivityEventIdentityV2(event: ActivityRemoteAlertEventV2): string | undefined {
+  if (event.type === 'source_unavailable' && event.stalledOccurrence) return resolveActivityStalledEventIdentityV1(event.stalledOccurrence);
   if ('sequenceDomain' in event) {
     return resolveActivitySequenceEventIdentityV1(event.sequenceDomain === 'discussion'
       ? {
@@ -217,7 +221,7 @@ export const ACTIVITY_REMOTE_ALERT_POLICY_EVENT_V1 = {
 
 export type ActivityRemoteAlertCommittedMessageV2 =
   | Readonly<{ domain: 'session_transcript'; seq: number }>
-  | Readonly<{ domain: 'discussion'; discussionId: SessionDiscussionId; seq: number }>;
+  | Readonly<{ domain: 'discussion'; discussionId: DiscussionId; seq: number }>;
 
 /**
  * The sole writer admission boundary between personal events and Home alerts.

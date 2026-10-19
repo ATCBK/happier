@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MachineKindFromLegacyProjectionSchema } from '../machines/machineKind.js';
 import { RunnerMachineContentKeyBindingV1Schema } from '../ephemeralRunner/machineContentKeyBinding.js';
 import { SessionViewerProjectionV1Schema } from '../sessions/personal/viewer.js';
@@ -12,12 +12,15 @@ import { SessionMessageAttentionImpactSchema } from '../sessions/messages/transc
 import { SessionMessageRoleSchema } from '../sessions/messages/sessionMessageRole.js';
 import { SessionMessageAccountActorV1Schema } from '../sessions/messages/sessionMessageAccountActorV1.js';
 import { SessionInputAdmissionReceiptV1Schema, PendingActivationRequestedEphemeralV1Schema } from '../sessions/messages/sessionInputAdmission.js';
+import { SessionMessageReplyPendingHintV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { UsageSourcesInvalidationV1Schema } from '../usage/usageSources.js';
 import { SessionMessageDeliveryResolutionV1Schema } from '../sessions/messages/sessionMessageDeliveryResolutionV1.js';
+import { FollowDeliveryProjectionV1Schema } from '../sessions/follow/sessionFollowDeliveryProjectionV1.js';
 import { SessionTranscriptObservationProvenanceV1Schema } from '../sessions/messages/transcriptObservationV1.js';
 import { SessionStoredMessageContentSchema } from '../sessions/messages/sessionStoredMessageContent.js';
 import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema } from '../sessions/control/runtimeIssueV1.js';
 import { TurnIdSchema } from '../sessions/idsV1.js';
+import { SessionFollowStalledOccurrenceV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
 import {
   ActionOperationRevisionEphemeralV1Schema,
   ActionOperationSnapshotEphemeralV1Schema,
@@ -36,34 +39,34 @@ import { ManagedWakeTargetV1Schema } from '../machines/managed/managedIntentV1.j
 import { DevcontainerChildProjectionV1Schema } from '../machines/managed/devcontainerV1.js';
 import { AccountEncryptionCurrentnessResponseSchema } from '../account/encryptionMode.js';
 
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().min(0));
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0)));
 const Base64Schema = lazyZodSchema(() => z.string());
-const SessionMessageRoleMetadataSchema = lazyZodSchema(() => z.nullable(SessionMessageRoleSchema).optional());
+const SessionMessageRoleMetadataSchema = lazyZodSchema(() => z.optional(z.nullable(SessionMessageRoleSchema)));
 const SessionEncryptionModeSchema = lazyZodSchema(() => z.enum(['e2ee', 'plain']));
 
-const VersionedNullableStringSchema = lazyZodSchema(() => z.object({
-  value: z.string().nullable(),
-  version: z.number().int(),
-}).passthrough());
+const VersionedNullableStringSchema = lazyZodSchema(() => z.looseObject({
+  value: z.nullable(z.string()),
+  version: z.number().check(z.int()),
+}));
 
-const VersionedStringSchema = lazyZodSchema(() => z.object({
+const VersionedStringSchema = lazyZodSchema(() => z.looseObject({
   value: z.string(),
-  version: z.number().int(),
-}).passthrough());
+  version: z.number().check(z.int()),
+}));
 
 export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.looseObject({
     t: z.literal('new-message'),
     sid: z.string(),
-    message: z
-      .object({
+    message: z.looseObject({
         id: z.string(),
-        seq: z.number().int().min(0),
+        seq: z.number().check(z.int(), z.minimum(0)),
         content: SessionStoredMessageContentSchema,
-        localId: z.string().nullable(),
-        sidechainId: z.string().nullable().optional(),
+        localId: z.nullable(z.string()),
+        sidechainId: z.optional(z.nullable(z.string())),
         messageRole: SessionMessageRoleMetadataSchema,
         deliveryResolution: z.optional(SessionMessageDeliveryResolutionV1Schema),
+        followDeliveryProjection: z.optional(FollowDeliveryProjectionV1Schema),
         attentionImpact: z.optional(SessionMessageAttentionImpactSchema),
         createdAt: TimestampMsSchema,
         updatedAt: TimestampMsSchema,
@@ -75,23 +78,22 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
          * older producer (preserve any known actor); explicit `null` means the
          * current producer evaluated this row and denies Account attribution.
          */
-        accountActor: z.nullable(SessionMessageAccountActorV1Schema).optional(),
+        accountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
         inputAdmissionReceipt: z.optional(SessionInputAdmissionReceiptV1Schema),
-      })
-      .passthrough(),
-  }).passthrough(),
-  z.object({
+      }),
+  }),
+  z.looseObject({
     t: z.literal('message-updated'),
     sid: z.string(),
-    message: z
-      .object({
+    message: z.looseObject({
         id: z.string(),
-        seq: z.number().int().min(0),
+        seq: z.number().check(z.int(), z.minimum(0)),
         content: SessionStoredMessageContentSchema,
-        localId: z.string().nullable(),
-        sidechainId: z.string().nullable().optional(),
+        localId: z.nullable(z.string()),
+        sidechainId: z.optional(z.nullable(z.string())),
         messageRole: SessionMessageRoleMetadataSchema,
         deliveryResolution: z.optional(SessionMessageDeliveryResolutionV1Schema),
+        followDeliveryProjection: z.optional(FollowDeliveryProjectionV1Schema),
         attentionImpact: z.optional(SessionMessageAttentionImpactSchema),
         createdAt: TimestampMsSchema,
         updatedAt: TimestampMsSchema,
@@ -103,24 +105,23 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
          * older producer (preserve any known actor); explicit `null` means the
          * current producer evaluated this row and denies Account attribution.
          */
-        accountActor: z.nullable(SessionMessageAccountActorV1Schema).optional(),
+        accountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
         inputAdmissionReceipt: z.optional(SessionInputAdmissionReceiptV1Schema),
-      })
-      .passthrough(),
-  }).passthrough(),
-  z.object({
+      }),
+  }),
+  z.looseObject({
     t: z.literal('new-session'),
     id: z.string(),
     viewer: z.optional(SessionViewerProjectionV1Schema),
-    seq: z.number().int().min(0),
+    seq: z.number().check(z.int(), z.minimum(0)),
     metadata: Base64Schema,
-    metadataVersion: z.number().int(),
-    metadataLayoutVersion: z.number().int().nonnegative().optional(),
-    ownerMetadata: z.nullable(SessionOwnerMetadataEnvelopeV1Schema).optional(),
+    metadataVersion: z.number().check(z.int()),
+    metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+    ownerMetadata: z.optional(z.nullable(SessionOwnerMetadataEnvelopeV1Schema)),
     agentState: z.nullable(Base64Schema),
-    agentStateVersion: z.number().int(),
+    agentStateVersion: z.number().check(z.int()),
     dataEncryptionKey: z.nullable(Base64Schema),
-    runnerContentKeyBinding: z.nullable(RunnerMachineContentKeyBindingV1Schema).optional(),
+    runnerContentKeyBinding: z.optional(z.nullable(RunnerMachineContentKeyBindingV1Schema)),
     encryptionMode: z.optional(SessionEncryptionModeSchema),
     active: z.boolean(),
     activeAt: TimestampMsSchema,
@@ -129,215 +130,215 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
     meaningfulActivityAt: z.optional(TimestampMsSchema),
     /** Where the Session's transcript lives (an imported external session starts `machine_only`). */
     currentStorageState: z.optional(ExternalSessionStorageStateV1Schema),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('update-session'),
     id: z.string(),
     metadata: z.optional(VersionedNullableStringSchema),
-    metadataLayoutVersion: z.number().int().nonnegative().optional(),
-    ownerMetadata: z.object({
+    metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+    ownerMetadata: z.optional(z.strictObject({
       value: SessionOwnerMetadataEnvelopeV1Schema,
-    }).strict().optional(),
+    })),
     agentState: z.optional(VersionedNullableStringSchema),
-    active: z.boolean().optional(),
+    active: z.optional(z.boolean()),
     activeAt: z.optional(TimestampMsSchema),
-    lastViewedSessionSeq: z.number().int().min(0).optional(),
-    unreadSince: z.nullable(TimestampMsSchema).optional(),
+    lastViewedSessionSeq: z.optional(z.number().check(z.int(), z.minimum(0))),
+    unreadSince: z.optional(z.nullable(TimestampMsSchema)),
     viewer: z.optional(SessionViewerProjectionV1Schema),
-    pendingPermissionRequestCount: z.number().int().min(0).optional(),
-    pendingUserActionRequestCount: z.number().int().min(0).optional(),
-    pendingRequestObservedAt: z.nullable(TimestampMsSchema).optional(),
-    latestReadyEventSeq: z.number().int().min(0).nullable().optional(),
-    latestReadyEventAt: z.nullable(TimestampMsSchema).optional(),
-    latestReadyEventLocalId: z.string().min(1).optional(),
-    latestTurnId: z.nullable(TurnIdSchema).optional(),
-    latestTurnStatus: z.nullable(PrimaryTurnStatusV1Schema).optional(),
-    latestTurnStatusObservedAt: z.nullable(TimestampMsSchema).optional(),
-    lastRuntimeIssue: z.nullable(SessionRuntimeIssueV1Schema).optional(),
+    pendingPermissionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingUserActionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingRequestObservedAt: z.optional(z.nullable(TimestampMsSchema)),
+    latestReadyEventSeq: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0)))),
+    latestReadyEventAt: z.optional(z.nullable(TimestampMsSchema)),
+    latestReadyEventLocalId: z.optional(z.string().check(z.minLength(1))),
+    latestTurnId: z.optional(z.nullable(TurnIdSchema)),
+    latestTurnStatus: z.optional(z.nullable(PrimaryTurnStatusV1Schema)),
+    latestTurnStatusObservedAt: z.optional(z.nullable(TimestampMsSchema)),
+    lastRuntimeIssue: z.optional(z.nullable(SessionRuntimeIssueV1Schema)),
     runtimeActivityState: z.optional(SessionRuntimeActivityStateSchema),
-    runtimeActivityActiveCount: z.number().int().min(0).optional(),
-    runtimeActivityObservedAt: z.nullable(TimestampMsSchema).optional(),
-    runtimeActivityRevision: z.number().int().min(0).optional(),
+    runtimeActivityActiveCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    runtimeActivityObservedAt: z.optional(z.nullable(TimestampMsSchema)),
+    runtimeActivityRevision: z.optional(z.number().check(z.int(), z.minimum(0))),
     meaningfulActivityAt: z.optional(TimestampMsSchema),
-    archivedAt: z.nullable(TimestampMsSchema).optional(),
-  }).passthrough(),
-  z.object({
+    archivedAt: z.optional(z.nullable(TimestampMsSchema)),
+  }),
+  z.looseObject({
     t: z.literal('pending-changed'),
     sid: z.string(),
-    sessionId: z.string().optional(),
-    pendingVersion: z.number().int().min(0),
-    pendingCount: z.number().int().min(0),
-    pendingBlockedCount: z.number().int().min(0).optional(),
+    sessionId: z.optional(z.string()),
+    pendingVersion: z.number().check(z.int(), z.minimum(0)),
+    pendingCount: z.number().check(z.int(), z.minimum(0)),
+    pendingBlockedCount: z.optional(z.number().check(z.int(), z.minimum(0))),
     recipient: z.optional(ParticipantExecutionRunRecipientRoutingIdentityV1Schema),
-    changedByAccountId: z.string().optional(),
+    changedByAccountId: z.optional(z.string()),
     meaningfulActivityAt: z.optional(TimestampMsSchema),
-    pendingActivationRequestId: z.string().trim().min(1).optional(),
-    pendingActivationAuthorization: z.nullable(PendingActivationAuthorizationV1Schema).optional(),
+    pendingActivationRequestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    pendingActivationAuthorization: z.optional(z.nullable(PendingActivationAuthorizationV1Schema)),
     managedWakeTargetV1: z.optional(ManagedWakeTargetV1Schema),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('automation-upsert'),
     automationId: z.string(),
-    version: z.number().int().min(0),
+    version: z.number().check(z.int(), z.minimum(0)),
     enabled: z.boolean(),
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('automation-delete'),
     automationId: z.string(),
     deletedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('automation-run-updated'),
     runId: z.string(),
     // Direct Workflow Runs have no Automation identity. Machine-targeted
     // invalidations preserve that absence instead of fabricating one.
-    automationId: z.string().nullable(),
+    automationId: z.nullable(z.string()),
     state: AutomationRunStateV3Schema,
     scheduledAt: TimestampMsSchema,
-    startedAt: z.nullable(TimestampMsSchema).optional(),
-    finishedAt: z.nullable(TimestampMsSchema).optional(),
+    startedAt: z.optional(z.nullable(TimestampMsSchema)),
+    finishedAt: z.optional(z.nullable(TimestampMsSchema)),
     updatedAt: TimestampMsSchema,
-    machineId: z.string().nullable().optional(),
+    machineId: z.optional(z.nullable(z.string())),
     // Current producers publish the Run lease generation so a worker can
     // reject a same-machine reclaim. Older supported producers omit it.
-    attempt: z.number().int().min(0).optional(),
+    attempt: z.optional(z.number().check(z.int(), z.minimum(0))),
     /** Exact machine wake for persisted Workflow cancellation custody. */
-    workflowControl: z.enum(['cancel_requested', 'review_resolved']).optional(),
+    workflowControl: z.optional(z.enum(['cancel_requested', 'review_resolved'])),
     managedWakeTargetV1: z.optional(ManagedWakeTargetV1Schema),
-  }).passthrough(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('automation-run-state-changed'),
     ...AutomationRunStateChangedHostEventV1Schema.shape,
-  }).strict().superRefine((value, context) => {
+  }).check(z.superRefine((value, context) => {
     const { t: _type, ...payload } = value;
     const parsed = AutomationRunStateChangedHostEventV1Schema.safeParse(payload);
     if (parsed.success) return;
     for (const issue of parsed.error.issues) {
       context.addIssue({ ...issue, path: issue.path });
     }
-  }),
-  z.object({
+  })),
+  z.looseObject({
     t: z.literal('automation-assignment-updated'),
     machineId: z.string(),
     automationId: z.string(),
     enabled: z.boolean(),
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('automation-source-status-updated'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('account-change'),
-  }).strict(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('delete-session'),
     sid: z.string(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('update-account'),
     id: z.string(),
     // Omitted on profile-only updates; null withdraws encryption admission.
-    encryptionCurrentness: z.nullable(AccountEncryptionCurrentnessResponseSchema).optional(),
-    name: z.string().nullable().optional(),
-  }).passthrough(),
-  z.object({
+    encryptionCurrentness: z.optional(z.nullable(AccountEncryptionCurrentnessResponseSchema)),
+    name: z.optional(z.nullable(z.string())),
+  }),
+  z.looseObject({
     t: z.literal('account-settings-changed'),
-    settingsVersion: z.number().int().min(0),
-  }).passthrough(),
-  z.object({
+    settingsVersion: z.number().check(z.int(), z.minimum(0)),
+  }),
+  z.looseObject({
     t: z.literal('new-machine'),
     devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)),
     access: z.optional(AccessibleMachineAccessV1Schema),
     keyBasis: z.optional(MachineKeyBasisV1Schema),
-    storageMode: z.enum(['plain', 'e2ee']).optional(),
+    storageMode: z.optional(z.enum(['plain', 'e2ee'])),
     kind: z.optional(MachineKindFromLegacyProjectionSchema),
     machineId: z.string(),
-    seq: z.number().int().min(0),
+    seq: z.number().check(z.int(), z.minimum(0)),
     metadata: Base64Schema,
-    metadataVersion: z.number().int(),
+    metadataVersion: z.number().check(z.int()),
     daemonState: z.nullable(Base64Schema),
-    daemonStateVersion: z.number().int(),
+    daemonStateVersion: z.number().check(z.int()),
     dataEncryptionKey: z.nullable(Base64Schema),
     active: z.boolean(),
     activeAt: TimestampMsSchema,
     createdAt: TimestampMsSchema,
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('update-machine'),
     devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)),
     access: z.optional(AccessibleMachineAccessV1Schema),
     keyBasis: z.optional(MachineKeyBasisV1Schema),
-    storageMode: z.enum(['plain', 'e2ee']).optional(),
-    dataEncryptionKey: z.nullable(Base64Schema).optional(),
+    storageMode: z.optional(z.enum(['plain', 'e2ee'])),
+    dataEncryptionKey: z.optional(z.nullable(Base64Schema)),
     machineId: z.string(),
     metadata: z.optional(VersionedStringSchema),
     daemonState: z.optional(VersionedNullableStringSchema),
     activeAt: z.optional(TimestampMsSchema),
-    active: z.boolean().optional(),
-    revokedAt: z.nullable(TimestampMsSchema).optional(),
-  }).passthrough(),
-  z.object({
+    active: z.optional(z.boolean()),
+    revokedAt: z.optional(z.nullable(TimestampMsSchema)),
+  }),
+  z.looseObject({
     t: z.literal('new-artifact'),
     artifactId: z.string(),
-    seq: z.number().int().min(0),
+    seq: z.number().check(z.int(), z.minimum(0)),
     header: Base64Schema,
-    headerVersion: z.number().int(),
+    headerVersion: z.number().check(z.int()),
     body: Base64Schema,
-    bodyVersion: z.number().int(),
+    bodyVersion: z.number().check(z.int()),
     dataEncryptionKey: Base64Schema,
-    provenance: z.nullable(Base64Schema).optional(),
-    provenanceDataEncryptionKey: z.nullable(Base64Schema).optional(),
+    provenance: z.optional(z.nullable(Base64Schema)),
+    provenanceDataEncryptionKey: z.optional(z.nullable(Base64Schema)),
     createdAt: TimestampMsSchema,
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('update-artifact'),
     artifactId: z.string(),
     header: z.optional(VersionedStringSchema),
     body: z.optional(VersionedStringSchema),
-    provenance: z.nullable(Base64Schema).optional(),
-    provenanceDataEncryptionKey: z.nullable(Base64Schema).optional(),
-  }).passthrough(),
-  z.object({
+    provenance: z.optional(z.nullable(Base64Schema)),
+    provenanceDataEncryptionKey: z.optional(z.nullable(Base64Schema)),
+  }),
+  z.looseObject({
     t: z.literal('delete-artifact'),
     artifactId: z.string(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('relationship-updated'),
     uid: z.string(),
     status: z.enum(['none', 'requested', 'pending', 'friend', 'rejected']),
     timestamp: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('new-feed-post'),
     id: z.string(),
     body: z.unknown(),
     cursor: z.string(),
     createdAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('kv-batch-update'),
-    changes: z.array(z.object({
+    changes: z.array(z.looseObject({
       key: z.string(),
-      value: z.string().nullable(),
-      version: z.number().int(),
-    }).passthrough()),
-  }).passthrough(),
-  z.object({
+      value: z.nullable(z.string()),
+      version: z.number().check(z.int()),
+    })),
+  }),
+  z.looseObject({
     t: z.literal('session-shared'),
     sessionId: z.string(),
     shareId: z.string(),
-    sharedBy: z.object({
+    sharedBy: z.looseObject({
       id: z.string(),
-      firstName: z.string().nullable(),
-      lastName: z.string().nullable(),
-      username: z.string().nullable(),
-      avatar: z.unknown().nullable(),
-    }).passthrough(),
+      firstName: z.nullable(z.string()),
+      lastName: z.nullable(z.string()),
+      username: z.nullable(z.string()),
+      avatar: z.nullable(z.unknown()),
+    }),
     accessLevel: z.enum(['view', 'edit', 'admin']),
-    canApprovePermissions: z.boolean().optional(),
+    canApprovePermissions: z.optional(z.boolean()),
     /**
      * Received-only compatibility seam, never emitted by 0.3.
      *
@@ -350,67 +351,67 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
      */
     encryptedDataKey: z.optional(Base64Schema),
     createdAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('session-share-updated'),
     sessionId: z.string(),
     shareId: z.string(),
     accessLevel: z.enum(['view', 'edit', 'admin']),
-    canApprovePermissions: z.boolean().optional(),
+    canApprovePermissions: z.optional(z.boolean()),
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('session-share-revoked'),
     sessionId: z.string(),
     shareId: z.string(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('public-share-created'),
     sessionId: z.string(),
     publicShareId: z.string(),
     token: z.string(),
     expiresAt: z.nullable(TimestampMsSchema),
-    maxUses: z.number().int().nullable(),
+    maxUses: z.nullable(z.number().check(z.int())),
     isConsentRequired: z.boolean(),
     createdAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('public-share-updated'),
     sessionId: z.string(),
     publicShareId: z.string(),
     expiresAt: z.nullable(TimestampMsSchema),
-    maxUses: z.number().int().nullable(),
+    maxUses: z.nullable(z.number().check(z.int())),
     isConsentRequired: z.boolean(),
     updatedAt: TimestampMsSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     t: z.literal('public-share-deleted'),
     sessionId: z.string(),
-  }).passthrough(),
-]).superRefine((value, context) => {
+  }),
+]).check(z.superRefine((value, context) => {
   if (value.t !== 'new-session' && value.t !== 'update-session') return;
   if (parseSessionRuntimeActivityProjectionFields(value).kind !== 'invalid') return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Runtime Activity projection fields must form one complete valid tuple',
     path: ['runtimeActivityState'],
   });
-}));
+})));
 
 export type UpdateBody = z.infer<typeof UpdateBodySchema>;
 
-export const UpdateContainerSchema = lazyZodSchema(() => z.object({
+export const UpdateContainerSchema = lazyZodSchema(() => z.looseObject({
   id: z.string(),
-  seq: z.number().int().min(0),
+  seq: z.number().check(z.int(), z.minimum(0)),
   createdAt: TimestampMsSchema,
   body: UpdateBodySchema,
-}).passthrough());
+}));
 
 export type UpdateContainer = z.infer<typeof UpdateContainerSchema>;
 
-export const TranscriptStreamSegmentEphemeralMessageSchema = lazyZodSchema(() => z.object({
-  localId: z.string().min(1),
-  sidechainId: z.string().nullable().optional(),
+export const TranscriptStreamSegmentEphemeralMessageSchema = lazyZodSchema(() => z.looseObject({
+  localId: z.string().check(z.minLength(1)),
+  sidechainId: z.optional(z.nullable(z.string())),
   content: SessionStoredMessageContentSchema,
   messageRole: SessionMessageRoleMetadataSchema,
   /**
@@ -418,10 +419,10 @@ export const TranscriptStreamSegmentEphemeralMessageSchema = lazyZodSchema(() =>
    * across all live emissions). Checkpoint/resync anchor for `transcript-stream-segment-delta`
    * chaining. Optional: absent from older CLIs and stripped by older servers.
    */
-  tick: z.number().int().min(0).optional(),
+  tick: z.optional(z.number().check(z.int(), z.minimum(0))),
   createdAt: TimestampMsSchema,
   updatedAt: TimestampMsSchema,
-}).passthrough());
+}));
 
 /**
  * Delta form of the live transcript segment stream.
@@ -432,95 +433,100 @@ export const TranscriptStreamSegmentEphemeralMessageSchema = lazyZodSchema(() =>
  * delta (and wait for the next full-snapshot checkpoint) on any gap: unknown segment, unexpected
  * `tick`, or `baseLength` mismatch.
  */
-export const TranscriptStreamSegmentDeltaEphemeralMessageSchema = lazyZodSchema(() => z.object({
-  localId: z.string().min(1),
-  sidechainId: z.string().nullable().optional(),
+export const TranscriptStreamSegmentDeltaEphemeralMessageSchema = lazyZodSchema(() => z.looseObject({
+  localId: z.string().check(z.minLength(1)),
+  sidechainId: z.optional(z.nullable(z.string())),
   content: SessionStoredMessageContentSchema,
   messageRole: SessionMessageRoleMetadataSchema,
   /** Per-segment live emission sequence (1-based, includes snapshot emissions). */
-  tick: z.number().int().min(1),
+  tick: z.number().check(z.int(), z.minimum(1)),
   /** Accumulated text length (UTF-16 code units) BEFORE applying this delta. */
-  baseLength: z.number().int().min(0),
+  baseLength: z.number().check(z.int(), z.minimum(0)),
   createdAt: TimestampMsSchema,
   updatedAt: TimestampMsSchema,
-}).passthrough());
+}));
 
 /** A committed, content-free recipient fact; never persisted or replayed as history. */
-const SessionPersonalEventEphemeralBaseV1Schema = lazyZodSchema(() => z.object({
+const SessionPersonalEventEphemeralBaseV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('session-personal-event'),
-  sessionId: z.string().min(1),
-  eventId: z.string().min(1),
-}).strict());
+  sessionId: z.string().check(z.minLength(1)),
+  eventId: z.string().check(z.minLength(1)),
+}));
 
 export const SessionPersonalEventEphemeralV1Schema = lazyZodSchema(() => z.discriminatedUnion('event', [
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.literal('directly_shared') }).strict(),
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.literal('assigned'), assignmentAutoFollowed: z.boolean().optional() }).strict(),
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.literal('source_unavailable') }).strict(),
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.enum(['failed', 'cancelled']), turnId: TurnIdSchema }).strict(),
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.literal('human_message'), message: ActivityMessageReferenceV2Schema, sourceAccountId: z.string().min(1) }).strict(),
-  SessionPersonalEventEphemeralBaseV1Schema.extend({ event: z.literal('message'), message: ActivityMessageReferenceV2Schema }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.literal('directly_shared') })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.literal('assigned'), assignmentAutoFollowed: z.optional(z.boolean()) })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.literal('source_unavailable'),
+    stalledOccurrence: z.optional(SessionFollowStalledOccurrenceV1Schema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.enum(['failed', 'cancelled']), turnId: TurnIdSchema })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.literal('human_message'), message: ActivityMessageReferenceV2Schema, sourceAccountId: z.string().check(z.minLength(1)) })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionPersonalEventEphemeralBaseV1Schema, { event: z.literal('message'), message: ActivityMessageReferenceV2Schema,
+    followEvent: z.optional(z.strictObject({ kind: z.enum(['goal_changed', 'update_posted']) })),
+  })),
 ]));
 
 export type SessionPersonalEventEphemeralV1 = z.infer<typeof SessionPersonalEventEphemeralV1Schema>;
 
 export const EphemeralUpdateSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
+  SessionMessageReplyPendingHintV1Schema,
   PendingActivationRequestedEphemeralV1Schema,
   // Hottest live event first: delta ticks stream at the live cadence (~25Hz per active segment).
-  z.object({
+  z.looseObject({
     type: z.literal('transcript-stream-segment-delta'),
     sessionId: z.string(),
     message: TranscriptStreamSegmentDeltaEphemeralMessageSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     type: z.literal('activity'),
     id: z.string(),
     active: z.boolean(),
     activeAt: TimestampMsSchema,
-    thinking: z.boolean().optional(),
-  }).passthrough(),
-  z.object({
+    thinking: z.optional(z.boolean()),
+  }),
+  z.looseObject({
     type: z.literal('execution-run-updated'),
     sessionId: z.string(),
     run: ExecutionRunPublicStateSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     type: z.literal('transcript-stream-segment'),
     sessionId: z.string(),
     message: TranscriptStreamSegmentEphemeralMessageSchema,
-  }).passthrough(),
+  }),
   ExternalSessionTranscriptInvalidationV1Schema,
   UsageSourcesInvalidationV1Schema,
-  z.object({
+  z.looseObject({
     type: z.literal('machine-activity'),
     id: z.string(),
     active: z.boolean(),
     activeAt: TimestampMsSchema,
     /** Admitted daemon socket connection; ordinary heartbeats omit this hint. */
-    reconnected: z.literal(true).optional(),
-  }).passthrough(),
-  z.object({
+    reconnected: z.optional(z.literal(true)),
+  }),
+  z.looseObject({
     type: z.literal('usage'),
     // Native Account accounting has no Happier Session; it wakes Account readers.
-    id: z.string().nullable(),
+    id: z.nullable(z.string()),
     key: z.string(),
     tokens: z.record(z.string(), z.number()),
     cost: z.record(z.string(), z.number()),
     timestamp: TimestampMsSchema,
-  }).passthrough(),
+  }),
   /**
    * Content-free invalidation to a Team credential resource's usage readers after a
    * new immutable usage fact commits. Readers re-query the authorized usage projection.
    */
-  z.object({
+  z.looseObject({
     type: z.literal('team-credential-usage-changed'),
-    resourceId: z.string().min(1),
-  }).passthrough(),
-  z.object({
+    resourceId: z.string().check(z.minLength(1)),
+  }),
+  z.looseObject({
     type: z.literal('machine-status'),
     machineId: z.string(),
     online: z.boolean(),
     timestamp: TimestampMsSchema,
-  }).passthrough(),
+  }),
   ActionOperationSnapshotEphemeralV1Schema,
   ActionOperationRevisionEphemeralV1Schema,
   SessionPersonalEventEphemeralV1Schema,
@@ -535,28 +541,28 @@ export type EphemeralUpdate = z.infer<typeof EphemeralUpdateSchema>;
 //
 // Important: clients must treat these as optional hints/optimizations only, never as the sole source of truth.
 export const SessionBroadcastBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.looseObject({
     t: z.literal('session-changed'),
     sessionId: z.string(),
-  }).passthrough(),
+  }),
 ]));
 
 export type SessionBroadcastBody = z.infer<typeof SessionBroadcastBodySchema>;
 
-export const SessionBroadcastContainerSchema = lazyZodSchema(() => z.object({
+export const SessionBroadcastContainerSchema = lazyZodSchema(() => z.looseObject({
   id: z.string(),
   createdAt: TimestampMsSchema,
   body: SessionBroadcastBodySchema,
-}).passthrough());
+}));
 
 export type SessionBroadcastContainer = z.infer<typeof SessionBroadcastContainerSchema>;
 
 export const MessageAckResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     id: z.string(),
-    seq: z.number().int().min(0),
-    localId: z.string().nullable(),
+    seq: z.number().check(z.int(), z.minimum(0)),
+    localId: z.nullable(z.string()),
     /**
      * Whether the server actually created a new transcript row.
      *
@@ -565,88 +571,88 @@ export const MessageAckResponseSchema = lazyZodSchema(() => z.union([
      *
      * Optional for backward compatibility with older servers.
      */
-    didWrite: z.boolean().optional(),
-    didUpdate: z.boolean().optional(),
-  }).passthrough(),
-  z.object({
+    didWrite: z.optional(z.boolean()),
+    didUpdate: z.optional(z.boolean()),
+  }),
+  z.looseObject({
     ok: z.literal(false),
     error: z.string(),
-  }).passthrough(),
+  }),
 ]));
 
 export type MessageAckResponse = z.infer<typeof MessageAckResponseSchema>;
 
 export const SessionEndAckResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     applied: z.boolean(),
-    active: z.literal(false).optional(),
+    active: z.optional(z.literal(false)),
     activeAt: z.optional(TimestampMsSchema),
-    latestTurnId: z.nullable(TurnIdSchema).optional(),
-    latestTurnStatus: z.nullable(PrimaryTurnStatusV1Schema).optional(),
-    latestTurnStatusObservedAt: z.nullable(TimestampMsSchema).optional(),
-    lastRuntimeIssue: z.nullable(SessionRuntimeIssueV1Schema).optional(),
-    projection: z.object({
-      active: z.literal(false).optional(),
+    latestTurnId: z.optional(z.nullable(TurnIdSchema)),
+    latestTurnStatus: z.optional(z.nullable(PrimaryTurnStatusV1Schema)),
+    latestTurnStatusObservedAt: z.optional(z.nullable(TimestampMsSchema)),
+    lastRuntimeIssue: z.optional(z.nullable(SessionRuntimeIssueV1Schema)),
+    projection: z.optional(z.looseObject({
+      active: z.optional(z.literal(false)),
       activeAt: z.optional(TimestampMsSchema),
-      latestTurnId: z.nullable(TurnIdSchema).optional(),
-      latestTurnStatus: z.nullable(PrimaryTurnStatusV1Schema).optional(),
-      latestTurnStatusObservedAt: z.nullable(TimestampMsSchema).optional(),
-      lastRuntimeIssue: z.nullable(SessionRuntimeIssueV1Schema).optional(),
-    }).passthrough().optional(),
-  }).passthrough(),
-  z.object({
+      latestTurnId: z.optional(z.nullable(TurnIdSchema)),
+      latestTurnStatus: z.optional(z.nullable(PrimaryTurnStatusV1Schema)),
+      latestTurnStatusObservedAt: z.optional(z.nullable(TimestampMsSchema)),
+      lastRuntimeIssue: z.optional(z.nullable(SessionRuntimeIssueV1Schema)),
+    })),
+  }),
+  z.looseObject({
     ok: z.literal(false),
     error: z.string(),
-  }).passthrough(),
+  }),
 ]));
 
 export type SessionEndAckResponse = z.infer<typeof SessionEndAckResponseSchema>;
 
 export const UpdateMetadataAckResponseSchema = lazyZodSchema(() => z.discriminatedUnion('result', [
-  z.object({
+  z.looseObject({
     result: z.literal('success'),
-    version: z.number().int(),
+    version: z.number().check(z.int()),
     metadata: z.string(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('version-mismatch'),
-    version: z.number().int(),
+    version: z.number().check(z.int()),
     metadata: z.string(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('forbidden'),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('metadata_privacy_upgrade_required'),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('error'),
-  }).passthrough(),
+  }),
 ]));
 
 export type UpdateMetadataAckResponse = z.infer<typeof UpdateMetadataAckResponseSchema>;
 
 export const UpdateStateAckResponseSchema = lazyZodSchema(() => z.discriminatedUnion('result', [
-  z.object({
+  z.looseObject({
     result: z.literal('success'),
-    version: z.number().int(),
-    agentState: z.string().nullable(),
-  }).passthrough(),
-  z.object({
+    version: z.number().check(z.int()),
+    agentState: z.nullable(z.string()),
+  }),
+  z.looseObject({
     result: z.literal('version-mismatch'),
-    version: z.number().int(),
-    agentState: z.string().nullable(),
-  }).passthrough(),
-  z.object({
+    version: z.number().check(z.int()),
+    agentState: z.nullable(z.string()),
+  }),
+  z.looseObject({
     result: z.literal('forbidden'),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('metadata_privacy_upgrade_required'),
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     result: z.literal('error'),
-  }).passthrough(),
+  }),
 ]));
 
 export type UpdateStateAckResponse = z.infer<typeof UpdateStateAckResponseSchema>;

@@ -1,8 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { readSessionBotV1 } from '../identity/sessionBotV1.js';
-import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../../workspaces/workspaceRefV1.js';
+import { deriveSessionCoordinatorV1, type SessionCoordinatorFactsV1 } from '../follow/sessionCoordinatorV1.js';
+import { QualifiedProjectKeyV1Schema, type QualifiedProjectKeyV1, type WorkspaceRefV1 } from '../../workspaces/workspaceRefV1.js';
+import { SessionAwarenessPresentationStateV1Schema, type SessionAwarenessPresentationStateV1 } from '../awareness/presentationV1.js';
 import { projectWorkspaceRefV1, resolveWorkspaceRefV1, type WorkspaceRefResolutionContextV1 } from '../../workspaces/workspaceRefResolutionV1.js';
+import type { SessionAwarenessOriginV1 } from '../awareness/projectionV1.js';
 
 import {
     SessionAttentionFilterV1Schema,
@@ -28,6 +31,10 @@ export type SessionListFilterV1 = Readonly<{
     scope: SessionListScopeV1;
     attention: SessionAttentionFilterV1;
     bot?: SessionBotFilterV1;
+    coordinator?: 'coordinator';
+    projects?: Readonly<{ include: readonly QualifiedProjectKeyV1[]; exclude: readonly QualifiedProjectKeyV1[] }>;
+    statuses?: readonly SessionAwarenessPresentationStateV1[];
+    underSessionId?: string;
     homeServerIds: readonly string[];
     audiences: readonly QualifiedAudienceSelection[];
     tagIds: readonly QualifiedTagAddress[];
@@ -35,6 +42,81 @@ export type SessionListFilterV1 = Readonly<{
 }>;
 
 export type SessionListFilterDefaultsInputV1 = Partial<SessionListFilterV1>;
+
+/** Session identity/relations cannot select Runs; consumers need no Run reader for a known-empty kind. */
+export function canSessionListFilterIncludeRunsV1(filter: Pick<SessionListFilterV1, 'show' | 'bot' | 'coordinator'>): boolean {
+    return filter.show !== 'sessions' && filter.bot === undefined && filter.coordinator === undefined;
+}
+
+export type SessionListFilterMatchV1 = 'match' | 'miss' | 'unavailable';
+export type SessionListStartedByFactV1 = SessionListFilterV1['startedBy'][number] | 'other_account' | 'non_person';
+
+/** Immutable creation provenance and Account identity, never a title, Bot marker or hosting daemon. */
+export function readSessionListStartedByV1(input: Readonly<{
+    origin?: SessionAwarenessOriginV1;
+    ownerAccountId?: string;
+    viewerAccountId?: string;
+}>): SessionListStartedByFactV1 | undefined {
+    if (input.origin && input.origin.kind !== 'none') return 'non_person';
+    if (!input.origin || !input.ownerAccountId || !input.viewerAccountId) return undefined;
+    return input.ownerAccountId === input.viewerAccountId ? 'you' : 'other_account';
+}
+
+/** Facts are authorized by the caller; unknown facts stay absent, never guessed from labels. */
+export type SessionListFilterFactsV1 = SessionCoordinatorFactsV1 & Readonly<{
+    serverId: string;
+    kind: 'session' | 'run';
+    startedBy?: SessionListStartedByFactV1;
+    attentionRequired?: boolean;
+    scopeMatches?: Partial<Readonly<Record<SessionListScopeV1, boolean>>>;
+    underSessionMatches?: boolean;
+    metadata?: unknown;
+    /** When presentation metadata differs, only the opened owner view may establish Project identity. */
+    projectMetadata?: unknown;
+    status?: SessionAwarenessPresentationStateV1;
+    audiences?: readonly SessionAudienceSelectionV1[];
+    tagIds?: readonly string[];
+    source?: 'persisted' | 'direct';
+    workspaceRefs?: readonly WorkspaceRefV1[];
+    workspaceContext?: WorkspaceRefResolutionContextV1;
+}>;
+
+/** Shared by lists, Boards, rule previews and occurrence matching. No fact lookup or graph traversal. */
+export function matchSessionListFilterV1(filter: SessionListFilterV1, facts: SessionListFilterFactsV1): SessionListFilterMatchV1 {
+    if (facts.kind === 'run' && !canSessionListFilterIncludeRunsV1(filter)) return 'miss';
+    const normalizeHome = facts.workspaceContext?.normalizeServerId ?? ((value: string) => value.trim());
+    const sameHome = (value: string) => normalizeHome(value) === normalizeHome(facts.serverId);
+    const results: SessionListFilterMatchV1[] = [];
+    const known = (value: boolean | undefined): SessionListFilterMatchV1 => value === undefined ? 'unavailable' : value ? 'match' : 'miss';
+    results.push(known(filter.homeServerIds.some(sameHome)));
+    results.push(known(filter.show === 'both' || (filter.show === 'runs') === (facts.kind === 'run')));
+    results.push(filter.startedBy.length === 0 ? 'miss'
+        : ['you', 'agents', 'triggers'].every(value => filter.startedBy.some(selected => selected === value)) ? 'match'
+        : facts.startedBy === undefined ? 'unavailable'
+        : facts.startedBy === 'non_person' ? filter.startedBy.some(value => value !== 'you') ? 'unavailable' : 'miss'
+        : known(facts.startedBy !== 'other_account' && filter.startedBy.includes(facts.startedBy)));
+    if (filter.scope !== 'all_accessible') results.push(known(facts.scopeMatches?.[filter.scope]));
+    if (filter.underSessionId !== undefined) results.push(known(facts.underSessionMatches));
+    if (filter.attention !== 'any') results.push(known(facts.attentionRequired));
+    if (filter.source !== 'all') results.push(facts.source === undefined ? 'unavailable' : known(filter.source === facts.source));
+    if (filter.bot !== undefined) results.push(matchSessionBotFilterV1(facts.metadata, filter.bot));
+    if (filter.coordinator !== undefined) results.push(known(deriveSessionCoordinatorV1(facts)));
+    if (filter.statuses?.length) results.push(facts.status === undefined ? 'unavailable' : known(filter.statuses.includes(facts.status)));
+    if (filter.audiences.length) results.push(facts.audiences === undefined ? 'unavailable' : known(filter.audiences.some(selection => sameHome(selection.serverId) && facts.audiences!.some(audience => {
+        if (selection.kind === 'outside_teams') return audience.kind === 'outside_teams';
+        if (audience.kind === 'outside_teams' || audience.teamId !== selection.teamId) return false;
+        return selection.kind === 'team' || audience.kind === 'group' && audience.groupId === selection.groupId;
+    }))));
+    if (filter.tagIds.length) results.push(facts.tagIds === undefined ? 'unavailable' : known(filter.tagIds.some(tag => sameHome(tag.serverId) && facts.tagIds!.includes(tag.tagId))));
+    if (filter.projects) {
+        const matches = (project: QualifiedProjectKeyV1) => matchSessionProjectFilterV1(Object.hasOwn(facts, 'projectMetadata') ? facts.projectMetadata : facts.metadata, facts.serverId, project, facts.workspaceRefs, facts.workspaceContext);
+        const included = filter.projects.include.map(matches);
+        if (included.length) results.push(included.includes('match') ? 'match' : included.includes('unavailable') ? 'unavailable' : 'miss');
+        const excluded = filter.projects.exclude.map(matches);
+        if (excluded.length) results.push(excluded.includes('match') ? 'miss' : excluded.includes('unavailable') ? 'unavailable' : 'match');
+    }
+    return results.includes('miss') ? 'miss' : results.includes('unavailable') ? 'unavailable' : 'match';
+}
 
 /** Owner metadata only. Account/Team admission and corpus membership belong to the list producer. */
 export function matchSessionProjectFilterV1(
@@ -81,6 +163,18 @@ export function matchSessionBotFilterV1(
 
 function normalizeId(raw: unknown): string {
     return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function normalizeProjects(values: readonly QualifiedProjectKeyV1[]): QualifiedProjectKeyV1[] {
+    const seen = new Set<string>();
+    return values.flatMap(value => {
+        const serverId = normalizeId(value.serverId);
+        const projectKey = normalizeId(value.projectKey);
+        const key = JSON.stringify([serverId, projectKey]);
+        if (!serverId || !projectKey || seen.has(key)) return [];
+        seen.add(key);
+        return [{ serverId, projectKey }];
+    });
 }
 
 export function normalizeSessionListFilterHomeIds(values: readonly string[] | undefined): string[] {
@@ -160,6 +254,10 @@ export function normalizeSessionListFilterV1(input: SessionListFilterDefaultsInp
         scope: input.scope ?? 'my_work',
         attention: input.attention ?? 'any',
         ...(input.bot === undefined ? {} : { bot: input.bot }),
+        ...(input.coordinator === undefined ? {} : { coordinator: input.coordinator }),
+        ...(input.projects === undefined ? {} : { projects: { include: normalizeProjects(input.projects.include), exclude: normalizeProjects(input.projects.exclude) } }),
+        ...(input.statuses === undefined ? {} : { statuses: [...new Set(input.statuses)] }),
+        ...(normalizeId(input.underSessionId) ? { underSessionId: normalizeId(input.underSessionId) } : {}),
         homeServerIds: normalizeSessionListFilterHomeIds(input.homeServerIds),
         audiences: normalizeSessionListFilterAudiences(input.audiences),
         tagIds: normalizeSessionListFilterTagIds(input.tagIds),
@@ -181,10 +279,16 @@ export const SessionListFilterFieldsV1Schema = lazyZodSchema(() => z.strictObjec
     scope: SessionListScopeV1Schema,
     attention: SessionAttentionFilterV1Schema,
     bot: z.optional(SessionBotFilterV1Schema),
+    coordinator: z.optional(z.literal('coordinator')),
+    projects: z.optional(z.strictObject({ include: z.array(QualifiedProjectKeyV1Schema), exclude: z.array(QualifiedProjectKeyV1Schema) })),
+    statuses: z.optional(z.array(SessionAwarenessPresentationStateV1Schema)),
+    underSessionId: z.optional(SelectionIdSchema),
     homeServerIds: z.array(z.string()),
     audiences: z.array(QualifiedAudienceSelectionSchema),
     tagIds: z.array(z.strictObject({ serverId: SelectionIdSchema, tagId: SelectionIdSchema })),
     source: z.enum(['all', 'persisted', 'direct']),
 }));
 
-export const SessionListFilterV1Schema = lazyZodSchema(() => z.pipe(SessionListFilterFieldsV1Schema, z.transform((value): SessionListFilterV1 => normalizeSessionListFilterV1(value))));
+export const SessionListFilterV1Schema: z.ZodMiniType<SessionListFilterV1, SessionListFilterV1> = lazyZodSchema(
+    () => z.pipe(SessionListFilterFieldsV1Schema, z.transform((value): SessionListFilterV1 => normalizeSessionListFilterV1(value))),
+);

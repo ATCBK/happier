@@ -29,7 +29,7 @@ export type SessionFollowTerminalTurnV1 = z.infer<typeof SessionFollowTerminalTu
 
 /** A deliverable own-turn fact, including presence loss before terminal completion. */
 export const SessionFollowObservedTurnV1Schema = lazyZodSchema(() => z.extend(SessionFollowTerminalTurnV1Schema, {
-  status: z.enum([...SESSION_FOLLOW_DELIVERED_TURN_STATUSES_V1, 'stalled']),
+  status: z.enum([...SESSION_FOLLOW_DELIVERED_TURN_STATUSES_V1, 'stalled', 'waiting']),
 }));
 export type SessionFollowObservedTurnV1 = z.infer<typeof SessionFollowObservedTurnV1Schema>;
 
@@ -99,7 +99,7 @@ function isDeliveredTurnStatus(value: unknown): value is SessionFollowDeliveredT
 export function normalizeSessionFollowFrontierV1(input: SessionFollowFrontierInputV1): SessionFollowFrontierV1 {
   const turn = input.turn ?? null;
   const turnId = typeof turn?.id === 'string' && turn.id.length > 0 ? turn.id : null;
-  const turnStatus = turn?.status === 'stalled' || isDeliveredTurnStatus(turn?.status) ? turn.status : null;
+  const turnStatus = turn?.status === 'stalled' || turn?.status === 'waiting' || isDeliveredTurnStatus(turn?.status) ? turn.status : null;
   return {
     transcriptSeq: normalizeSequence(input.transcriptSeq),
     readyEventSeq: normalizeSequence(input.readyEventSeq),
@@ -180,8 +180,9 @@ export function compareSessionFollowFrontierProgressV1(
  * Checks one ACK against the stored lower bound, the exact observe response
  * that produced the delivery, and the source frontier visible at ACK time.
  * Deliverable turns are identities rather than ordered counters, so consumption
- * must name the observed turn exactly; the server separately requires it to
- * remain the current deliverable turn before advancing persistence.
+ * may retain the delivered turn while an original transcript prefix is consumed,
+ * or consume the observed turn. The server separately checks that the observed
+ * turn is still current before advancing persistence.
  */
 export function isSessionFollowConsumptionWithinCurrentV1(input: Readonly<{
   expected: SessionFollowFrontierV1;
@@ -196,7 +197,8 @@ export function isSessionFollowConsumptionWithinCurrentV1(input: Readonly<{
     && consumed.transcriptSeq <= observed.transcriptSeq
     && consumed.readyEventSeq <= observed.readyEventSeq
     && consumed.agentStateVersion <= observed.agentStateVersion
-    && isSessionFollowTurnEqualV1(consumed.turn, observed.turn)
+    && (isSessionFollowTurnEqualV1(consumed.turn, expected.turn)
+      || isSessionFollowTurnEqualV1(consumed.turn, observed.turn))
     && consumed.transcriptSeq <= current.transcriptSeq
     && consumed.readyEventSeq <= current.readyEventSeq
     && consumed.agentStateVersion <= current.agentStateVersion;

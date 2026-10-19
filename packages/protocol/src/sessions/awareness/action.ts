@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { QualifiedProjectKeyV1Schema, type QualifiedProjectKeyV1 } from '../../workspaces/workspaceRefV1.js';
-import { SessionListResultSchema, SessionListMetadataUpgradeRequiredCountSchema, SessionListBotFilterUnavailableCountSchema } from '../control/listResult.js';
+import { SessionListResultSchema, SessionSummarySchema, SessionListMetadataUpgradeRequiredCountSchema, SessionListBotFilterUnavailableCountSchema } from '../control/listResult.js';
 
 import {
   SESSION_AWARENESS_PROJECTION_VERSION_V1,
@@ -132,6 +132,7 @@ const LegacyUiSessionListResultSchema = lazyZodSchema(() => z.looseObject({
   ok: z.optional(z.literal(true)),
   sessions: z.array(z.object({
     id: z.string().check(z.minLength(1)),
+    manager: SessionSummarySchema.shape.manager,
     active: z.boolean(),
     presence: z.nullable(z.string()),
     updatedAt: z.number().check(z.nonnegative()),

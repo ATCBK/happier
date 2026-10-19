@@ -52,7 +52,9 @@ export function applyReachRulesChangeV1(rules: ReachRulesV1, change: ReachRulesC
     seen.add(key);
     const previous = rules.find(rule => reachRuleKeyV1(rule) === key);
     if (previous?.enabled === draft.enabled) return previous;
-    return { ...draft, id: previous?.id ?? ctx.newId(), createdAt: previous?.createdAt ?? ctx.nowMs, updatedAt: ctx.nowMs };
+    // Native evidence uses this edit stamp; same-clock edits must not reuse it.
+    return { ...draft, id: previous?.id ?? ctx.newId(), createdAt: previous?.createdAt ?? ctx.nowMs,
+      updatedAt: Math.max(ctx.nowMs, (previous?.updatedAt ?? -1) + 1) };
   });
 }
 

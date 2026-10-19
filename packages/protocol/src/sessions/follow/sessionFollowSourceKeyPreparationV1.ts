@@ -7,6 +7,7 @@ import { ENCRYPTED_DATA_KEY_V1_BYTES } from '../../crypto/encryptedDataKeyEnvelo
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { readRpcErrorCode, RPC_ERROR_CODES } from '../../rpc/errors.js';
+import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 
 const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
 
@@ -22,6 +23,7 @@ export const SessionFollowSourceKeyPrepareAuthorizationV1Schema = lazyZodSchema(
   kind: z.literal(SESSION_FOLLOW_SOURCE_KEY_PREPARE_AUTHORIZATION_KIND_V1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
+  localInputId: z.optional(PendingLocalIdSchema),
 }).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
     context.addIssue({ code: 'custom', path: ['sourceSessionId'], message: 'Follow requires distinct Sessions' });
@@ -33,6 +35,7 @@ export const SessionFollowSourceKeyPrepareRequestV1Schema = lazyZodSchema(() => 
   v: z.literal(1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
+  localInputId: z.optional(PendingLocalIdSchema),
   sourceDataEncryptionKeyBase64: SourceDataEncryptionKeyBase64Schema,
 }).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
@@ -51,6 +54,7 @@ export function buildSessionFollowSourceKeyPrepareRequestV1(params: Readonly<{
   sourceSessionId: string;
   destinationSessionId: string;
   sourceDataEncryptionKeyBase64: string;
+  localInputId?: string;
 }>): Readonly<{
   authorization: SessionFollowSourceKeyPrepareAuthorizationV1;
   request: SessionFollowSourceKeyPrepareRequestV1;
@@ -58,6 +62,7 @@ export function buildSessionFollowSourceKeyPrepareRequestV1(params: Readonly<{
   const relation = {
     sourceSessionId: params.sourceSessionId,
     destinationSessionId: params.destinationSessionId,
+    ...(params.localInputId !== undefined ? { localInputId: params.localInputId } : {}),
   };
   return {
     authorization: SessionFollowSourceKeyPrepareAuthorizationV1Schema.parse({

@@ -1,9 +1,87 @@
 import { describe, expect, it } from 'vitest';
 
 import { ScopeActionInputSchemas } from '../../actions/scopeActionFamily.js';
-import { matchSessionBotFilterV1, matchSessionProjectFilterV1, normalizeSessionListFilterV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListFilterV1, normalizeSessionListFilterV1, readSessionListStartedByV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
 
 describe('SessionListFilterV1', () => {
+    it('never uses list attention promotion as proof that a Run matches the selected starter', () => {
+        const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], startedBy: ['you'] });
+        expect(matchSessionListFilterV1(filter, { serverId: 'home', kind: 'run', startedBy: 'triggers', attentionRequired: true })).toBe('miss');
+        expect(matchSessionListFilterV1({ ...filter, startedBy: [] }, { serverId: 'home', kind: 'run', startedBy: 'you', attentionRequired: true })).toBe('miss');
+        expect(matchSessionListFilterV1({ ...filter, startedBy: ['you', 'you', 'you'] },
+            { serverId: 'home', kind: 'run', startedBy: 'triggers', attentionRequired: false })).toBe('miss');
+    });
+    it('serializes Only coordinators and distinguishes positive, ordinary and unavailable relation facts', () => {
+        const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], coordinator: 'coordinator' });
+        expect(filter).toHaveProperty('coordinator', 'coordinator');
+        expect(SessionListFilterV1Schema.parse(JSON.parse(JSON.stringify(filter)))).toEqual(filter);
+        expect(ScopeActionInputSchemas['session.list.view.set'].parse({ filters: { coordinator: 'coordinator' } }).filters).toEqual({ coordinator: 'coordinator' });
+        const facts = { serverId: 'home', kind: 'session' as const, startedBy: 'you' as const };
+        expect(matchSessionListFilterV1(filter, facts)).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, managedSessions: { total: 1 } })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, receivedRuleCount: 1 })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, managedSessions: { total: 0 }, receivedRuleCount: 0 })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, managedSessions: { total: 0 } })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, kind: 'run', receivedRuleCount: 1 })).toBe('miss');
+    });
+    it('proves Started by me only with immutable none origin and the same owner Account', () => {
+        expect(readSessionListStartedByV1({ origin: { kind: 'none' }, ownerAccountId: 'me', viewerAccountId: 'me' })).toBe('you');
+        for (const facts of [
+            { origin: { kind: 'none' as const }, viewerAccountId: 'me' },
+            { ownerAccountId: 'me', viewerAccountId: 'me' },
+            { origin: { kind: 'none' as const }, ownerAccountId: 'me' },
+        ]) expect(readSessionListStartedByV1(facts)).toBeUndefined();
+        const startedBy = readSessionListStartedByV1({ origin: { kind: 'none' }, ownerAccountId: 'other', viewerAccountId: 'me' });
+        expect(startedBy).toBe('other_account');
+        expect(matchSessionListFilterV1(normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'] }),
+            { serverId: 'home', kind: 'session', startedBy })).toBe('miss');
+        const automation = readSessionListStartedByV1({ origin: { kind: 'run_step', runId: 'workflow' }, ownerAccountId: 'me', viewerAccountId: 'me' });
+        expect(automation).toBe('non_person');
+        const match = (selection: ('you' | 'agents' | 'triggers')[]) => matchSessionListFilterV1(normalizeSessionListFilterV1({
+            scope: 'all_accessible', homeServerIds: ['home'], startedBy: selection,
+        }), { serverId: 'home', kind: 'session', startedBy: automation });
+        expect(match(['you'])).toBe('miss');
+        expect(match(['agents'])).toBe('unavailable');
+    });
+    it('round trips qualified include/exclude projects, canonical status and producer-owned subtree selection', () => {
+        const filter = normalizeSessionListFilterV1({
+            projects: { include: [{ serverId: ' home-a ', projectKey: ' payments ' }, { serverId: 'home-a', projectKey: 'payments' }], exclude: [{ serverId: 'home-b', projectKey: 'payments' }] },
+            statuses: ['failed', 'thinking', 'failed'], underSessionId: ' manager ',
+        });
+        expect(filter).toMatchObject({ projects: { include: [{ serverId: 'home-a', projectKey: 'payments' }], exclude: [{ serverId: 'home-b', projectKey: 'payments' }] }, statuses: ['failed', 'thinking'], underSessionId: 'manager' });
+        expect(SessionListFilterV1Schema.parse(JSON.parse(JSON.stringify(filter)))).toEqual(filter);
+        expect(SessionListFilterV1Schema.safeParse({ ...filter, statuses: ['done'] }).success).toBe(false);
+        expect(ScopeActionInputSchemas['session.list.view.set'].parse({ filters: { projects: filter.projects, statuses: ['failed'], underSessionId: 'manager' } }).filters).toMatchObject({ statuses: ['failed'], underSessionId: 'manager' });
+    });
+
+    it('uses one authorized tri-state predicate and never treats unavailable projects as satisfying exclusions', () => {
+        const project = { serverId: 'home-a', projectKey: 'payments' };
+        const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home-a'], projects: { include: [], exclude: [project] }, statuses: ['failed'] });
+        const facts = { serverId: 'home-a', kind: 'session' as const, startedBy: 'you' as const, source: 'persisted' as const, status: 'failed' as const };
+        expect(matchSessionListFilterV1(filter, { ...facts, metadata: null })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'payments' } })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'other' } })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'other' }, status: undefined })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, serverId: 'home-b', metadata: null })).toBe('miss');
+        const under = normalizeSessionListFilterV1({ ...filter, projects: undefined, underSessionId: 'manager' });
+        expect(matchSessionListFilterV1(under, facts)).toBe('unavailable');
+        expect(matchSessionListFilterV1(under, { ...facts, underSessionMatches: true })).toBe('match');
+        expect(matchSessionListFilterV1(under, { ...facts, underSessionMatches: false })).toBe('miss');
+    });
+
+    it('requires producer evidence for scope and qualified facets and keeps person-started sessions distinct from agent work', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home-a'], scope: 'following', attention: 'needs_my_attention',
+            audiences: [{ serverId: 'home-a', kind: 'group', teamId: 'team', groupId: 'group' }], tagIds: [{ serverId: 'home-a', tagId: 'urgent' }], source: 'persisted' });
+        const facts = { serverId: 'home-a', kind: 'session' as const, startedBy: 'you' as const, attentionRequired: true,
+            scopeMatches: { following: true }, audiences: [{ kind: 'group' as const, teamId: 'team', groupId: 'group' }], tagIds: ['urgent'], source: 'persisted' as const };
+        expect(matchSessionListFilterV1(filter, facts)).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, scopeMatches: undefined })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, audiences: undefined })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, audiences: [{ kind: 'team', teamId: 'team' }] })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, tagIds: ['other'] })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, startedBy: 'agents' })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, source: undefined })).toBe('unavailable');
+    });
     it('matches only a qualified explicit Project or uniquely accepted checkout, never repository/path groups', () => {
         const project = { serverId: 'home-a', projectKey: 'anchor' };
         const refs = [{ id: 'checkout', serverId: 'home-a', projectKey: 'anchor', machineId: 'machine', rootPath: 'C:\\repo', createdAtMs: 1 }];

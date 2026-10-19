@@ -18,6 +18,7 @@ export const SessionPersonalRelevanceReasonV1Schema = lazyZodSchema(() => z.enum
   'followed_by_me',
   'pinned_by_me',
   'explicit_attention',
+  'follow_once',
 ]));
 export type SessionPersonalRelevanceReasonV1 = z.infer<
   typeof SessionPersonalRelevanceReasonV1Schema
@@ -53,6 +54,8 @@ export type SessionPersonalRelevanceFactsV1 = Readonly<{
   followedByMe: boolean;
   pinnedByMe: boolean;
   explicitAttention: boolean;
+  /** Private one-shot custody, without an ongoing Follow subscription. */
+  followOnce?: boolean;
 }>;
 
 export const NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1: SessionPersonalRelevanceFactsV1 = Object.freeze({
@@ -78,6 +81,7 @@ const RELEVANCE_ARMS: readonly (readonly [
   ['followed_by_me', 'followedByMe'],
   ['pinned_by_me', 'pinnedByMe'],
   ['explicit_attention', 'explicitAttention'],
+  ['follow_once', 'followOnce'],
 ];
 
 /**

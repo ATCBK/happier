@@ -39,6 +39,16 @@ export const SessionOrganizationSnapshotRequestSchema = lazyZodSchema(() => z.st
   }));
 export type SessionOrganizationSnapshotRequest = z.infer<typeof SessionOrganizationSnapshotRequestSchema>;
 
+/** Exact existing assignment read shared by transports and signed-purpose admission. */
+export function buildSessionOrganizationAssignmentSnapshotHttpRequestV1(sessionIds: readonly string[]) {
+  const request = SessionOrganizationSnapshotRequestSchema.parse({ includeFolders: false, includeTags: false, includeLabels: false,
+    assignmentSessionIds: [...new Set(sessionIds.map(id => id.trim()).filter(Boolean))] });
+  if (!request.assignmentSessionIds.length) throw new TypeError('Session assignments require named Session ids');
+  const query = { includeFolders: 'false', includeTags: 'false', includeLabels: 'false',
+    assignmentSessionIds: request.assignmentSessionIds.join(',') };
+  return { method: 'GET' as const, path: `/v2/session-organization?${new URLSearchParams(query)}`, query };
+}
+
 export const SessionOrganizationSnapshotSchema = lazyZodSchema(() => z.strictObject({
     schemaVersion: z.literal(SESSION_ORGANIZATION_SNAPSHOT_VERSION),
     version: z.number().check(z.int(), z.nonnegative()),

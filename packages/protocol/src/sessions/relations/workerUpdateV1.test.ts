@@ -5,7 +5,8 @@ import {
   renderSessionInputContextPromptV1,
   renderWorkerUpdatePromptBlockV1,
 } from '../messages/sessionInputPromptContextV1.js';
-import { SessionWorkerPublishInputV1Schema, WorkerUpdateV1Schema } from './workerUpdateV1.js';
+import { classifyWorkerUpdateEventV1, SessionUpdatePostInputV1Schema, WorkerUpdateV1Schema } from './workerUpdateV1.js';
+import { resolveFollowDeliveryV1 } from '../follow/sessionFollowPolicyV1.js';
 import { TranscriptRawAgentEventV1Schema } from '../messages/transcriptRawRecordV1.js';
 
 const sessionUpdate = {
@@ -20,13 +21,51 @@ const sessionUpdate = {
 };
 
 describe('WorkerUpdateV1', () => {
+  it('selects successful, failed/stopped and live attention policy from source outcome, independently of legacy wake', () => {
+    for (const [workerKind, ownerState, kind] of [
+      ['session', 'settled', 'finished'], ['session', 'failed', 'failed_or_stopped'],
+      ['session', 'cancelled', 'failed_or_stopped'], ['session', 'needs_input', 'needs_you'],
+      ['session', 'published', 'update_posted'], ['session', 'stalled', 'stalled'],
+      ['execution_run', 'succeeded', 'finished'], ['execution_run', 'failed', 'failed_or_stopped'],
+      ['execution_run', 'cancelled', 'failed_or_stopped'], ['execution_run', 'timeout', 'failed_or_stopped'],
+      ['workflow_run', 'succeeded', 'finished'], ['workflow_run', 'failed', 'failed_or_stopped'],
+      ['workflow_run', 'cancelled', 'failed_or_stopped'], ['workflow_run', 'expired', 'failed_or_stopped'],
+      ['workflow_run', 'dispatch_failed', 'failed_or_stopped'], ['workflow_run', 'outcome_uncertain', 'failed_or_stopped'],
+      ['workflow_run', 'skipped', 'failed_or_stopped'], ['workflow_run', 'missed', 'failed_or_stopped'],
+    ]) {
+      const update = WorkerUpdateV1Schema.parse({ ...sessionUpdate, workerKind, ownerState });
+      const event = classifyWorkerUpdateEventV1(update);
+      expect(event).toBe(kind);
+      if (event === 'finished' || event === 'failed_or_stopped') {
+        const decision = resolveFollowDeliveryV1({ policies: [{ preset: 'custom', events: { finished: { delivery: 'interrupt' } } }],
+          event: { kind: event } });
+        expect(decision.selected).toBe(kind === 'finished');
+      }
+    }
+    expect(classifyWorkerUpdateEventV1(WorkerUpdateV1Schema.parse({ ...sessionUpdate,
+      workerKind: 'workflow_run', ownerState: 'running', wake: 'needs_you' }))).toBe('needs_you');
+    expect(classifyWorkerUpdateEventV1(WorkerUpdateV1Schema.parse({ ...sessionUpdate,
+      workerKind: 'workflow_run', ownerState: 'succeeded', wake: 'needs_you' }))).toBe('needs_you');
+    expect(classifyWorkerUpdateEventV1(WorkerUpdateV1Schema.parse({ ...sessionUpdate,
+      workerKind: 'workflow_run', ownerState: 'running' }))).toBeNull();
+  });
+
+  it.each([1_800_000, null])('retains reported runtime issue recovery details through the strict envelope and receiver prompt (reset %s)', resetAtMs => {
+    const runtimeIssueV1 = { v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit',
+      occurredAt: 1000, usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'provider', recoverability: 'wait' } };
+    const update = WorkerUpdateV1Schema.parse({ ...sessionUpdate, ownerState: 'failed', runtimeIssueV1 });
+    expect(update.runtimeIssueV1).toEqual(runtimeIssueV1);
+    const rendered = renderWorkerUpdatePromptBlockV1(update);
+    expect(rendered).toContain('runtime_issue=');
+    expect(rendered).toContain(`"resetAtMs":${resetAtMs}`);
+  });
   it('carries strict scoped deliverable references through publication and the host envelope', () => {
     const deliverables = [
       { kind: 'workspace_file', sessionId: 'worker-session', path: 'docs/result.md' },
       { kind: 'artifact', artifactId: 'document-1' },
     ];
     const report = { summary: 'Ready for review', deliverables };
-    expect(SessionWorkerPublishInputV1Schema.parse(report)).toEqual(report);
+    expect(SessionUpdatePostInputV1Schema.parse(report)).toEqual(report);
     expect(TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', ...report })).toEqual({ type: 'worker-report', ...report });
     expect(WorkerUpdateV1Schema.parse({ ...sessionUpdate, deliverables })).toEqual({ ...sessionUpdate, deliverables });
     for (const reference of [
@@ -36,12 +75,12 @@ describe('WorkerUpdateV1', () => {
       { kind: 'artifact', artifactId: 'document-1', serverId: 'another-home' },
       ...['../secret', '/secret', 'C:\\secret', 'folder/../secret', 'folder\\secret', '~/secret', 'secret\0'].map(path => ({ kind: 'workspace_file', sessionId: 'worker-session', path })),
     ]) {
-      expect(SessionWorkerPublishInputV1Schema.safeParse({ ...report, deliverables: [reference] }).success).toBe(false);
+      expect(SessionUpdatePostInputV1Schema.safeParse({ ...report, deliverables: [reference] }).success).toBe(false);
     }
     const compactDeliverables = Array.from({ length: 40 }, (_, index) => ({ kind: 'artifact', artifactId: `document-${index}` }));
     const compactReport = { ...report, deliverables: compactDeliverables };
     const compactUpdate = { ...sessionUpdate, deliverables: compactDeliverables };
-    expect(SessionWorkerPublishInputV1Schema.parse(compactReport)).toEqual(compactReport);
+    expect(SessionUpdatePostInputV1Schema.parse(compactReport)).toEqual(compactReport);
     expect(TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', ...compactReport })).toEqual({ type: 'worker-report', ...compactReport });
     expect(WorkerUpdateV1Schema.parse(compactUpdate)).toEqual(compactUpdate);
     const compactRendered = renderWorkerUpdatePromptBlockV1(WorkerUpdateV1Schema.parse(compactUpdate));
@@ -49,8 +88,8 @@ describe('WorkerUpdateV1', () => {
     expect(WorkerUpdateV1Schema.safeParse({ ...sessionUpdate, deliverables: [{ ...deliverables[0], sessionId: 'another-session' }] }).success).toBe(false);
     expect(WorkerUpdateV1Schema.safeParse({ ...sessionUpdate, deliverables: [{ kind: 'artifact', artifactId: 'x'.repeat(8_001) }] }).success).toBe(false);
     const referenceBytes = JSON.stringify(deliverables).length;
-    expect(SessionWorkerPublishInputV1Schema.safeParse({ summary: 'x'.repeat(8_000 - referenceBytes), deliverables }).success).toBe(true);
-    expect(SessionWorkerPublishInputV1Schema.safeParse({ summary: 'x'.repeat(8_000), deliverables }).success).toBe(false);
+    expect(SessionUpdatePostInputV1Schema.safeParse({ summary: 'x'.repeat(8_000 - referenceBytes), deliverables }).success).toBe(true);
+    expect(SessionUpdatePostInputV1Schema.safeParse({ summary: 'x'.repeat(8_000), deliverables }).success).toBe(false);
     expect(WorkerUpdateV1Schema.safeParse({ ...sessionUpdate, result: 'x'.repeat(8_000), deliverables }).success).toBe(false);
     const rendered = renderWorkerUpdatePromptBlockV1(WorkerUpdateV1Schema.parse({ ...sessionUpdate, deliverables }));
     expect(rendered).toContain('docs/result.md');

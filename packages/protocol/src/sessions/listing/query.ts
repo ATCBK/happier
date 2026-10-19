@@ -66,6 +66,8 @@ export const SessionListQueryV1Schema = lazyZodSchema(() => z.strictObject({
   // The server returns the structural candidate corpus and its original cursors.
   // Clients apply this selection only after authorized metadata hydration.
   bot: z.optional(SessionBotFilterV1Schema),
+  /** Relation facts are selected by the Home owner before pagination. */
+  coordinator: z.optional(z.literal('coordinator')),
   audiences: AudienceSelectionsSchema,
   tagIds: TagIdsSchema,
   folderIds: z.optional(FolderIdsSchema),
@@ -92,7 +94,7 @@ export function buildSessionListServerQueryV1(query: SessionListQueryV1): Omit<S
 export const SessionListUnavailableQueryV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('not_found'),
   code: z.literal('filtered_session_listing_unavailable'),
-  reason: z.enum(['audience', 'scope', 'following']),
+  reason: z.enum(['audience', 'scope', 'following', 'coordinator']),
 }));
 
 export type SessionListUnavailableQueryV1 = Readonly<z.infer<typeof SessionListUnavailableQueryV1Schema>>;

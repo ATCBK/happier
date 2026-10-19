@@ -1,4 +1,67 @@
 import { describe, expect, it } from 'vitest';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { SessionViewerProjectionV1Schema } from '../personal/viewer.js';
+import { DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1, PersonalFollowOnceV1Schema, matchesPersonalFollowOnceOccurrenceV1, projectPersonalFollowCustodyV1 } from './accountFollow.js';
+import { resolveSessionFollowActionRequest } from './actionTransport.js';
+import type { FollowPolicyV1 } from './sessionFollowPolicyV1.js';
+
+describe('personal Follow one-shot occurrence', () => {
+  it('keeps stored delivery and policy authority closed while dropping unrelated retired viewer presentation', () => {
+    const viewer = {
+      readState: { state: 'not_started' }, relevance: { relevant: false, reasons: [] },
+      attention: { needsAttention: false, primary: null, reasons: [], presentation: 'full' },
+      follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'none' },
+    };
+    const read = createStoredReadSchema(SessionViewerProjectionV1Schema);
+    expect(read.safeParse({ ...viewer, retiredPresentation: true }).success).toBe(true);
+    for (const authority of [
+      { policy: { preset: 'important', receiverAccountId: 'other' } },
+      { policy: { preset: 'custom', events: { finished: { delivery: 'quiet', targetSessionId: 'other' } } } },
+      { once: { kind: 'first_needs_you', requestId: 'unproven' } },
+      { onceDelivery: { event: 'ready', turnId: 'turn', agentStateVersion: 1, sourceAccountId: 'other' } },
+    ]) expect(read.safeParse({ ...viewer, follow: { ...viewer.follow, ...authority } }).success).toBe(false);
+  });
+  it('carries a one-shot-only Action to HTTP and rejects an empty Action mutation', () => {
+    const pair = { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: 'session-1' } };
+    expect(resolveSessionFollowActionRequest('follow.set', { ...pair, once: null }))
+      .toEqual({ path: '/v2/sessions/session-1/follow', method: 'PUT', body: { once: null } });
+    expect(() => resolveSessionFollowActionRequest('follow.set', pair)).toThrow();
+    expect(() => resolveSessionFollowActionRequest('follow.set', { ...pair, includeInVoice: true })).toThrow();
+  });
+  it('fails a malformed stored explicit policy closed rather than falling back to Important', () => {
+    for (const followPolicy of ['{broken', '']) {
+      expect(projectPersonalFollowCustodyV1({ followPolicy })).toEqual({ policy: { preset: 'custom', events: {} } });
+    }
+  });
+  const baseline = { transcriptSeq: 10, readyEventSeq: 2, agentStateVersion: 4, turn: null };
+  it('selects only the captured turn terminal outcome, including failure and stop', () => {
+    const once = { kind: 'turn_finished', sourceTurnId: 'turn-a' } as const;
+    expect(PersonalFollowOnceV1Schema.parse(once)).toEqual(once);
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+        event: status === 'completed' ? 'ready' : status, turnId: 'turn-a', agentStateVersion: 5,
+      } })).toBe(true);
+      expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+        event: status === 'completed' ? 'ready' : status, turnId: 'turn-b', agentStateVersion: 5,
+      } })).toBe(false);
+    }
+    expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+      event: 'message', turnId: 'turn-a', agentStateVersion: 5,
+    } })).toBe(false);
+  });
+  it('requires a real needs-you request after the intent frontier', () => {
+    const once = { kind: 'first_needs_you' } as const;
+    expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+      event: 'user_action_required', requestId: 'request-a', agentStateVersion: 4,
+    } })).toBe(false);
+    expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+      event: 'user_action_required', requestId: 'request-b', agentStateVersion: 5,
+    } })).toBe(true);
+    expect(matchesPersonalFollowOnceOccurrenceV1({ once, baseline, occurrence: {
+      event: 'permission_required', agentStateVersion: 5,
+    } })).toBe(false);
+  });
+});
 
 import { FEATURE_CATALOG, isFeatureId } from '../../features/catalog.js';
 import { FeaturesResponseSchema } from '../../features/payload/featuresResponseSchema.js';
@@ -25,6 +88,38 @@ import {
 } from './index.js';
 
 describe('Account Follow protocol contract', () => {
+  it('defaults new Discussion participants to Quiet while manager and Run reports stay Important', () => {
+    expect(DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1).toEqual({
+      managerPolicy: { preset: 'important' },
+      runReportPolicy: { preset: 'important' },
+      discussionReceivePolicy: { preset: 'quiet' },
+    });
+  });
+
+  it('projects Voice from the explicit event policy while preserving legacy inclusion ingress', () => {
+    const project = (policy?: FollowPolicyV1, includeInVoice = false) =>
+      projectAccountSessionFollowEditorStateV1({ isSessionOwner: false, follow: {
+        sessionId: 'source', following: true, notificationLevel: 'none', includeInVoice,
+        ...(policy ? { policy } : {}),
+      } }).includeInVoice;
+    expect(project({ preset: 'important', voice: true })).toBe(true);
+    expect(project({ preset: 'important' }, true)).toBe(false);
+    expect(project({ preset: 'custom', events: { finished: { delivery: 'quiet', voice: true } } })).toBe(true);
+    expect(project({ preset: 'custom', events: { finished: { delivery: 'off', voice: true } } })).toBe(false);
+    expect(project(undefined, true)).toBe(true);
+    for (const policy of [
+      { preset: 'important', voice: true },
+      { preset: 'custom', events: { finished: { delivery: 'off', voice: true } } },
+    ] satisfies FollowPolicyV1[]) {
+      const expected = policy.preset === 'important';
+      expect(projectSessionFollowFactsV1({ following: true, notificationLevel: 'important', includeInVoice: !expected, policy }))
+        .toMatchObject({ includeInVoice: expected });
+      expect(projectSessionFollowFactsV1({ following: true, notificationLevel: 'important', includeInVoice: !expected,
+        followPolicy: JSON.stringify(policy) })).toMatchObject({ includeInVoice: expected });
+    }
+    expect(projectSessionFollowFactsV1({ following: true, notificationLevel: 'important', includeInVoice: true, followPolicy: '{broken' }))
+      .toMatchObject({ includeInVoice: false });
+  });
   it('projects Include in Voice for current viewers while accepting released projections without it', () => {
     expect(projectSessionFollowFactsV1({
       following: true,
@@ -185,22 +280,22 @@ describe('Account Follow protocol contract', () => {
 
   it('projects effective editor state for an owner, a follower and an explicit unfollow', () => {
     expect(projectAccountSessionFollowEditorStateV1({ follow: null, isSessionOwner: true }))
-      .toEqual({ tracked: true, suppressed: false, notificationLevel: 'important', includeInVoice: false });
+      .toEqual({ tracked: true, suppressed: false, notificationLevel: 'important', includeInVoice: false, policy: { preset: 'important' } });
 
     expect(projectAccountSessionFollowEditorStateV1({ follow: null, isSessionOwner: false }))
-      .toEqual({ tracked: false, suppressed: false, notificationLevel: 'none', includeInVoice: false });
+      .toEqual({ tracked: false, suppressed: false, notificationLevel: 'none', includeInVoice: false, policy: null });
 
     // An owner override is a real row and wins over the owner default.
     expect(projectAccountSessionFollowEditorStateV1({
       follow: { sessionId: 'session-1', following: true, notificationLevel: 'none', includeInVoice: true },
       isSessionOwner: true,
-    })).toEqual({ tracked: true, suppressed: false, notificationLevel: 'none', includeInVoice: true });
+    })).toEqual({ tracked: true, suppressed: false, notificationLevel: 'none', includeInVoice: true, policy: null });
 
     // Explicit Unfollow carries no Voice inclusion and no notifications.
     expect(projectAccountSessionFollowEditorStateV1({
       follow: { sessionId: 'session-1', following: false, notificationLevel: 'none', includeInVoice: false },
       isSessionOwner: false,
-    })).toEqual({ tracked: false, suppressed: true, notificationLevel: 'none', includeInVoice: false });
+    })).toEqual({ tracked: false, suppressed: true, notificationLevel: 'none', includeInVoice: false, policy: null });
   });
 
   it('publishes the closed Follow error vocabulary', () => {

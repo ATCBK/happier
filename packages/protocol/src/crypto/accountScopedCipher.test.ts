@@ -129,6 +129,12 @@ const REMOTE_DEV_9B097966_SESSION_DRAFT_PRIVATE_PAYLOAD_VECTOR = {
 
 const FROZEN_CANONICAL_ACCOUNT_SCOPED_VECTORS = [
   {
+    kind: 'account_session_follow_rule',
+    kindByte: 50,
+    ciphertext: 'oTIhIiMkJSYnKCkqKywtLi8wMTIzNDU2NzjfC0fnsIFojvp3akd90r6P6/Q6d+/vnHCky+GmobNyFE5iiIAD1TRHK4atO6DjD12t0Z0S365KyfBCoqIv',
+    payload: { slot: 50, source: 'session-follow-rule-v1' },
+  },
+  {
     kind: 'account_prompt_catalog', kindByte: 38,
     ciphertext: 'oSYhIiMkJSYnKCkqKywtLi8wMTIzNDU2NzhmtqWH5RJrP3OkS2t1TtnjJX6e33KW/L97Og6M2iC2TjiiW7rvjuBX+OPvNJUQ5Rp3ZKK6H2jpMJP/veDBBuvB',
     payload: { slot: 38, source: 'account-prompt-catalog-v1' },
@@ -611,9 +617,16 @@ const CURRENT_ACCOUNT_SCOPED_KIND_ROLLBACK_DISPOSITIONS = {
     productionOwner: 'Account authoring-memory reserved-row owner',
     remoteDev165A: 'rollback_blocking',
   },
+  account_session_follow_rule: {
+    productionOwner: 'Account-private Follow rule owner',
+    remoteDev165A: 'rollback_blocking',
+  },
 } as const satisfies Record<AccountScopedBlobKind, AccountScopedKindRollbackDisposition>;
 
 describe('accountScopedCipher', () => {
+  it('allocates a distinct authenticated private Follow rule domain', () => {
+    expect(getAccountScopedBlobKindByte('account_session_follow_rule')).toBe(50);
+  });
   it('has one frozen canonical vector and an explicit rollback disposition for every current kind', () => {
     const frozenKinds = FROZEN_CANONICAL_ACCOUNT_SCOPED_VECTORS.map(
       (vector) => vector.kind,
@@ -1142,6 +1155,7 @@ describe('accountScopedCipher', () => {
         32,
         33,
         38,
+        50,
       ],
     );
   });

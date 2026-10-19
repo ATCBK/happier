@@ -6,6 +6,16 @@ import { resolveAttentionDeliveryPolicyDecision } from './attentionDeliveryPolic
 import * as remote from './accountRemoteAlertPolicy.js';
 
 describe('remote alert policy projection', () => {
+  it('preserves Follow quiet delivery in the remote Account/device adapter', () => {
+    const accountPolicy = remote.deriveAccountRemoteAlertPolicyV1({ sessionRemoteAlertsEnabled: true });
+    const params = { accountPolicy, devicePolicy: { v: 1, enabled: true, nativeConsumer: 'ios_service_extension_v1',
+      quietHoursOverride: { mode: 'account' }, foregroundBehavior: 'account', previewCeiling: 'title_only', soundVolume: 1 },
+      event: 'ready', now: new Date('2026-05-03T12:00:00Z'),
+      follow: { policies: [{ preset: 'important' as const }], event: { kind: 'finished' as const } },
+    };
+    expect(remote.resolveRemoteAlertPolicyDecision(params)?.delivery).toBe('suppress');
+  });
+
   it('enrolls selected machines without consenting to remote session alerts', () => {
     const policy = remote.deriveAccountRemoteAlertPolicyV1({
       sessionRemoteAlertsEnabled: false,

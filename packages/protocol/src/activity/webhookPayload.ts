@@ -12,6 +12,19 @@ import { PUSH_NOTIFICATION_CATEGORY_IDS } from '../push/pushNotificationActions.
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
 import { MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from '../actions/specs/machineTerminal.js';
+import { FollowEventV1Schema } from '../sessions/follow/sessionFollowPolicyV1.js';
+import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
+
+const followUpdateFields = { event: z.lazy(() => FollowEventV1Schema) };
+const FollowUpdateOriginalV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...followUpdateFields, sourceMessage: SessionFollowSourceMessageV1Schema, sourceRequests: z.optional(z.never()) }),
+  z.strictObject({ ...followUpdateFields, sourceRequests: SessionFollowSourceRequestsV1Schema, sourceMessage: z.optional(z.never()) }),
+]));
+/** Content-free semantic notice; private rule definitions and source text never leave the executor. */
+export const SessionFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({
+  topic: z.literal('follow_update'), sessionId: z.string().check(z.minLength(1)), follow: FollowUpdateOriginalV1Schema,
+}));
+export type SessionFollowUpdateNotificationV1 = z.infer<typeof SessionFollowUpdateNotificationV1Schema>;
 
 const UsageResetNotificationEvidenceV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderAccountUsagePaceWindowV1Schema, {
   observedAtMs: z.number().check(z.int(), z.nonnegative()), previousObservedAtMs: z.number().check(z.int(), z.nonnegative()),
@@ -135,7 +148,7 @@ const guardPushEnvelope = {
       z.strictObject({ actionId: z.literal('session.stop'), input: z.lazy(() => getActionSpec('session.stop').inputSchema) }),
       // Push carries a URL; its recipient resolves the device-local Home id before Action admission.
       z.strictObject({ actionId: z.literal('machines.terminal.close'),
-        input: z.lazy(() => MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS['machines.terminal.close'].omit({ serverId: true })) }),
+        input: z.lazy(() => lazyZodSchema(() => z.omit(MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS['machines.terminal.close'], { serverId: true }))) }),
     ]),
   }),
 };
@@ -188,6 +201,7 @@ export const MachineGuardActivityNotificationV1Schema = lazyZodSchema(() => z.st
 export type MachineGuardActivityNotificationV1 = z.infer<typeof MachineGuardActivityNotificationV1Schema>;
 
 export const ActivityWebhookTopicSchema = lazyZodSchema(() => z.enum([
+  'follow_update',
   'ready',
   'permission_request',
   'user_action_request',
@@ -256,7 +270,7 @@ const ActivityWebhookRequestV1Schema = lazyZodSchema(() => z.object({
   toolDetails: z.optional(z.nullable(z.string())),
 }));
 
-const ActivityWebhookOrdinaryTopicSchema = lazyZodSchema(() => z.enum(ActivityWebhookTopicSchema.options.filter((value): value is Exclude<(typeof ActivityWebhookTopicSchema.options)[number], 'workflow_run_update'> => !(['workflow_run_update'] as readonly string[]).includes(value))));
+const ActivityWebhookOrdinaryTopicSchema = lazyZodSchema(() => z.enum(ActivityWebhookTopicSchema.options.filter((value): value is Exclude<(typeof ActivityWebhookTopicSchema.options)[number], 'workflow_run_update' | 'follow_update'> => !(['workflow_run_update', 'follow_update'] as readonly string[]).includes(value))));
 
 const ActivityWebhookOrdinaryPayloadV1Schema = lazyZodSchema(() => z.object({
   v: z._default(z.literal(1), 1),
@@ -289,6 +303,11 @@ export const WorkflowRunUpdateWebhookPayloadV1Schema = lazyZodSchema(() => z.str
 export const ActivityWebhookPayloadV1Schema = lazyZodSchema(() => z.discriminatedUnion('topic', [
   ActivityWebhookOrdinaryPayloadV1Schema,
   WorkflowRunUpdateWebhookPayloadV1Schema,
+  z.strictObject({ v: z._default(z.literal(1), 1), channelId: z.string().check(z.trim(), z.minLength(1)),
+    createdAt: z.number().check(z.int(), z.nonnegative()), topic: z.literal('follow_update'),
+    content: WorkflowActivityWebhookContentV1Schema, follow: FollowUpdateOriginalV1Schema,
+    navigation: z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
+  }),
 ]));
 
 export type ActivityWebhookPayloadV1 = z.infer<typeof ActivityWebhookPayloadV1Schema>;
@@ -312,6 +331,7 @@ export function buildActivityWebhookPayload(params: Readonly<{
   }> | null;
   metadata?: Readonly<Record<string, unknown>> | undefined;
   notificationOpen?: Readonly<{ kind: 'session'; sessionId: string }> | Readonly<{ kind: 'workflow_run'; runId: string }>;
+  follow?: SessionFollowUpdateNotificationV1['follow'];
 }>): ActivityWebhookPayloadV1 {
   const common = {
     v: 1,
@@ -323,6 +343,10 @@ export function buildActivityWebhookPayload(params: Readonly<{
       body: params.content.body,
     },
   } as const;
+  if (params.topic === 'follow_update') {
+    return ActivityWebhookPayloadV1Schema.parse({ ...common, follow: params.follow,
+      navigation: { sessionId: params.session?.sessionId } });
+  }
   if (params.topic === 'workflow_run_update') {
     return ActivityWebhookPayloadV1Schema.parse({
       ...common,

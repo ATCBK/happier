@@ -20,6 +20,14 @@ export type AutomationSessionLifecycleEvent = z.infer<
   typeof AutomationSessionLifecycleEventSchema
 >;
 
+/** Authoring groups project the exact lifecycle event schema, never a matcher. */
+export const AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1 = {
+  turnEnds: ['parentTurnCompleted', 'parentTurnFailed', 'parentTurnCancelled'],
+  needsYou: ['userActionRequired'],
+  sessionArchived: ['sessionArchived'],
+  sessionStarts: ['sessionStarted'],
+} as const satisfies Readonly<Record<string, readonly AutomationSessionLifecycleEvent[]>>;
+
 export const AutomationSessionLifecycleRequestKindSchema =
   SessionUserActionRequiredRequestKindV1Schema;
 export type AutomationSessionLifecycleRequestKind =

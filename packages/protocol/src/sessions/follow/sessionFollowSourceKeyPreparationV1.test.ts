@@ -12,6 +12,7 @@ import {
   projectSessionFollowSourceKeyPreparationAfterSetV1,
   decodeSessionFollowSourceDataEncryptionKeyV1,
   resolveSessionFollowSourceKeyPreparationFailureV1,
+  buildSessionFollowSourceKeyPrepareRequestV1,
 } from './sessionFollowSourceKeyPreparationV1.js';
 import { RPC_ERROR_CODES } from '../../rpc/index.js';
 
@@ -43,6 +44,24 @@ describe('Session Follow source-key preparation V1', () => {
     expect(SessionFollowSourceKeyPrepareRequestV1Schema.safeParse({ ...request, ignored: true }).success).toBe(false);
   });
 
+  it('binds admitted source material to the same input without exposing private rule references', () => {
+    const material = buildSessionFollowSourceKeyPrepareRequestV1({
+      sourceSessionId: 'source', destinationSessionId: 'destination',
+      sourceDataEncryptionKeyBase64, localInputId: 'admitted-original',
+    });
+    expect(material.authorization).toMatchObject({ localInputId: 'admitted-original' });
+    expect(material.request).toMatchObject({ localInputId: 'admitted-original' });
+  });
+
+  it('rejects private rule references in either native source-key carrier', () => {
+    const material = buildSessionFollowSourceKeyPrepareRequestV1({
+      sourceSessionId: 'source', destinationSessionId: 'destination', sourceDataEncryptionKeyBase64,
+    });
+    const rule = { ruleId: 'private-rule', ruleVersion: 1 };
+    expect(SessionFollowSourceKeyPrepareAuthorizationV1Schema.safeParse({ ...material.authorization, rule }).success).toBe(false);
+    expect(SessionFollowSourceKeyPrepareRequestV1Schema.safeParse({ ...material.request, rule }).success).toBe(false);
+  });
+
   it('returns only the strict installation outcome', () => {
     expect(SessionFollowSourceKeyPrepareResponseV1Schema.parse({ v: 1, outcome: 'installed' })).toEqual({ v: 1, outcome: 'installed' });
     expect(SessionFollowSourceKeyPrepareResponseV1Schema.safeParse({ v: 1, outcome: 'installed', sourceSessionId: 'source' }).success).toBe(false);
@@ -54,7 +73,7 @@ describe('Session Follow source-key preparation V1', () => {
       source: {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
-        mode: 'next_turn' as const,
+        policy: { preset: 'quiet' as const },
         deliveryState: 'eligible' as const,
         hasPendingUpdates: false,
       },
@@ -72,7 +91,7 @@ describe('Session Follow source-key preparation V1', () => {
       source: {
         sourceSessionId: 'source',
         destinationSessionId: 'destination',
-        mode: 'next_turn' as const,
+        policy: { preset: 'quiet' as const },
         deliveryState: 'eligible' as const,
         hasPendingUpdates: false,
       },

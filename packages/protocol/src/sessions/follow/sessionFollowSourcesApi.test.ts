@@ -13,7 +13,7 @@ import {
 const source = {
   sourceSessionId: 'src-session',
   destinationSessionId: 'dst-session',
-  mode: 'next_turn' as const,
+  policy: { preset: 'important' as const },
   deliveryState: 'eligible' as const,
   hasPendingUpdates: true,
 };
@@ -29,11 +29,11 @@ describe('session Follow sources authoring contracts', () => {
     expect(SessionFollowSourceV1Schema.safeParse({ ...source, deliveryAccountId: 'acc' }).success).toBe(false);
   });
 
-  it('keeps next-turn implicit while accepting only the two closed source modes', () => {
-    expect(SetSessionFollowSourceRequestSchema.parse({})).toEqual({});
-    expect(SetSessionFollowSourceRequestSchema.parse({ mode: 'wake_on_human_change' })).toEqual({ mode: 'wake_on_human_change' });
-    expect(SetSessionFollowSourceRequestSchema.parse({ mode: 'next_turn' })).toEqual({ mode: 'next_turn' });
-    expect(SetSessionFollowSourceRequestSchema.safeParse({ mode: 'always' }).success).toBe(false);
+  it('requires one explicit shared event policy instead of a separate source mode', () => {
+    expect(SetSessionFollowSourceRequestSchema.parse({ policy: source.policy })).toEqual({ policy: source.policy });
+    expect(SetSessionFollowSourceRequestSchema.safeParse({}).success).toBe(false);
+    expect(SetSessionFollowSourceRequestSchema.safeParse({ mode: 'next_turn' }).success).toBe(false);
+    expect(SetSessionFollowSourceRequestSchema.safeParse({ policy: source.policy, mode: 'wake_on_human_change' }).success).toBe(false);
   });
 
   it('rejects a delivery state that is not durably derivable from the two endpoints', () => {
