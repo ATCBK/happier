@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import { PushNotificationClient } from './pushNotifications';
-import { accountSettingsParse } from '@happier-dev/protocol';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { notificationCatalogFixture, notificationSettingsFixture } from '@/notifications/activity/activityNotification.testkit';
 
 vi.mock('axios', () => {
   const isAxiosError = (err: any) => Boolean(err?.isAxiosError);
@@ -90,8 +90,13 @@ describe('focused computer push filtering', () => {
         : { tokens: [], suppressedByFocusedComputer: true },
     }));
     const client = new PushNotificationClient('t', 'https://api.example.test');
+    const settings = notificationSettingsFixture({
+      attentionDeliveryPolicyV1: { mutePhoneWhenComputerFocused: true },
+      notificationChannelsV1: [{ id: 'phone-push', kind: 'expo_push', enabled: true }],
+    });
     const result = await dispatchActivityNotificationAsync({
-      settings: accountSettingsParse({ attentionDeliveryPolicyV1: { mutePhoneWhenComputerFocused: true } }),
+      settings,
+      ...notificationCatalogFixture(settings),
       pluginNotifications: null,
       expoPushSender: client,
       fetchSessionNotificationContext: client.fetchSessionNotificationContext.bind(client),

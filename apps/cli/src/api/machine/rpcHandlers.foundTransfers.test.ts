@@ -8,7 +8,7 @@ describe('source-composed machine Found transfer registration', () => {
   it('retains the download transport and refuses every retired asset operation through production registration', async () => {
     const manager = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
     const registration = registerMachineRpcHandlers({ rpcHandlerManager: manager, handlers: {
-      spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'Unavailable fixture Agent' }),
+      spawnSession: async () => ({ type: 'error', errorCode: 'UNEXPECTED', errorMessage: 'Unavailable fixture Agent' }),
       stopSession: async () => true, requestShutdown: () => {},
     } });
     try {

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { Server } from 'socket.io';
 import { io as connect } from 'socket.io-client';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -70,10 +71,11 @@ it('scans, reads, adopts and installs through registered Actions and transfers w
   const agents = [{ agentId: 'codex', nativeRoots: { user: [['.agents', 'skills']],
     plugin: [['.codex', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']] } }];
   const store = createCliApprovalsArtifactStore({ credentials, serverId: 'srv_seam', getAccountEncryptionMode: async () => 'plain' });
-  const service = createMachineSkillActions({ store: store.promptLibraryStore, target: { machineId: 'machine', serverIdentityId: 'srv_seam' },
+  const service = createMachineSkillActions({ store: store.promptLibraryStore, readPluginSkills: store.readPluginSkills,
+    target: { machineId: 'machine', serverIdentityId: 'srv_seam' },
     libraryServerIdentityId: 'srv_seam', homeDirectory: home, happierHomeDirectory: join(home, '.happier'),
     agents, readInstalledAgents: async () => ['codex'] });
-  const executor = createActionExecutor({ skillMachineActionExecute: createMachineSkillActionExecutor({ machineId: 'machine', service }) });
+  const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), skillMachineActionExecute: createMachineSkillActionExecutor({ machineId: 'machine', service }) });
   let confirmation: ActionExecutorContext['presentUserConfirmation'];
   const manager = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });
   // Human confirmation is a UI/transport boundary fact, not a public RPC input or a fake policy decision.
@@ -182,13 +184,14 @@ it('scans, reads, adopts and installs through registered Actions and transfers w
     const conflictPath = join(home, '.conflicting', 'skills', basename(path));
     mkdirSync(conflictPath, { recursive: true });
     writeFileSync(join(conflictPath, 'SKILL.md'), 'native owner content');
-    const partialService = createMachineSkillActions({ store: store.promptLibraryStore,
+    const partialService = createMachineSkillActions({ store: store.promptLibraryStore, readPluginSkills: store.readPluginSkills,
       target: { machineId: 'machine', serverIdentityId: 'srv_seam' }, libraryServerIdentityId: 'srv_seam',
       homeDirectory: home, happierHomeDirectory: join(home, '.happier'),
       agents: [{ agentId: 'codex', nativeRoots: { user: [['.agents', 'skills']] } },
         { agentId: 'claude', nativeRoots: { user: [['.conflicting', 'skills']] } }],
       readInstalledAgents: async () => ['codex', 'claude'] });
     const partialExecutor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       skillMachineActionExecute: createMachineSkillActionExecutor({ machineId: 'machine', service: partialService }),
     });
     const partialManager = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain' });

@@ -5,14 +5,18 @@ import type { Credentials } from '@/persistence';
 import type { Metadata } from '@/api/types';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { ApiClient } from './api';
 
-const { mockPost, mockIsAxiosError } = vi.hoisted(() => ({
+const { mockGet, mockPost, mockIsAxiosError } = vi.hoisted(() => ({
+  mockGet: vi.fn(),
   mockPost: vi.fn(),
   mockIsAxiosError: vi.fn(() => false),
 }));
 
 vi.mock('axios', () => ({
   default: {
+    get: mockGet,
     post: mockPost,
     isAxiosError: mockIsAxiosError,
   },
@@ -33,6 +37,10 @@ const envScope = createEnvKeyScope([
 
 describe('ApiClient loopback url resolution', () => {
   beforeEach(() => {
+    mockGet.mockReset().mockResolvedValue({
+      status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }),
+    });
     mockPost.mockReset();
     mockIsAxiosError.mockReset();
 
@@ -59,7 +67,6 @@ describe('ApiClient loopback url resolution', () => {
       token: 'fake-token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
     };
-    const { ApiClient } = await import('./api');
     const api = await ApiClient.create(credential);
 
     const metadata: Metadata = {
@@ -71,12 +78,15 @@ describe('ApiClient loopback url resolution', () => {
       happyToolsDir: '/tmp/happier-cli-test-loopback/tools',
       machineId: 'test-machine',
     };
-    await api.getOrCreateSession({
-      tag: 'test-tag',
-      metadata,
-      state: null,
-    });
-    output.restore();
+    try {
+      await api.getOrCreateSession({
+        tag: 'test-tag',
+        metadata,
+        state: null,
+      });
+    } finally {
+      output.restore();
+    }
 
     expect(mockPost).toHaveBeenCalled();
     const calledUrl = mockPost.mock.calls[0]?.[0];
@@ -95,7 +105,6 @@ describe('ApiClient loopback url resolution', () => {
       token: 'fake-token',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
     };
-    const { ApiClient } = await import('./api');
     const api = await ApiClient.create(credential);
 
     const metadata: Metadata = {

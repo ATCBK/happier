@@ -46,7 +46,7 @@ describe('ApiClient sessionSyncClient runtime-action routes', () => {
       browser: { enabled: true, viewTargets: { enabled: true }, internal: { enabled: true }, automation: { enabled: true } },
     } }) }));
     const broker = createBrowserDaemonControlBroker();
-    const provision = vi.fn(async () => 'provisioning' as const);
+    const provision = vi.fn(async (): Promise<never> => { throw new Error('Cancellation must not provision Chromium'); });
     api.setBrowserAutomationRuntimeProvisionerProvider(() => provision);
     // The machine RPC transport is the system boundary; route composition and forwarding stay real.
     const payloads: unknown[] = [];
@@ -331,7 +331,8 @@ describe('ApiClient sessionSyncClient runtime-action routes', () => {
 
     api.setBrowserDiagnosticsActionRoutesProvider(() => ({ dispatch: diagnosticsDispatch }));
     api.setBrowserDaemonContextRoutesProvider(() => ({ dispatch: contextDispatch }));
-    api.setBrowserDaemonAutomationRoutesProvider(() => ({ dispatch: automationDispatch }));
+    api.setBrowserDaemonAutomationRoutesProvider(() => ({ dispatch: automationDispatch,
+      prepareConfidentialFill: async () => { throw new Error('Confidential browser input is not available in this fixture'); } }));
     const broker = createBrowserDaemonControlBroker();
     // Physical ownership comes from the real broker; only the Chromium command boundary is fake.
     broker.registerAdapter({ adapterKind: 'chromiumSidecar',

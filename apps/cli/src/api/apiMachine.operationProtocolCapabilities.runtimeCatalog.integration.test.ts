@@ -6,7 +6,8 @@ import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
 import { ApiMachineClient } from './apiMachine';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
-import { MachineUpdateStateRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
+import { MachineUpdateStateRequestSchema, type MachineUpdateStateResponse } from '@happier-dev/protocol/machines/metadataUpdate';
+import type { MachineUpdateOperationProtocolCapabilitiesResponseV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 function createMachine(): Machine {
@@ -449,7 +450,7 @@ describe('ApiMachineClient operation protocol capability publication', () => {
     };
     const client = new ApiMachineClient('token', machine);
     expect(machine.daemonState?.peerMediation?.iroh).toBeUndefined();
-    const emitWithAck = vi.fn(async (event: string, payload: unknown) => event === 'machine-update-state'
+    const emitWithAck = vi.fn<(event: string, payload: unknown) => Promise<MachineUpdateStateResponse | MachineUpdateOperationProtocolCapabilitiesResponseV1>>(async (event, payload) => event === 'machine-update-state'
       ? { result: 'success', version: 1, daemonState: MachineUpdateStateRequestSchema.parse(payload).daemonState }
       : { v: 1, result: 'success', revision: 4 });
     const socket = createApiSessionSocketStub({ connected: true,

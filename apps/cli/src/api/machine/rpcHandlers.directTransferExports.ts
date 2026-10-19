@@ -1,11 +1,11 @@
-import * as zMini from 'zod/mini';
 import { ComposerContentHandleV1Schema, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { FoundSkillDownloadRequestV1Schema, type FoundSkillDownloadRequestV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import type { RegistryDownloadRequestV1 } from '@happier-dev/protocol/registries';
 import { WorkspaceSyncSeedExportPrepareV1Schema, WorkspaceSyncTargetConflictStageV1Schema, type WorkspaceSyncSeedExportPrepareV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import type { ComposerContentHandleV1, TransferEndpointCandidate, WorkspaceSyncTargetConflictStageV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { extend } from 'zod/mini';
 
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 
@@ -37,31 +37,31 @@ export type DirectTransferExportPrepareRequest =
     }>;
 
 const DirectTransferExportPrepareRequestSchema = z.union([
-    asHostProtocolZod(zMini.extend(FoundSkillDownloadRequestV1Schema, { t: z.literal('prompt_asset_download_v1') })),
-    z.object({
+    asHostProtocolZod(extend(FoundSkillDownloadRequestV1Schema, { t: z.literal('prompt_asset_download_v1') })),
+    z.strictObject({
         t: z.literal('prompt_registry_download_v1'),
-        sourceId: z.string().min(1),
+        sourceId: z.string().check(z.minLength(1)),
         kind: z.literal('skill'),
         itemId: z.string(),
-        version: z.string().min(1),
-    }).strict(),
-    z.object({
+        version: z.string().check(z.minLength(1)),
+    }),
+    z.strictObject({
         t: z.literal('workspace_file_download_v1'),
-        workingDirectory: z.string().min(1),
-        path: z.string().min(1),
+        workingDirectory: z.string().check(z.minLength(1)),
+        path: z.string().check(z.minLength(1)),
         asZip: z.boolean(),
-        confinedToWorkingDirectory: z.boolean().optional(),
-    }).strict(),
+        confinedToWorkingDirectory: z.optional(z.boolean()),
+    }),
     asHostProtocolZod(WorkspaceSyncSeedExportPrepareV1Schema),
-    asHostProtocolZod(zMini.extend(WorkspaceSyncTargetConflictStageV1Schema, {
+    asHostProtocolZod(extend(WorkspaceSyncTargetConflictStageV1Schema, {
         t: z.literal('workspace_sync_resolution_v1'),
     })),
-    z.object({
+    z.strictObject({
         t: z.literal('composer_media_stage_inspect_v1'),
         handle: asHostProtocolZod(ComposerContentHandleV1Schema),
-        offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-        maxBytes: z.number().int().positive().max(MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1),
-    }).strict(),
+        offset: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+        maxBytes: z.number().check(z.int(), z.positive(), z.maximum(MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1)),
+    }),
 ]);
 
 type DirectTransferExportPrepareResponse = Readonly<

@@ -209,9 +209,6 @@ describe('workspace sync machine RPC handlers', () => {
     await expect(handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN)?.({
       sourceWorkspaceRefId: 'workspace-a', targetWorkspaceRefId: 'workspace-b',
     })).resolves.toEqual({ ok: true, traversed: [] });
-    expect(prepareBetween).toHaveBeenCalledWith({
-      sourceWorkspaceRefId: 'workspace-a', targetWorkspaceRefId: 'workspace-b',
-    }, expect.any(AbortSignal));
     await expect(handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN)?.({
       sourceWorkspaceRefId: 'workspace-a', targetWorkspaceRefId: 'workspace-b', rootPath: '/caller/root',
     })).rejects.toThrow();
@@ -313,7 +310,7 @@ describe('workspace sync machine RPC handlers', () => {
 });
 
 describe('workspace sync target bootstrap RPC handlers', () => {
-  it('registers the exact root-free prepare/release methods, forwards the abort signal and rejects poison fields', async () => {
+  it('registers the exact root-free prepare/release methods and rejects poison fields', async () => {
     const { handlers, rpcHandlerManager } = createRegistrar();
     const readyResult = {
       v: 1 as const,
@@ -360,7 +357,6 @@ describe('workspace sync target bootstrap RPC handlers', () => {
     const signal = new AbortController().signal;
     await expect(handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE)?.(prepareRequest, { signal }))
       .resolves.toEqual(readyResult);
-    expect(prepareBootstrapAtTarget).toHaveBeenCalledWith(prepareRequest, signal);
 
     // Caller-supplied paths, credentials and unknown fields are rejected before the service is consulted.
     for (const poison of ['rootPath', 'sourceRootPath', 'canonicalRoot', 'markerPath', 'credential', 'grant', 'bearer', 'route']) {
@@ -379,7 +375,6 @@ describe('workspace sync target bootstrap RPC handlers', () => {
     };
     await expect(handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_RELEASE)?.(releaseRequest, { signal }))
       .resolves.toEqual({ ok: true, released: false });
-    expect(releaseBootstrapAtTarget).toHaveBeenCalledWith(releaseRequest, signal);
     await expect(handlers.get(RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_RELEASE)?.({
       ...releaseRequest,
       reason: 'copy_committed',

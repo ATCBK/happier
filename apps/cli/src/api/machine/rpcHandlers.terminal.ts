@@ -251,6 +251,16 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     }
     if (!await admissionCurrent(context)) return err('terminal_forbidden');
     const admission = context.machineAdmission;
+    // An unqualified custodian shell belongs to the Machine, not an accepted
+    // Project checkout. Explicit Project and Session targets keep their owners.
+    if (!input.workspace && admission.actorAccountId === admission.custodianAccountId && admission.role === 'manage') {
+      if (!params.deps?.serverId) return err('terminal_unavailable');
+      const cwd = resolveCwd(input.cwd);
+      if (!cwd.ok) return cwd;
+      return { ok: true, cwd: cwd.cwd, custody: { kind: 'machine', serverId: params.deps.serverId,
+        requesterAccountId: admission.actorAccountId, machineId: admission.machineId,
+        installationId: admission.installationId, rootPath: cwd.cwd } };
+    }
     const runtime = await params.deps?.accountReadRuntime?.(context);
     // The requester Account owner must supply its own ports. Machine Use never
     // authorizes reading the custodian's private accepted-workspace catalog.

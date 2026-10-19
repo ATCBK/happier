@@ -4,6 +4,7 @@ import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 
 import { isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 export function createLoopbackHomeIdentityProbe(params: Readonly<{
@@ -61,15 +62,14 @@ export function createLoopbackHomeIdentityProbe(params: Readonly<{
 }
 
 export function createLoopbackReadinessProbe(params: Readonly<{
-  serverUrl: string;
+  serverUrl?: string;
   token: string;
   expectedServerIdentityId?: string;
   signal?: AbortSignal;
 }>): () => Promise<ReadinessProbeResult> {
-  const serverUrl = resolveLoopbackHttpUrl(params.serverUrl).replace(/\/+$/, '');
-
   return async () => {
-    const identity = await createLoopbackHomeIdentityProbe(params)();
+    const serverUrl = resolveLoopbackHttpUrl(params.serverUrl ?? resolveServerHttpBaseUrl()).replace(/\/+$/, '');
+    const identity = await createLoopbackHomeIdentityProbe({ ...params, serverUrl })();
     if (identity.status !== 'ready') return identity;
 
     try {

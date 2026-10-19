@@ -84,7 +84,7 @@ describe('Machine MCP Test pipeline', () => {
       annotations: { readOnlyHint: true }, tokens: 11 }], serverInfo: { name: 'fixture', version: '2.0.0' },
       instructions: 'Read before writing.', protocolVersion: expect.any(String), stderrTail: expect.stringContaining('[REDACTED]') });
     expect(writes).toEqual([expect.objectContaining({ expectedRevision: 3, content: { t: 'plain', v: {
-      ...catalog, servers: [{ ...server, toolsSnapshot: expect.objectContaining({ machineId: 'machine',
+      ...catalog, servers: [{ ...server, updatedAt: expect.any(Number), toolsSnapshot: expect.objectContaining({ machineId: 'machine',
         checkedAt: expect.any(Number), tools: [{ name: 'read_records', title: 'Read records', description: 'Lists records.',
           annotations: { readOnlyHint: true }, tokens: 11 }] }) }],
     } } })]);

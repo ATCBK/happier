@@ -11,7 +11,7 @@ it.each(['account', 'terminal'] as const)('preserves the %s root authority when 
     actionId: 'machines.terminal.list', requestId: 'original-request', requestEnvelopeDigest: 'a'.repeat(43),
     target: { kind: 'machine', machineId: 'machine' },
   } });
-  const authority = kind === 'account' ? 'present_user' : 'account_automation';
+  const authority = kind === 'account' ? 'present_user' as const : 'account_automation' as const;
   const rpc = new RpcHandlerManager({ scopePrefix: 'machine', localMachineId: 'machine', encryptionMode: 'plain', logger: () => {},
     // Authenticated Home admission is the network boundary; local matching stays real.
     authorizeRequest: async () => ({ ok: true }) });

@@ -11,7 +11,7 @@ const machine = (): Machine => ({ id: 'machine-1', encryptionMode: 'plain', meta
 describe('ApiMachine operation-owned ACK lifetimes', () => {
   it.each(['metadata', 'state'] as const)('rejoins a committed %s CAS after transport loss without applying its mutation twice', async kind => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const current = machine();
     const client = new ApiMachineClient('token', current);
     let committed: string | null = null;
@@ -43,7 +43,7 @@ describe('ApiMachine operation-owned ACK lifetimes', () => {
       answer: { result: 'success', version: 1, daemonState: encodePlainMachineStoredContent({ status: 'running' }) }, result: 'published' },
   ])('awaits $event through delayed server settlement without replay', async ({ event, run, answer, result }) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const client = new ApiMachineClient('token', machine());
     let acknowledge!: (answer: unknown) => void;
     const socket = createApiSessionSocketStub({ connected: true,

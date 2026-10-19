@@ -1,5 +1,5 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { DEFAULT_HAPPIER_CLOUD_SERVER_URL } from '@happier-dev/cli-common/happierCloud';
+import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
 import axios from 'axios'
 import { boundExpoPushMessage } from './boundExpoPushMessage'
 import { logger } from '@/ui/logger'
@@ -17,6 +17,8 @@ import { PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS, PUSH_NOTIFICATION_CATEGORY_IDS, 
 import type { LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration'
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp'
+import { readAccountSessionDeliveryMutedScopes } from './sessionDeliveryMuteTransport';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 export interface PushToken {
     id: string
@@ -127,6 +129,7 @@ function resolveIosSubtitleFromPushData(data: Record<string, unknown> | undefine
 export class PushNotificationClient {
     private readonly token: string
     private readonly baseUrl: string
+    private readonly notificationServerUrl: string
     readonly serverId: string
     private readonly expo: Expo
     private pushTokenFetchFailureCooldownUntilMs = 0
@@ -134,17 +137,25 @@ export class PushNotificationClient {
 
     constructor(
         token: string,
-        baseUrl: string = DEFAULT_HAPPIER_CLOUD_SERVER_URL,
+        baseUrl?: string,
         serverId: string = configuration.activeServerId,
     ) {
         this.token = token
-        this.baseUrl = baseUrl
+        this.baseUrl = baseUrl ?? resolveServerHttpBaseUrl()
+        // Explicit finite targets keep their link fallback. Default Home HTTP
+        // may use a process-local carrier that cannot be shared with a device.
+        this.notificationServerUrl = baseUrl ?? configuration.serverUrl
         this.serverId = serverId
         this.expo = new Expo()
     }
 
     async fetchSessionNotificationContext(sessionId: string): Promise<RawSessionRecord | null> {
         return fetchSessionById({ token: this.token, serverUrl: this.baseUrl, sessionId, accessProjectionVersion: 1 })
+    }
+
+    readAccountSessionDeliveryMutedScopes(): ReturnType<typeof readAccountSessionDeliveryMutedScopes> {
+        return readAccountSessionDeliveryMutedScopes({ token: this.token, serverHttpBaseUrl: this.baseUrl,
+            accountId: readAccountIdFromToken(this.token) ?? '' });
     }
 
     /**
@@ -455,7 +466,7 @@ export class PushNotificationClient {
             // Create messages for all tokens
             const messages: ExpoPushMessage[] = tokens.map((token, index) => {
                 if (debugPush) logger.debug(`[PUSH] Creating message ${index + 1} for token`)
-                const baseUrl = normalizeClientServerUrl(token.clientServerUrl) ?? this.baseUrl
+                const baseUrl = normalizeClientServerUrl(token.clientServerUrl) ?? this.notificationServerUrl
                 const categoryId = resolveCategoryIdFromPushData(data);
                 const channelId = resolveAndroidChannelIdFromPushData(data, options);
                 const subtitle = resolveIosSubtitleFromPushData(data);

@@ -28,7 +28,7 @@ function harness(providersEnabled: boolean | (() => boolean) = true) {
   } as never;
   const services = {
     // The new operation remains the real source owner, not a test-local translator.
-    prepareProfileMigrationSource: createLegacyProfileMigrationRpcServices({ credentials: { token: 'boundary-token' } }).prepareProfileMigrationSource,
+    prepareProfileMigrationSource: createLegacyProfileMigrationRpcServices({ credentials: { token: 'boundary-token', encryption: null } }).prepareProfileMigrationSource,
     probe: vi.fn<(
       input: Readonly<{ connectionId: string; machineId: string }>,
       waiter?: Readonly<{ signal?: AbortSignal }>,

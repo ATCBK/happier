@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { SocketRpcContent } from '@happier-dev/sync-client';
 import { WorkspaceSyncSourceWriterTargetRoutingV1Schema, WorkspaceSyncSourceRoutingV1Schema,
   WorkspaceSyncSeedRoutingV1Schema, type WorkspaceSyncSeedRoutingV1,
@@ -10,15 +10,15 @@ import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64'
 import { deriveBoxPublicKeyFromEd25519PublicKey, deriveBoxPublicKeyFromSeed, deriveBoxSecretKeyFromSeed,
   openBoxBundleWithSecretKey, sealBoxBundle, isValidBoxBundlePublicKey } from '@happier-dev/protocol/crypto/boxBundle';
 
-const recipient = { v: z.literal(1), machineId: z.string().min(1), installationId: z.string().min(1) };
+const recipient = { v: z.literal(1), machineId: z.string().check(z.minLength(1)), installationId: z.string().check(z.minLength(1)) };
 type InstalledWorkspaceRouting = WorkspaceSyncSourceWriterTargetRoutingV1 | WorkspaceSyncSourceRoutingV1 | WorkspaceSyncSeedRoutingV1;
 const installedRouting = z.union([WorkspaceSyncSourceWriterTargetRoutingV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSeedRoutingV1Schema]);
-const requestEnvelope = z.object({ ...recipient, kind: z.literal('workspace_sync_target_request_v1'), ciphertext: z.string().min(1) }).strict();
-const responseEnvelope = z.object({ ...recipient, kind: z.literal('workspace_sync_target_response_v1'), ciphertext: z.string().min(1) }).strict();
-const requestContent = z.object({ ...recipient, kind: z.literal('workspace_sync_target_request_v1'), method: z.string().min(1),
-  routing: installedRouting, replyPublicKey: z.string().min(1), rpc: z.unknown() }).strict();
-const responseContent = z.object({ ...recipient, kind: z.literal('workspace_sync_target_response_v1'), method: z.string().min(1),
-  routing: installedRouting, rpc: z.unknown() }).strict();
+const requestEnvelope = z.strictObject({ ...recipient, kind: z.literal('workspace_sync_target_request_v1'), ciphertext: z.string().check(z.minLength(1)) });
+const responseEnvelope = z.strictObject({ ...recipient, kind: z.literal('workspace_sync_target_response_v1'), ciphertext: z.string().check(z.minLength(1)) });
+const requestContent = z.strictObject({ ...recipient, kind: z.literal('workspace_sync_target_request_v1'), method: z.string().check(z.minLength(1)),
+  routing: installedRouting, replyPublicKey: z.string().check(z.minLength(1)), rpc: z.unknown() });
+const responseContent = z.strictObject({ ...recipient, kind: z.literal('workspace_sync_target_response_v1'), method: z.string().check(z.minLength(1)),
+  routing: installedRouting, rpc: z.unknown() });
 const entropy = (length: number) => new Uint8Array(randomBytes(length));
 
 /** Only this new private carrier selects installed-key decoding; ordinary Account RPC is unchanged. */

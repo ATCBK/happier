@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import type { Machine } from '@/api/types';
 import type { BrowserRecordingSessionV1 } from '@happier-dev/protocol';
@@ -80,11 +81,12 @@ describe('ApiMachineClient browser recording routes', () => {
         localServicesLauncher: runtime.launcherRoutes, localServicesActions: runtime.actionRoutes,
         resolveLauncherActionExecutor: ({ ingress }) => {
           const executor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId,
               normalizeActionsSettingsV1(null), { surface: context.surface ?? null, authority: context.authority }),
             // Account Artifact persistence/decision is the boundary, not policy or launcher dispatch.
             approvalsCreate: async () => ({ artifactId: 'service-start-approval' }),
-            approvalsUpdate: async () => {},
+            approvalsUpdate: async () => ({ ok: true }),
             approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject' as const, request,
               decisionAuthority: 'present_user' as const }),
             runtimeActionExecute: createLocalServicesDaemonRuntimeActionExecutor({ featureGate: gate, ingress,

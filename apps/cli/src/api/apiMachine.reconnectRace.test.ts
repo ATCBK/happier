@@ -229,9 +229,10 @@ const {
     };
 });
 
-vi.mock('@/configuration', () => ({
-    configuration: configurationMock,
-}));
+vi.mock('@/configuration', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/configuration')>();
+    return { ...actual, configuration: { ...actual.configuration, ...configurationMock } };
+});
 
 vi.mock('@/ui/logger', () => ({
     logger: {

@@ -440,7 +440,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             preferredHost: 'host.local', happyHomeDir: tempRoot, happyLibDir: tempRoot,
             filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
             createConnectedApiMachine: () => client, attachTransferRuntimeStatePublisher: async () => {},
-            startAutomationWorkerForMachine: () => ({ stop: () => {}, refreshAssignments: async () => {}, pause: () => {}, resume: () => {}, handleServerUpdate: () => {} }),
+            startAutomationWorkerForMachine: () => ({ liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} }, stop: () => {}, refreshAssignments: async () => {}, pause: () => {}, resume: () => {}, handleServerUpdate: () => {} }),
             startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
             spawnSession: async () => ({ type: 'success', sessionId: 'unused' }), stopSession: async () => ({ status: 'stopped' }),
             isSessionAlreadyRunning: async () => false, loadLocalSessionMetadataForHandoff: async () => null,
@@ -1350,6 +1350,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             createConnectedApiMachine: () => client,
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => ({
+                liveWorkProducer: { read: () => ({ coverage: 'complete' as const, items: [] }), subscribe: () => () => {} },
                 stop: vi.fn(),
                 refreshAssignments: vi.fn(async () => {}),
                 pause: vi.fn(),
@@ -2540,6 +2541,47 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             },
         });
         expect(order).toEqual(['deleted', 'cursor']);
+    });
+
+    it('delivers exact changed Session ids before cursor acknowledgement and retains failed Follow wake work', async () => {
+        const machine: Machine = { id: 'machine-follow-changes', encryptionKey: new Uint8Array(32).fill(7),
+            encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        mockAccountGet(async (url: string) => {
+            if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'account-follow-changes' } };
+            if (url.includes('/v2/changes')) return { status: 200, data: {
+                changes: [{ cursor: 12, kind: 'session', entityId: 'follow-destination', changedAt: 2, hint: null },
+                    { cursor: 13, kind: 'artifact', entityId: 'unrelated-artifact', changedAt: 3, hint: null },
+                    { cursor: 14, kind: 'session', entityId: 'other-destination', changedAt: 4, hint: { pendingVersion: 0 } }],
+                nextCursor: 14,
+                sessionAccessWitness: { v: 1, throughCursor: 14,
+                    entries: [{ sessionId: 'follow-destination', cursor: 12, status: 'available' },
+                        { sessionId: 'other-destination', cursor: 14, status: 'available' }] },
+            } };
+            throw new Error(`unexpected url: ${url}`);
+        });
+        const order: string[] = [];
+        const changed: unknown[] = [];
+        let unavailable = true;
+        writeAccountChangesCursor.mockClear();
+        writeAccountChangesCursor.mockImplementation(async () => { order.push('cursor'); });
+        const client = new ApiMachineClient('fake-token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        admitAccountSnapshot('fake-token');
+        const dispose = client.onSessionChanged(async change => {
+            if (unavailable) throw new Error('follow_read_temporarily_unavailable');
+            changed.push(change); order.push('changed');
+        });
+        const sync = () => (client as unknown as { syncChangesOnConnect: (opts: { reason: 'live' }) => Promise<void> })
+            .syncChangesOnConnect({ reason: 'live' });
+        try {
+            await expect(sync()).rejects.toThrow('follow_read_temporarily_unavailable');
+            expect(writeAccountChangesCursor).not.toHaveBeenCalled();
+            unavailable = false;
+            await sync();
+            expect(changed).toEqual([{ sessionId: 'follow-destination', cursor: 12 },
+                { sessionId: 'other-destination', cursor: 14 }]);
+            expect(order).toEqual(['changed', 'changed', 'cursor']);
+        } finally { dispose(); await client.shutdown(); }
     });
 
     it('delivers same-sequence transcript revisions before acknowledging the Account cursor', async () => {

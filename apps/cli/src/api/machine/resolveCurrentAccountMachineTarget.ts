@@ -1,6 +1,5 @@
-import * as zMini from 'zod/mini';
 import axios from 'axios';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { AccessibleMachineAccessV1Schema, type AccessibleMachineAccessV1 } from '@happier-dev/protocol/machines/machineAccessV1';
@@ -19,8 +18,9 @@ import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/clie
 // bootstrap projection; this parser extends it only with the legacy/full-account
 // `metadata` blob it genuinely needs. Labels and decoded platform facts remain
 // CLI projections of that metadata and never alter machine identity.
-const ACCOUNT_MACHINE_ROW_SCHEMA = zMini.catchall(zMini.extend(ExternalActionMachineBootstrapV1Schema, { metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: z.optional(AccessibleMachineAccessV1Schema),
-    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) }), z.unknown());
+const ACCOUNT_MACHINE_ROW_SCHEMA = z.looseObject({ ...ExternalActionMachineBootstrapV1Schema.shape,
+    metadata: z.optional(z.string()), activeAt: z.optional(z.nullable(z.number())), access: z.optional(AccessibleMachineAccessV1Schema),
+    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) });
 
 const ACCOUNT_MACHINE_INVENTORY_SCHEMA = z.array(ACCOUNT_MACHINE_ROW_SCHEMA);
 
@@ -148,9 +148,13 @@ export async function listCurrentAccountMachines(params: Readonly<{
   }
 }
 
-/** Background Account administration selects a reachable daemon in the exact Home. */
+/** Background Account administration preserves explicit targets and otherwise selects a reachable daemon in the exact Home. */
 export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountMachines>[0]
-  & Readonly<{ preferredMachineId?: string | null }>): Promise<string | null> {
+  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null }>): Promise<string | null> {
+  if (params.requestedMachineId !== undefined) {
+    const resolution = await resolveCurrentAccountMachineTarget(params);
+    return resolution.kind === 'selected' ? resolution.target.machineId : null;
+  }
   const machines = await listCurrentAccountMachines(params);
   const reachable = machines.filter(machine => machine.kind === 'persistent' && !machine.replacedByMachineId
     && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }));

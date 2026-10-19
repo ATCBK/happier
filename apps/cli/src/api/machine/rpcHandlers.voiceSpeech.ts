@@ -632,7 +632,9 @@ export function registerMachineVoiceSpeechRpcHandlers(params: Readonly<{
     if (code === 'credential_unavailable' || code === 'plugin_voice_credential_access_unavailable') {
       return { ok: false as const, errorCode: 'credential_unavailable' as const };
     }
-    if (code === 'provider_unavailable') return { ok: false as const, errorCode: 'provider_unavailable' as const };
+    if (code === 'provider_unavailable' || code === 'plugin_final_generation_retired') {
+      return { ok: false as const, errorCode: 'provider_unavailable' as const };
+    }
     if (code === 'provider_settings_invalid') return { ok: false as const, errorCode: 'invalid_parameters' as const };
     if (code === 'cancelled') return { ok: false as const, errorCode: 'cancelled' as const };
     if (code === 'request_timeout') return { ok: false as const, errorCode: 'request_timeout' as const };

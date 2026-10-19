@@ -9,6 +9,7 @@ import {
   MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1,
   SESSION_SERVER_START_DAEMON_RPC_METHOD_V1,
 } from '@happier-dev/protocol';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -74,6 +75,7 @@ vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: loggerDebugMock,
+    info: () => undefined,
     warn: loggerWarnMock,
     debugLargeJson: () => undefined,
   },
@@ -120,6 +122,12 @@ describe('ApiMachineClient connect ordering', () => {
       nowMs: () => now,
     });
     if (!listener) throw new Error('expected listener');
+    const { decodeBase64, decryptResult } = await import('@/api/encryption');
+    const readPublishedState = () => {
+      const writes = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state');
+      const content = (writes.at(-1)![1] as { daemonState: string }).daemonState;
+      return decryptResult(key, 'legacy', decodeBase64(content));
+    };
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const publishEndpoint = async () => {
       const endpoint = listener.readEndpoint();
@@ -140,6 +148,11 @@ describe('ApiMachineClient connect ordering', () => {
         }
       }
       await vi.waitFor(() => expect(connected).toBe(true));
+      // Connect's callback and registration readiness publish independently.
+      // Heartbeat assertions start after the real readiness state is acknowledged.
+      await vi.waitFor(() => expect(readPublishedState()).toMatchObject({
+        status: 'authenticated', value: { pid: process.pid, contributionRegistryProjectionRevision: 0 },
+      }));
       const writesBeforeHeartbeat = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state').length;
       now += 20_000;
       await vi.advanceTimersByTimeAsync(20_000);
@@ -147,12 +160,6 @@ describe('ApiMachineClient connect ordering', () => {
       expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state')).toHaveLength(writesBeforeHeartbeat);
       now = listener.endpoint.expiresAt - 150_000;
       await vi.advanceTimersByTimeAsync(130_000);
-      const { decodeBase64, decryptResult } = await import('@/api/encryption');
-      const readPublishedState = () => {
-        const writes = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state');
-        const content = (writes.at(-1)![1] as { daemonState: string }).daemonState;
-        return decryptResult(key, 'legacy', decodeBase64(content));
-      };
       await vi.waitFor(() => expect(readPublishedState()).toMatchObject({
         status: 'authenticated', value: { peerMediation: { loopback: { endpoint: {
           ...listener.endpoint, expiresAt: now + 300_000,
@@ -240,9 +247,12 @@ describe('ApiMachineClient connect ordering', () => {
       metadataVersion: 0,
       daemonState: projectionRevision === 0
         ? null
-        : { status: 'running', contributionRegistryProjectionRevision: projectionRevision },
+        : {
+          status: 'running', contributionRegistryProjectionRevision: projectionRevision,
+          peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
+        },
       daemonStateVersion: 0,
-    });
+    }, undefined, { controlPort: 41233 });
 
     const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
     rpcHandlerManager.registerHandler('neutral.reconnect', async () => ({ ok: true }));
@@ -273,6 +283,14 @@ describe('ApiMachineClient connect ordering', () => {
       const { decodeBase64, decryptResult } = await import('@/api/encryption');
       const runningState = decryptResult(new Uint8Array(32).fill(1), 'legacy', decodeBase64((runningPublication![1] as { daemonState: string }).daemonState));
       expect(runningState).toMatchObject({ status: 'authenticated', value: { contributionRegistryProjectionRevision: projectionRevision } });
+      if (projectionRevision !== 0) {
+        if (runningState.status !== 'authenticated') throw new Error('Expected authenticated machine state');
+        const readyState = MachinePublishedDaemonStateV1Schema.parse(runningState.value);
+        expect(readyState).toMatchObject({
+          status: 'running', pid: process.pid, startedAt: expect.any(Number), httpPort: 41233,
+          peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
+        });
+      }
       firstSocket.disconnect();
       await vi.waitFor(() => expect(secondSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTER,
         { method: 'machine-1:neutral.reconnect' }));

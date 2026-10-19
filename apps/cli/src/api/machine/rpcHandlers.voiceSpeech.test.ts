@@ -517,7 +517,7 @@ describe('unified Voice speech machine RPC', () => {
       settingsVersion: revision,
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
-      connectedPurposeCatalog: { status: 'ready', revision, record: { key: 'purposes', value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [{
+      connectedPurposeCatalog: { status: 'ready' as const, revision, record: { key: 'purposes' as const, value: ConnectedPurposeCatalogV1Schema.parse({ v: 1, bindings: [{
         purpose: { consumer: target, purpose: 'voice.speech' }, target: { kind: 'account',
           account: { service: { pluginId: 'happier.google', localId: 'oauth' }, accountId } },
       }] }) } },
@@ -804,7 +804,7 @@ describe('unified Voice speech machine RPC', () => {
     await expect(handlers.get(RPC_METHODS.DAEMON_VOICE_SPEECH_CATALOG)?.({
       target, catalog: 'models',
     })).resolves.toMatchObject({ ok: false, errorCode: 'provider_unavailable' });
-    await expect(boundHttp?.request({ method: 'GET', url: 'https://speech.example.test' })).rejects.toMatchObject({ code: 'plugin_final_generation_retired' });
+    await expect(boundHttp?.request({ method: 'GET', url: 'https://speech.example.test', redirect: 'error' })).rejects.toMatchObject({ code: 'plugin_final_generation_retired' });
     await registration.dispose();
   });
 

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
   StoredJsonContentEnvelopeSchema,
   sealEncryptedDataKeyEnvelopeV1,
 } from '@happier-dev/protocol';
@@ -9,10 +8,10 @@ import {
 import { ApiClient } from './api';
 import { decodeBase64, encodeBase64, encrypt, getRandomBytes } from './encryption';
 import tweetnacl from 'tweetnacl';
+import predecessor from './machine/machineLegacyContent.predecessor.fixture.json';
 
 const mockPost = vi.fn();
 const mockGet = vi.fn();
-const mockFetchServerFeaturesSnapshot = vi.fn();
 
 vi.mock('axios', () => ({
   default: {
@@ -36,10 +35,6 @@ vi.mock('@/ui/logger', () => ({
   },
 }));
 
-vi.mock('@/features/serverFeaturesClient', () => ({
-  fetchServerFeaturesSnapshot: (...args: unknown[]) =>
-    mockFetchServerFeaturesSnapshot(...args),
-}));
 
 function decodeEnvelope(value: string) {
   return StoredJsonContentEnvelopeSchema.parse(
@@ -51,20 +46,7 @@ describe('ApiClient.getOrCreateMachine plaintext account storage', () => {
   beforeEach(() => {
     mockGet.mockReset();
     mockPost.mockReset();
-    mockFetchServerFeaturesSnapshot.mockReset();
-    mockFetchServerFeaturesSnapshot.mockResolvedValue({
-      status: 'ready',
-      features: {
-        capabilities: {
-          accountStoredContentCompatibility: {
-            v: 1,
-            minimumProtocolVersion: 2,
-            currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-            declarationTransport: 'http-header-and-socket-auth-v1',
-          },
-        },
-      },
-    });
+
   });
 
   it('writes and reads machine state without consulting account encryption material', async () => {
@@ -126,44 +108,48 @@ describe('ApiClient.getOrCreateMachine plaintext account storage', () => {
     });
   });
 
-  it('refuses a plaintext Machine marker before POST against an immutable old-server capability snapshot', async () => {
-    mockFetchServerFeaturesSnapshot.mockResolvedValue({
-      status: 'ready',
-      features: {
-        capabilities: {
-          encryption: {
-            storagePolicy: 'optional',
-          },
-        },
-      },
-    });
+  it('recovers exact predecessor Machine blobs before registering an already-plain Account', async () => {
+    const fixture = predecessor.rows.find(row => row.credentialKind === 'dataKey')!;
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    let row: Record<string, unknown> = { ...fixture.machine, storageMode: 'e2ee', contentPublicKeyFingerprint: 'old-key' };
     mockGet.mockImplementation(async (url: string) => {
-      if (url.includes('/v1/machines/')) throw { isAxiosError: true, response: { status: 404 } };
+      if (url.includes('/v1/machines/')) return { status: 200, data: { machine: row } };
       return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     });
-
-    const api = await ApiClient.create({
-      token: 'token-test',
-      encryption: null,
+    mockPost.mockImplementation(async (url: string, body: Record<string, unknown>) => {
+      if (url.endsWith('/content-key/transition')) {
+        const next = body.next as Record<string, unknown>;
+        expect(decodeEnvelope(String(next.metadata))).toEqual({ t: 'plain', v: predecessor.openedMetadata });
+        expect(decodeEnvelope(String(next.daemonState))).toEqual({ t: 'plain', v: predecessor.openedDaemonState });
+        expect(body.expected).toEqual({ dataEncryptionKey: fixture.machine.dataEncryptionKey, metadataVersion: 4, daemonStateVersion: 3 });
+        row = { ...row, ...next, storageMode: 'plain', metadataVersion: 5, daemonStateVersion: 4, contentPublicKeyFingerprint: null };
+        return { status: 200, data: { kind: 'committed', machine: row } };
+      }
+      expect(body.metadata).toBe(row.metadata);
+      expect(body.daemonState).toBe(row.daemonState);
+      expect(body.dataEncryptionKey).toBe(row.dataEncryptionKey);
+      return { status: 200, data: { machine: row } };
     });
+    const api = await ApiClient.create({ token, encryption: { type: 'dataKey', machineKey: decodeBase64(fixture.accountSecret), publicKey: decodeBase64(fixture.accountPublicKey!) } });
+    const machine = await api.getOrCreateMachine({ machineId: fixture.machine.id,
+      metadata: { host: 'current-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/tmp', happyHomeDir: '/tmp/.happier' } });
+    expect(machine).toMatchObject({ encryptionMode: 'plain', metadata: { displayName: 'User edit' }, daemonState: predecessor.openedDaemonState });
+    expect(mockPost.mock.calls.map(([url]) => String(url).endsWith('/content-key/transition'))).toEqual([true, false]);
+  });
 
-    await expect(api.getOrCreateMachine({
-      machineId: 'machine-plain-old-server',
-      metadata: {
-        host: 'plain-host',
-        homeDir: '/home/plain',
-        platform: 'linux',
-        happyCliVersion: '0.0.0-test',
-        happyHomeDir: '/home/plain/.happier',
-        happyLibDir: '/home/plain/.happier/lib',
-      },
-    })).rejects.toMatchObject({
-      code: 'client-upgrade-required',
-      retryable: false,
-    });
-
+  it('keeps predecessor Machine bytes locked when the historical key is unavailable', async () => {
+    const fixture = predecessor.rows.find(row => row.credentialKind === 'dataKey')!;
+    mockGet.mockImplementation(async (url: string) => url.includes('/v1/machines/')
+      ? { status: 200, data: { machine: fixture.machine } }
+      : { status: 200, data: { mode: 'plain', updatedAt: 1 } });
+    const api = await ApiClient.create({ token: `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`, encryption: null });
+    await expect(api.getOrCreateMachine({ machineId: fixture.machine.id,
+      metadata: { host: 'current-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/tmp', happyHomeDir: '/tmp/.happier' } }))
+      .rejects.toMatchObject({ code: 'machine_content_key_unavailable' });
     expect(mockPost).not.toHaveBeenCalled();
   });
+
+
 });
 
 

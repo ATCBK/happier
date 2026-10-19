@@ -8,6 +8,8 @@ import { connectionState } from '@/api/offline/serverConnectionErrors';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
 import { logger } from '@/ui/logger';
+import { AccountEncryptionModeResponseSchema, AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { MachinePublishedRowV1Schema, type MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const {
@@ -104,6 +106,29 @@ function readApiTestSettings(): any {
     return JSON.parse(readFileSync(configurationMock.settingsFile, 'utf8'));
 }
 
+async function readApiGetFixture(url: string) {
+    if (url.endsWith('/v1/account/encryption')) {
+        return { status: 200, data: AccountEncryptionModeResponseSchema.parse({ mode: 'e2ee', updatedAt: 1 }) };
+    }
+    if (url.includes('/v1/machines/')) {
+        throw { isAxiosError: true, response: { status: 404, data: { error: 'machine_not_found' } } };
+    }
+    if (url.endsWith('/v1/account/encryption/currentness')) {
+        return { status: 200, data: AccountEncryptionCurrentnessResponseSchema.parse({
+            mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing-fingerprint',
+            contentKeyFingerprint: 'content-fingerprint', updatedAt: 1,
+        }) };
+    }
+    throw new Error('Unexpected API fixture GET');
+}
+
+function createMachineRegistrationFixture(overrides: Partial<MachinePublishedRowV1> = {}) {
+    // These cases exercise registration and error policy. No stored Machine
+    // content is needed; an absent payload still follows the real key owner.
+    return MachinePublishedRowV1Schema.parse({ id: 'test-machine', metadata: null,
+        metadataVersion: 1, daemonState: null, daemonStateVersion: 0, ...overrides });
+}
+
 describe('Api server error handling', () => {
     let api: ApiClient;
     const envKeys = [
@@ -138,16 +163,7 @@ describe('Api server error handling', () => {
                 },
             },
         });
-        mockGet.mockResolvedValue({
-            status: 200,
-            data: {
-                mode: 'e2ee',
-                version: 1,
-                signingKeyFingerprint: 'signing-fingerprint',
-                contentKeyFingerprint: 'content-fingerprint',
-                updatedAt: 1,
-            },
-        });
+        mockGet.mockImplementation(readApiGetFixture);
         connectionState.reset(); // Reset offline state between tests
         rmSync(configurationMock.happyHomeDir, { recursive: true, force: true });
         mkdirSync(configurationMock.happyHomeDir, { recursive: true });
@@ -618,19 +634,14 @@ describe('Api server error handling', () => {
         it('retains only the server-validated exact-target operation capability snapshot', async () => {
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
+                    machine: createMachineRegistrationFixture({
                         revokedAt: null,
                         replacedByMachineId: null,
                         operationProtocolCapabilities: {
                             sessionSpawn: { protocolVersions: [1] },
                         },
                         operationProtocolCapabilitiesRevision: 4,
-                    },
+                    }),
                 },
             });
 
@@ -648,13 +659,7 @@ describe('Api server error handling', () => {
         it('uses provided timeout override for machine registration request', async () => {
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
 
@@ -673,7 +678,7 @@ describe('Api server error handling', () => {
                 token: 'fake-token',
                 encryption: {
                     type: 'dataKey' as const,
-                    publicKey: new Uint8Array(32).fill(1),
+                    publicKey: tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(2)).publicKey,
                     machineKey: new Uint8Array(32).fill(2),
                 },
             };
@@ -682,13 +687,7 @@ describe('Api server error handling', () => {
 
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
 
@@ -704,13 +703,7 @@ describe('Api server error handling', () => {
         it('includes explicit installation identity fields when registering a machine', async () => {
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
 
@@ -765,13 +758,7 @@ describe('Api server error handling', () => {
 
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
 
@@ -824,13 +811,7 @@ describe('Api server error handling', () => {
                         status: 'applied',
                         replacesMachineId: 'machine-old',
                     },
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
 
@@ -875,23 +856,17 @@ describe('Api server error handling', () => {
 
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture(),
                 },
             });
-            mockGet.mockResolvedValue({
+            mockGet.mockImplementation(async (url: string) => url.endsWith('/v1/machines/machine-old') ? {
                 data: {
                     machine: {
                         id: 'machine-old',
                         replacedByMachineId: 'test-machine',
                     },
                 },
-            });
+            } : readApiGetFixture(url));
 
             await api.getOrCreateMachine({
                 machineId: 'test-machine',
@@ -991,14 +966,7 @@ describe('Api server error handling', () => {
             connectionState.reset();
             mockPost.mockResolvedValue({
                 data: {
-                    machine: {
-                        id: 'test-machine',
-                        replacedByMachineId: 'replacement-machine',
-                        metadata: testMachineMetadata,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
+                    machine: createMachineRegistrationFixture({ replacedByMachineId: 'replacement-machine' }),
                 },
             });
 
@@ -1074,7 +1042,7 @@ describe('Api server error handling', () => {
                 token: 'fake-token',
                 encryption: {
                     type: 'dataKey' as const,
-                    publicKey: new Uint8Array(32).fill(1),
+                    publicKey: tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(2)).publicKey,
                     machineKey: new Uint8Array(32).fill(2),
                 },
             };
@@ -1102,7 +1070,7 @@ describe('Api server error handling', () => {
                 token: 'fake-token',
                 encryption: {
                     type: 'dataKey' as const,
-                    publicKey: new Uint8Array(32).fill(1),
+                    publicKey: tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(2)).publicKey,
                     machineKey: new Uint8Array(32).fill(2),
                 },
             };

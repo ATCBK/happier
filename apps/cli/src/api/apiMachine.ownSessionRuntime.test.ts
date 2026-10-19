@@ -1,6 +1,9 @@
 import axios, { AxiosHeaders } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { ExternalActionMachineRpcExecutionV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
@@ -54,6 +57,50 @@ vi.mock('@/daemon/identity/store', async importOriginal => ({
 }));
 
 describe('ApiMachine own Session Account read custody', () => {
+  it('signs a Workflow Role RPC with the actual installed executor and exact Session target', async () => {
+    const pair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(39));
+    osStore.identity = { version: 1, installationId: 'workflow-installation', createdAt: 1,
+      publicKey: Buffer.from(pair.publicKey).toString('base64url'), privateKey: Buffer.from(pair.secretKey).toString('base64url') };
+    const client = new ApiMachineClient('owner-token', { id: 'run-executor', encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy',
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-workflow-proof', binding: {
+      accountId: 'owner', custodianAccountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
+      serverIdentityId: 'home', machineId: 'run-executor', installationId: 'workflow-installation', actionId: 'session.notes.set',
+      requestId: 'notes', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'session', sessionId: 'origin' },
+      workflowActionOrigin: { runId: 'run', requestId: 'notes', sessionAuthority: { authorization: {
+        principal: { kind: 'host' }, admittedPermissionCeiling: 'default' }, runDepth: 4,
+        runOriginSessionId: 'origin', directory: '/repo', workspaceWrites: 'allow' } },
+    } });
+    const observed: unknown[] = [];
+    // Only Socket.IO delivery is substituted. The production adapter, codec,
+    // installed signer and strict schema/signature consumer all remain real.
+    const socket = { connected: true, emit() {}, async emitWithAck(event: string, payload: unknown) {
+      expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
+      const wire = JSON.parse(JSON.stringify(payload)) as SocketRpcRequestPayload;
+      const execution = ExternalActionMachineRpcExecutionV1Schema.parse(wire.externalActionExecution);
+      observed.push(execution);
+      expect(verifyExternalActionMachineRpcRequestV1({ authorizationToken: execution.authorization.token,
+        effectActionId: execution.effectActionId, target: execution.target, installationId: execution.installationId,
+        event: SOCKET_RPC_EVENTS.CALL, method: wire.method, requestId: wire.requestId!, params: wire.params,
+        publicKey: pair.publicKey, signature: execution.machineSignature })).toBe(true);
+      expect(wire.method).toBe('origin:session.notes.set');
+      expect(wire.authorization).toEqual({ kind: 'session.write', sessionId: 'origin' });
+      return { ok: true, result: { updated: true } };
+    } };
+    try {
+      Object.defineProperty(client, 'socket', { value: socket, writable: true, configurable: true });
+      const request = { sessionId: 'origin', method: 'session.notes.set', input: { sessionId: 'origin', notes: 'Run note' },
+        content: { mode: 'plain' as const }, executionAuthorization: authorization };
+      expect(await client.callSessionActionRpc(request)).toEqual({ updated: true });
+      expect(observed).toHaveLength(1);
+      await expect(client.callSessionActionRpc({ ...request, sessionId: 'unrelated' }))
+        .rejects.toMatchObject({ code: 'role_rpc_origin_unavailable' });
+      expect(observed).toHaveLength(1);
+    } finally {
+      Object.defineProperty(client, 'socket', { value: null, writable: true, configurable: true });
+      osStore.identity = null;
+    }
+  });
   it('consumes Bob admitted original Account ports for his Session on Alice installation without reading Alice credentials', async () => {
     const pair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
     osStore.identity = { version: 1, installationId: '11111111-1111-4111-8111-111111111111', createdAt: 1,

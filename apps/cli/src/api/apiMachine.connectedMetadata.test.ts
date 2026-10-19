@@ -9,6 +9,9 @@ import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot,
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { Machine } from '@/api/types';
 import { ApiMachineClient } from './apiMachine';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+
+vi.mock('socket.io-client', () => ({ io: () => createApiSessionSocketStub() }));
 
 describe('ApiMachine connected metadata demand lifecycle', () => {
   it.each([CONNECTED_PRESENTATION_ACCOUNT_KV_KEY_V1, CONNECTED_ACKNOWLEDGEMENTS_ACCOUNT_KV_KEY_V1])(

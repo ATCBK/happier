@@ -2,6 +2,7 @@ import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcEr
 import axios from 'axios';
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { RequesterSessionCurrentnessPurposeV1Schema, type RequesterSessionCurrentnessPurposeV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import type { SessionApprovalDecisionCurrentnessV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { MachineAccessLossCustodyRequestV1Schema, MachineAdmissionVerifyResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext, isSocketRpcMachineAccessLossServerOriginAuthorizationContext, parseSocketRpcAuthorizationContext, resolveSocketRpcSessionWriteAuthorizationMethod, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -194,6 +195,7 @@ export function doesMachineRpcTargetMatchAdmission(
 /** This read proves current access; the signed context is not a reusable admission ticket. */
 export type MachineRpcAdmissionCurrentInput = Readonly<{
   context: SocketRpcMachineAdmissionContextV1;
+  sessionDecision?: SessionApprovalDecisionCurrentnessV1;
   custodySubjectAccountId?: string;
   workspaceSyncSourceRouting?: WorkspaceSyncSourceRoutingV1;
   workspaceSyncSourceExecution?: WorkspaceSyncSourceExecutionV1;
@@ -258,7 +260,11 @@ export async function readMachineRpcAdmissionCurrentOrThrow(input: MachineRpcAdm
       : WorkspaceSyncSourceExecutionV1Schema.parse(input.workspaceSyncSourceExecution);
     const originalRoot = input.callerInputAuthorization === undefined
       ? undefined : ExternalActionExecutionAuthorizationV1Schema.parse(input.callerInputAuthorization);
-    const moveChild = Boolean(originalRoot?.binding.actionId === 'projects.service.relocate'
+    const moveChild = Boolean((originalRoot?.binding.actionId === 'projects.service.relocate'
+      || originalRoot?.binding.actionId === 'discussion.second_opinion.start'
+        && sourceExecution?.externalActionExecution.effectActionId === 'session.spawn_new'
+        && (input.method === `${context.machineId}:${RPC_METHODS.SESSION_SPAWN_NEW}`
+          || input.method === `${context.machineId}:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`))
       && sourceExecution?.originalActionEnvelope && !sourceRouting && !input.workspaceSyncTargetRouting
       && !input.workspaceSyncSourceWriterTargetRouting && !input.workspaceSyncSeedRouting
       && sourceExecution.method === input.method && input.method?.startsWith(`${context.machineId}:`)
@@ -332,16 +338,19 @@ export async function readMachineRpcAdmissionCurrentOrThrow(input: MachineRpcAdm
       ...(writerTarget ? { workspaceSyncSourceWriterTargetRouting: writerTarget } : {}),
       ...(seed ? { workspaceSyncSeedRouting: seed } : {}) };
     stage = 'proof_signing';
+    const sessionDecision = input.sessionDecision ? { sessionDecision: input.sessionDecision } : {};
     const proof = signMachineInstallationProof({ payload: {
       version: 1, machineId: signer.machineId, installationId: signer.installationId,
-      accountId: seedReceiver?.accountId ?? writerTargetReceiver?.accountId ?? sourceReceiver?.accountId ?? context.custodianAccountId, rpcAdmission: { context, ...admissionPurpose, ...custody, ...routing, ...retainedRoot },
+      accountId: seedReceiver?.accountId ?? writerTargetReceiver?.accountId ?? sourceReceiver?.accountId ?? context.custodianAccountId, rpcAdmission: { context, ...admissionPurpose, ...custody, ...routing, ...retainedRoot, ...sessionDecision },
     }, privateKey: input.privateKey });
     stage = 'transport';
     const response = await axios.post<unknown>(
       `${input.serverHttpBaseUrl}/v1/machines/${encodeURIComponent(signer.machineId)}/admission/verify`,
-      { v: 1, context, ...admissionPurpose, proof, ...custody, ...routing, ...retainedRoot },
+      { v: 1, context, ...admissionPurpose, proof, ...custody, ...routing, ...retainedRoot, ...sessionDecision },
       { headers: { Authorization: `Bearer ${input.daemonToken}`, 'Content-Type': 'application/json' },
-        timeout: 15_000, validateStatus: () => true,
+        // The containing RPC owns its deadline and cancellation. A second,
+        // shorter HTTP cutoff must not turn a still-valid read into a denial.
+        timeout: input.signal ? 0 : 15_000, validateStatus: () => true,
         ...(input.signal ? { signal: input.signal } : {}) },
     );
     if (input.signal?.aborted) return failed('request_cancelled');

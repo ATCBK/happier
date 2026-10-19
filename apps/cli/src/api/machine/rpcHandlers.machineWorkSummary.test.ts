@@ -41,7 +41,7 @@ describe('current Machine work summary ingress', () => {
             serverHttpBaseUrl: 'http://work-summary.test' });
         const operations = createActionOperationStore();
         const activity = createManagedActivityInventory({ producers: [{ read: operations.readLiveWork, subscribe: operations.subscribe }] });
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const handlers = new Map<string, RpcHandler>();
         registerMachineWorkSummaryRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
             target, custodianAccountId: custodian.accountId, activity,
             readAccess: signal => access.machineAccessAction!({ actionId: 'machines.access.grants.list',
@@ -73,7 +73,7 @@ describe('current Machine work summary ingress', () => {
         const activity = createManagedActivityInventory({ producers: [unavailableOwner] });
         const admission = createProjectWorkerAdmission({ machineId: target.machineId,
             admissionDrain: createDaemonAdmissionDrain(),
-            readPolicy: async () => ({ status: 'ready', metadataVersion: 1, policy: { accepting: true, runAtMost: 1 } }),
+            readPolicy: async () => ({ status: 'ready', source: 'stored', metadataVersion: 1, policy: { accepting: true, runAtMost: 1 } }),
         });
         const settlement = deferred<ProjectWorkerReservationOutcome>();
         const accepted = deferred<void>();
@@ -84,7 +84,7 @@ describe('current Machine work summary ingress', () => {
         });
         let current = true;
         let retireDuringFiniteRead = false;
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const handlers = new Map<string, RpcHandler>();
         const rpcHandlerManager: RpcHandlerRegistrar = {
             registerHandler(method, handler) { handlers.set(method, handler); },
         };
@@ -135,7 +135,7 @@ describe('current Machine work summary ingress', () => {
         let retireDuringFiniteRead = false;
         const admission = createProjectWorkerAdmission({ machineId: target.machineId,
             admissionDrain: createDaemonAdmissionDrain(),
-            readPolicy: async () => policyAvailable ? { status: 'ready', metadataVersion: 1,
+            readPolicy: async () => policyAvailable ? { status: 'ready', source: 'stored', metadataVersion: 1,
                 policy: { accepting: true, runAtMost } } : { status: 'unavailable' },
         });
         const controllers = [new AbortController(), new AbortController()];
@@ -160,7 +160,7 @@ describe('current Machine work summary ingress', () => {
         operations.create({ operationId: 'managed-task', actionId: 'machines.managed.power.set', title: 'Private managed task',
             scope: { accountId: 'bob', machineId: target.machineId }, cancellation: 'supported', inputIdentity: '{}',
             requesterWorkAttributionV1: { ...target, accountId: 'bob' } });
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const handlers = new Map<string, RpcHandler>();
         const rpcHandlerManager: RpcHandlerRegistrar = {
             registerHandler(method, handler) { handlers.set(method, handler); },
         };
@@ -226,7 +226,7 @@ describe('current Machine work summary ingress', () => {
         operations.create({ operationId: 'private-operation', actionId: 'projects.script.run', title: 'Private command',
             scope: { accountId: 'bob', machineId: target.machineId }, cancellation: 'supported', inputIdentity: '{}',
             requesterWorkAttributionV1: { ...target, accountId: 'bob' } });
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        const handlers = new Map<string, RpcHandler>();
         let retireDuringRead = false;
         registerMachineWorkSummaryRpcHandlers({ rpcHandlerManager: {
             registerHandler(method, handler) { handlers.set(method, handler); },

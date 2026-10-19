@@ -4,6 +4,7 @@
  */
 
 import { logger as defaultLogger } from '@/ui/logger';
+import { SessionGoalControlFailureV1Schema, type SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { createHash, randomUUID } from 'node:crypto';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from '@/api/encryption';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
@@ -36,14 +37,18 @@ import { computeExternalActionSocketRpcRequestDigestV1, isExternalActionAuthoriz
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema,
     WorkspaceSyncSeedRoutingV1Schema } from '@happier-dev/protocol/socketRpc';
-import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, WorkspaceSyncPrepareBetweenRequestV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { isDeepStrictEqual } from 'node:util';
 import { resolveMachineRpcExternalActionEffectV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { doesWorkspaceSyncSourceRootMatchRouting, doesWorkspaceSyncSourceWriterTargetRootMatchRouting,
     doesWorkspaceSyncTargetRoutingMatchWriterTarget, doesWorkspaceSyncProjectSourceRequestMatchRouting,
-    doesWorkspaceSyncSeedRootMatchRouting } from '@/api/machine/machineRpcAuthorization';
+    doesWorkspaceSyncSeedRootMatchRouting, doesWorkspaceSyncFinitePrepareRequestMatchRouting } from '@/api/machine/machineRpcAuthorization';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
-import { resolveExternalActionRootInvocationAuthority } from '@/api/externalActionExecutionAuthorization';
+import { resolveExternalActionRootInvocationAuthority, isReviewedServiceMoveChild, isReviewedSecondOpinionModelSpawnChild, claimReviewedServiceMoveStart } from '@/api/externalActionExecutionAuthorization';
+import { isDiscussionSecondOpinionModelRpcMethodV1 } from '@happier-dev/protocol/discussions/secondOpinionActions';
+import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
 
 type OwnedHandlerRegistrationContext = {
@@ -73,6 +78,7 @@ type RequestDiagnostic = {
     admissionPredicate: string;
     admissionDenied?: boolean;
     acknowledgementOutcomeCode?: string;
+    goalControlFailure?: SessionGoalControlFailureV1;
     failure?: Readonly<{
         failedPhase: string;
         cancelled: boolean;
@@ -101,6 +107,7 @@ export class RpcHandlerManager {
     private readonly localMachineId: string | null;
     private rpcContent: SocketRpcContent | null;
     private readonly authorizeRequest: RpcHandlerConfig['authorizeRequest'];
+    private readonly resolveSessionDecisionContext: RpcHandlerConfig['resolveSessionDecisionContext'];
     private readonly prepareRequesterAccountContext: RpcHandlerConfig['prepareRequesterAccountContext'];
     private readonly resolveExternalActionEncryption: RpcHandlerConfig['resolveExternalActionEncryption'];
     private readonly projectTransportAcknowledgement:
@@ -138,6 +145,7 @@ export class RpcHandlerManager {
         this.localMachineId = config.localMachineId ?? null;
         this.rpcContent = this.createEncryptionContent(config);
         this.authorizeRequest = config.authorizeRequest;
+        this.resolveSessionDecisionContext = config.resolveSessionDecisionContext;
         this.prepareRequesterAccountContext = config.prepareRequesterAccountContext;
         this.resolveExternalActionEncryption = config.resolveExternalActionEncryption;
         this.projectTransportAcknowledgement =
@@ -210,7 +218,7 @@ export class RpcHandlerManager {
             if (method !== RPC_METHODS.SESSION_SPAWN_NEW
                 && !SessionTransferRpcMethodV1Schema.safeParse(method).success
                 && ((isSocketRpcSessionAuthorizationNamespace(method) && !sessionAuthorization)
-                    || sessionAuthorization?.routeToSessionOwnerDaemon === true)) {
+                    || (sessionAuthorization?.routeToSessionOwnerDaemon === true && sessionAuthorization.machineScope !== true))) {
                 return false;
             }
         }
@@ -245,7 +253,12 @@ export class RpcHandlerManager {
         const registeredMethod = this.handlers.has(method) ? this.readUnprefixedMethod(method) : null;
         try {
             const response = await dispatch(diagnostic);
-            if (local) diagnostic.outcomeCode = readOutcomeCode(response);
+            if (local) {
+                diagnostic.outcomeCode = readOutcomeCode(response);
+                const failure = SessionGoalControlFailureV1Schema.safeParse(
+                    response && typeof response === 'object' ? Reflect.get(response, 'goalControlFailure') : undefined);
+                if (failure.success) diagnostic.goalControlFailure = failure.data;
+            }
             return response;
         } catch (error) {
             diagnostic.outcomeCode = readOutcomeCode(error, true);
@@ -262,6 +275,7 @@ export class RpcHandlerManager {
                 ...(diagnostic.admissionDenied || diagnostic.outcomeCode === RPC_ERROR_CODES.FORBIDDEN
                     ? { admissionPredicate: diagnostic.admissionPredicate } : {}),
                 ...(diagnostic.acknowledgementOutcomeCode ? { acknowledgementOutcomeCode: diagnostic.acknowledgementOutcomeCode } : {}),
+                ...(diagnostic.goalControlFailure ? { goalControlFailure: diagnostic.goalControlFailure } : {}),
                 ...(diagnostic.failure ?? {}),
             });
         }
@@ -286,6 +300,9 @@ export class RpcHandlerManager {
         let callId: string | null = null;
         const respond = (request: RpcRequest, result: unknown, acknowledgement: SocketRpcTransportAcknowledgementV1 | null = null) => {
             diagnostic.outcomeCode = readOutcomeCode(result);
+            const failure = SessionGoalControlFailureV1Schema.safeParse(
+                result && typeof result === 'object' ? Reflect.get(result, 'goalControlFailure') : undefined);
+            if (failure.success) diagnostic.goalControlFailure = failure.data;
             return this.encodeTransportResponse(request, result, acknowledgement, callId, rpcContent);
         };
         const deny = (predicate: string, result: unknown = { error: RPC_ERROR_MESSAGES.FORBIDDEN, errorCode: RPC_ERROR_CODES.FORBIDDEN }) => {
@@ -307,13 +324,16 @@ export class RpcHandlerManager {
         const originalActionEnvelope = request.originalActionEnvelope === undefined
             ? null : ExternalActionRequestEnvelopeSchema.safeParse(request.originalActionEnvelope);
         const isProjectSource = this.readUnprefixedMethod(request.method) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN;
+        const isFiniteSource = this.readUnprefixedMethod(request.method) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN
+            && workspaceSyncSourceRouting !== null;
         const workspaceSyncTargetRouting = request.workspaceSyncTargetRouting === undefined
             ? null : WorkspaceSyncTargetRoutingV1Schema.safeParse(request.workspaceSyncTargetRouting);
         const workspaceSyncSourceWriterTargetRouting = request.workspaceSyncSourceWriterTargetRouting === undefined
             ? null : WorkspaceSyncSourceWriterTargetRoutingV1Schema.safeParse(request.workspaceSyncSourceWriterTargetRouting);
         const workspaceSyncSeedRouting = request.workspaceSyncSeedRouting === undefined
             ? null : WorkspaceSyncSeedRoutingV1Schema.safeParse(request.workspaceSyncSeedRouting);
-        const isWorkspaceSourcePhase = isProjectSource || this.readUnprefixedMethod(request.method) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE;
+        const isWorkspaceSourcePhase = isProjectSource || isFiniteSource
+            || this.readUnprefixedMethod(request.method) === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE;
         const targetMethod = this.readUnprefixedMethod(request.method);
         const isWorkspaceTargetPhase = targetMethod === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT
             || targetMethod === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE
@@ -336,7 +356,7 @@ export class RpcHandlerManager {
             const installation = readInstallationIdentityIfExistsSync();
             const installedRouting = workspaceSyncSeedRouting?.success ? workspaceSyncSeedRouting.data
                 : workspaceSyncSourceWriterTargetRouting?.success ? workspaceSyncSourceWriterTargetRouting.data
-                : isProjectSource && workspaceSyncSourceRouting?.success ? workspaceSyncSourceRouting.data : undefined;
+                : (isProjectSource || isFiniteSource) && workspaceSyncSourceRouting?.success ? workspaceSyncSourceRouting.data : undefined;
             const content = installation && installedRouting && typeof request.params === 'string'
                 ? openWorkspaceSyncTargetContent({ ciphertext: request.params, installation, machineId: this.scopePrefix,
                     method: request.method, routing: installedRouting }) : null;
@@ -350,9 +370,12 @@ export class RpcHandlerManager {
         }
         if ((isWorkspaceSourcePhase || workspaceSyncSourceRouting) && (!isWorkspaceSourcePhase
             || !workspaceSyncSourceRouting?.success || !machineAdmission?.success || !this.authorizeRequest
-            || request.method !== `${this.scopePrefix}:${isProjectSource ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN
+            || request.method !== `${this.scopePrefix}:${isFiniteSource ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN
+                : isProjectSource ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN
                 : RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE}`
-            || isProjectSource && (!workspaceSyncSourceExecution?.success || workspaceSyncSourceExecution.data.method !== request.method))) {
+            || (isProjectSource || isFiniteSource) && (!workspaceSyncSourceExecution?.success
+                || workspaceSyncSourceExecution.data.method !== request.method
+                || isFiniteSource && workspaceSyncSourceExecution.data.params !== request.params))) {
             return await deny('workspace_source_routing');
         }
         const workspaceContext = workspaceSyncSourceRouting?.success ? workspaceSyncSourceRouting.data.sourceContext
@@ -366,6 +389,22 @@ export class RpcHandlerManager {
         }
         const parsedInputAuthorization = request.callerInputAuthorization === undefined
             ? null : ExternalActionExecutionAuthorizationV1Schema.safeParse(request.callerInputAuthorization);
+        const serviceMoveChild = Boolean(parsedInputAuthorization?.success && originalActionEnvelope?.success
+            && workspaceSyncSourceExecution?.success && machineAdmission?.success && this.authorizeRequest
+            && (parsedInputAuthorization.data.binding.actionId === 'projects.service.relocate'
+                && workspaceSyncSourceExecution.data.externalActionExecution.effectActionId === readProjectServiceMoveChildEffectV1(targetMethod)
+              || parsedInputAuthorization.data.binding.actionId === 'discussion.second_opinion.start'
+                && isDiscussionSecondOpinionModelRpcMethodV1(targetMethod)
+                && workspaceSyncSourceExecution.data.externalActionExecution.effectActionId === 'session.spawn_new')
+            && workspaceSyncSourceExecution.data.externalActionExecution.installationId === parsedInputAuthorization.data.binding.installationId
+            && isDeepStrictEqual(workspaceSyncSourceExecution.data.externalActionExecution.authorization, parsedInputAuthorization.data)
+            && isDeepStrictEqual(workspaceSyncSourceExecution.data.originalActionEnvelope, originalActionEnvelope.data)
+            && workspaceSyncSourceExecution.data.method === request.method
+            && sameStrictJsonValue(workspaceSyncSourceExecution.data.params, request.params)
+            && machineAdmission.data.machineId === this.scopePrefix && this.scopePrefix === this.localMachineId
+            && machineAdmission.data.actorAccountId === parsedInputAuthorization.data.binding.accountId
+            && request.callerAuthority === resolveExternalActionRootInvocationAuthority(parsedInputAuthorization.data)
+            && isDeepStrictEqual(request.sessionActionOrigin, parsedInputAuthorization.data.binding.sessionActionOrigin));
         const projectWriterTarget = workspaceSyncSourceWriterTargetRouting?.success
             && parsedInputAuthorization?.success && parsedInputAuthorization.data.binding.actionId === 'projects.open';
         const seedInputAuthorizationMatchesRequest = !!(workspaceSyncSeedRouting?.success && parsedInputAuthorization?.success
@@ -383,11 +422,14 @@ export class RpcHandlerManager {
                 || !isDeepStrictEqual(workspaceSyncSourceExecution.data.externalActionExecution.authorization, parsedInputAuthorization.data))) {
             return await deny('workspace_source_execution');
         }
-        if (workspaceSyncSourceExecution && ((!isProjectSource && !projectWriterTarget && !seedInputAuthorizationMatchesRequest) || !workspaceSyncSourceExecution.success)
+        if (workspaceSyncSourceExecution && ((!serviceMoveChild && !isProjectSource && !isFiniteSource && !projectWriterTarget && !seedInputAuthorizationMatchesRequest) || !workspaceSyncSourceExecution.success)
             || originalActionEnvelope && (!originalActionEnvelope.success || !parsedInputAuthorization?.success
-                || request.method !== `${this.scopePrefix}:${RPC_METHODS.PROJECTS_OPEN}`
+                || !(serviceMoveChild || parsedInputAuthorization.data.binding.actionId === 'projects.open' && targetMethod === RPC_METHODS.PROJECTS_OPEN
+                    || parsedInputAuthorization.data.binding.actionId === 'projects.script.run' && targetMethod === RPC_METHODS.DAEMON_PROJECTS_SCRIPT_RUN
+                    || parsedInputAuthorization.data.binding.actionId === 'projects.compute.exec' && targetMethod === RPC_METHODS.DAEMON_PROJECTS_COMPUTE_EXEC)
+                || request.method !== `${this.scopePrefix}:${targetMethod}`
                 || !isExternalActionAuthorizationBoundToEnvelope(parsedInputAuthorization.data.binding,
-                    { actionId: 'projects.open', machineId: this.scopePrefix, envelope: originalActionEnvelope.data }))) {
+                    { actionId: parsedInputAuthorization.data.binding.actionId, machineId: serviceMoveChild ? parsedInputAuthorization.data.binding.machineId : this.scopePrefix, envelope: originalActionEnvelope.data }))) {
             return await deny('original_action_binding');
         }
         const writerTargetInputAuthorizationMatchesRequest = !!(parsedInputAuthorization?.success
@@ -400,6 +442,10 @@ export class RpcHandlerManager {
         const sourceInputAuthorizationMatchesRequest = (() => {
             if (!parsedInputAuthorization?.success || !machineAdmission?.success
                 || !workspaceSyncSourceRouting?.success || !workspaceContext || !this.authorizeRequest) return false;
+            if (isFiniteSource && (!workspaceSyncSourceExecution?.success
+                || workspaceSyncSourceExecution.data.externalActionExecution.effectActionId !== parsedInputAuthorization.data.binding.actionId
+                || workspaceSyncSourceExecution.data.externalActionExecution.installationId !== parsedInputAuthorization.data.binding.installationId
+                || !isDeepStrictEqual(workspaceSyncSourceExecution.data.externalActionExecution.authorization, parsedInputAuthorization.data))) return false;
             return doesWorkspaceSyncSourceRootMatchRouting(parsedInputAuthorization.data, workspaceSyncSourceRouting.data);
         })();
         const machineInputAuthorizationMatchesRequest = (() => {
@@ -435,13 +481,22 @@ export class RpcHandlerManager {
                 && request.method === `${this.scopePrefix}:${targetMethod}` && request.callerAuthority === expectedAuthority
                 && isDeepStrictEqual(binding.sessionActionOrigin, request.sessionActionOrigin);
         })();
+        const workflowRoleInputAuthorizationMatchesRequest = (() => {
+            if (!parsedInputAuthorization?.success) return false;
+            const binding = parsedInputAuthorization.data.binding;
+            return !!binding.workflowActionOrigin?.sessionAuthority && binding.target.kind === 'session'
+                && binding.target.sessionId === this.scopePrefix && request.callerAuthority === 'account_automation'
+                && request.method === `${this.scopePrefix}:${targetMethod}`
+                && (binding.actionId === targetMethod && targetMethod.startsWith('session.') && isRoleActionIdV1(targetMethod)
+                    || binding.actionId === 'session.roles.apply_to_reports' && targetMethod === SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET);
+        })();
         const sessionActionOrigin = request.sessionActionOrigin === undefined
             ? null : SessionActionRpcOriginV1Schema.safeParse(request.sessionActionOrigin);
         if (sessionActionOrigin && (!sessionActionOrigin.success
             || request.callerAuthority !== 'account_automation'
             || isWorkspaceTargetPhase && !workspaceSyncTargetRouting?.success
                 && (!machineAdmission?.success || machineAdmission.data.machineId !== this.scopePrefix || !this.authorizeRequest)
-            || !machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest && !sourceInputAuthorizationMatchesRequest
+            || !serviceMoveChild && !machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest && !sourceInputAuthorizationMatchesRequest
                 && !writerTargetInputAuthorizationMatchesRequest && !seedInputAuthorizationMatchesRequest
                 && !isSessionActionRpcMethodV1(this.readUnprefixedMethod(request.method)))) {
             return await deny('session_action_origin', { error: 'Invalid Session Action origin', errorCode: RPC_ERROR_CODES.FORBIDDEN });
@@ -475,8 +530,8 @@ export class RpcHandlerManager {
             ? parsedRequestId.data
             : null;
         if (parsedInputAuthorization) {
-            let matchesRequest = machineInputAuthorizationMatchesRequest || sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest
-                || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest;
+            let matchesRequest = serviceMoveChild || machineInputAuthorizationMatchesRequest || sessionTransitionInputAuthorizationMatchesRequest || sourceInputAuthorizationMatchesRequest
+                || writerTargetInputAuthorizationMatchesRequest || seedInputAuthorizationMatchesRequest || workflowRoleInputAuthorizationMatchesRequest;
             if (!matchesRequest && parsedInputAuthorization.success && requestId) {
                 const binding = parsedInputAuthorization.data.binding;
                 try {
@@ -539,6 +594,28 @@ export class RpcHandlerManager {
             phaseStartedAtMs = now;
         };
         try {
+            const sessionDecisionAuthorization = parseSocketRpcAuthorizationContext(request.authorization);
+            const isRequesterDecisionMethod = request.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`);
+            const isSessionDecisionRoute = isRequesterDecisionMethod
+                && (request.method !== `${this.scopePrefix}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`
+                    || sessionDecisionAuthorization?.kind === 'session.permission.respond');
+            let requesterApprovalDecision: RpcHandlerContext['requesterApprovalDecision'];
+            if (isSessionDecisionRoute) {
+                if (request.callerAuthority !== 'present_user' || sessionDecisionAuthorization?.kind !== 'session.permission.respond'
+                    || !sessionDecisionAuthorization.authentication
+                    || request.method !== `${sessionDecisionAuthorization.sessionId}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`
+                    || !this.resolveSessionDecisionContext) return await deny('session_decision_authorization');
+                const admitted = await this.resolveSessionDecisionContext({ authorization: sessionDecisionAuthorization, signal: controller.signal });
+                if (!admitted) return await deny('session_decision_currentness');
+                rpcContent = admitted.content;
+                requesterApprovalDecision = { sessionId: sessionDecisionAuthorization.sessionId,
+                    actor: sessionDecisionAuthorization.actor,
+                    isCurrent: async () => {
+                        try { return !controller.signal.aborted && await admitted.isCurrent() && !controller.signal.aborted; }
+                        catch { return false; }
+                    } };
+                if (!await requesterApprovalDecision.isCurrent()) return await deny('session_decision_currentness');
+            }
             const isReservedAutomationReplyHandoff = this.isReservedAutomationReplyHandoffRequest(request);
             const isReservedSessionServerStart = this.isReservedSessionServerStartRequest(request);
             const isReservedActionApi = this.isReservedActionApiRequest(request);
@@ -590,9 +667,14 @@ export class RpcHandlerManager {
                 });
             }
 
-            const handler = this.handlers.get(request.method);
+            const handler = this.handlers.get(request.method)
+                ?? (requesterApprovalDecision ? this.handlers.get(`${this.scopePrefix}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`) : undefined);
             if (!handler) {
                 return await respond(request, { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+            }
+            if (requesterApprovalDecision && (!decryptedParams || typeof decryptedParams !== 'object' || Array.isArray(decryptedParams)
+                || !('sessionId' in decryptedParams) || decryptedParams.sessionId !== requesterApprovalDecision.sessionId)) {
+                return await deny('session_decision_target');
             }
 
             if (parsedTransferRouting?.success) {
@@ -712,7 +794,10 @@ export class RpcHandlerManager {
                 // at Home. Bind the decrypted chosen target before retaining the child's root.
                 const phase = WorkspaceSyncHandoffSourcePhaseRequestV1Schema.safeParse(decryptedParams);
                 const handoff = parsedInputAuthorization.data.binding.handoffAdmission;
-                const sourceBodyMatches = isProjectSource
+                const sourceBodyMatches = isFiniteSource
+                    ? workspaceSyncSourceRouting?.success && doesWorkspaceSyncFinitePrepareRequestMatchRouting(decryptedParams,
+                        parsedInputAuthorization.data, workspaceSyncSourceRouting.data)
+                    : isProjectSource
                     ? workspaceSyncSourceRouting?.success && doesWorkspaceSyncProjectSourceRequestMatchRouting(decryptedParams,
                         parsedInputAuthorization.data, workspaceSyncSourceRouting.data)
                     : phase.success && handoff && phase.data.input.targetMachineId === handoff.targetMachineId
@@ -740,13 +825,29 @@ export class RpcHandlerManager {
                 }
             }
             if (callerInputAuthorization?.requesterAccountContext) {
-                if ((!machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest) || !this.prepareRequesterAccountContext
+                const finitePreparation = isFiniteSource && sourceInputAuthorizationMatchesRequest;
+                if ((!serviceMoveChild && !machineInputAuthorizationMatchesRequest && !sessionTransitionInputAuthorizationMatchesRequest && !finitePreparation) || !this.prepareRequesterAccountContext
                     || controller.signal.aborted) {
                     return await deny('requester_account_admission');
                 }
+                const installation = finitePreparation || serviceMoveChild ? readInstallationIdentityIfExistsSync() : null;
+                const preparationRequest = finitePreparation ? WorkspaceSyncPrepareBetweenRequestV1Schema.safeParse(decryptedParams) : null;
+                if (finitePreparation && (!installation || !preparationRequest?.success)) return await deny('requester_account_admission');
                 nextPhase('requester_preparation');
                 const prepared = await this.prepareRequesterAccountContext({ authorization: callerInputAuthorization,
-                    purpose: { kind: 'machine_rpc', method: this.readUnprefixedMethod(request.method), params: decryptedParams }, signal: controller.signal });
+                    purpose: finitePreparation && installation && preparationRequest?.success
+                        ? { kind: 'workspace_sync_prepare', controller: { machineId: this.scopePrefix, installationId: installation.installationId },
+                            request: preparationRequest.data }
+                        : { kind: 'machine_rpc', method: this.readUnprefixedMethod(request.method), params: decryptedParams,
+                            ...(serviceMoveChild && installation ? { recipient: { machineId: this.scopePrefix, installationId: installation.installationId } } : {}) },
+                    ...(serviceMoveChild ? { verifyServiceMoveChildCurrent: async () => {
+                        try { return !controller.signal.aborted && this.authorizeRequest !== undefined
+                            && (await this.authorizeRequest(authorizationRequest)).ok; } catch { return false; }
+                    } } : {}),
+                    ...(finitePreparation ? { verifyWorkspaceSyncPrepareCurrent: async () => {
+                        try { return !controller.signal.aborted && this.authorizeRequest !== undefined
+                            && (await this.authorizeRequest(authorizationRequest)).ok; } catch { return false; }
+                    } } : {}), signal: controller.signal });
                 nextPhase('input_binding');
                 if (!prepared) {
                     return await deny('requester_account_preparation');
@@ -758,6 +859,27 @@ export class RpcHandlerManager {
                 }
                 callerInputAuthorization = prepared.authorization;
                 requesterInvocation = prepared.invocation;
+            }
+
+            if (serviceMoveChild) {
+                if (!callerInputAuthorization || !originalActionEnvelope?.success) return await deny('caller_input_authorization');
+                const opinionChild = callerInputAuthorization.binding.actionId === 'discussion.second_opinion.start';
+                const child = opinionChild ? isDiscussionSecondOpinionModelRpcMethodV1(targetMethod) ? 'session.spawn_new' : null
+                    : readProjectServiceMoveChildEffectV1(targetMethod);
+                const review = opinionChild ? isReviewedSecondOpinionModelSpawnChild : isReviewedServiceMoveChild;
+                if (!child || !await review({ authorization: callerInputAuthorization,
+                    envelope: originalActionEnvelope.data, signal: controller.signal,
+                    actionId: child, machineId: this.scopePrefix, params: decryptedParams,
+                    ...(opinionChild ? { method: targetMethod } : {}) })) {
+                    return await deny('caller_input_authorization');
+                }
+                if (child === 'localServices.launcher.start') {
+                    const claim = await claimReviewedServiceMoveStart({ authorization: callerInputAuthorization,
+                        envelope: originalActionEnvelope.data, signal: controller.signal });
+                    if (claim.kind !== 'claimed') return await respond(request, {
+                        ok: false, error: claim.reasonCode, errorCode: claim.reasonCode,
+                    });
+                }
             }
 
             // Call the handler
@@ -776,7 +898,7 @@ export class RpcHandlerManager {
                 ...(sessionActionOrigin?.success ? { sessionActionOrigin: sessionActionOrigin.data } : {}),
                 ...(workspaceSyncSourceRouting?.success ? { workspaceSyncSourceRouting: workspaceSyncSourceRouting.data } : {}),
                 ...(workspaceSyncSourceExecution?.success ? { workspaceSyncSourceExecution: workspaceSyncSourceExecution.data } : {}),
-                ...(originalActionEnvelope?.success && machineInputAuthorizationMatchesRequest
+                ...(originalActionEnvelope?.success && (serviceMoveChild || machineInputAuthorizationMatchesRequest)
                     ? { originalActionEnvelope: originalActionEnvelope.data } : {}),
                 ...(admittedTargetRouting ? { workspaceSyncTargetRouting: admittedTargetRouting } : {}),
                 ...(workspaceSyncSourceWriterTargetRouting?.success ? { workspaceSyncSourceWriterTargetRouting: workspaceSyncSourceWriterTargetRouting.data } : {}),
@@ -793,6 +915,7 @@ export class RpcHandlerManager {
                 } : parsedConstraints?.success ? { callerInputConstraints: parsedConstraints.data } : {}),
                 ...(requestId ? { transportRequestId: requestId } : {}),
                 ...(request.authorization ? { authorization: request.authorization } : {}),
+                ...(requesterApprovalDecision ? { requesterApprovalDecision } : {}),
                 ...(machineAdmission?.success ? {
                     machineAdmission: machineAdmission.data,
                     verifyMachineAuthorityCurrent: async () => {
@@ -872,7 +995,7 @@ export class RpcHandlerManager {
         verifiedPeerAuthority?: 'present_user' | 'account_automation';
         /** Installed host forwards an already-admitted requester; input never supplies authority. */
         rpcContext?: Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent' | 'callerInputAuthorization'
-            | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin' | 'originalActionEnvelope'>;
+            | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin' | 'originalActionEnvelope' | 'requesterSessionBootstrap'>;
     }>): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
         const requestStartedAtMs = Date.now();
@@ -893,6 +1016,7 @@ export class RpcHandlerManager {
                         callerInputConstraints: options.rpcContext.callerInputConstraints,
                         sessionActionOrigin: options.rpcContext.sessionActionOrigin,
                         originalActionEnvelope: options.rpcContext.originalActionEnvelope,
+                        requesterSessionBootstrap: options.rpcContext.requesterSessionBootstrap,
                     } : {}),
                     signal: options?.signal ?? new AbortController().signal,
                     requestStartedAtMs,
@@ -987,6 +1111,11 @@ export class RpcHandlerManager {
         this.socket = null;
         this.acknowledgedRegistrationMethods.clear();
         this.settleRegistrationReadinessWaiters('disconnected');
+        this.cancelTransportRequests();
+    }
+
+    /** Retire callers while their reply socket is still available during close. */
+    cancelTransportRequests(): void {
         for (const controller of this.activeTransportRequestControllers) {
             controller.abort(new Error('RPC target transport disconnected'));
         }

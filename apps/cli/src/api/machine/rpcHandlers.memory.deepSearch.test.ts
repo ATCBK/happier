@@ -53,6 +53,7 @@ describe('rpcHandlers.memory (deep search routing)', () => {
       const memoryWorker = {
         stop: () => {},
         reloadSettings: async () => {},
+        clearIndex: async () => {},
         ensureUpToDate: async () => {},
       removeSessions: async () => {},
       reconcileRetainedSessionAccess: async () => {},
@@ -144,6 +145,9 @@ describe('rpcHandlers.memory (deep search routing)', () => {
       const handler = handlers.get(RPC_METHODS.DAEMON_MEMORY_SEARCH);
       expect(handler).toBeTruthy();
 
+      expect(await handler!({ v: 1, query: 'openclaw', scope: { type: 'project', projectRef: { serverId: 'home', projectKey: 'project' } }, mode: 'deep' }))
+        .toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
+
       const res = await handler!({
         v: 1,
         query: 'openclaw',
@@ -190,6 +194,7 @@ describe('rpcHandlers.memory (deep search routing)', () => {
       const memoryWorker = {
         stop: () => {},
         reloadSettings: async () => {},
+        clearIndex: async () => {},
         ensureUpToDate: async () => {},
       removeSessions: async () => {},
       reconcileRetainedSessionAccess: async () => {},

@@ -7,13 +7,31 @@ import { encrypt, decrypt, encodeBase64, decodeBase64 } from '@/api/encryption';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RpcHandlerManager } from './RpcHandlerManager';
 import { logger as fileLogger } from '@/ui/logger';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
 
 describe('RPC completion diagnostics', () => {
+    it.each([
+        { phase: 'host_publication_rejected' },
+        { phase: 'never-log-native-detail' },
+        { phase: 'native_effect', error: 'never-log-objective' },
+    ])('records only a closed Goal settlement phase %j once', async goalControlFailure => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger });
+        rpc.registerHandler('session.goal.set', () => ({ ok: false,
+            errorCode: 'session_goal_control_work_state_unavailable', goalControlFailure }));
+        await rpc.invokeLocal('session.goal.set', { objective: 'never-log-objective' });
+        expect(logger.mock.calls).toHaveLength(1);
+        const completed = logger.mock.calls[0]?.[1];
+        if (goalControlFailure.phase === 'host_publication_rejected') {
+            expect(completed).toMatchObject({ goalControlFailure: { phase: 'host_publication_rejected' } });
+        } else expect(completed).not.toHaveProperty('goalControlFailure');
+        expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+    });
     it('preserves request cancellation during Home admission instead of reporting a currentness refusal', async () => {
         const logger = vi.fn();
         const key = tweetnacl.sign.keyPair();
@@ -61,8 +79,9 @@ describe('RPC completion diagnostics', () => {
         const record = vi.spyOn(fileLogger, 'infoFile').mockImplementation(() => {});
         const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
         const executor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             scmActionExecute: async () => { throw new Error('Invalid input must not cross SCM admission'); },
-        } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+        });
         registerScmHandlers(rpc, '/repo', { machineId: 'machine', actionExecutor: executor });
         try {
             const result = await rpc.handleRequest({ method: 'machine:scm.diffSummary.generate', callerAuthority: 'present_user',
@@ -167,6 +186,8 @@ describe('RPC completion diagnostics', () => {
         rpc.registerHandler('demo', () => ({ ok: false, errorCode: 'permission_actor_unattributable' }));
         for (const authorization of [{ kind: 'session.permission.respond', sessionId: 'session' },
             { kind: 'session.write', sessionId: 'other-session' }]) {
+            // Deliberately malformed/unscoped transport stamps must never acquire Session attribution.
+            // @ts-expect-error Exercise invalid wire data rather than manufacturing a valid authority.
             await rpc.handleRequest({ method: 'session:demo', params: {}, authorization });
         }
         expect(logger.mock.calls).toEqual([0, 1].map(() => ['[RPC] Request completed', expect.objectContaining({
@@ -241,8 +262,9 @@ describe('RPC completion diagnostics', () => {
             context?.reportAdmissionDenial?.('machine_currentness');
             throw new RpcError('never-log-token /home/private-user/workspace', RPC_ERROR_CODES.FORBIDDEN);
         });
-        await rpc.handleRequest({ method: 'machine:demo', params: {}, machineAdmission: { actorAccountId: 'guest',
-            custodianAccountId: 'owner', machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' } });
+        expect(await rpc.handleRequest({ method: 'machine:demo', params: {}, machineAdmission: { actorAccountId: 'guest',
+            custodianAccountId: 'owner', machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' } }))
+            .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
         expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({
             method: 'demo', requestId: expect.any(String), outcomeCode: RPC_ERROR_CODES.FORBIDDEN,
             callerClass: 'machine_guest', admissionPredicate: 'machine_currentness',

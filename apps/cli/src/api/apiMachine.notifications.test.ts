@@ -13,6 +13,9 @@ import { createExecutionRunAccountSettingsSnapshotResolver } from './machine/res
 import { MCP_SERVER_CATALOG_ACCOUNT_KEY_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { ChangesResponseSchema } from './changes';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+
+vi.mock('socket.io-client', () => ({ io: () => createApiSessionSocketStub() }));
 
 describe('ApiMachine notification catalog lifecycle', () => {
   it.each(['unavailable', 'cancelled', 'retired'] as const)('captured MCP %s preserves the Machine notification boundary', async failure => {
@@ -30,21 +33,23 @@ describe('ApiMachine notification catalog lifecycle', () => {
       readCredentials: async () => credentials, isOwnerCurrent: () => ownerCurrent, onSettings() {} });
     // Only HTTP and credential/cursor persistence are substituted. The real
     // captured resolver, Machine changes owner and notification loader execute.
-    const get = vi.spyOn(axios, 'get').mockImplementation(async (input, options) => {
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (input) => {
       const target = new URL(String(input));
       const path = target.pathname;
       if (path === '/v1/account/profile') return { status: 200, data: { id: 'mcp-machine-followers' } };
       if (path === '/v1/account/encryption/currentness') {
-        if (failed && !failedRefreshRead && options?.signal === controller.signal) {
+        return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 7,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      }
+      if (path === '/v1/account/entity-rows/mcp') {
+        if (failed && !failedRefreshRead) {
           failedRefreshRead = true;
           if (failure === 'cancelled') controller.abort(new Error('Machine catch-up cancelled'));
           if (failure === 'retired') ownerCurrent = false;
           return { status: 503, data: {} };
         }
-        return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 7,
-          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        return { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } } } };
       }
-      if (path === '/v1/account/entity-rows/mcp') return { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } } } };
       if (path === '/v1/account/entity-rows/notification-channels') return { status: 200, data: { status: 'deleted', revision: 2 } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
       if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
@@ -75,7 +80,7 @@ describe('ApiMachine notification catalog lifecycle', () => {
           .syncChangesOnConnect({ reason: 'live' }, controller.signal));
       if (failure === 'unavailable') {
         await sync();
-        expect(captured?.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'encryption-material-unavailable' });
+        expect(captured?.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
         expect(getActiveAccountSettingsSnapshot()?.notificationChannelCatalog).toMatchObject({ status: 'ready', revision: 2 });
         expect(pending).toHaveBeenCalledWith({ sessionId: 'pending-session', requestId: 'pending-request', pendingVersion: 1, source: 'changes' });
         expect(writeCursor).toHaveBeenCalledWith('mcp-machine-followers', 3);

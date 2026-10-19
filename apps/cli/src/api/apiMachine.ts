@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema, type PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
@@ -55,11 +56,16 @@ import { resolveCliHomeTarget } from '@/server/homeTarget';
 import { MachineInstallationPublicIdentityV1Schema, type MachineInstallationPublicIdentityV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { USAGE_SOURCES_INVALIDATION_EVENT_V1, type UsageSourcesInvalidationV1 } from '@happier-dev/protocol/usage/usageSources';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { resolveSessionRpcContent } from '@/session/transport/rpc/sessionRpc';
 import { createMachineSkillHostService, resolveMachineSkillInstallTarget } from '@/prompts/skills/machineInstall/machineSkillHost';
 import { createMachineSkillActionExecutor } from '@/prompts/skills/machineInstall/machineSkillActionExecutor';
 import { createExternalActionMachineRpcExecution, verifyExternalActionExecutionAuthorizationCurrent } from './externalActionExecutionAuthorization';
 import { externalActionTargetsEqualV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { PendingActivationRequestedEphemeralV1Schema, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMachineMutationV1Schema,
+    SessionMessageReplyMutationResultV1Schema, SessionMessageReplyPendingHintV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { recoverSessionMessageRepliesForMachine } from '@/session/services/sessionMessageReply';
 
 import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
 import { callSocketRpc, isSocketIoAckTimeoutError, type SocketRpcContent } from '@happier-dev/sync-client';
@@ -163,6 +169,7 @@ import type { RpcHandlerActiveExecution, RpcHandlerContext, RpcLocalActionContex
 import type { PeerMachineRpcDirectHandlerManager } from '@/daemon/peer/mediation/rpc/registerRoutes';
 import { SOCKET_RPC_EVENTS, type SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { isCurrentUiContextClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { EXTERNAL_SESSION_OPERATION_SOCKET_EVENT_V1 } from '@happier-dev/protocol/sessions/external/operationActionsV1';
 import { EXTERNAL_SESSION_STATUS_DEMAND_EVENT_V1 } from '@happier-dev/protocol/sessions/external/statusDemandV1';
 import { MACHINE_LIVE_STREAM_SOCKET_EVENT } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
@@ -185,7 +192,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import { createExecutionRunAccountSettingsSnapshotResolver } from './machine/resolveExecutionRunAccountSettingsSnapshot';
 import { changesRequireSavedSecretCatalogRefresh } from '@/settings/secrets/savedSecretCatalogChangeInvalidation';
 import { isProfileCatalogAccountChangeEntityIdV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -377,6 +384,11 @@ export type SessionTranscriptRevisionNotification = Readonly<{
     cursor: number;
 }>;
 
+export type SessionChangeNotification = Readonly<{
+    sessionId: string;
+    cursor: number;
+}>;
+
 export type SessionDeletedChangeNotification = Readonly<{
     sessionId: string;
     cursor: number;
@@ -561,6 +573,7 @@ export class ApiMachineClient {
     private accountChangesObserverTransportGeneration: number | null = null;
     private updateListeners = new Set<(update: Update) => boolean | void>();
     private accountSettingsVersionHintListeners = new Set<(hint: AccountSettingsVersionHintNotification) => void | Promise<void>>();
+    private readonly sessionFollowRulesChangedListeners = new Set<() => void>();
     private accountProjectRowsChangeListeners = new Set<(change: AccountProjectRowsChangeNotification) => void | Promise<void>>();
     private automationEventSourcesInvalidationListeners = new Set<() => void | Promise<void>>();
     private pendingSessionActivationHintListeners = new Set<(
@@ -571,6 +584,9 @@ export class ApiMachineClient {
     ) => void | Promise<void>>();
     private sessionTranscriptRevisionListeners = new Set<(
         change: SessionTranscriptRevisionNotification,
+    ) => void | Promise<void>>();
+    private sessionChangeListeners = new Set<(
+        change: SessionChangeNotification,
     ) => void | Promise<void>>();
     private sessionAccessRevokedListeners = new Set<(
         change: SessionAccessRevokedNotification,
@@ -737,6 +753,15 @@ export class ApiMachineClient {
     private providerBrokerAccountConnectionIngressLive = false;
     private agentCatalogObservation: AgentProviderCatalogObservationService | null = null;
     private activeTransportGeneration = 0;
+    private sessionMessageReplyRecovery: {
+        socket: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
+        generation: number;
+        controller: AbortController;
+        requested: Set<string | null>;
+        promise: Promise<void> | null;
+        isCurrent?: () => Promise<boolean>;
+    } | null = null;
+    private sessionMessageReplyRecoverySupported = false;
     private advertisedOperationProtocolCapabilitiesGeneration: number | null = null;
     private machineControlReadinessFailureGeneration: number | null = null;
     private machineControlRunningGeneration: number | null = null;
@@ -795,6 +820,9 @@ export class ApiMachineClient {
     }
 
     private teardownActiveSocket(): void {
+        this.sessionMessageReplyRecovery?.controller.abort();
+        this.sessionMessageReplyRecovery = null;
+        this.sessionMessageReplyRecoverySupported = false;
         this.connectedClientRpcMethods.clear();
         if (!this.socket) {
             this.sessionSyncPendingInputServerContractResult = null;
@@ -808,6 +836,109 @@ export class ApiMachineClient {
         this.rpcHandlerManager.onSocketDisconnect();
         this.stopKeepAlive();
         this.socket = null;
+    }
+
+    /** The existing requester visitor reopens only its retained exact Session custody. */
+    async requestSessionMessageReplyRecoveryForSession(sessionId: string): Promise<void> {
+        const socket = this.socket;
+        if (!socket) return;
+        await this.requestSessionMessageReplyRecovery(socket, this.activeTransportGeneration, sessionId);
+    }
+
+    private requestSessionMessageReplyRecovery(socket: Socket<ServerToDaemonEvents, DaemonToServerEvents>, generation: number,
+        requesterSessionId: string | null = null): Promise<void> | undefined {
+        if (this.projectionSchedulingClosed || this.socket !== socket || !socket.connected
+            || !this.isActiveTransportGeneration(generation)
+            || this.machineControlRunningGeneration !== generation) return;
+        let recovery = this.sessionMessageReplyRecovery;
+        if (!recovery || recovery.socket !== socket || recovery.generation !== generation) {
+            recovery?.controller.abort();
+            recovery = { socket, generation, controller: new AbortController(), requested: new Set(), promise: null };
+            this.sessionMessageReplyRecovery = recovery;
+        }
+        // Coalesce read invalidations, never payloads or delivery custody. Null is
+        // the installed Account; requester scopes must resolve their own lifetime.
+        recovery.requested.add(requesterSessionId);
+        if (recovery.promise) return recovery.promise;
+        const active = recovery;
+        const transportCurrent = () => !this.projectionSchedulingClosed && !active.controller.signal.aborted
+            && this.sessionMessageReplyRecovery === active && this.socket === socket && socket.connected
+            && this.isActiveTransportGeneration(generation);
+        active.promise = (async () => {
+            while (active.requested.size && transportCurrent()) {
+                const next = active.requested.values().next();
+                if (next.done) break;
+                const scope = next.value;
+                active.requested.delete(scope);
+                const requesterPort = this.lifecycleDependencies.requesterSessionRuntime;
+                let requester: Awaited<ReturnType<NonNullable<typeof requesterPort>['resolve']>> = null;
+                try {
+                    if (scope !== null) requester = await requesterPort?.resolve(scope) ?? null;
+                    const requesterCurrent = async () => {
+                        const bootstrap = requester?.bootstrap;
+                        return !!bootstrap && requesterPort?.serverId === this.machineRuntimeServerId
+                            && bootstrap.getBoundSessionId() === scope
+                            && bootstrap.attribution.serverId === this.machineRuntimeServerId
+                            && bootstrap.attribution.machineId === this.machine.id
+                            && bootstrap.attribution.installationId === this.machineRuntimeInstallationId
+                            && bootstrap.serverHttpBaseUrl === this.machineRuntimeServerHttpBaseUrl
+                            && configuration.activeServerId === this.machineRuntimeServerId
+                            && readInstallationIdentityIfExistsSync()?.installationId === this.machineRuntimeInstallationId
+                            && await requester!.isCurrent(active.controller.signal);
+                    };
+                    const runtime = scope === null ? await this.resolveInstalledAccountRuntime(active.controller.signal)
+                        : requester && await requesterCurrent() ? { credentials: requester.bootstrap.credentials,
+                            serverId: requester.bootstrap.attribution.serverId, serverHttpBaseUrl: requester.bootstrap.serverHttpBaseUrl,
+                            isCurrent: requesterCurrent } : null;
+                    if (!runtime || !transportCurrent()) continue;
+                    const isCurrent = async () => transportCurrent() && await runtime.isCurrent() && transportCurrent();
+                    // The advertised installed-Account capability must not retain
+                    // a temporary requester context which release will retire.
+                    if (scope === null) active.isCurrent = isCurrent;
+                    await runWithServerHttpBaseUrl(runtime.serverHttpBaseUrl, () => recoverSessionMessageRepliesForMachine({
+                        machineId: this.machine.id, serverId: runtime.serverId, credentials: runtime.credentials,
+                        ...(scope === null ? {} : { requesterSessionId: scope }),
+                        signal: active.controller.signal, isCurrent,
+                        onSupported: async () => {
+                            if (scope !== null || this.sessionMessageReplyRecoverySupported || !await isCurrent()) return;
+                            this.sessionMessageReplyRecoverySupported = true;
+                            try { await this.refreshOperationProtocolCapabilitiesAdvertisement(); }
+                            catch {
+                                if (transportCurrent()) this.sessionMessageReplyRecoverySupported = false;
+                                logger.warn('[API MACHINE] Session reply capability publication remains unavailable');
+                            }
+                        },
+                        machineAdmissionTransport: (request, options) => this.enqueueSessionPendingByMachine(request, options),
+                        publishDiscussionReply: createDiscussionReplyReturnPublisher({ credentials: runtime.credentials,
+                            machineId: this.machine.id,
+                            serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl,
+                            ...(requester ? { actionsSettingsProvider: createActionSettingsProvider({
+                                scopeKey: resolveAccountSettingsScopeKeyForToken(runtime.credentials.token),
+                                getAccountSettings: () => {
+                                    const snapshot = requester!.readAccountSettingsSnapshot();
+                                    return snapshot.source === 'none' ? null : snapshot.settings;
+                                },
+                            }) } : {}),
+                            signal: active.controller.signal, isCurrent }),
+                        markReturned: async request => {
+                            if (scope !== null || !await isCurrent()) return { v: 1, ok: false, error: 'unavailable' };
+                            const payload = SessionMessageReplyMachineMutationV1Schema.parse({ v: 1, machineId: this.machine.id,
+                                requestSessionId: request.requestSessionId, requestLocalId: request.requestLocalId,
+                                operation: { kind: 'returned', returnedInputLocalId: request.returnedInputLocalId } });
+                            return SessionMessageReplyMutationResultV1Schema.parse(await emitSocketWithAck({ socket,
+                                event: SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, payload, signal: active.controller.signal }));
+                        },
+                    }));
+                } catch {
+                    if (transportCurrent()) logger.warn('[API MACHINE] Session reply recovery remains pending in original input custody');
+                } finally {
+                    if (requester) await requesterPort!.release(requester);
+                }
+            }
+        })().catch(() => {
+            if (transportCurrent()) logger.warn('[API MACHINE] Session reply recovery could not acquire current Account custody');
+        }).finally(() => { active.promise = null; });
+        return active.promise;
     }
 
     private async publishMachineControlReadinessWhenReady(params: Readonly<{
@@ -891,6 +1022,9 @@ export class ApiMachineClient {
                 && socket.connected === true
             ) {
                 this.machineControlRunningGeneration = transportGeneration;
+                // Connect precedes server-side asynchronous admission. Existing
+                // registration readiness proves its Machine listeners are mounted.
+                this.requestSessionMessageReplyRecovery(socket, transportGeneration);
                 // Pairs with the unready warning below: an operator reading the daemon log
                 // can tell a connection that recovered from one that never did.
                 logger.info('[API MACHINE] Core machine-control RPC registration ready', {
@@ -1064,6 +1198,30 @@ export class ApiMachineClient {
             scopePrefix: this.machine.id,
             localMachineId: this.machine.id,
             ...rpcTransportConfig,
+            resolveSessionDecisionContext: async ({ authorization, signal }) => {
+                const credentials = await readStoredCredentialsForServerId(machineRuntimeServerId).catch(() => null);
+                const accountId = readAccountIdFromToken(this.token);
+                const installation = readInstallationIdentityIfExistsSync();
+                if (!credentials || credentials.token !== this.token || !accountId || !installation || !authorization.authentication || signal.aborted
+                    || this.projectionSchedulingClosed) return null;
+                const context = { actorAccountId: accountId, custodianAccountId: accountId, machineId: this.machine.id,
+                    installationId: installation.installationId, role: 'manage' as const, encryptionMode: this.machine.encryptionMode ?? 'e2ee' };
+                const sessionDecision = { sessionId: authorization.sessionId, actor: authorization.actor,
+                    authentication: authorization.authentication };
+                const isCurrent = async () => !signal.aborted && !this.projectionSchedulingClosed
+                    && sameStoredCredentials(credentials, await readStoredCredentialsForServerId(machineRuntimeServerId).catch(() => null))
+                    && readInstallationIdentityIfExistsSync()?.installationId === installation.installationId
+                    && await verifyMachineRpcAdmissionCurrent({ context,
+                        method: `${authorization.sessionId}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`, sessionDecision,
+                        privateKey: installation.privateKey, daemonToken: credentials.token,
+                        serverHttpBaseUrl: machineRuntimeServerHttpBaseUrl, signal });
+                if (!await isCurrent()) return null;
+                const transport = await runWithServerHttpBaseUrl(machineRuntimeServerHttpBaseUrl, () => resolveSessionTransportContext({
+                    credentials, idOrPrefix: authorization.sessionId, signal,
+                }));
+                if (!transport.ok || transport.sessionId !== authorization.sessionId) return null;
+                return { content: resolveSessionRpcContent(transport), isCurrent };
+            },
             prepareRequesterAccountContext: (input) => this.externalActionIngressOwner?.prepareRequesterAccountContext?.(input)
                 ?? Promise.resolve(null),
             resolveExternalActionEncryption: (signal, authorization) => this.resolveExternalActionEncryption(signal, authorization),
@@ -1712,9 +1870,9 @@ export class ApiMachineClient {
             serverId, machineId: this.machine.id, workingDirectory: this.machineRpcWorkingDirectory,
             accessPolicy: this.filesystemAccessPolicy,
             acquirePluginRuntime: acquireAuthoritativePluginRuntimeRegistryLease,
-            ...(ingress ? { inspectSetup: async ({ workspace, context }) => {
+            ...(ingress ? { inspectSetup: async ({ workspace, context, reviewSetupConsent }) => {
                 const runtime = await this.resolveProjectFiniteRuntime(ingress);
-                return runtime ? inspectProjectSetupFromRuntime({ runtime, ingress, workspace, context })
+                return runtime ? inspectProjectSetupFromRuntime({ runtime, ingress, workspace, context, reviewSetupConsent })
                     : { setupReadiness: { kind: 'unknown' as const, code: 'project_setup_requester_review_unavailable' } };
             } } : {}),
         });
@@ -1880,6 +2038,7 @@ export class ApiMachineClient {
             executionRunPermissionRequestStore?: unknown;
             executionRunWorkflowObservationSink?: unknown;
             executionRunWorkflowRunId?: string;
+            executionRunWorkflowScope?: RpcLocalActionContext['executionRunWorkflowScope'];
             localActionContext?: RpcLocalActionContext;
             /** Existing requester custody for host-owned exact-daemon replay. */
             rpcContext?: NonNullable<Parameters<RpcHandlerManager['invokeLocal']>[2]>['rpcContext'];
@@ -1891,12 +2050,14 @@ export class ApiMachineClient {
             ...(options?.executionRunPermissionRequestStore === undefined
                 && options?.executionRunWorkflowObservationSink === undefined
                 && options?.executionRunWorkflowRunId === undefined
+                && options?.executionRunWorkflowScope === undefined
                 && options?.localActionContext === undefined
                 ? {}
                 : {
                     localActionContext: {
                         ...options?.localActionContext,
                         ...(options?.executionRunWorkflowRunId ? { executionRunWorkflowRunId: options.executionRunWorkflowRunId } : {}),
+                        ...(options?.executionRunWorkflowScope ? { executionRunWorkflowScope: options.executionRunWorkflowScope } : {}),
                         ...(options?.executionRunPermissionRequestStore === undefined
                             ? {}
                             : { executionRunPermissionRequestStore: options.executionRunPermissionRequestStore }),
@@ -2036,6 +2197,16 @@ export class ApiMachineClient {
         };
     }
 
+    /** Content-free invalidation on the already-consumed Account feed; no second socket or cursor. */
+    onSessionFollowRulesChanged(listener: () => void): () => void {
+        this.sessionFollowRulesChangedListeners.add(listener);
+        return () => { this.sessionFollowRulesChangedListeners.delete(listener); };
+    }
+
+    private notifySessionFollowRulesChanged(): void {
+        for (const listener of this.sessionFollowRulesChangedListeners) listener();
+    }
+
     onAccountProjectRowsChanged(listener: (change: AccountProjectRowsChangeNotification) => void | Promise<void>): () => void {
         this.accountProjectRowsChangeListeners.add(listener);
         return () => { this.accountProjectRowsChangeListeners.delete(listener); };
@@ -2078,6 +2249,13 @@ export class ApiMachineClient {
     ): () => void {
         this.sessionTranscriptRevisionListeners.add(listener);
         return () => { this.sessionTranscriptRevisionListeners.delete(listener); };
+    }
+
+    onSessionChanged(
+        listener: (change: SessionChangeNotification) => void | Promise<void>,
+    ): () => void {
+        this.sessionChangeListeners.add(listener);
+        return () => { this.sessionChangeListeners.delete(listener); };
     }
 
     getSessionSyncPendingInputServerContractResult():
@@ -2344,7 +2522,18 @@ export class ApiMachineClient {
 
     hasConnectedClientRpcHandler(method: string): boolean {
         const normalized = this.normalizeMachineScopedRpcMethod(method);
-        return normalized ? this.connectedClientRpcMethods.has(normalized) : false;
+        const available = normalized ? this.connectedClientRpcMethods.has(normalized) : false;
+        if (isCurrentUiContextClientRpcMethod(method)) {
+            logger.warn('[API MACHINE] Current UI RPC availability checked', {
+                machineId: this.machine.id,
+                method,
+                normalizedMethod: normalized,
+                available,
+                transportGeneration: this.activeTransportGeneration,
+                socketConnected: this.socket?.connected === true,
+            });
+        }
+        return available;
     }
 
     sendTransferRelayV2Envelope(payload: TransferRelayV2SendEnvelope): void {
@@ -2966,7 +3155,7 @@ export class ApiMachineClient {
                 || this.socket !== socket || !socket.connected || configuration.activeServerId !== this.machineRuntimeServerId
                 || readInstallationIdentityIfExistsSync()?.installationId !== installation.installationId) throw unavailable();
             const forwardedAuthorization = input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN
-                ? await signedAuthorization.requesterAccountProjection?.sealRequesterAccountContext({ authorization: signedAuthorization,
+                ? await signedAuthorization.requesterAccountProjection?.sealRequesterAccountContext?.({ authorization: signedAuthorization,
                     purpose: { kind: 'workspace_sync_prepare', controller: { machineId: destination.machineId,
                         installationId: destination.installationId }, request: WorkspaceSyncPrepareBetweenRequestV1Schema.parse(input.request) },
                     installationPublicKey: decodeBase64(destination.installationPublicKey, 'base64url') })
@@ -3321,6 +3510,7 @@ export class ApiMachineClient {
             ...sessionCapabilities
         } = CURRENT_MACHINE_OPERATION_PROTOCOL_CAPABILITIES_V1;
         const capabilities: MachineOperationProtocolCapabilitiesV1 = {
+            ...(this.sessionMessageReplyRecoverySupported ? { sessionMessageReply: { protocolVersions: [1] } } : {}),
             ...(includeSessionCapabilities && this.sessionSpawnV1OutcomeRequired
                 ? sessionCapabilities
                 : {}),
@@ -3353,6 +3543,12 @@ export class ApiMachineClient {
         currentServerFeatures?: FeaturesResponse,
     ): Promise<MachineOperationProtocolCapabilitiesV1 | null> {
         let capabilities = this.currentMachineOperationProtocolCapabilities(includeSessionCapabilities);
+        if (!capabilities) return null;
+
+        if (capabilities.sessionMessageReply && !await this.sessionMessageReplyRecovery?.isCurrent?.()) {
+            const { sessionMessageReply: _retiredReply, ...currentCapabilities } = capabilities;
+            capabilities = Object.keys(currentCapabilities).length > 0 ? currentCapabilities : null;
+        }
         if (!capabilities) return null;
 
         // The Home's resolved server feature bit is both product enablement and
@@ -4006,6 +4202,16 @@ export class ApiMachineClient {
                 return;
             }
             const method = this.normalizeConnectedClientRpcAvailabilityMethod(data.method);
+            const separatorIndex = data.method.indexOf(':');
+            const rpcMethod = separatorIndex === -1 ? data.method : data.method.slice(separatorIndex + 1);
+            if (isCurrentUiContextClientRpcMethod(rpcMethod)) {
+                logger.warn('[API MACHINE] Current UI RPC availability received', {
+                    machineId: this.machine.id,
+                    method: data.method,
+                    accepted: method !== null,
+                    transportGeneration,
+                });
+            }
             if (method) {
                 this.connectedClientRpcMethods.add(method);
             }
@@ -4112,6 +4318,12 @@ export class ApiMachineClient {
 
         socket.on('ephemeral', (raw: unknown) => {
             if (this.projectionSchedulingClosed || !this.isActiveTransportGeneration(transportGeneration) || socket !== this.socket) return;
+            const replyHint = SessionMessageReplyPendingHintV1Schema.safeParse(raw);
+            if (replyHint.success) {
+                this.requestSessionMessageReplyRecovery(socket, transportGeneration);
+                this.requestSessionMessageReplyRecovery(socket, transportGeneration, replyHint.data.sessionId);
+                return;
+            }
             const hint = PendingActivationRequestedEphemeralV1Schema.safeParse(raw);
             if (!hint.success || hint.data.target.machineId !== this.machine.id) return;
             void this.notifyPendingSessionActivationHint({ sessionId: hint.data.target.sessionId,
@@ -4626,6 +4838,7 @@ export class ApiMachineClient {
         }
 
         if (result.status === 'cursor-gone') {
+            this.notifySessionFollowRulesChanged();
             publishSessionFollowWakeInvalidation();
             this.applyResourceSessionAccessWitness({ accountId });
             signal.throwIfAborted();
@@ -4697,6 +4910,8 @@ export class ApiMachineClient {
         }
 
         const changes = result.response.changes;
+        if (opts.reason !== 'live' || changes.some(change => change.kind === 'account'
+            && asRecord(change.hint)?.sessionFollows === true)) this.notifySessionFollowRulesChanged();
         if (opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT || changes.some((change) => change.kind === 'session')) {
             publishSessionFollowWakeInvalidation();
         }
@@ -4907,8 +5122,17 @@ export class ApiMachineClient {
             await this.notifyPendingSessionActivationHint(activationHint);
         }
         for (const change of changes) {
-            const transcript = readSessionTranscriptChangeHintV1(change);
             const sessionId = change.entityId.trim();
+            if (change.kind === 'session' && sessionId) {
+                signal.throwIfAborted();
+                // Consume this exact durable invalidation before advancing the
+                // Account cursor. Failure replays it through the existing feed.
+                for (const listener of this.sessionChangeListeners) {
+                    await listener({ sessionId, cursor: change.cursor });
+                    signal.throwIfAborted();
+                }
+            }
+            const transcript = readSessionTranscriptChangeHintV1(change);
             if (!transcript || !sessionId) continue;
             signal.throwIfAborted();
             // Append hints also invalidate retained rows: Account changes can

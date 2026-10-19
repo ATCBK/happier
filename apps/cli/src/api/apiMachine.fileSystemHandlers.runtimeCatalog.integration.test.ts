@@ -53,7 +53,7 @@ describe('ApiMachineClient filesystem handlers', () => {
         approvalsCreate: async ({ request }) => { approvals.push(request); return { artifactId: 'approval' }; },
       });
       const handlers = {
-        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not implemented' } as const),
+        spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'not implemented' } as const),
         stopSession: async () => true, requestShutdown: () => {},
       } satisfies Parameters<ApiMachineClient['setRPCHandlers']>[0];
       client.setRPCHandlers(handlers, { externalActionIngressOwner: {

@@ -1,4 +1,5 @@
-import { getActionSpec, type ActionId } from '@happier-dev/protocol/actions';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { ActionId } from '@happier-dev/protocol/actions';
 
 /** Admission belongs to the captured invoker; an acknowledged effect outlives its cancellation or retirement. */
 export async function executeCapturedMachineAction<Result>(input: Readonly<{

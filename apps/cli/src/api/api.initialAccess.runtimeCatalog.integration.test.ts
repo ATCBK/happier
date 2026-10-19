@@ -17,6 +17,9 @@ import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRu
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { readSessionCreationTerminalSpawnErrorDetail } from './session/sessionCreationTerminalSpawnErrorDetail';
+import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
+import { commitDaemonLaunchSession } from '@/daemon/spawn/commitDaemonLaunchSession';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 
 const initialAccess: SessionInitialAccessDraftV1 = {
   grants: [{ subject: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit', canApprovePermissions: false }],
@@ -71,7 +74,9 @@ for (const owner of ['api', 'http'] as const) {
       // URL; each case stubs its own Home answer at the fetch boundary.
       resetServerFeaturesClientForTests();
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(features(true)))));
-      vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+      vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/v2/account/settings')
+        ? { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } }
+        : { status: 200, data: {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
       } });
@@ -86,6 +91,70 @@ for (const owner of ['api', 'http'] as const) {
       });
     });
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+    it('creates the Session when Account currentness arrives within its canonical HTTP budget', async () => {
+      vi.useFakeTimers();
+      vi.stubEnv('HAPPIER_CONNECTED_SERVICES_API_TIMEOUT_MS', '30000');
+      const currentnessBudget = resolveConnectedServicesServerApiTimeoutMs();
+      const responseDelay = currentnessBudget / 2;
+      vi.mocked(axios.get).mockImplementation(async (url, options) => {
+        if (!String(url).endsWith('/v1/account/encryption/currentness')) throw new Error('Unexpected GET');
+        const currentnessResponse = { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+          recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+        } };
+        return await new Promise<typeof currentnessResponse>((resolve, reject) => {
+          const response = setTimeout(() => {
+            clearTimeout(deadline);
+            resolve(currentnessResponse);
+          }, responseDelay);
+          // Axios is the real network boundary: honor its supplied timeout,
+          // rather than making a delayed response succeed under any budget.
+          const deadline = setTimeout(() => {
+            clearTimeout(response);
+            reject(new axios.AxiosError('Account read timed out', 'ECONNABORTED'));
+          }, options?.timeout ?? currentnessBudget);
+        });
+      });
+      try {
+        const created = create({});
+        const settled = expect(created).resolves.toMatchObject(owner === 'api'
+          ? { id: 'created-session' }
+          : { session: { id: 'created-session' } });
+        void settled.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(responseDelay - 1);
+        expect(axios.post).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await settled;
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ encryptionMode: 'plain' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    if (owner === 'api') it('reports an offline preflight distinctly before any durable Session creation attempt', async () => {
+      vi.mocked(axios.get).mockRejectedValue(new axios.AxiosError('Account read timed out', 'ECONNABORTED'));
+      const api = await ApiClient.create(credentials);
+      const result = await commitDaemonLaunchSession({ api, credentials, options: { directory: '/workspace' },
+        directory: '/workspace', accountSettings: {} });
+      expect(result).toMatchObject({ ok: false, result: { type: 'error', errorCode: 'SPAWN_FAILED',
+        errorMessage: expect.stringMatching(/offline|unreachable/i) } });
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    if (owner === 'api') it('retains an exhausted server transaction as a server failure through daemon launch commitment', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
+      vi.mocked(axios.post).mockRejectedValue(new axios.AxiosError('Request failed with status code 503', undefined,
+        undefined, undefined, { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
+          headers: {}, statusText: 'Service Unavailable', config: { headers: new axios.AxiosHeaders() } }));
+      const api = await ApiClient.create(credentials);
+      const error: unknown = await commitDaemonLaunchSession({ api, credentials, options: { directory: '/workspace' },
+        directory: '/workspace', accountSettings: {} }).catch((failure: unknown) => failure);
+      expect(error).toMatchObject({ code: 'database_transaction_conflict_exhausted', response: { status: 503 } });
+      expect(classifyServerEndpointError(error)).toMatchObject({ kind: 'server_error', retryable: true, statusCode: 503 });
+      expect(axios.post).toHaveBeenCalledTimes(1);
+    });
 
     it('transports initial grants and explicit Team context only as create fields', async () => {
       await create({ initialAccess, primaryTeamId: 'team-1' });

@@ -16,7 +16,7 @@ const projection = {
 } as const;
 
 function register(readPoolSelection: () => Promise<unknown>) {
-  const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+  const handlers = new Map<string, RpcHandler>();
   registerMachineConnectedAccountRpcHandlers({
     machineId: 'machine', getRuntime: () => null,
     // The owner port is a wire boundary; malformed fixtures deliberately violate its declared result.

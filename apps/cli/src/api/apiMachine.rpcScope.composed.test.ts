@@ -19,7 +19,12 @@ import { createCliActionExecutor } from '@/session/actions/createCliActionExecut
 // Persistence is the boundary: exercise the actual server registration and machine-availability policy.
 vi.mock('../../../server/sources/storage/db', () => ({
     db: {
-        machine: { findFirst: async () => ({ revokedAt: null, replacedByMachineId: null }) },
+        machine: {
+            findFirst: async () => ({ revokedAt: null, replacedByMachineId: null }),
+            // An owned predecessor Machine uses the retained carrier without
+            // an installation proof; this suite tests method scope registration.
+            findUnique: async () => ({ id: 'machine-1', kind: 'persistent', accountId: 'account-1', installationId: null }),
+        },
     },
 }));
 

@@ -16,7 +16,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { registerMachineRpcHandlers } from './rpcHandlers';
 import { accountSettingsParse,RegistrySkillFilesPayloadV1Schema } from '@happier-dev/protocol';
-import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { FoundSkillBundleV1Schema } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
+import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 type Handler = (data: unknown) => Promise<any>;
 
@@ -159,10 +160,14 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 encryptedDataKeyEnvelopeBase64: chunkEnvelope.encryptedDataKeyEnvelopeBase64,
                 recipientSecretKeySeed: recipientKeyPair.recipientSecretKeySeed,
             }).toString('utf8'));
-            expect(payload).toMatchObject({
-                assetTypeId: 'agents.skill',
-                title: 'reviewer',
-                bundleSchemaId: 'skills.skill_md_v1',
+            expect(FoundSkillBundleV1Schema.parse(payload)).toMatchObject({
+                name: 'reviewer',
+                path: join(homeDir, '.agents', 'skills', 'reviewer'),
+                pluginOwned: null,
+                files: [
+                    { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from('---\nname: reviewer\n---\n# Reviewer\n').toString('base64') },
+                    { path: 'notes.txt', contentKind: 'utf8', contentBase64: Buffer.from('Remember this\n').toString('base64') },
+                ],
             });
 
             relay.emitFromUser({
@@ -362,7 +367,10 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 encryptedDataKeyEnvelopeBase64: chunkEnvelope.encryptedDataKeyEnvelopeBase64,
                 recipientSecretKeySeed: recipientKeyPair.recipientSecretKeySeed,
             }).toString('utf8'));
-            expect(RegistrySkillFilesPayloadV1Schema.parse(payload)).toMatchObject([{path:'SKILL.md',contentBase64:Buffer.from('# Reviewer\n').toString('base64')},{path:'notes.txt'}]);
+            expect(RegistrySkillFilesPayloadV1Schema.parse(payload)).toMatchObject([
+                { path: 'SKILL.md', contentBase64: Buffer.from('---\nname: reviewer\n---\n# Reviewer\n').toString('base64') },
+                { path: 'notes.txt', contentBase64: Buffer.from('remember me\n').toString('base64') },
+            ]);
 
             relay.emitFromUser({
                 scopeUserId: 'user-1',
@@ -390,7 +398,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                 },
             });
         } finally {
-            setActiveAccountSettingsSnapshot(null);
+            clearActiveAccountSettingsSnapshot();
             rmSync(repo, { recursive: true, force: true });
             rmSync(happierHomeDir, { recursive: true, force: true });
         }

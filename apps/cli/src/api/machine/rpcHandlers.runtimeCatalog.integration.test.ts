@@ -7139,6 +7139,7 @@ describe('registerMachineRpcHandlers', () => {
       memoryWorker: {
         stop: () => {},
         reloadSettings: async () => {},
+        clearIndex: async () => {},
         ensureUpToDate: async () => {},
         removeSessions: async () => {},
         reconcileRetainedSessionAccess: async () => {},
