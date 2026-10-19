@@ -54,34 +54,38 @@ describe('workspace file native download actions through the prepared carrier', 
     it('removes the native sink when real encrypted bytes fail manifest verification before OS handoff', async () => {
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
         const http = await import('@/utils/system/runtimeFetch');
-        const { MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease');
+        const { createEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
+        const corruptBytes = new Uint8Array([1, 2, 4]);
         const request = http.runtimeFetch;
-        // Corrupt only the daemon HTTP manifest; transport, decryption,
-        // verification and destination cleanup remain the real owners.
-        const manifestBoundary = vi.spyOn(http, 'runtimeFetch').mockImplementation(async (input, init) => {
+        // The prepared Action pins the manifest before HTTP opens. Corrupt only
+        // the daemon's bytes with a valid envelope; transport, decryption,
+        // final digest verification and destination cleanup stay real.
+        const chunkBoundary = vi.spyOn(http, 'runtimeFetch').mockImplementation(async (input, init) => {
             const response = await request(input, init);
-            if (!new URL(String(input)).pathname.endsWith('/open') || !response.ok) return response;
-            const manifest: unknown = await response.json();
-            if (!manifest || typeof manifest !== 'object' || !('manifestHash' in manifest)
-                || typeof manifest.manifestHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(manifest.manifestHash)) {
-                throw new Error('Expected SHA-256 transfer manifest');
+            if (!new URL(String(input)).pathname.endsWith('/chunks/0') || !response.ok) return response;
+            const chunk: unknown = await response.json();
+            if (!chunk || typeof chunk !== 'object' || !('transferId' in chunk)
+                || typeof chunk.transferId !== 'string') {
+                throw new Error('Expected encrypted transfer chunk');
             }
-            const hash = manifest.manifestHash;
-            return Response.json({ ...manifest, manifestHash: `sha256:${hash[7] === '0' ? '1' : '0'}${hash.slice(8)}` });
+            const envelope = await createEncryptedTransferChunkEnvelope({ transferId: chunk.transferId,
+                sequence: 0, payload: corruptBytes,
+                recipientPublicKeyBase64: new Headers(init?.headers).get('x-happier-transfer-recipient-public-key') ?? '' });
+            return Response.json({ ...chunk, ...envelope });
         });
         try {
             const transfers = await renderTransfers();
             await act(async () => {
                 await expect(transfers.api().startDownload({ path: 'recording.mp4', asZip: false }))
-                    .resolves.toEqual({ ok: false, error: MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR });
+                    .resolves.toEqual({ ok: false, error: 'Direct export file manifest mismatch' });
             });
-            expect((await fs).writes).toHaveBeenCalledWith(expect.any(String), new Uint8Array([1, 2, 3]));
+            expect((await fs).writes).toHaveBeenCalledWith(expect.any(String), corruptBytes);
             expect(actions.iosShare).not.toHaveBeenCalled();
             expect(actions.saveFile).not.toHaveBeenCalled();
             expect((await fs).files.size).toBe(0);
             expect(harness.nativeTunnelStops).toHaveLength(1);
         } finally {
-            manifestBoundary.mockRestore();
+            chunkBoundary.mockRestore();
         }
     });
 
@@ -138,22 +142,15 @@ describe('workspace file native download actions through the prepared carrier', 
     });
 
     it('reports preparation as busy before a native destination is allocated', async () => {
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        const credentials = await TokenStorage.getCredentials();
-        const entered = createDeferred<void>();
-        const released = createDeferred<typeof credentials>();
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementationOnce(async () => {
-            entered.resolve();
-            return await released.promise;
-        });
         const transfers = await renderTransfers();
+        const preparation = harness.deferNextDownloadPreparation();
         let result: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startDownload']> | undefined;
-        await act(async () => { result = transfers.api().startDownload({ path: 'recording.mp4', asZip: false }); await entered.promise; });
         try {
+            await act(async () => { result = transfers.api().startDownload({ path: 'recording.mp4', asZip: false }); await preparation.entered; });
             expect(transfers.api().downloadState.status).toBe('downloading');
             expect((await fs).files.size).toBe(0);
         } finally {
-            await act(async () => { released.resolve(credentials); await result; });
+            await act(async () => { preparation.release(); await expect(result).resolves.toEqual({ ok: true }); });
         }
     });
 
