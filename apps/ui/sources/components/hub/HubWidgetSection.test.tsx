@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
-import { WIDGET_SIZE_POLICY_V1 } from '@happier-dev/protocol/widgets';
+import { WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { normalizePluginUiProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -153,5 +153,31 @@ describe('a card that owns its row', () => {
         expect(await presentedSize({ size: 'small' })).toBe('small');
         // A widget that declares no full-row size keeps the size it was saved at.
         expect(await presentedSize({ size: 'small', ownsRow: true, sizes: ['small', 'medium'] })).toBe('small');
+    });
+});
+
+describe('a card whose definition has not arrived', () => {
+    const frameTitle = async (node: React.ReactElement) => {
+        const screen = await renderScreen(node);
+        const frame = screen.root.findAll(node => node.props.testID === 'home-pending.frame' && 'title' in node.props)[0]!;
+        const result = { title: frame.props.title as unknown, text: screen.getTextContent() };
+        standardCleanup();
+        return result;
+    };
+    const pending = (extra: Partial<React.ComponentProps<typeof HubWidgetSection>>, nameless: WidgetInstanceV1 = instance) => <HubWidgetSection
+        instance={nameless} frameStyle="card" menu={null} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })}
+        testID="home-pending" {...extra} />;
+
+    it('draws a skeleton title rather than the word "Widget", and uses the first name it knows', async () => {
+        const unknown = await frameTitle(pending({}));
+        expect(React.isValidElement(unknown.title)).toBe(true);
+        expect(unknown.text).not.toContain('boards.widgets.kind');
+        // A settled installed widget whose plugin is absent has no name to wait for: it keeps the generic word, not a skeleton.
+        const settled = await frameTitle(<Projection>{pending({})}</Projection>);
+        expect(settled.title).toBe('boards.widgets.kind');
+        expect((await frameTitle(<Projection>{pending({}, { ...instance, definition: { kind: 'artifact', artifactId: 'definition-1' } })}</Projection>)).title)
+            .toSatisfy((title: unknown) => React.isValidElement(title));
+        expect((await frameTitle(pending({ widget }))).title).toBe('Notes status');
+        expect((await frameTitle(pending({}, { ...instance, displayName: 'Ops table' }))).title).toBe('Ops table');
     });
 });

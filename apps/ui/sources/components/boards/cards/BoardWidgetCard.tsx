@@ -8,6 +8,7 @@ import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/App
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
+import { WidgetFrameTitleSkeleton, readWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import { useWidgetFrameSurfaceDefault } from '@/components/widgets/frame/useWidgetFrameStyle';
 import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu, WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
@@ -154,7 +155,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
                 placement="board"
                 widgetPresentation={widgetPresentation}
                 mark={candidate?.icon ?? 'squares-four'}
-                title={rename.field ?? title}
+                title={rename.field ?? readWidgetInstanceName(placement.instance, candidate) ?? <WidgetFrameTitleSkeleton />}
                 source={bindingLabel ?? candidate?.pluginName}
                 menu={(
                     <View style={styles.controls}>
@@ -186,9 +187,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
 
 /** A copy's title: its own name, else its widget's (an inline definition carries one), else what it is. */
 export function describeBoardWidgetTitle(placement: WorkBoardWidgetPlacementV1, candidate: Pick<WidgetCandidate, 'title'> | null): string {
-    const { instance } = placement;
-    const authoredName = instance.definition.kind === 'inline' ? instance.definition.definition.name : null;
-    return instance.displayName ?? candidate?.title ?? authoredName ?? t('boards.widgets.kind');
+    return readWidgetInstanceName(placement.instance, candidate) ?? t('boards.widgets.kind');
 }
 
 const styles = {

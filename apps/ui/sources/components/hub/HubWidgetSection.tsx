@@ -18,6 +18,7 @@ import { t } from '@/text';
 
 import { useActivateAppDestination, useCompactAppDestinations, type CompactAppPluginDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WidgetFrame, type WidgetFrameFooter, type WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
+import { WidgetFrameTitleSkeleton, readWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
 import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
 import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { WidgetFrameBodyCaptionContext, WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -73,6 +74,10 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
     const phone = !useIsTablet();
     const descriptor = props.widget ?? null;
     const pluginName = descriptor?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
+    // A name still on its way (an Artifact definition loading, or the plugin projection not current yet) is a skeleton line;
+    // a settled installed widget whose plugin is absent has no name to wait for and keeps the generic word.
+    const projectionPhase = useAppShellPluginUiProjection().phase;
+    const nameArriving = props.instance.definition.kind === 'artifact' || projectionPhase !== 'current';
     // Copies are named by what they are bound to, in the source slot (lab dbind H, N1).
     const bindingLabel = useWidgetInstanceBindingLabel(props.instance, descriptor);
     // The body may name what it shows ("Tokens by agent · last 7 days"), as it does in every area.
@@ -175,7 +180,7 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
                 widgetPresentation={widgetPresentation}
                 {...(props.sectionHost ? { title: null } : {
                     mark: descriptor?.icon ?? 'squares-four',
-                    title: props.titleEditor ?? props.instance.displayName ?? descriptor?.title ?? t('boards.widgets.kind'),
+                    title: props.titleEditor ?? readWidgetInstanceName(props.instance, descriptor) ?? (nameArriving ? <WidgetFrameTitleSkeleton /> : t('boards.widgets.kind')),
                     source,
                     meta: bodyMeta,
                 })}
