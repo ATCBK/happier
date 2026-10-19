@@ -33,6 +33,8 @@ import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
 import { SessionResumeRequestV1Schema } from '../sessions/control/sessionResumeRequestV1.js';
 import { SessionNeedsYouRaiseInputV1Schema, SessionNeedsYouRaiseOutputV1Schema } from '../sessions/permissions/questionV1.js';
 import { SessionStatusActionResultV1Schema } from '../sessions/control/contract.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { RestartSessionRunnerResultV1Schema } from '../sessions/control/sessionRunnerRestartV1.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
 import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
@@ -1488,6 +1490,9 @@ const SessionStatusGetInputSchema = lazyZodSchema(() => z.looseObject({
   sessionId: SessionTargetV1Schema,
   live: z.optional(z.boolean()),
   readiness: z.optional(z.boolean()),
+  operation: z.optional(z.enum(['conversation', 'credential'])),
+  credentialPurpose: z.optional(QualifiedConnectedAccountPurposeV1Schema),
+  credentialTeamSelection: z.optional(QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema),
 }));
 
 const SessionHistoryGetInputSchema = lazyZodSchema(() => z.looseObject({

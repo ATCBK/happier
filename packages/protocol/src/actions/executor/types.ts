@@ -1,4 +1,6 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
 import type { SessionMessageSendAuthoredInput } from '../actionSpecs.js';
 import type { ApprovalStaleReason } from '../../approvals/approvalExecutionFailure.js';
 import type { NpmRegistryProfileActionIdV1 } from '../npmRegistryProfileActionFamily.js';
@@ -1935,7 +1937,7 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; readiness?: boolean; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
+  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; readiness?: boolean; operation?: 'conversation' | 'credential'; credentialPurpose?: QualifiedConnectedAccountPurposeV1; credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionHistoryGet?: (args: Readonly<{
     sessionId: string;
     limit?: number;

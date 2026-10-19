@@ -1,4 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
 import { SessionDiscussionParticipantV1Schema } from '../sessions/creation/sessionDiscussionParticipantV1.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
@@ -9563,8 +9565,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.status.get' };
           }
           const live = data.live === true;
+          const operation = data.operation === 'credential' || data.operation === 'conversation' ? data.operation : undefined;
+          const credentialPurpose = data.credentialPurpose === undefined ? undefined : QualifiedConnectedAccountPurposeV1Schema.parse(data.credentialPurpose);
+          const credentialTeamSelection = data.credentialTeamSelection === undefined ? undefined : QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema.parse(data.credentialTeamSelection);
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
           const res = await deps.sessionStatusGet({ sessionId, live, ...(data.readiness === true ? { readiness: true } : {}), context: ctx,
+            ...(operation ? { operation } : {}), ...(credentialPurpose ? { credentialPurpose } : {}),
+            ...(credentialTeamSelection ? { credentialTeamSelection } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}), ...(serverId ? { serverId } : {}) });
           return completeActionResult(res);
         }
