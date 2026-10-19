@@ -89,6 +89,25 @@ function fireNodeLayout(node: { props: Record<string, unknown> }, height: number
 }
 
 describe('SelectionList (orchestrator)', () => {
+    it('publishes the single keyboard-highlighted option to its demand callback', async () => {
+        const { act } = await import('react-test-renderer');
+        const { SelectionList } = await import('../SelectionList');
+        const highlighted: string[] = [];
+        const screen = await renderScreen(<SelectionList {...defaultProps({ rootStep: makeRootStep({
+            autoFocusFirstOption: false,
+            sections: [{ kind: 'static', id: 'sessions', options: [
+                { id: 'first', label: 'First', onHighlight: () => highlighted.push('first') },
+                { id: 'second', label: 'Second', onHighlight: () => highlighted.push('second') },
+            ] }],
+        }) })} />);
+        expect(highlighted).toEqual([]);
+        const header = () => screen.findAllByTestId('sl:header').find(node => typeof node.props.onKeyPress === 'function')!;
+        const key = { key: 'ArrowDown', nativeEvent: { key: 'ArrowDown' }, preventDefault() {}, stopPropagation() {} };
+        await act(async () => header().props.onKeyPress(key));
+        expect(highlighted).toEqual(['first']);
+        await act(async () => header().props.onKeyPress(key));
+        expect(highlighted).toEqual(['first', 'second']);
+    });
     beforeEach(() => {
         vi.stubGlobal('window', { matchMedia: () => ({ matches: true }) });
         vi.stubGlobal('navigator', { maxTouchPoints: 0 });

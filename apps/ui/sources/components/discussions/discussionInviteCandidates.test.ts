@@ -25,6 +25,19 @@ function model(serverId = scope.serverId) {
 }
 
 describe('Discussion Invite candidates', () => {
+    it('preserves canonical title readability independently of the display label', () => {
+        const candidates = buildDiscussionInviteCandidates({ scope, people: [], modelOptions: [], sessions: [
+            { address: { serverId: scope.serverId, sessionId: 'locked' }, label: 'Encrypted session', titleReadable: false,
+                access: createSessionAccessFixture() },
+            { address: { serverId: scope.serverId, sessionId: 'readable' }, label: 'Encrypted session', titleReadable: true,
+                access: createSessionAccessFixture() },
+        ] });
+        expect(candidates).toMatchObject([
+            { kind: 'session', titleReadable: false, label: 'Encrypted session' },
+            { kind: 'session', titleReadable: true, label: 'Encrypted session' },
+        ]);
+    });
+
     it('deduplicates people and existing Agents against the Discussion roster, never the source Session grants', () => {
         const selected = model().value;
         if (selected.kind !== 'model') throw new Error('Expected model fixture');
@@ -37,9 +50,9 @@ describe('Discussion Invite candidates', () => {
         const candidates = buildDiscussionInviteCandidates({ scope, roster,
             people: [person('owner'), person('invited'), person('new-person'), person('new-person')],
             sessions: [...['joined', 'owned-session', 'new-agent', 'new-agent'].map(sessionId => ({
-                address: { serverId: scope.serverId, sessionId }, label: sessionId, access: createSessionAccessFixture() })),
-                { address: { serverId: scope.serverId, sessionId: 'read-only' }, label: 'Read only', access: createSessionAccessFixture('view') },
-                { address: { serverId: scope.serverId, sessionId: 'unobserved' }, label: null, access: null }],
+                address: { serverId: scope.serverId, sessionId }, label: sessionId, titleReadable: true, access: createSessionAccessFixture() })),
+                { address: { serverId: scope.serverId, sessionId: 'read-only' }, label: 'Read only', titleReadable: true, access: createSessionAccessFixture('view') },
+                { address: { serverId: scope.serverId, sessionId: 'unobserved' }, label: null, titleReadable: false, access: null }],
             modelOptions: [],
         });
         expect(candidates.map(candidate => candidate.kind)).toEqual(['account', 'session']);
@@ -50,8 +63,8 @@ describe('Discussion Invite candidates', () => {
     it('preserves U4 setup/readiness and only offers executable choices from the captured Home', () => {
         const option = model();
         const candidates = buildDiscussionInviteCandidates({ scope, people: [],
-            sessions: [{ address: { serverId: 'home-b', sessionId: 'same-id' }, label: 'Other Home', access: createSessionAccessFixture() },
-                { address: { serverId: scope.serverId, sessionId: 'same-id' }, label: 'This Home', access: createSessionAccessFixture() }],
+            sessions: [{ address: { serverId: 'home-b', sessionId: 'same-id' }, label: 'Other Home', titleReadable: true, access: createSessionAccessFixture() },
+                { address: { serverId: scope.serverId, sessionId: 'same-id' }, label: 'This Home', titleReadable: true, access: createSessionAccessFixture() }],
             modelOptions: [option, option, model('home-b')],
         });
         expect(candidates.map(candidate => candidate.kind)).toEqual(['session', 'model']);

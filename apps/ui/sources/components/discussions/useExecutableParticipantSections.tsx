@@ -9,6 +9,8 @@ import {
 import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { hasAgentIconMark } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { SelectionListOption, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
@@ -71,6 +73,7 @@ export function useExecutableParticipantSections(
     roster?: DiscussionParticipantsListResponseV1 | null;
     busy?: boolean;
     readinessSessionId?: string | null;
+    onReadinessSessionChange?: (sessionId: string | null) => void;
     modelOptions?: readonly ExecutableParticipantPickerOption[];
     /** How the viewer's sessions take part here; said once beside the section title, not on every row. */
     sessionsContext: string;
@@ -88,18 +91,22 @@ export function useExecutableParticipantSections(
     modelOptions: input.modelOptions,
   });
   const machines = useMachineListForServer(serverId, input.enabled);
-  const { onChoose, sessionsContext } = input;
+  const { onChoose, sessionsContext, onReadinessSessionChange } = input;
   const busy = input.busy === true;
   const query = input.query ?? '';
   return React.useMemo(() => {
     if (!input.enabled) return [];
-    const sessionMark = (
-      <Icon
-        name="robot"
-        size={ICON_SIZE.md}
-        color={theme.colors.text.secondary}
-      />
-    );
+    // A session leads with its Agent's own mark (identity marks always stay); the catalog decides
+    // whether one exists, and a session without a recorded Agent keeps the neutral glyph.
+    const sessionMark = (agentId: string | null | undefined) => agentId && hasAgentIconMark(agentId, theme)
+      ? <AgentIcon agentId={agentId} size={ICON_SIZE.md} />
+      : (
+        <Icon
+          name="robot"
+          size={ICON_SIZE.md}
+          color={theme.colors.text.secondary}
+        />
+      );
     const modelMark = (
       <Icon
         name="sparkle"
@@ -123,10 +130,12 @@ export function useExecutableParticipantSections(
                 candidate.label ??
                 t('session.collaboration.discussion.participants.session'),
               subtitle: readinessSubtitle(candidate.readiness, candidate.contextLabel ?? (candidate.lastActivityAt == null ? '' : formatAsOfTime(candidate.lastActivityAt))),
-              icon: sessionMark,
+              icon: sessionMark(candidate.agentId),
               disabled: busy,
               readiness: candidate.readiness,
               repair: candidate.repair,
+              onHighlight: () => onReadinessSessionChange?.(candidate.selection.session.sessionId),
+              onPressIn: () => onReadinessSessionChange?.(candidate.selection.session.sessionId),
               onSelect: () => onChoose(candidate.selection),
             },
           ]
@@ -150,6 +159,8 @@ export function useExecutableParticipantSections(
           />
         ),
         disabled: false,
+        onHighlight: () => onReadinessSessionChange?.(null),
+        onPressIn: () => onReadinessSessionChange?.(null),
         onSelect: () => {
           void candidates.sessions.loadMore();
         },
@@ -165,7 +176,8 @@ export function useExecutableParticipantSections(
     );
     const models: ExecutableParticipantSectionOption[] = candidates.candidates.flatMap(candidate => candidate.kind === 'model' && matches(candidate.label)
       ? [{ id: candidate.key, label: candidate.label, subtitle: readinessSubtitle(candidate.readiness, ''), icon: modelMark, disabled: busy,
-          readiness: candidate.readiness, repair: candidate.repair, onSelect: () => onChoose(candidate.selection) }] : []);
+          readiness: candidate.readiness, repair: candidate.repair, onHighlight: () => onReadinessSessionChange?.(null),
+          onPressIn: () => onReadinessSessionChange?.(null), onSelect: () => onChoose(candidate.selection) }] : []);
     models.push(...matchingMachines.map((machine) => {
       const name =
         getMachineDisplayName(machine, inventory) ??
@@ -182,6 +194,8 @@ export function useExecutableParticipantSections(
         readiness,
         subtitle: readinessSubtitle(readiness, t('session.collaboration.discussion.manage.modelCandidate')),
         repair: null,
+        onHighlight: () => onReadinessSessionChange?.(null),
+        onPressIn: () => onReadinessSessionChange?.(null),
         onSelect: () => {
           void (async () => {
             const { presentSessionServerStartDraftComposer } =
@@ -231,6 +245,7 @@ export function useExecutableParticipantSections(
     input.enabled,
     query,
     onChoose,
+    onReadinessSessionChange,
     machines,
     serverId,
     sessionsContext,

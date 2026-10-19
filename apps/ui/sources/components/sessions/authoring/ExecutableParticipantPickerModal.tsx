@@ -43,6 +43,7 @@ function ExecutableParticipantPicker(
     }>,
 ) {
   const { onResolve, multiple } = props;
+  const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
   const [chosen, setChosen] = React.useState<
     readonly ExecutableParticipantSelectionV1[]
   >(() =>
@@ -69,6 +70,8 @@ function ExecutableParticipantPicker(
   const sections = useExecutableParticipantSections({
     accountLifetime: props.accountLifetime,
     enabled: true,
+    readinessSessionId,
+    onReadinessSessionChange: setReadinessSessionId,
     sessionsContext: t('workflows.start.participantSession'),
     onChoose,
   });
@@ -80,6 +83,7 @@ function ExecutableParticipantPicker(
       id: option.id, label: option.label, subtitle: option.subtitle,
       icon: option.icon, rightAccessory: option.rightAccessory,
       accessibilityLabel: option.accessibilityLabel, disabled: option.disabled, testID: option.testID,
+      onHighlight: option.onHighlight, onPressIn: option.onPressIn,
     })),
   })), [sections]);
   const selectOption = React.useCallback((id: string) => {

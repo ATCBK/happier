@@ -17,6 +17,8 @@ import { getSessionName, getSessionWorkContext } from '@/utils/sessions/sessionU
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { t } from '@/text';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { readableSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -33,6 +35,51 @@ async function captureHome(serverId: string) {
 }
 
 describe('Discussion Invite source composition', () => {
+    it('projects encrypted title readability from the exact Home title owner and tracks unlock without label heuristics', async () => {
+        const [focusedHome, home] = boundary.serverIds as [string, string, string];
+        const accountLifetime = await captureHome(home);
+        boundary.setRows(home, ['same-id', 'readable']);
+        boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+        const hook = await renderHook(() => useDiscussionInviteCandidates({ accountLifetime, availability: 'available', enabled: true }));
+        await vi.waitFor(() => expect(hook.getCurrent().candidates.filter(candidate => candidate.kind === 'session')).toHaveLength(2));
+        const readable = createSessionFixture({ id: 'readable', serverId: home, encryptionMode: 'e2ee', metadataLayoutVersion: 1,
+            encryptedContentAvailability: 'ready', metadata: parseDecryptedSessionMetadata({ v: 1 }, 1),
+            ownerMetadataView: { name: 'Cached private review', host: 'review-box', path: '/release' } });
+        const locked = { ...readable, id: 'same-id', encryptedContentAvailability: 'encrypted_access_pending' as const,
+            ownerMetadataView: { ...readable.ownerMetadataView!, name: 'Do not disclose this cached title' } };
+        await act(async () => { storage.setState(state => ({
+            sessions: { ...state.sessions, 'same-id': createSessionFixture({ id: 'same-id', serverId: focusedHome,
+                encryptionMode: 'plain', metadata: { name: 'Readable other Home', host: 'other', path: '/other' } }) },
+            sessionListRowsByServerId: { ...state.sessionListRowsByServerId, [home]: {
+                ...state.sessionListRowsByServerId[home], 'same-id': buildSessionListRenderableFromSession(locked),
+                readable: buildSessionListRenderableFromSession(readable),
+            } },
+        })); });
+        const candidates = hook.getCurrent().candidates;
+        const lockedCandidate = candidates.find(candidate => candidate.kind === 'session' && candidate.selection.session.sessionId === 'same-id');
+        const readableCandidate = candidates.find(candidate => candidate.kind === 'session' && candidate.selection.session.sessionId === 'readable');
+        const lockedSource = selectSessionDisplayNameSource(storage.getState(), 'same-id', home);
+        const readableSource = selectSessionDisplayNameSource(storage.getState(), 'readable', home);
+        expect(readableCandidate).toMatchObject({ label: sessionDisplayTitle(readableSource), titleReadable: true });
+        expect(readableCandidate?.kind === 'session' && readableCandidate.label).toBe('Cached private review');
+        expect(readableSessionDisplayTitle(lockedSource)).toBeNull();
+        expect(lockedCandidate).toMatchObject({ label: sessionDisplayTitle(lockedSource), titleReadable: false });
+        const lockedLabel = sessionDisplayTitle(lockedSource)!;
+        await act(async () => { storage.setState(state => ({ sessions: { ...state.sessions,
+            'same-id': { ...state.sessions['same-id']!, metadata: { name: 'Changed other Home', host: 'other', path: '/other' } },
+        } })); });
+        expect(hook.getCurrent().candidates).toBe(candidates);
+        await act(async () => { storage.setState(state => ({ sessionListRowsByServerId: {
+            ...state.sessionListRowsByServerId, [home]: { ...state.sessionListRowsByServerId[home],
+                'same-id': buildSessionListRenderableFromSession({ ...locked, encryptedContentAvailability: 'ready',
+                    ownerMetadataView: { ...locked.ownerMetadataView, name: lockedLabel } }),
+            },
+        } })); });
+        // A readable title may deliberately have the same words as the locked label.
+        expect(hook.getCurrent().candidates.find(candidate => candidate.kind === 'session' && candidate.selection.session.sessionId === 'same-id'))
+            .toMatchObject({ key: lockedCandidate?.key, label: lockedLabel, titleReadable: true });
+    });
+
     it('keeps an offline model target in the demanded picker with its readiness and repair data', async () => {
         const home = boundary.serverIds[1]!;
         const accountLifetime = await captureHome(home);

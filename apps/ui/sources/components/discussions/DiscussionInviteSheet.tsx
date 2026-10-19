@@ -472,6 +472,7 @@ function DiscussionInviteSheetWithAgents(
   }>,
 ) {
   const { inviteExecutable, operation } = props.management;
+  const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
   const onChoose = React.useCallback(
     (selection: ExecutableParticipantSelectionV1) => { void inviteExecutable(selection); },
     [inviteExecutable],
@@ -483,6 +484,8 @@ function DiscussionInviteSheetWithAgents(
     sessionsContext: t('session.collaboration.discussion.manage.sessionCandidate'),
     onChoose,
     enabled: props.controller.model.editable,
+    readinessSessionId,
+    onReadinessSessionChange: setReadinessSessionId,
     query: props.controller.model.directory.query,
   });
   const { accountLifetime: _lifetime, management: _management, roster: _roster, ...shared } = props;

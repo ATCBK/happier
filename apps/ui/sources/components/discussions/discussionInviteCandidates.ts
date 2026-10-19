@@ -20,8 +20,12 @@ export type DiscussionInviteCandidate =
         kind: 'session'; key: string;
         selection: Extract<ExecutableParticipantSelectionV1, { kind: 'session' }>;
         label: string | null;
+        /** Whether the existing Session title owner can read this exact Home's title. */
+        titleReadable: boolean;
         /** Agent and Machine/workspace identity from the shared Session display owner. */
         contextLabel?: string | null;
+        /** The Agent that byline names, so the row leads with its own mark. */
+        agentId?: string | null;
         /** The list owner's public recency remains available when private identity is locked. */
         lastActivityAt?: number | null;
         /** Invitation is not a claim that this Session is currently able to answer. */
@@ -42,7 +46,7 @@ export type DiscussionInviteCandidate =
 export type DiscussionInviteCandidatesInput = Readonly<{
     scope: ServerAccountScope;
     people: readonly SessionAccessCandidateRowModel[];
-    sessions: readonly Readonly<{ address: SessionAddress; label: string | null; contextLabel?: string | null; lastActivityAt?: number | null;
+    sessions: readonly Readonly<{ address: SessionAddress; label: string | null; titleReadable: boolean; contextLabel?: string | null; agentId?: string | null; lastActivityAt?: number | null;
         access: Pick<SessionEffectiveAccessV1, 'capabilities'> | null;
         readiness?: SessionReadinessV1 | null; repair?: SessionReadinessRepairV1 | null }>[];
     modelOptions: readonly ExecutableParticipantPickerOption[];
@@ -61,7 +65,8 @@ export function buildDiscussionInviteCandidates(input: DiscussionInviteCandidate
     }
     for (const row of input.sessions) {
         candidates.push({ kind: 'session',
-            selection: { kind: 'session', session: row.address }, label: row.label, contextLabel: row.contextLabel ?? null,
+            selection: { kind: 'session', session: row.address }, label: row.label, titleReadable: row.titleReadable,
+            contextLabel: row.contextLabel ?? null, agentId: row.agentId ?? null,
             lastActivityAt: row.lastActivityAt ?? null,
             availability: { kind: 'existing_session' }, readiness: row.readiness ?? null, repair: row.repair ?? null });
     }

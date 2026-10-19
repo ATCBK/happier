@@ -13,6 +13,9 @@ export type ExecutableParticipantPickerOption = Readonly<{
   accessibilityLabel?: string;
   disabled?: boolean;
   testID?: string;
+  /** Explicit row intent; the caller may demand current detail for this option. */
+  onHighlight?: () => void;
+  onPressIn?: () => void;
 }>;
 
 export type ExecutableParticipantPickerSection = Readonly<{
