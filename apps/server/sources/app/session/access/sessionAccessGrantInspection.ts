@@ -3,7 +3,7 @@ import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1 } from "
 import { listSessionTeamCredentialBindingConsequencesInTx } from "@/app/teams/credentials/sessionBinding";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { projectSessionEffectiveAccessV1, resolveSessionAccessForOperation } from "./sessionAccess";
-import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
+import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import { classifySubjectsExternalToTeamInTx, enforceTeamExternalSharingPolicyInTx } from "./sessionAccessExternalSharingPolicy";
 import { resolveSessionAccessGrantSubjectsInTx } from "./sessionAccessGrantEligibility";
 import { teamsPolicyStillRequireGrants } from "./sessionAccessGrantService";
@@ -21,6 +21,7 @@ type SessionAccessGrantInspectionResult =
 export async function inspectSessionAccessGrants(params: Readonly<{
     actorAccountId: string;
     sessionId: string;
+    recipientAccountId?: string;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionAccessGrantInspectionResult> {
     return await readSnapshotWithCurrentAdmission<SessionAccessGrantInspectionResult>(async (tx): Promise<SessionAccessGrantInspectionResult> => {
@@ -36,6 +37,9 @@ export async function inspectSessionAccessGrants(params: Readonly<{
             return { ok: false, error: "session_access_authentication_unavailable" };
         }
         if (admission.status !== "allowed" || !admission.access.capabilities.readTranscript) {
+            return { ok: false, error: "session_access_forbidden" };
+        }
+        if (params.recipientAccountId !== undefined && !admission.access.capabilities.manageAccess) {
             return { ok: false, error: "session_access_forbidden" };
         }
         const session = await tx.session.findUniqueOrThrow({
@@ -132,6 +136,20 @@ export async function inspectSessionAccessGrants(params: Readonly<{
         if (current.status !== "allowed"
             || (captured.value.effectiveAccess.capabilities.managePermissionDelegation
                 && !current.access.capabilities.managePermissionDelegation)) return { ok: false, error: "session_access_forbidden" };
-        return { ...captured, value: { ...captured.value, effectiveAccess: projectSessionEffectiveAccessV1(current.access) } };
+        const value = { ...captured.value, effectiveAccess: projectSessionEffectiveAccessV1(current.access) };
+        if (params.recipientAccountId === undefined) return { ok: true, value };
+        if (value.visibility !== "complete") return { ok: false, error: "session_access_forbidden" };
+        // This host-only preview has no verified credential evidence from the
+        // recipient. The current access owner must qualify their grants itself;
+        // the manager's authentication cannot stand in for the recipient's.
+        const recipient = await resolveSessionAccessForOperation(tx, {
+            accountId: params.recipientAccountId,
+            sessionId: params.sessionId,
+            authentication: backgroundDeliveryAuthentication(),
+        });
+        return { ok: true, value: { ...value, recipientAccess: {
+            accountId: params.recipientAccountId,
+            effectiveAccess: recipient.status === "allowed" ? projectSessionEffectiveAccessV1(recipient.access) : null,
+        } } };
     });
 }

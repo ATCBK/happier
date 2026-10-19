@@ -12,13 +12,14 @@ import type { Server } from "socket.io";
 
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { auth, ApiTokenOperationError, type ExternalActionGrantEvaluationContext, type ExternalActionExecutionAuthorizationMintInput } from "@/app/auth/auth";
-import { admitManagedAcquire } from '@/app/machines/managed/managedAcquire';
+import { admitManagedAcquire, ExternalActionAdmissionUnexpectedError } from '@/app/machines/managed/managedAcquire';
 import { ManagedMachineError, sameManagedInput } from '@/app/machines/managed/managedRows';
 import { verifyCurrentExternalActionPrincipal, verifyCurrentExternalActionPrincipalInTx,
     hasCurrentExternalActionSessionSource, isExternalActionAuthorizationBoundToEnvelope,
     projectExternalActionBoundPrincipal, isOriginalAccountHandoffAction,
     readCurrentExternalActionHandoffBindingInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { readMachineDaemonSocketIdentity } from "@/app/machines/machineDaemonPresence";
+import { readCurrentCommittedSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import {
     readSessionPublisherAuthorityProjection,
     type createSessionPublisherPresence,
@@ -33,6 +34,7 @@ import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/acti
 import { prepareManagedFiniteActionWake } from '@/app/machines/managed/managedWake';
 import { log } from '@/utils/logging/log';
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 
 import { forwardRpcCall, type RpcForwardResult } from "./rpc/forwardRpcCall";
 import { readVerifiedMachineSocketInstallationIdFromSocketData } from "./machineSocketInstallationProof";
@@ -55,6 +57,8 @@ export type ExternalActionPlacementErrorCode =
     | "target_required"
     | "target_not_local"
     | "target_unavailable"
+    | "database_transaction_conflict_exhausted"
+    | "database_connection_unavailable"
     | "encrypted_action_unsupported"
     | "session_input_target_update_required";
 
@@ -117,6 +121,7 @@ type SocketDataCarrier = Readonly<{ data?: unknown }>;
 type DispatchPhase =
     | 'session_publishers'
     | 'publisher_currentness'
+    | 'principal_currentness'
     | 'target_currentness'
     | 'pending_reset_admission'
     | 'session_machine_resolution'
@@ -126,44 +131,80 @@ type DispatchPhase =
     | 'daemon_cancel'
     | 'daemon_forward';
 
+type PlacementRefusalBranch =
+    | 'target_required'
+    | 'aborted'
+    | 'session_machine_unresolved'
+    | 'execution_authorization_invalid'
+    | 'managed_machine_not_authorized'
+    | 'managed_controller_mismatch'
+    | 'principal_not_current'
+    | 'managed_credential_scope_denied'
+    | 'managed_acquire_unavailable'
+    | 'finite_wake_unavailable'
+    | 'managed_machine_unavailable_after_admission'
+    | 'machine_not_owned'
+    | 'machine_unavailable'
+    | 'machine_external_action_update_required'
+    | 'machine_session_input_update_required'
+    | 'credential_scope_denied'
+    | 'session_source_stale'
+    | 'daemon_forward_not_ok'
+    | 'daemon_response_unparsable'
+    | 'phase_exception';
+
 interface DispatchPhaseFailure {
     readonly kind: 'failed';
     readonly phase: DispatchPhase;
     readonly errorClass: 'TypeError' | 'RangeError' | 'SyntaxError' | 'Error' | 'UnknownError';
     readonly message: 'Unexpected phase failure (details redacted)';
     readonly credentialScopeDenied: boolean;
+    readonly databaseErrorCode: 'database_transaction_conflict_exhausted' | 'database_connection_unavailable' | null;
 }
 
 type DispatchPhaseResult<T> = Readonly<{ kind: 'ready'; value: T }> | DispatchPhaseFailure;
 
 function emitDispatchPhaseWitness(
     failure: Pick<DispatchPhaseFailure, 'phase' | 'errorClass' | 'message'> | Readonly<{
-        phase: 'daemon_envelope_admission';
-        errorClass: 'DaemonAdmissionError';
-        message: 'invalid_encrypted_envelope';
+        phase: 'daemon_envelope_admission' | 'placement_refusal';
+        errorClass: 'DaemonAdmissionError' | 'PlacementRefusal';
+        message: 'invalid_encrypted_envelope' | 'External Action placement refused';
     }>,
     machineId?: string,
+    context: Readonly<{ requestId?: string; refusalBranch: PlacementRefusalBranch | 'daemon_envelope_rejected'; availability?: MachineResolution }> = {
+        refusalBranch: 'phase_exception',
+    },
 ): void {
     try {
         log({ module: 'external-action-dispatch', level: 'warn', phase: failure.phase,
             errorClass: failure.errorClass, message: failure.message,
+            refusalBranch: context.refusalBranch,
+            ...(context.requestId === undefined ? {} : { requestId: context.requestId }),
+            ...(context.availability === undefined ? {} : { availability: context.availability }),
             ...(machineId === undefined ? {} : { machineId }) }, '[external-action-phase]');
     } catch {
         // Diagnostics cannot replace the existing fail-closed public outcome.
     }
 }
 
-function recordDispatchPhaseFailure(phase: DispatchPhase, error: unknown, machineId?: string): DispatchPhaseFailure {
+function recordDispatchPhaseFailure(
+    phase: DispatchPhase,
+    error: unknown,
+    _machineId?: string,
+    _requestId?: string,
+): DispatchPhaseFailure {
     // Error names, messages, causes and Zod issues can contain Action content,
     // credentials or Account identifiers. Classify builtins without reading them.
     let errorClass: DispatchPhaseFailure['errorClass'] = 'UnknownError';
     let credentialScopeDenied = false;
+    let databaseErrorCode: DispatchPhaseFailure['databaseErrorCode'] = null;
     try {
         errorClass = error instanceof TypeError ? 'TypeError'
             : error instanceof RangeError ? 'RangeError'
                 : error instanceof SyntaxError ? 'SyntaxError'
                     : error instanceof Error ? 'Error' : 'UnknownError';
         credentialScopeDenied = error instanceof ApiTokenOperationError && error.code === 'credential_scope_denied';
+        databaseErrorCode = readDatabaseErrorCode(error);
     } catch {
         // A thrown Proxy or accessor is untrusted too; retain only the phase.
     }
@@ -171,8 +212,8 @@ function recordDispatchPhaseFailure(phase: DispatchPhase, error: unknown, machin
         kind: 'failed', phase, errorClass,
         message: 'Unexpected phase failure (details redacted)',
         credentialScopeDenied,
+        databaseErrorCode,
     };
-    emitDispatchPhaseWitness(failure, machineId);
     return failure;
 }
 
@@ -180,12 +221,42 @@ async function runDispatchPhase<T>(
     phase: DispatchPhase,
     machineId: string | undefined,
     operation: () => T | Promise<T>,
+    requestId?: string,
 ): Promise<DispatchPhaseResult<T>> {
     try {
         return { kind: 'ready', value: await timeWebLatencyPhase(`dispatch.${phase}`, operation) };
     } catch (error) {
-        return recordDispatchPhaseFailure(phase, error, machineId);
+        return recordDispatchPhaseFailure(phase, error, machineId, requestId);
     }
+}
+
+function projectDispatchPhaseFailureCode(failure: DispatchPhaseFailure): ExternalActionPlacementErrorCode {
+    return failure.databaseErrorCode ?? 'target_unavailable';
+}
+
+function createPlacementError(input: Readonly<{
+    code: ExternalActionPlacementErrorCode;
+    refusalBranch: PlacementRefusalBranch;
+    requestId: string | undefined;
+    machineId?: string;
+    availability?: MachineResolution;
+    phaseFailure?: DispatchPhaseFailure;
+    managedAdmission?: Readonly<{ managedId: string }>;
+}>): Extract<ExternalActionDaemonDispatchResult, { kind: 'placement_error' }> {
+    emitDispatchPhaseWitness(input.phaseFailure ?? {
+        phase: 'placement_refusal',
+        errorClass: 'PlacementRefusal',
+        message: 'External Action placement refused',
+    }, input.machineId, {
+        refusalBranch: input.refusalBranch,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        ...(input.availability === undefined ? {} : { availability: input.availability }),
+    });
+    return {
+        kind: 'placement_error',
+        code: input.code,
+        ...(input.managedAdmission === undefined ? {} : { managedAdmission: input.managedAdmission }),
+    };
 }
 
 function parseDaemonResponse(
@@ -376,7 +447,11 @@ function createExactMachineDaemonGuard(params: Readonly<{
     resolveMachine: ResolveMachine;
     resolveSessionMachine: ResolveSessionMachine;
     isOriginCurrent?: () => Promise<boolean>;
-}>): RpcForwardTargetGuard {
+}>): Readonly<{
+    targetGuard: RpcForwardTargetGuard;
+    readPhaseFailure: () => DispatchPhaseFailure | null;
+}> {
+    let phaseFailure: DispatchPhaseFailure | null = null;
     const current = async (): Promise<boolean> => {
         const result = await runDispatchPhase('target_currentness', params.machineId, async () => {
             if (params.isOriginCurrent && !await params.isOriginCurrent()) return false;
@@ -402,25 +477,33 @@ function createExactMachineDaemonGuard(params: Readonly<{
                 sessionId: params.sessionId,
             }) === params.machineId;
         });
-        return result.kind === 'ready' && result.value;
+        if (result.kind === 'failed') {
+            phaseFailure = result;
+            return false;
+        }
+        phaseFailure = null;
+        return result.value;
     };
     const exact = (target: Pick<RpcAckResponseEmitter, "data">): boolean => (
         isExactMachineDaemonTarget(target, params.machineId, params.installationId)
     );
 
     return {
-        filterTargets: async (targets) => {
-            if (!await current()) return [];
-            return targets.filter(exact);
-        },
-        runOperation: async ({ target, operation, readLatestTarget }) => {
-            if (!exact(target) || !await current()) return { status: "unavailable" };
-            const latestTarget = await readLatestTarget();
-            if (!latestTarget || !exact(latestTarget) || !await current()) {
-                return { status: "unavailable" };
-            }
-            const value = await operation();
-            return { status: "current", value };
+        readPhaseFailure: () => phaseFailure,
+        targetGuard: {
+            filterTargets: async (targets) => {
+                if (!await current()) return [];
+                return targets.filter(exact);
+            },
+            runOperation: async ({ target, operation, readLatestTarget }) => {
+                if (!exact(target) || !await current()) return { status: "unavailable" };
+                const latestTarget = await readLatestTarget();
+                if (!latestTarget || !exact(latestTarget) || !await current()) {
+                    return { status: "unavailable" };
+                }
+                const value = await operation();
+                return { status: "current", value };
+            },
         },
     };
 }
@@ -452,24 +535,41 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             sessionId,
         })
     ));
+    // Input is admitted to Pending, whose committed target survives a planned
+    // publisher replacement. A live socket is authority for runtime effects,
+    // not a prerequisite for the Session's existing input custody.
+    const resolveSessionInputMachine: ResolveSessionMachine = params.resolveSessionMachine ?? (async ({ accountId, sessionId }) => {
+        const target = await readCurrentCommittedSessionInputMachineTargetInTx(db, sessionId);
+        return target?.accountId === accountId ? target.machineId : null;
+    });
     const mintExecutionAuthorization = params.mintExecutionAuthorization
         ?? ((binding, context) => auth.mintExternalActionExecutionAuthorization(binding, context));
     const getServerIdentityId = params.getServerIdentityId ?? getOrCreateServerIdentityId;
 
     return async (request, options = {}): Promise<ExternalActionDaemonDispatchResult> => {
+        const resolveTargetSessionMachine = request.actionId === 'session.message.send'
+            ? resolveSessionInputMachine : resolveSessionMachine;
         const target = request.envelope.target;
         if (!target) {
-            return { kind: "placement_error", code: "target_required" };
+            return createPlacementError({ code: 'target_required', refusalBranch: 'target_required',
+                requestId: request.envelope.requestId });
         }
         if (options.signal?.aborted) {
-            return { kind: "placement_error", code: "target_unavailable" };
+            return createPlacementError({ code: 'target_unavailable', refusalBranch: 'aborted',
+                requestId: request.envelope.requestId,
+                ...(target.kind === 'machine' ? { machineId: target.machineId } : {}) });
         }
         const pendingReset = await runDispatchPhase('pending_reset_admission',
             target.kind === 'machine' ? target.machineId : undefined, () => (
                 projectExternalActionPendingResetStartEnvelopeAdmissionV1({
                     actionId: request.actionId, envelope: request.envelope, target })
-            ));
+            ), request.envelope.requestId);
         if (pendingReset.kind === 'failed') {
+            emitDispatchPhaseWitness(pendingReset,
+                target.kind === 'machine' ? target.machineId : undefined, {
+                    refusalBranch: 'phase_exception',
+                    ...(request.envelope.requestId === undefined ? {} : { requestId: request.envelope.requestId }),
+                });
             return { kind: 'invalid_request', errorCode: 'invalid_envelope',
                 ...(request.envelope.requestId ? { requestId: request.envelope.requestId } : {}) };
         }
@@ -491,13 +591,18 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         } else {
             sessionId = target.sessionId;
             const resolved = await runDispatchPhase('session_machine_resolution', undefined, () => (
-                resolveSessionMachine({
+                resolveTargetSessionMachine({
                     accountId: request.principal.accountId,
                     sessionId: target.sessionId,
                 })
-            ));
-            if (resolved.kind === 'failed' || !resolved.value) {
-                return { kind: "placement_error", code: "target_unavailable" };
+            ), request.envelope.requestId);
+            if (resolved.kind === 'failed') {
+                return createPlacementError({ code: projectDispatchPhaseFailureCode(resolved), refusalBranch: 'phase_exception',
+                    requestId: request.envelope.requestId, phaseFailure: resolved });
+            }
+            if (!resolved.value) {
+                return createPlacementError({ code: 'target_unavailable', refusalBranch: 'session_machine_unresolved',
+                    requestId: request.envelope.requestId });
             }
             machineId = resolved.value;
         }
@@ -512,7 +617,8 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 || !sameManagedInput(root, executionAuthorization.binding)
                 || !sameManagedInput(principal, request.principal)
                 || !isExternalActionAuthorizationBoundToEnvelope(root, { actionId: request.actionId, machineId,
-                    envelope: request.envelope })) return { kind: 'placement_error', code: 'credential_scope_denied' };
+                    envelope: request.envelope })) return createPlacementError({ code: 'credential_scope_denied',
+                    refusalBranch: 'execution_authorization_invalid', requestId: request.envelope.requestId, machineId });
         }
         let managedAdmission: Awaited<ReturnType<typeof admitManagedAcquire>> | undefined;
         const mint = async (): Promise<ExternalActionExecutionAuthorizationV1> => {
@@ -568,16 +674,21 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             const review = resolveManagedAcquireReviewV1(projected.input);
             const admission = await resolveMachineAdmission({ actorAccountId: request.principal.accountId,
                 machineId, actionId: request.actionId, requiredRole: 'manage' });
-            if (admission.kind !== 'admitted') return { kind: 'placement_error', code: 'credential_scope_denied' };
+            if (admission.kind !== 'admitted') return createPlacementError({ code: 'credential_scope_denied',
+                refusalBranch: 'managed_machine_not_authorized', requestId: request.envelope.requestId, machineId });
             if (review.controller.machineId !== machineId || review.controller.installationId !== admission.installationId) {
-                return { kind: 'placement_error', code: 'target_unavailable' };
+                return createPlacementError({ code: 'target_unavailable', refusalBranch: 'managed_controller_mismatch',
+                    requestId: request.envelope.requestId, machineId });
             }
+            let admissionStarted = false;
             try {
                 executionAuthorization ??= await mint();
                 const principal = request.executionAuthorization
                     ? await verifyCurrentExternalActionPrincipalInTx(db, executionAuthorization.binding)
                     : await verifyCurrentExternalActionPrincipal(executionAuthorization.binding);
-                if (!principal) return { kind: 'placement_error', code: 'target_unavailable' };
+                if (!principal) return createPlacementError({ code: 'target_unavailable', refusalBranch: 'principal_not_current',
+                    requestId: request.envelope.requestId, machineId });
+                admissionStarted = true;
                 managedAdmission = await admitManagedAcquire({ custodianAccountId: executionAuthorization.binding.custodianAccountId,
                     requesterAccountId: request.principal.accountId,
                     authentication: { authenticationAuthority: principal.authority,
@@ -585,15 +696,33 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                     requestEnvelopeDigest: executionAuthorization.binding.requestEnvelopeDigest,
                     input: { input: projected.input, continuationPresent: projected.continuationPresent, requestId: request.envelope.requestId } });
             } catch (error) {
-                if (error instanceof ApiTokenOperationError) return { kind: 'placement_error', code: error.code === 'credential_scope_denied'
-                    ? 'credential_scope_denied' : 'target_unavailable' };
+                const cause = error instanceof ExternalActionAdmissionUnexpectedError ? error.cause : error;
+                if (cause instanceof ApiTokenOperationError) return createPlacementError({
+                    code: cause.code === 'credential_scope_denied' ? 'credential_scope_denied' : 'target_unavailable',
+                    refusalBranch: cause.code === 'credential_scope_denied'
+                        ? 'managed_credential_scope_denied' : 'managed_acquire_unavailable',
+                    requestId: request.envelope.requestId, machineId,
+                });
                 if (error instanceof ManagedMachineError) {
                     if (request.envelope.v === 1) return { kind: 'response', prepared: prepareExternalActionResponseEnvelopeV1({
                         v: 1, actionId: request.actionId, requestId: request.envelope.requestId,
                         execution: { ok: false, errorCode: error.code, error: error.code } }) };
-                    return { kind: 'placement_error', code: error.code === 'permission_denied' ? 'credential_scope_denied' : 'target_unavailable' };
+                    return createPlacementError({
+                        code: error.code === 'permission_denied' ? 'credential_scope_denied' : 'target_unavailable',
+                        refusalBranch: error.code === 'permission_denied'
+                            ? 'managed_credential_scope_denied' : 'managed_acquire_unavailable',
+                        requestId: request.envelope.requestId, machineId,
+                    });
                 }
-                throw error;
+                let admissionCommitted: boolean | null = error instanceof ExternalActionAdmissionUnexpectedError
+                    ? error.admissionCommitted : admissionStarted ? null : false;
+                try {
+                    const retained = await db.managedMachine.findUnique({ where: {
+                        homeId_admittedActionRequestId: { homeId: review.homeId, admittedActionRequestId: request.envelope.requestId },
+                    }, select: { id: true } });
+                    if (retained) admissionCommitted = true;
+                } catch { admissionCommitted = null; /* Prior admission may also be unavailable. */ }
+                throw new ExternalActionAdmissionUnexpectedError(cause, admissionCommitted);
             }
         }
         const requiredSessionInputAdmissionProtocolVersion = requiresSessionInputAdmissionV2(request)
@@ -608,11 +737,13 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 return await prepareManagedFiniteActionWake({ io: params.io, actionOrigin: originalAuthorization,
                     signal: finiteSignal, forwardRpc,
                     isOriginalSourceCurrent: () => hasCurrentExternalActionSessionSource(originalAuthorization.binding, resolveSessionMachine) });
-            });
-            if (wake.kind === 'failed') return { kind: 'placement_error', code: 'target_unavailable' };
+            }, request.envelope.requestId);
+            if (wake.kind === 'failed') return createPlacementError({ code: projectDispatchPhaseFailureCode(wake),
+                refusalBranch: 'phase_exception', requestId: request.envelope.requestId, machineId, phaseFailure: wake });
             finiteWake = wake.value;
             if (finiteWake.kind === 'submitted-unknown') return { kind: 'submitted_unknown' };
-            if (finiteWake.kind === 'unavailable') return { kind: 'placement_error', code: 'target_unavailable' };
+            if (finiteWake.kind === 'unavailable') return createPlacementError({ code: 'target_unavailable',
+                refusalBranch: 'finite_wake_unavailable', requestId: request.envelope.requestId, machineId });
         }
         const machine = await runDispatchPhase('machine_resolution', machineId, () => (
             resolveMachine({
@@ -627,9 +758,10 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                     ? {}
                     : { requiredSessionInputAdmissionProtocolVersion }),
             })
-        ));
+        ), request.envelope.requestId);
         if (machine.kind === 'failed') {
-            return { kind: "placement_error", code: "target_unavailable" };
+            return createPlacementError({ code: projectDispatchPhaseFailureCode(machine), refusalBranch: 'phase_exception',
+                requestId: request.envelope.requestId, machineId, phaseFailure: machine });
         }
         const availability = machine.value;
         if (availability !== "available") {
@@ -638,54 +770,72 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                     ? { kind: 'response', prepared: prepareExternalActionResponseEnvelopeV1({ v: 1,
                         actionId: request.actionId, requestId: request.envelope.requestId,
                         execution: { ok: true, result: { managedId: managedAdmission.machine.id } } }) }
-                    : { kind: 'placement_error', code: 'target_unavailable', managedAdmission: { managedId: managedAdmission.machine.id } };
+                    : createPlacementError({ code: 'target_unavailable',
+                        refusalBranch: 'managed_machine_unavailable_after_admission', requestId: request.envelope.requestId,
+                        machineId, availability, managedAdmission: { managedId: managedAdmission.machine.id } });
             }
             if (availability === "external_action_update_required") {
-                return {
-                    kind: "placement_error",
-                    code: "encrypted_action_unsupported",
-                };
+                return createPlacementError({ code: 'encrypted_action_unsupported',
+                    refusalBranch: 'machine_external_action_update_required', requestId: request.envelope.requestId,
+                    machineId, availability });
             }
             if (availability === "session_input_update_required") {
-                return {
-                    kind: "placement_error",
-                    code: "session_input_target_update_required",
-                };
+                return createPlacementError({ code: 'session_input_target_update_required',
+                    refusalBranch: 'machine_session_input_update_required', requestId: request.envelope.requestId,
+                    machineId, availability });
             }
-            return {
-                kind: "placement_error",
-                code: target.kind === "machine" && availability === "not_owned"
-                    ? "target_not_local"
-                    : "target_unavailable",
-            };
+            return createPlacementError({
+                code: target.kind === 'machine' && availability === 'not_owned' ? 'target_not_local' : 'target_unavailable',
+                refusalBranch: availability === 'not_owned' ? 'machine_not_owned' : 'machine_unavailable',
+                requestId: request.envelope.requestId, machineId, availability,
+            });
         }
         if (options.signal?.aborted) {
-            return { kind: "placement_error", code: "target_unavailable" };
+            return createPlacementError({ code: 'target_unavailable', refusalBranch: 'aborted',
+                requestId: request.envelope.requestId, machineId });
         }
 
         const authorization = await runDispatchPhase('execution_authorization', machineId, async () => (
             executionAuthorization ?? await mint()
-        ));
+        ), request.envelope.requestId);
         if (authorization.kind === 'failed') {
             if (authorization.credentialScopeDenied) {
-                return { kind: "placement_error", code: "credential_scope_denied" };
+                return createPlacementError({ code: 'credential_scope_denied', refusalBranch: 'credential_scope_denied',
+                    requestId: request.envelope.requestId, machineId, phaseFailure: authorization });
             }
-            return { kind: "placement_error", code: "target_unavailable" };
+            return createPlacementError({ code: projectDispatchPhaseFailureCode(authorization), refusalBranch: 'phase_exception',
+                requestId: request.envelope.requestId, machineId, phaseFailure: authorization });
         }
         const currentAuthorization = authorization.value;
 
-        // No provider/login HTTP await follows this original-source check.
-        if ((request.executionAuthorization || currentAuthorization.binding.sessionActionOrigin)
-            && (!await hasCurrentExternalActionSessionSource(currentAuthorization.binding, resolveSessionMachine)
-                || !await verifyCurrentExternalActionPrincipalInTx(db, currentAuthorization.binding))) {
-            return { kind: 'placement_error', code: 'target_unavailable' };
+        // No provider/login HTTP await follows these original-source checks.
+        if (request.executionAuthorization || currentAuthorization.binding.sessionActionOrigin) {
+            const sourceCurrent = await runDispatchPhase('target_currentness', machineId, () => (
+                hasCurrentExternalActionSessionSource(currentAuthorization.binding, resolveSessionMachine)
+            ), request.envelope.requestId);
+            if (sourceCurrent.kind === 'failed') return createPlacementError({
+                code: projectDispatchPhaseFailureCode(sourceCurrent), refusalBranch: 'phase_exception',
+                requestId: request.envelope.requestId, machineId, phaseFailure: sourceCurrent,
+            });
+            if (!sourceCurrent.value) return createPlacementError({ code: 'target_unavailable',
+                refusalBranch: 'session_source_stale', requestId: request.envelope.requestId, machineId });
+
+            const principalCurrent = await runDispatchPhase('principal_currentness', machineId, () => (
+                verifyCurrentExternalActionPrincipalInTx(db, currentAuthorization.binding)
+            ), request.envelope.requestId);
+            if (principalCurrent.kind === 'failed') return createPlacementError({
+                code: projectDispatchPhaseFailureCode(principalCurrent), refusalBranch: 'phase_exception',
+                requestId: request.envelope.requestId, machineId, phaseFailure: principalCurrent,
+            });
+            if (!principalCurrent.value) return createPlacementError({ code: 'target_unavailable',
+                refusalBranch: 'principal_not_current', requestId: request.envelope.requestId, machineId });
         }
 
         const placement: ExternalActionDaemonPlacementV1 = {
             machineId,
             target: { kind: "machine", machineId },
         };
-        const targetGuard = createExactMachineDaemonGuard({
+        const exactDaemonTarget = createExactMachineDaemonGuard({
             accountId: request.principal.accountId,
             machineId,
             actionId: request.actionId,
@@ -698,7 +848,7 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 ? {}
                 : { requiredSessionInputAdmissionProtocolVersion }),
             resolveMachine,
-            resolveSessionMachine,
+            resolveSessionMachine: resolveTargetSessionMachine,
             ...(finiteWake && (finiteWake.kind === 'ready' || finiteWake.kind === 'not-needed')
                 ? { isOriginCurrent: finiteWake.isCurrent } : {}),
         });
@@ -718,7 +868,12 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
             try {
                 params.io.to(targetSocketId).emit(SOCKET_RPC_EVENTS.CANCEL, { requestId });
             } catch (error) {
-                recordDispatchPhaseFailure('daemon_cancel', error, machineId);
+                const failure = recordDispatchPhaseFailure('daemon_cancel', error, machineId,
+                    request.envelope.requestId);
+                emitDispatchPhaseWitness(failure, machineId, {
+                    refusalBranch: 'phase_exception',
+                    ...(request.envelope.requestId === undefined ? {} : { requestId: request.envelope.requestId }),
+                });
                 // Cancellation is best effort at the transport boundary.
             }
         };
@@ -740,20 +895,30 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                     executionAuthorization: currentAuthorization,
                 } satisfies ExternalActionDaemonDispatchRequest,
                 authorization: ACTION_API_SERVER_ORIGIN,
-                targetGuard,
+                targetGuard: exactDaemonTarget.targetGuard,
                 onSubmittedUnknown: () => {
                     submittedUnknown = true;
                 },
                 ...(finiteWake?.kind === 'ready' ? { callerLifetime: { signal: finiteSignal, isCurrent: finiteWake.isCurrent } } : {}),
                 ...(cancellation ? { cancellation } : {}),
-            }));
+            }), request.envelope.requestId);
         } finally {
             options.signal?.removeEventListener("abort", cancelTarget);
         }
         if (forwarded.kind === 'failed' || !forwarded.value.ok) {
+            const guardFailure = exactDaemonTarget.readPhaseFailure();
             return submittedUnknown
                 ? { kind: "submitted_unknown" }
-                : { kind: "placement_error", code: "target_unavailable" };
+                : createPlacementError({
+                    code: forwarded.kind === 'failed' ? projectDispatchPhaseFailureCode(forwarded)
+                        : guardFailure ? projectDispatchPhaseFailureCode(guardFailure) : 'target_unavailable',
+                    refusalBranch: forwarded.kind === 'failed' || guardFailure ? 'phase_exception'
+                        : options.signal?.aborted ? 'aborted' : 'daemon_forward_not_ok',
+                    requestId: request.envelope.requestId, machineId,
+                    ...(forwarded.kind === 'failed'
+                        ? { phaseFailure: forwarded }
+                        : guardFailure ? { phaseFailure: guardFailure } : {}),
+                });
         }
 
         const result = parseDaemonResponse(forwarded.value.result, {
@@ -763,12 +928,16 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         });
         if (result?.kind === 'invalid_request' && result.errorCode === 'invalid_encrypted_envelope') {
             emitDispatchPhaseWitness({ phase: 'daemon_envelope_admission',
-                errorClass: 'DaemonAdmissionError', message: 'invalid_encrypted_envelope' }, machineId);
+                errorClass: 'DaemonAdmissionError', message: 'invalid_encrypted_envelope' }, machineId, {
+                refusalBranch: 'daemon_envelope_rejected',
+                ...(request.envelope.requestId === undefined ? {} : { requestId: request.envelope.requestId }),
+            });
         }
         return result
             ? result
             : request.envelope.v === 2
                 ? { kind: "submitted_unknown" }
-                : { kind: "placement_error", code: "target_unavailable" };
+                : createPlacementError({ code: 'target_unavailable', refusalBranch: 'daemon_response_unparsable',
+                    requestId: request.envelope.requestId, machineId });
     };
 }

@@ -1,0 +1,2 @@
+ALTER TABLE `Account` ADD COLUMN `deliveryMutes` LONGTEXT NULL;
+ALTER TABLE `Session` ADD COLUMN `deliveryMutes` LONGTEXT NULL;

@@ -3,6 +3,8 @@ import type { Socket } from 'socket.io';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol';
 import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { PendingResetStartsReadResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
@@ -220,6 +222,33 @@ describe('Pending reset start custody (real SQLite)', () => {
         expect(await listPendingResetStartsForSource(read)).toMatchObject({
             unboundEntries: [{ sessionId: f.session.id, localId: f.params.localId, authorityCurrent: false }],
         });
+    });
+
+    it('preserves every distinct target beyond the SQLite access-query batch boundary', async () => {
+        const f = await fixture();
+        const produced = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+            sessionId: f.session.id, localId: f.params.localId,
+        } } });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse(produced.inputAdmissionReceipt);
+        const sessions = Array.from({ length: 205 }, () => ({ id: randomUUID(), accountId: f.params.actorUserId,
+            tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' as const }));
+        await db.session.createMany({ data: sessions });
+        await db.accessKey.createMany({ data: sessions.map(session => ({ accountId: f.params.actorUserId,
+            sessionId: session.id, machineId: f.machine.id, data: 'key' })) });
+        const expected = [{ sessionId: f.session.id, localId: f.params.localId, authorityCurrent: true }];
+        await db.sessionPendingMessage.createMany({ data: sessions.map((session, index) => {
+            const localId = randomUUID();
+            const authorityCurrent = index !== sessions.length - 1;
+            expected.push({ sessionId: session.id, localId, authorityCurrent });
+            return { sessionId: session.id, localId, position: 1, status: 'queued', messageRole: 'user', authorAccountId: f.params.actorUserId,
+                content: produced.content!, requestedAction: { v: 1, kind: 'enqueue' },
+                inputAdmissionReceipt: SessionInputAdmissionReceiptV1Schema.parse({ ...receipt, admittedTarget: { ...receipt.admittedTarget!,
+                    sessionId: session.id, ...(authorityCurrent ? {} : { installationId: randomUUID() }) } }) };
+        }) });
+        const result = PendingResetStartsReadResultV1Schema.parse(await listPendingResetStartsForSource({
+            actorUserId: f.params.actorUserId, authentication, source: reset.source,
+        }));
+        expect(result).toEqual({ entries: [], unboundEntries: expected.sort((a, b) => a.sessionId.localeCompare(b.sessionId)) });
     });
 
     it('atomically admits composer reset input held from its first Pending write', async () => {

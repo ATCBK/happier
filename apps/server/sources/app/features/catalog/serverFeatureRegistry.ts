@@ -45,6 +45,7 @@ import { resolveSessionProtocolCapabilitiesFeature } from '../sessionProtocolCap
 import { resolveAccountStoredContentCompatibilityFeature } from '../accountStoredContentCompatibilityFeature';
 import { resolveAccountDirectoryFeature } from '../accountDirectoryFeature';
 import { resolveSessionConversationsFeature } from '../sessionConversationsFeature';
+import { resolveSessionAutonomousExchangeFeature } from '../sessionAutonomousExchangeFeature';
 
 export type ServerFeatureResolver = ((env: NodeJS.ProcessEnv) => FeaturesPayloadDelta) & Readonly<{
     /** Every feature root this producer writes; empty for a diagnostic-only producer. */
@@ -93,6 +94,7 @@ export const serverFeatureRegistry = Object.freeze([
     register(['sessions'], (env) => resolveSessionBoardFeature(env)),
     register(['sessions'], (env) => resolveSessionFollowingFeature(env)),
     register(['sessions'], (env) => resolveSessionConversationsFeature(env)),
+    register(['sessions'], () => resolveSessionAutonomousExchangeFeature()),
     register(['sessions'], (env) => resolveSessionFilteredListingFeature(env)),
     register(['sessions'], (env) => resolveSessionEphemeralRunnerFeature(env)),
     register(['sessions'], (env) => resolveSessionAgentSwitchingFeature(env)),

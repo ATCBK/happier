@@ -13,7 +13,6 @@ import {
 } from "@/app/account/profile/accountDisplayProfile";
 import { buildAccountTextPrefixFilter } from "@/app/account/accountTextPrefixFilter";
 import { scheduleSessionActivityRemoteAlerts } from "@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts";
-import { applySessionAutoFollowForRelationshipChangeInTx } from "@/app/session/follow/accountFollowService";
 import { markCurrentSessionReadersChanged } from "@/app/session/changeTracking/markCurrentSessionReadersChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
@@ -174,17 +173,11 @@ export async function setSessionResponsibility(params: Readonly<{
         });
         const responsibleAccount = await resolveResponsibleAccountSummaryInTx(tx, desired);
 
-        const autoFollowed = desired !== null
-            ? await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-                sessionId: params.sessionId,
-                accountIds: [desired],
-                relationship: "assigned",
-            }) > 0
-            : false;
+        const autoFollowed = false;
         if (desired !== null) {
-            // Self-assignment still applies the recipient's effective auto-Follow
-            // decision, which is distinct from a one-shot self-notification.
-            // Notifying the actor about their own action would be redundant noise.
+            // Relationship defaults are evaluated as rules at the occurrence.
+            // Assignment itself remains a targeted notice; self-assignment
+            // does not notify the actor about their own action.
             if (desired !== params.actorAccountId) {
                 afterTx(tx, () => scheduleSessionActivityRemoteAlerts({
                     sessionId: params.sessionId,

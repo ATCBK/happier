@@ -5,7 +5,8 @@ import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracki
 import { tombstoneSessionDraftForLifecycleInTx } from "@/app/account/sessionDrafts/sessionDraftService";
 import { removeAccountSessionFollowsOnAccessLossInTx } from "@/app/session/follow/accountFollowService";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
-import { removeUnsafeSessionReportsToEdgesForAccessChangeInTx } from "@/app/session/relations/sessionReportsToService";
+import { removeUnsafeSessionManagerEdgesForAccessChangeInTx } from "@/app/session/follow/sessionManagerService";
+import { hasSessionFollowSessionSource } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { projectSessionEffectiveAccessV1, type EffectiveSessionAccess } from "./sessionAccess";
 import { clearSessionResponsibilityIfNoReadAccessInTx } from "./sessionResponsibilityService";
 
@@ -32,14 +33,14 @@ function accessFingerprint(access: EffectiveSessionAccess | null): string {
 async function resolveAccessTransitionProjectionSessionIdsInTx(tx: Tx, sessionIds: readonly string[]): Promise<string[]> {
     const ids = [...new Set(sessionIds)];
     if (ids.length === 0) return [];
-    const [followEdges, reportsToEdges] = await Promise.all([
+    const [followEdges, managerEdges] = await Promise.all([
         tx.sessionFollowEdge.findMany({ where: { OR: [{ sourceSessionId: { in: ids } }, { destinationSessionId: { in: ids } }] },
             select: { destinationSessionId: true } }),
-        tx.sessionReportsTo.findMany({ where: { OR: [{ sessionId: { in: ids } }, { leadSessionId: { in: ids } }] },
-            select: { sessionId: true, leadSessionId: true } }),
+        tx.sessionFollowEdge.findMany({ where: { relation: 'manager', OR: [{ sourceSessionId: { in: ids } }, { destinationSessionId: { in: ids } }] },
+            select: { sourceSessionId: true, destinationSessionId: true } }),
     ]);
     return [...new Set([...ids, ...followEdges.map(edge => edge.destinationSessionId),
-        ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId])])];
+        ...managerEdges.filter(hasSessionFollowSessionSource).flatMap(edge => [edge.sourceSessionId, edge.destinationSessionId])])];
 }
 
 /** Fence access cleanup's complete relation audience before native or grant writes. */
@@ -128,7 +129,7 @@ export async function applySessionAccessTransitionEffectsInTx(
         await removeUnsafeSessionFollowEdgesForAccessChangeInTx(tx, {
             sessionId: params.sessionId,
         });
-        await removeUnsafeSessionReportsToEdgesForAccessChangeInTx(tx, { sessionId: params.sessionId });
+        await removeUnsafeSessionManagerEdgesForAccessChangeInTx(tx, { sessionId: params.sessionId });
     }
 
     // Responsibility is a workflow fact layered on current access, so this one

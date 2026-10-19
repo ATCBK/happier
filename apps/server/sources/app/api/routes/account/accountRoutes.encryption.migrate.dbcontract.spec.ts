@@ -868,6 +868,7 @@ function buildMigrationRequest(
                 machineId: fixture.machine.id,
                 expectedMetadataVersion: 2,
                 expectedDaemonStateVersion: 3,
+                expectedDataEncryptionKey: "AQID",
                 metadata:
                     fixture.target.machineMetadata,
                 daemonState:

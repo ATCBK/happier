@@ -1,6 +1,7 @@
 import { log } from "@/utils/logging/log";
 import { recordEventFanoutDrop, recordEventFanoutEmit } from "@/app/monitoring/metrics/index";
 import { readAccountStoredContentCompatibilityForSocket } from "@/app/clientCompatibility/accountStoredContentCompatibility";
+import { projectSessionTurnWaitingCompatibility } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
 import { getAccountStoredContentV3SocketRoom } from "@/app/api/socketRooms";
 import {
     type ClientConnection,
@@ -70,7 +71,8 @@ function shouldSampleEventFanoutPayloadBytes(): boolean {
     return Math.random() < EVENT_FANOUT_PAYLOAD_BYTES_SAMPLE_RATE;
 }
 
-function projectPayloadForSocket(data: Readonly<{ authTokenKind?: unknown }>, payload: unknown): unknown {
+function projectPayloadForSocket(data: Socket['data'], payload: unknown): unknown {
+    payload = projectSessionTurnWaitingCompatibility(payload, readAccountStoredContentCompatibilityForSocket({ data }));
     if (data.authTokenKind !== "api_token" || !payload || typeof payload !== "object") return payload;
     const container = payload as Readonly<Record<string, unknown>>;
     const body = container.body;

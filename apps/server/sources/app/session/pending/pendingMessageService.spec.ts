@@ -144,7 +144,7 @@ describe("pendingMessageService", () => {
                 findMany: vi.fn(async () => [{ ...createPendingSessionFixture(), account: { status: 'active' } }]),
                 update: vi.fn(async () => ({ pendingQueueSeq: 1 })),
             },
-            sessionReportsTo: { findMany: vi.fn(async () => []) },
+            sessionFollowEdge: { findMany: vi.fn(async () => []) },
             sessionShare: { findMany: vi.fn(async () => []) },
             sessionTeamGrant: { findMany: vi.fn(async () => []) },
             sessionGroupGrant: { findMany: vi.fn(async () => []) },

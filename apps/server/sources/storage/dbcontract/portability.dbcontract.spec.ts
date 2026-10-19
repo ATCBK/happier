@@ -2,6 +2,7 @@ import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { pruneExpiredVoiceSessionLeases } from "@/app/voice/pruneExpiredVoiceSessionLeases";
 import { db, initDbMysql, initDbPostgres, isPrismaErrorCode } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 
 function resolveContractProviderFromEnv(): "postgres" | "mysql" {
     const raw = (process.env.HAPPIER_DB_PROVIDER ?? process.env.HAPPY_DB_PROVIDER ?? "postgres")
@@ -168,8 +169,8 @@ describe("db portability contract", () => {
 
         await db.sessionFollowEdge.createMany({
             data: [
-                { sourceSessionId: deletedSource.id, destinationSessionId: firstDestination.id },
-                { sourceSessionId: secondSource.id, destinationSessionId: deletedDestination.id },
+                { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: deletedSource.id }), sourceSessionId: deletedSource.id, destinationSessionId: firstDestination.id, policyJson: JSON.stringify({ preset: 'quiet' }) },
+                { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: secondSource.id }), sourceSessionId: secondSource.id, destinationSessionId: deletedDestination.id, policyJson: JSON.stringify({ preset: 'quiet' }) },
             ],
         });
         await db.session.delete({ where: { id: deletedSource.id } });
@@ -201,8 +202,10 @@ describe("db portability contract", () => {
 
         await expect(db.sessionFollowEdge.create({
             data: {
+                sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: session.id }),
                 sourceSessionId: session.id,
                 destinationSessionId: session.id,
+                policyJson: JSON.stringify({ preset: 'quiet' }),
             },
         })).rejects.toThrow();
         await expect(db.sessionFollowEdge.count({

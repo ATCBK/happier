@@ -1,6 +1,6 @@
 import { afterTx, type Tx } from '@/storage/inTx';
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from '@/app/session/access/sessionRecipients';
-import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
+import { markSessionAccountsChanged } from '@/app/changes/markAccountChanged';
 import { eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -22,9 +22,8 @@ export async function invalidateSessionRelationProjectionsInTx(
     const uniqueSessionIds = [...new Set(sessionIds)].sort();
     const recipientsBySession = resolvedRecipients
         ?? await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: uniqueSessionIds });
-    await acquireAccountChangePublicationLocksInTx(tx, [...recipientsBySession.values()].flat());
+    await markSessionAccountsChanged(tx, recipientsBySession);
     for (const [sessionId, accountIds] of recipientsBySession) {
-        await markAccountsChanged(tx, { accountIds, kind: 'session', entityId: sessionId });
         scheduleSessionRelationBroadcastAfterTx(tx, sessionId, accountIds);
     }
 }

@@ -52,22 +52,29 @@ export function parseStoredSessionLatestTurnStatus(value: string | null | undefi
 export function projectStoredSessionOrigin(row: Readonly<{
     originKind: string;
     originRunId: string | null;
+    originDiscussionId?: string | null;
+    originDiscussionParticipantSlotId?: string | null;
 }>): V2SessionRecord["origin"] {
     const origin = SessionAwarenessOriginV1Schema.safeParse({
         kind: row.originKind,
         ...(row.originRunId ? { runId: row.originRunId } : {}),
+        ...(row.originDiscussionId && row.originDiscussionParticipantSlotId ? { discussionParticipant: {
+            discussionId: row.originDiscussionId, participantSlotId: row.originDiscussionParticipantSlotId,
+        } } : {}),
     });
     return origin.success ? origin.data : undefined;
 }
 
 function isTerminalTurnStatus(status: V2SessionRecord["latestTurnStatus"]): boolean {
-    return status === "completed" || status === "cancelled" || status === "failed";
+    return status === "completed" || status === "cancelled" || status === "failed" || status === "waiting";
 }
 
 const V2_SESSION_LIST_ROW_BASE_SELECT = {
     id: true,
     originKind: true,
     originRunId: true,
+    originDiscussionId: true,
+    originDiscussionParticipantSlotId: true,
     workDepth: true,
     ...SESSION_TRANSCRIPT_PUBLICATION_SELECT,
     accountId: true,
@@ -433,6 +440,7 @@ export function mapV2SessionListRow(params: Readonly<{
     const origin = projectStoredSessionOrigin(row);
     return {
         id: row.id,
+        ownerAccountId: row.accountId,
         ...(origin ? { origin } : {}),
         workDepth: row.workDepth,
         seq: publicationProjection.seq,

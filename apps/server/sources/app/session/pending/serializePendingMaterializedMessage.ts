@@ -2,6 +2,7 @@ import type { PendingProviderAction } from '@happier-dev/protocol/sessions/pendi
 import type { PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import type { SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { SessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { projectSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 
 type MaterializedPendingMessage = Readonly<{
     id: string | null;
@@ -17,7 +18,9 @@ type MaterializedPendingMessage = Readonly<{
     updatedAt: Date;
 }>;
 
-export function serializePendingMaterializedMessage(message: MaterializedPendingMessage) {
+/** Admission witnesses remain server-private even on the exact native publisher. */
+export function serializePendingMaterializedMessage(message: MaterializedPendingMessage,
+    _options?: Readonly<{ nativeAdmission: true }>) {
     return {
         id: message.id,
         seq: message.seq,
@@ -26,7 +29,7 @@ export function serializePendingMaterializedMessage(message: MaterializedPending
         content: message.content,
         ...(message.requestedAction ? { requestedAction: message.requestedAction } : {}),
         ...(message.providerAction ? { providerAction: message.providerAction } : {}),
-        ...(message.inputAdmissionReceipt ? { inputAdmissionReceipt: message.inputAdmissionReceipt } : {}),
+        ...projectSessionInputAdmissionReceipt(message.inputAdmissionReceipt),
         ...(message.deliveryResolution ? { deliveryResolution: message.deliveryResolution } : {}),
         createdAt: message.createdAt.getTime(),
         updatedAt: message.updatedAt.getTime(),

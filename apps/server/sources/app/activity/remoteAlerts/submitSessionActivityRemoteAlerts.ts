@@ -3,9 +3,12 @@ import { SESSION_CHANGED_WAKE_TYPE, SessionChangedWakeV1Schema } from '@happier-
 import { resolveAccountRemoteAlertPolicyCurrentness, resolveRemoteAlertPolicyDecision } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
 import { resolveExpoNotificationSoundName, resolvePushNotificationAndroidChannelId } from '@happier-dev/protocol/push/pushNotificationActions';
 import { shouldMuteMobileAlertsForComputerFocus } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
-import { type SessionPersonalEventKindV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
+import { resolveSessionPersonalFollowEventV1, type SessionPersonalEventKindV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
+import type { PersonalFollowOnceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import type { FollowEventV1, ResolveFollowDeliveryV1Params } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import { listSessionPersonalEventRecipients } from "@/app/session/personal/eventEligibility";
+import { acceptAccountSessionFollowOnceDelivery } from '@/app/session/follow/accountFollowService';
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 import { hasExactCurrentPublisherAuthorityInTx } from "@/app/session/pending/hasExactCurrentPublisherAuthorityInTx";
@@ -13,6 +16,8 @@ import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity
 import { db } from "@/storage/db";
 import { eventRouter } from '@/app/events/eventRouter';
 import { inTx } from "@/storage/inTx";
+import { isSessionPersonalStalledOccurrenceCurrent } from '@/app/session/personal/publishPersonalEvent';
+import type { SessionFollowStalledOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { log } from "@/utils/logging/log";
 
 import { sendAccountExpoPushMessages, type AccountPushDelivery } from "../accountPushTransport";
@@ -97,8 +102,18 @@ export type SubmitSessionActivityRemoteAlertsParams = Readonly<{
      * exactly one alert for one request, whichever leg observed it first.
      */
     committedRequestId?: string;
+    /** Exact committed source witness; never dated from a later Session snapshot. */
+    onceOccurrence?: PersonalFollowOnceOccurrenceV1;
+    /** Terminal success supplements the existing ready producer only for an armed one-shot. */
+    onceOnly?: boolean;
+    /** Request-owner projection, including continue mode and current handler. */
+    followEvent?: FollowEventV1;
+    /** Only the committed presence owner supplies this exact in-flight Turn/fence. */
+    stalledOccurrence?: SessionFollowStalledOccurrenceV1;
     /** One-shot targets established by the committed semantic mutation owner. */
     targetAccountIds?: readonly string[];
+    /** Ephemeral winners of the original source transaction's Inbox CAS. */
+    acceptedOnceAccountIds?: readonly string[];
     /** True only when this committed assignment inserted the recipient's automatic Follow. */
     assignmentAutoFollowed?: boolean;
     /** Authenticated human source of a committed post; never alert that Account about its own post. */
@@ -110,6 +125,8 @@ export type SubmitSessionActivityRemoteAlertsParams = Readonly<{
         publisherAuthority: CurrentSessionPublisherAuthority;
         /** Actual sender composition established by the runtime host before commit. */
         ownerActivityDelivery: "rich_sender" | "home_required";
+        /** Distinguishes current explicit composition from released publishers' omitted rich default. */
+        ownerActivityDeliveryWasReported?: true;
     }>;
     now?: Date;
 }>;
@@ -131,36 +148,67 @@ export async function submitSessionActivityRemoteAlerts(
     params: SubmitSessionActivityRemoteAlertsParams,
 ): Promise<readonly string[]> {
     if (!await isServerFeatureEnabledForHome("sessions.following")) return [];
+    if (params.stalledOccurrence && !await isSessionPersonalStalledOccurrenceCurrent(params)) return [];
     const disposition = resolveSessionActivityRemoteAlertDisposition(
         params.event,
         params.committedMessage,
         params.committedTurnId,
         params.committedRequestId,
     );
-    if (disposition.kind !== "alert") return [];
-    const alertEvent = disposition.event;
+    // The exact source-backed Inbox effect does not require an OS-alert
+    // transcript pointer. A successful turn may legitimately have no message.
+    if (disposition.kind !== "alert" && !params.onceOccurrence) return [];
+    const alertEvent = disposition.kind === 'alert' ? disposition.event.type === 'source_unavailable' && params.stalledOccurrence
+        ? { ...disposition.event, stalledOccurrence: params.stalledOccurrence } : disposition.event : null;
 
-    const session = await db.session.findUnique({ where: { id: params.sessionId }, select: { accountId: true } });
+    const session = await db.session.findUnique({ where: { id: params.sessionId }, select: { accountId: true, agentStateVersion: true } });
     if (!session) return [];
+
+    const acceptedOnceAccountIds = new Set(params.acceptedOnceAccountIds ?? []);
 
     const recipients = await listSessionPersonalEventRecipients({
         sessionId: params.sessionId,
         event: params.event,
-        ...(params.targetAccountIds ? { targetAccountIds: params.targetAccountIds } : {}),
+        onceOccurrence: params.onceOccurrence,
+        followEvent: params.followEvent,
+        targetAccountIds: [...new Set([...(params.targetAccountIds ?? []), ...acceptedOnceAccountIds])],
     });
-    const richOwnerSenderOwnsDelivery = await resolveRichOwnerSenderResponsibility({
+    const richOwnerSenderOwnsDelivery = alertEvent !== null && await resolveRichOwnerSenderResponsibility({
         sessionId: params.sessionId,
         sessionOwnerAccountId: session.accountId,
         alertEventType: alertEvent.type,
         runtimeComposition: params.runtimeComposition,
     });
     const excluded = new Set(params.excludeAccountIds ?? []);
-    const candidates = recipients
-        .map((recipient) => recipient.accountId)
-        .filter((accountId) => accountId !== params.sourceAccountId)
-        .filter((accountId) => !excluded.has(accountId))
-        .filter((accountId) => !(richOwnerSenderOwnsDelivery && accountId === session.accountId));
-    if (candidates.length === 0) return [];
+    const followByAccountId = new Map<string, ResolveFollowDeliveryV1Params>();
+    const candidates: string[] = [];
+    for (const recipient of recipients) {
+        const accountId = recipient.accountId;
+        if (accountId === params.sourceAccountId || excluded.has(accountId)) continue;
+        let follow = recipient.follow;
+        let acceptedOnce = acceptedOnceAccountIds.has(accountId);
+        if (recipient.once && !acceptedOnce) {
+            acceptedOnce = await acceptAccountSessionFollowOnceDelivery({
+                accountId, sessionId: params.sessionId, ...recipient.once,
+            });
+            if (!acceptedOnce && recipient.reason === 'follow_once') continue;
+        }
+        if (acceptedOnce) {
+            const event = params.followEvent ?? follow?.event ?? resolveSessionPersonalFollowEventV1(params.event);
+            if (event) follow = { event, policies: [...(follow?.policies ?? []), { preset: 'everything' }] };
+            // Acceptance retains the Inbox reference; it does not authorize a
+            // stale encrypted request to interrupt after a newer state commit.
+            if ((params.onceOccurrence?.event === 'permission_required' || params.onceOccurrence?.event === 'user_action_required')
+                && session.agentStateVersion !== params.onceOccurrence.agentStateVersion) continue;
+        }
+        if (params.onceOnly && !acceptedOnce) continue;
+        // The rich sender owns only its supported ongoing topics. It does not
+        // perform the Account-private one-shot CAS or deliver that override.
+        if (richOwnerSenderOwnsDelivery && accountId === session.accountId && !acceptedOnce) continue;
+        if (follow) followByAccountId.set(accountId, { ...follow, event: params.followEvent ?? follow.event });
+        candidates.push(accountId);
+    }
+    if (!alertEvent || candidates.length === 0) return [];
 
     const policyEvent = ACTIVITY_REMOTE_ALERT_POLICY_EVENT_V1[alertEvent.type];
     const now = params.now ?? new Date();
@@ -198,6 +246,9 @@ export async function submitSessionActivityRemoteAlerts(
                 devicePolicy: token.remoteAlerts,
                 event: policyEvent,
                 now,
+                follow: followByAccountId.get(account.id),
+                inboxItemType: params.event === 'discussion_mention' ? 'mention'
+                    : params.event === 'source_unavailable' ? 'update' : undefined,
             });
             if (!decision || decision.delivery === "suppress") continue;
             const soundId = decision.delivery === "silent" || decision.sound.kind === "none" || decision.sound.kind === "custom"
@@ -265,6 +316,9 @@ export async function submitSessionActivityRemoteAlerts(
     }
 
     if (deliveries.length === 0) return [];
+    // All asynchronous recipient/policy/device preparation precedes this final
+    // original-source check. Recovery/replacement/archive withdraws the effect.
+    if (params.stalledOccurrence && !await isSessionPersonalStalledOccurrenceCurrent(params)) return [];
     await sendAccountExpoPushMessages(deliveries, "activity-remote-alerts");
     return [...alerted];
 }
@@ -272,17 +326,21 @@ export async function submitSessionActivityRemoteAlerts(
 /**
  * The alert categories the rich owner sender can actually deliver.
  *
- * `ownerActivityDelivery: "rich_sender"` says the runtime host has a push
- * sender, not that its notification vocabulary covers this event. The rich
- * union publishes `ready`, permission and user-action topics (plus its
- * connected-service and workflow topics); it carries no terminal-turn topic, so
- * delegating a `failed`/`cancelled` alert to it drops the owner's alert
- * entirely. Any category outside this set stays the Home's to deliver.
+ * Released publishers omitted sender composition and handled only ready and
+ * request alerts. Current explicitly reported rich publishers additionally
+ * deliver committed failure/cancellation and message originals through the
+ * source daemon's personal Follow adapter. Authenticated Account human writes
+ * remain Home-owned: their socket/HTTP ingress has no runtime sender custody.
  */
 const RICH_OWNER_SENDER_ALERT_EVENTS: ReadonlySet<ActivityRemoteAlertEventV2["type"]> = new Set([
     "ready",
     "permission_request",
     "user_action_request",
+]);
+const REPORTED_RICH_OWNER_SEMANTIC_ALERT_EVENTS: ReadonlySet<ActivityRemoteAlertEventV2["type"]> = new Set([
+    "failed",
+    "cancelled",
+    "message",
 ]);
 
 async function resolveRichOwnerSenderResponsibility(params: Readonly<{
@@ -291,9 +349,11 @@ async function resolveRichOwnerSenderResponsibility(params: Readonly<{
     alertEventType: ActivityRemoteAlertEventV2["type"];
     runtimeComposition?: SubmitSessionActivityRemoteAlertsParams["runtimeComposition"];
 }>): Promise<boolean> {
-    if (!RICH_OWNER_SENDER_ALERT_EVENTS.has(params.alertEventType)) return false;
     const composition = params.runtimeComposition;
     if (!composition || composition.ownerActivityDelivery !== "rich_sender") return false;
+    if (!RICH_OWNER_SENDER_ALERT_EVENTS.has(params.alertEventType)
+        && !(composition.ownerActivityDeliveryWasReported === true
+            && REPORTED_RICH_OWNER_SEMANTIC_ALERT_EVENTS.has(params.alertEventType))) return false;
     const authority = composition.publisherAuthority;
     if (authority.sessionId !== params.sessionId || authority.accountId !== params.sessionOwnerAccountId) return false;
     return await inTx(async (tx) => {

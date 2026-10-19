@@ -12,6 +12,7 @@ import type { Prisma } from '@prisma/client';
 const sessionDeleteTargetSelect = {
     id: true,
     accountId: true,
+    active: true,
     metadataLayoutVersion: true,
     updatedAt: true,
 } satisfies Prisma.SessionSelect;

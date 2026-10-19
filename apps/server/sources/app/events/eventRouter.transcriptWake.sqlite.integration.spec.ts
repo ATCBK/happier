@@ -11,7 +11,8 @@ import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSessionMessage } from '@/app/session/sessionWriteService';
 import { eventRouter } from './connectionEventRouter';
-import { buildNewMessageUpdate } from './eventPayloadBuilders';
+import { buildNewMessageUpdate, buildUpdateSessionUpdate } from './eventPayloadBuilders';
+import { evaluateAccountStoredContentSocketCompatibility, writeAccountStoredContentCompatibilityForSocket } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerSessionMessageRoutes';
 import { projectSessionMessageAccountActors, resolveSessionMessageAccountActor } from '@/app/session/messages/projectSessionMessageAccountActors';
@@ -23,6 +24,44 @@ describe('committed transcript socket wake (SQLite)', () => {
             sqliteConnectionLimit: 1, env: { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' } });
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('projects waiting at the actual socket boundary for old and cumulative V4 readers', async () => {
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const http = createServer();
+        const io = new Server(http, { path: '/v1/updates' });
+        io.on('connection', socket => {
+            Object.assign(socket.data, { userId: owner.id, clientType: 'session-scoped', sessionId: session.id,
+                authAuthority: 'account_automation', authTokenAuthenticationEvidence: [] });
+            writeAccountStoredContentCompatibilityForSocket(socket, evaluateAccountStoredContentSocketCompatibility(socket.handshake.auth));
+            void socket.join(`session:${session.id}:${owner.id}`);
+        });
+        await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+        const address = http.address();
+        if (!address || typeof address === 'string') throw new Error('Missing test address');
+        eventRouter.setIo(io);
+        const clients = [undefined, 2, 3, 4].map(protocolVersion => connect(`http://127.0.0.1:${address.port}`, {
+            path: '/v1/updates', transports: ['websocket'], reconnection: false,
+            auth: protocolVersion === undefined ? {} : { accountStoredContentCompatibility: { v: 1, protocolVersion } },
+        }));
+        try {
+            await Promise.all(clients.map(client => new Promise<void>((resolve, reject) => {
+                client.once('connect', resolve); client.once('connect_error', reject);
+            })));
+            const received = clients.map(client => new Promise<unknown>(resolve => client.once('update', resolve)));
+            await eventRouter.emitUpdate({ userId: owner.id,
+                payload: buildUpdateSessionUpdate(session.id, 1, 'question-wait', undefined, undefined,
+                    { latestTurnId: 'question-turn', latestTurnStatus: 'waiting', latestReadyEventSeq: 9 }),
+                recipientFilter: { type: 'all-interested-in-session', sessionId: session.id } });
+            const payloads = await Promise.all(received);
+            for (let index = 0; index < payloads.length; index += 1) {
+                expect(payloads[index]).toMatchObject({ body: { latestTurnStatus: index === 3 ? 'waiting' : null,
+                    latestReadyEventSeq: index === 3 ? 9 : null } });
+            }
+        } finally {
+            clients.forEach(client => client.close()); eventRouter.clearIo(); await io.close();
+        }
+    });
 
     it('projects the committed Account-authored notification before the next writer releases the pool', async () => {
         const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });

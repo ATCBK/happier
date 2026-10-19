@@ -20,6 +20,7 @@ import type { SessionDraftSocketUpdateV1 } from '@happier-dev/protocol/drafts/se
 import type { SessionDraftSocketUpdateV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { PendingActivationRequestedEphemeralV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import type { SessionMessageReplyPendingHintV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { UsageSourcesInvalidationV1 } from '@happier-dev/protocol/usage/usageSources';
 
 // === CONNECTION TYPES ===
@@ -348,7 +349,7 @@ export type UpdateEvent = {
 
 // === EPHEMERAL EVENT TYPES (Transient) ===
 
-export type EphemeralEvent = SessionPersonalEventEphemeralV1 | PendingActivationRequestedEphemeralV1 | UsageSourcesInvalidationV1 | {
+export type EphemeralEvent = SessionPersonalEventEphemeralV1 | PendingActivationRequestedEphemeralV1 | SessionMessageReplyPendingHintV1 | UsageSourcesInvalidationV1 | {
     type: 'activity';
     id: string;
     active: boolean;

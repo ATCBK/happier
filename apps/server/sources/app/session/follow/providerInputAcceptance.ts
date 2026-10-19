@@ -1,6 +1,7 @@
 import { isSessionFollowWakeEventLocalId } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 import type { Tx } from '@/storage/inTx';
+import { readStoredSessionMessageDeliveryResolutionV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 
 /**
  * Verifies that a Follow ACK names an admitted user input in the destination
@@ -14,6 +15,7 @@ export async function hasCanonicalFollowProviderInputAcceptanceInTx(
         destinationSessionId: string;
         localInputId: string;
         userMessageSeq: number | null;
+        requireProviderAccepted?: true;
     }>,
 ): Promise<boolean> {
     const message = await tx.sessionMessage.findUnique({
@@ -26,10 +28,14 @@ export async function hasCanonicalFollowProviderInputAcceptanceInTx(
         select: {
             seq: true,
             messageRole: true,
+            acceptedTurnId: true,
+            deliveryResolution: true,
         },
     });
     if (!message) return false;
     if (message.messageRole !== null && message.messageRole !== 'user') return false;
+    if (input.requireProviderAccepted && !message.acceptedTurnId
+        && readStoredSessionMessageDeliveryResolutionV1(message.deliveryResolution)?.kind !== 'provider_accepted') return false;
     return input.userMessageSeq === null || message.seq === input.userMessageSeq;
 }
 

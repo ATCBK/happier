@@ -40,7 +40,7 @@ export function projectSessionEffectiveAccessV1(access: EffectiveSessionAccess):
 }
 export type SessionAccessReader = Pick<Tx, "session">;
 // Session-major projections stay below the existing conservative SQLite bind boundary.
-const SESSION_ACCESS_SESSION_BATCH_SIZE = 200;
+export const SESSION_ACCESS_SESSION_BATCH_SIZE = 200;
 /**
  * Team and Group access, responsibility and atomic initial access are Session
  * sharing: they are served wherever `sharing.session` is enabled, with no

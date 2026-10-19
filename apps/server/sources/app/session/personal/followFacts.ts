@@ -7,6 +7,9 @@ export function projectSessionFollowFacts(row: Readonly<{
     following: boolean;
     notificationLevel: string;
     includeInVoice?: boolean;
+    followPolicy?: string | null;
+    notifyOnce?: string | null;
+    hasPersistentFollow?: boolean;
 }> | null): SessionFollowFactsV1 {
     return projectSessionFollowFactsV1(row);
 }
@@ -28,7 +31,7 @@ export async function resolveSessionFollowFactsInTx(
 ): Promise<SessionFollowFactsV1> {
     const row = await tx.accountSessionFollow.findUnique({
         where: { accountId_sessionId: params },
-        select: { following: true, notificationLevel: true },
+        select: { following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
     });
     return projectSessionFollowFacts(row);
 }
@@ -39,7 +42,7 @@ export async function listActivelyFollowingAccountIdsInTx(
     params: Readonly<{ sessionId: string }>,
 ): Promise<readonly string[]> {
     const rows = await tx.accountSessionFollow.findMany({
-        where: { sessionId: params.sessionId, following: true },
+        where: { sessionId: params.sessionId, OR: [{ following: true, hasPersistentFollow: true }, { notifyOnce: { not: null } }] },
         select: { accountId: true },
     });
     return rows.map(row => row.accountId);
@@ -52,7 +55,7 @@ export async function resolveSessionFollowFactsForAccountsInTx(
 ): Promise<ReadonlyMap<string, SessionFollowFactsV1>> {
     const rows = params.accountIds.length === 0 ? [] : await tx.accountSessionFollow.findMany({
         where: { sessionId: params.sessionId, accountId: { in: [...params.accountIds] } },
-        select: { accountId: true, following: true, notificationLevel: true },
+        select: { accountId: true, following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
     });
     const byAccountId = new Map(rows.map((row) => [row.accountId, projectSessionFollowFacts(row)]));
     return new Map(params.accountIds.map((accountId) => [accountId, byAccountId.get(accountId) ?? projectSessionFollowFacts(null)]));

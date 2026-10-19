@@ -227,6 +227,95 @@ describe("Session access HTTP and initial creation (SQLite integration)", () => 
         });
     });
 
+    it("inspects exact recipient access through current direct grants without treating view as input authority", async () => {
+        const { owner, recipient } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionShare.create({ data: {
+            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "edit",
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const inspect = async () => {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(owner.id),
+                    payload: { sessionId: session.id, recipientAccountId: recipient.id },
+                });
+                expect(response.statusCode, response.body).toBe(200);
+                return SessionAccessGrantsListResponseV1Schema.parse(response.json());
+            };
+            expect(await inspect()).toMatchObject({ visibility: "complete", recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "edit", capabilities: { readTranscript: true, submitAgentInput: true } },
+            } });
+            await db.sessionShare.updateMany({ where: { sessionId: session.id }, data: { accessLevel: "view" } });
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "view", capabilities: { readTranscript: true, submitAgentInput: false } },
+            } });
+            await db.sessionShare.deleteMany({ where: { sessionId: session.id } });
+            expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+        });
+    });
+
+    it("refuses recipient access probing by an admitted non-manager", async () => {
+        const { owner, recipient } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access-private", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionShare.create({ data: {
+            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "edit",
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            for (const recipientAccountId of [recipient.id, owner.id, "missing-account"]) {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(recipient.id),
+                    payload: { sessionId: session.id, recipientAccountId },
+                });
+                expect(response.statusCode, response.body).toBe(403);
+                expect(response.json()).toEqual({ error: "session_access_forbidden" });
+            }
+        });
+    });
+
+    it("inspects recipient access without borrowing manager authentication for a restricted Team", async () => {
+        const { owner, recipient, team } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access-team", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionTeamGrant.create({ data: {
+            sessionId: session.id, teamId: team.id, accessLevel: "edit", effectiveAt: new Date(),
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const inspect = async () => {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list",
+                    headers: { ...headers(owner.id), "x-test-authentication-evidence": JSON.stringify([{ kind: "home_method", methodId: "key_challenge" }]) },
+                    payload: { sessionId: session.id, recipientAccountId: recipient.id },
+                });
+                expect(response.statusCode, response.body).toBe(200);
+                return SessionAccessGrantsListResponseV1Schema.parse(response.json());
+            };
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "edit", capabilities: { submitAgentInput: true } },
+            } });
+            await db.team.update({ where: { id: team.id }, data: { authenticationPolicy: {
+                v: 1, mode: "restricted", accepted: [{ kind: "home_method", methodId: "key_challenge" }],
+            } } });
+            expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+            vi.stubEnv("HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED", "0");
+            try {
+                expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+            } finally {
+                vi.stubEnv("HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED", "1");
+            }
+            await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "view",
+            } });
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "view", capabilities: { submitAgentInput: false } },
+            } });
+        });
+    });
+
     it("projects exactly the full writer transitions for every valid stored grant state", async () => {
         const { owner, recipient, team } = await fixture();
         const manager = await db.account.create({

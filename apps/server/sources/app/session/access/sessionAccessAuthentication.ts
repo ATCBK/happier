@@ -1,5 +1,6 @@
 import type { AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/auth/authToken';
 import type { ApiTokenGrantV1, CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
+import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import {
     qualifyTeamAuthenticationInTx,
@@ -16,6 +17,8 @@ export type SessionAccessAuthentication = Readonly<{
     authenticationEvidence: readonly AuthTokenAuthenticationEvidenceV1[] | undefined;
     tokenEpoch?: number;
     sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal;
+    /** Verified executable destination, not an additional source-access grant. */
+    contentDisclosureSessionId?: string;
     /** PAT ceiling retained until signed admission proves every Session operand's captured resource scope. */
     apiTokenGrant?: ApiTokenGrantV1;
     /** Verified caller constraints also survive signed Action-effect admission. */
@@ -32,6 +35,7 @@ export function readSessionAccessAuthenticationFromRequest(request: Readonly<{
     externalActionExecutionAuthorized?: boolean;
     externalActionSessionAccessAdmitted?: boolean;
     externalActionInputConstraints?: CallerInputConstraintsV1;
+    externalActionExecutionAuthorizationBinding?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin'>;
 }>): SessionAccessAuthentication {
     if (!request.authAuthority) {
         throw new Error("Verified request authentication authority is unavailable");
@@ -39,10 +43,14 @@ export function readSessionAccessAuthenticationFromRequest(request: Readonly<{
     if (request.externalActionExecutionAuthorized === true && !request.externalActionInputConstraints) {
         throw new Error("Verified Action input constraints are unavailable");
     }
+    const contentDisclosureSessionId = request.sessionRuntimePrincipal?.sessionId
+        ?? (request.externalActionExecutionAuthorized === true
+            ? request.externalActionExecutionAuthorizationBinding?.sessionActionOrigin?.caller.sessionId : undefined);
     return {
         env: process.env,
         authority: request.authAuthority,
         authenticationEvidence: request.authTokenAuthenticationEvidence,
+        ...(contentDisclosureSessionId ? { contentDisclosureSessionId } : {}),
         ...(request.externalActionExecutionAuthorized === true ? {
             callerInputConstraints: request.externalActionInputConstraints,
         } : request.apiTokenPrincipal ? {
@@ -77,7 +85,7 @@ export function readSessionAccessAuthenticationFromSocket(socket: Pick<Socket, "
         env: process.env,
         authority: runtimePrincipal ? "account_automation" : socket.data.authAuthority,
         authenticationEvidence: socket.data.authTokenAuthenticationEvidence,
-        ...(runtimePrincipal ? { sessionRuntimePrincipal: runtimePrincipal } : {}),
+        ...(runtimePrincipal ? { sessionRuntimePrincipal: runtimePrincipal, contentDisclosureSessionId: runtimePrincipal.sessionId } : {}),
         ...(apiTokenPrincipal ? { apiTokenGrant: apiTokenPrincipal.grant,
             callerInputConstraints: { models: apiTokenPrincipal.grant.models, permissionModes: apiTokenPrincipal.grant.permissionModes },
         } : {}),

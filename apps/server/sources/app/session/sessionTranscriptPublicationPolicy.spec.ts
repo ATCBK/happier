@@ -18,6 +18,14 @@ import {
 } from "./sessionTranscriptPublicationPolicy";
 
 describe("session transcript publication policy", () => {
+    it('keeps a question-waiting turn from settling an external consumer input cursor', () => {
+        expect(resolveExternalShareableTranscriptTurnSettlementBlockedFromSeq({
+            messages: [{ seq: 4, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } }],
+            turns: [{ turnId: 'question-turn', status: 'waiting', startedAt: 100n, updatedAt: 200n,
+                transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [4], startSeqInclusive: 4, endSeqInclusive: 4 }) }],
+            hasLegacyTurnProjection: false, turnSnapshotExhausted: false, hasInconsistentTurnProjection: false,
+        })).toBe(4);
+    });
     it("does not mistake provider acceptance detail for a terminal no-turn settlement", () => {
         const snapshot = {
             turns: [], hasLegacyTurnProjection: false, turnSnapshotExhausted: false,

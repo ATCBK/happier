@@ -104,7 +104,7 @@ describe("sessionRoutes v1 messages pagination", () => {
                 headers: { "x-test-user-id": "u1" },
             });
 
-            expect(response.statusCode).toBe(400);
+            expect(response.statusCode, response.body).toBe(400);
         } finally {
             await app.close();
         }

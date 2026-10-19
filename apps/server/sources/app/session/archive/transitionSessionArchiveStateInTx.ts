@@ -1,5 +1,5 @@
 import { applySessionArchiveTransitionToFollowsInTx } from "@/app/session/follow/lifecycle";
-import { applySessionArchiveTransitionToReportsToInTx } from "@/app/session/relations/sessionReportsToService";
+import { applySessionArchiveTransitionToManagerInTx } from "@/app/session/follow/sessionManagerService";
 import type { Tx } from "@/storage/inTx";
 import { admitSessionLifecycleAutomationRunsTx } from "@/app/automations/automationSessionLifecycleAdmission";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
@@ -32,7 +32,7 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
         wasArchived: params.wasArchived,
         isArchived: params.archivedAt !== null,
     });
-    await applySessionArchiveTransitionToReportsToInTx(params.tx, {
+    await applySessionArchiveTransitionToManagerInTx(params.tx, {
         sessionId: params.sessionId, wasArchived: params.wasArchived, isArchived: params.archivedAt !== null,
     });
     if (!params.wasArchived && params.archivedAt !== null) {

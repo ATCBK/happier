@@ -3647,7 +3647,8 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
                 headers: { "content-type": "application/json", "x-test-user-id": account.id },
                 payload: {
                     expectedTemplateVersion: automation.templateVersion,
-                    executionRecipe: staleRecipe,
+                    // The stored V1 recipe uses the current retained-template CAS recovery path.
+                    templateCiphertext: stalePlainTemplate,
                 },
             });
             await barrier.modeObserved;
@@ -5531,6 +5532,7 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
                             machineId: "machine-storage-inventory",
                             expectedMetadataVersion: 2,
                             expectedDaemonStateVersion: 3,
+                            expectedDataEncryptionKey: "AQID",
                             metadata: machineMetadata,
                             daemonState: machineDaemonState,
                             dataEncryptionKey: machineDataKey,
@@ -5553,6 +5555,7 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
                             expectedBodyVersion: 6,
                             expectedDataEncryptionKey: privacyKit.encodeBase64(new Uint8Array([4, 5, 6])),
                             recipientKeyEnvelopes: [],
+                            blobs: [],
                             revisions: [],
                             header: artifactHeader,
                             body: artifactBody,
@@ -5685,6 +5688,7 @@ describe("registerAccountEncryptionMigrateRoutes (integration)", () => {
                             machineId: "machine-storage-rollback",
                             expectedMetadataVersion: 2,
                             expectedDaemonStateVersion: 3,
+                            expectedDataEncryptionKey: "AQID",
                             metadata: encodePlainStoredJson({
                                 host: "must-roll-back",
                             }),

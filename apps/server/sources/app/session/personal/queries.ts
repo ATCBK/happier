@@ -1,14 +1,17 @@
 import type { Prisma } from "@prisma/client";
 import type { SessionListScopeV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { type Tx } from "@/storage/inTx";
+import { db } from "@/storage/db";
 import {
     createSessionsWithDiscussionMentionWhere,
     createSessionsWithHumanDiscussionAuthorshipWhere,
-    loadSessionDiscussionAttentionForAccountsInTx,
-} from "@/app/session/discussions/attentionFacts";
+    loadDiscussionAttentionForAccountsInTx,
+    loadFirstClassDiscussionAttentionForAccountsInTx,
+} from "@/app/discussions/attentionFacts";
 import {
     loadSessionPersonalDiscussionFactsInTx,
     projectDiscussionAttentionSignals,
+    doesDiscussionViewerNeedAttention,
     QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
     type SessionPersonalDiscussionFacts,
 } from "./discussionFacts";
@@ -23,6 +26,7 @@ import {
     createSessionPersonallyTrackedWhere,
     iterateBoundedSessionPersonalAttentionRows,
 } from "./attentionQuery";
+import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 
 export {
     createSessionPersonalAttentionCandidateWhere,
@@ -146,19 +150,21 @@ export type SessionPersonalAttentionAccountAdmission = Readonly<{
 const SESSION_PERSONAL_ATTENTION_ACCOUNT_BATCH_SIZE = 50;
 
 /**
- * Exact Account-grouped attention count for badge snapshots and push refresh.
+ * Exact Account-grouped Session and Discussion count for badges and push refresh.
  *
  * Each bounded Account batch performs one Session-major candidate scan. The
  * canonical access projection and attention projector then admit unique
  * `(accountId, sessionId)` pairs, so overlapping ownership, Follow, direct and
  * collective access never multiply a badge. Discussion attention is loaded
- * through Lane 05's existing set-oriented fact owner for the same candidate
- * batch; no badge-local interpretation is introduced.
+ * through the Discussion fact owner for the same candidate batch. First-class
+ * Discussions not represented by a counted Session use that same fact owner
+ * and Protocol attention policy; no badge-local interpretation is introduced.
  */
-export async function countSessionPersonalAttentionRowsForAccountsInTx(
+export async function countAccountPersonalAttentionRowsForAccountsInTx(
     tx: Tx,
     params: Readonly<{
         admissions: readonly SessionPersonalAttentionAccountAdmission[];
+        authentication: SessionAccessAuthentication;
         now?: number;
     }>,
 ): Promise<Map<string, number>> {
@@ -198,9 +204,10 @@ export async function countSessionPersonalAttentionRowsForAccountsInTx(
             }),
             cursorAfter: (rows) => rows[rows.length - 1]?.id ?? "",
             admitCandidates: async (rows) => {
-                const discussionByAccount = await loadSessionDiscussionAttentionForAccountsInTx(tx, {
+                const discussionByAccount = await loadDiscussionAttentionForAccountsInTx(tx, {
                     accountIds,
                     sessionIds: rows.map((row) => row.id),
+                    authentication: params.authentication,
                 });
                 for (const row of rows) {
                     for (const admission of batch) {
@@ -234,6 +241,40 @@ export async function countSessionPersonalAttentionRowsForAccountsInTx(
         for (const accountId of accountIds) {
             counts.set(accountId, countedSessionIds.get(accountId)?.size ?? 0);
         }
+
+        // Discussion grants and private cursors establish their own attention,
+        // including when a source Session is absent, revoked or untracked. An
+        // anchor already represented by a counted Session must not count twice.
+        for await (const rows of iterateBoundedSessionPersonalAttentionRows<{ id: string; anchorSessionId: string | null; lastMessageAt: Date }, string>({
+            readCandidates: async ({ cursor, take }) => await tx.discussion.findMany({
+                where: {
+                    archivedAt: null,
+                    readStates: { some: { accountId: { in: accountIds } } },
+                    ...(cursor ? { id: { gt: cursor } } : {}),
+                },
+                orderBy: { id: "asc" },
+                take,
+                select: { id: true, anchorSessionId: true, lastMessageAt: true },
+            }),
+            cursorAfter: (rows) => rows[rows.length - 1]?.id ?? "",
+            admitCandidates: async (rows) => {
+                const discussionByAccount = await loadFirstClassDiscussionAttentionForAccountsInTx(tx, {
+                    accountIds,
+                    discussions: rows,
+                    authentication: params.authentication,
+                });
+                for (const accountId of accountIds) {
+                    for (const row of rows) {
+                        if (row.anchorSessionId !== null && countedSessionIds.get(accountId)?.has(row.anchorSessionId)) continue;
+                        if (!doesDiscussionViewerNeedAttention(discussionByAccount.get(accountId)?.get(row.id))) continue;
+                        counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
+                    }
+                }
+                return rows;
+            },
+        })) {
+            void rows;
+        }
     }
 
     return counts;
@@ -258,34 +299,36 @@ function createActiveFollowWhere(accountId: string): Prisma.SessionWhereInput {
  * A mention is deliberately absent: being named is My work relevance, not
  * participation (§4.3).
  */
-function createSessionParticipationWhere(accountId: string): readonly Prisma.SessionWhereInput[] {
+async function createSessionParticipationWhere(tx: Tx, accountId: string): Promise<readonly Prisma.SessionWhereInput[]> {
     return [
         { accountId },
         { responsibleAccountId: accountId },
         { shares: { some: { sharedWithUserId: accountId } } },
         { messages: { some: { authorAccountId: accountId } } },
-        createSessionsWithHumanDiscussionAuthorshipWhere(accountId),
+        await createSessionsWithHumanDiscussionAuthorshipWhere(tx, accountId),
     ];
 }
 
 /** Lane 07 composes these personal relations with the independent access predicate. */
-export function createSessionListScopeWhere(params: Readonly<{
+export async function createSessionListScopeWhere(params: Readonly<{
     accountId: string;
     scope: SessionListScopeV1;
-}>): Prisma.SessionWhereInput {
+    tx?: Tx;
+}>): Promise<Prisma.SessionWhereInput> {
     const { accountId, scope } = params;
     if (scope === "all_accessible") return {};
     if (scope === "assigned_to_me") return { responsibleAccountId: accountId };
     if (scope === "following") return createActiveFollowWhere(accountId);
-    if (scope === "involving_me") return { OR: [...createSessionParticipationWhere(accountId)] };
+    if (scope === "involving_me") return { OR: [...await createSessionParticipationWhere(params.tx ?? db, accountId)] };
     // My work is any personal relevance reason: participation plus the personal
     // interest and organization facts. An explicit attention standing may add a
     // row; a negative one only removes its own contribution, and neither changes
     // tracking (L09B-I8).
     return { OR: [
-        ...createSessionParticipationWhere(accountId),
-        createSessionsWithDiscussionMentionWhere(accountId),
+        ...await createSessionParticipationWhere(params.tx ?? db, accountId),
+        await createSessionsWithDiscussionMentionWhere(params.tx ?? db, accountId),
         createActiveFollowWhere(accountId),
+        { accountFollows: { some: { accountId, notifyOnce: { not: null } } } },
         { sessionPins: { some: { accountId } } },
         {
             sessionAttentionStandings: {

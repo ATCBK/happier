@@ -1341,6 +1341,7 @@ describe("sessionUpdateHandler", () => {
             ...(ownerActivityDelivery ? { runtimeComposition: {
                 publisherAuthority,
                 ownerActivityDelivery,
+                ownerActivityDeliveryWasReported: true,
             } } : {}),
         });
         expect(buildUpdateSessionUpdate).toHaveBeenCalledTimes(1);
@@ -1909,6 +1910,7 @@ describe("sessionUpdateHandler", () => {
 
     it.each([
         [undefined, "rich_sender"],
+        ["rich_sender", "rich_sender"],
         ["home_required", "home_required"],
     ] as const)("carries publisher owner-delivery declaration %s into turn settlement as %s", async (
         reportedOwnerActivityDelivery,
@@ -1982,6 +1984,7 @@ describe("sessionUpdateHandler", () => {
             runtimeComposition: {
                 publisherAuthority,
                 ownerActivityDelivery: expectedOwnerActivityDelivery,
+                ...(reportedOwnerActivityDelivery ? { ownerActivityDeliveryWasReported: true } : {}),
             },
         }));
     });

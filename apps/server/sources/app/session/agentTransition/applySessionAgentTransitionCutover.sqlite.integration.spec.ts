@@ -8,6 +8,9 @@ import {
 } from "@happier-dev/protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { computeAccountActivityBadgeCounts } from "@/app/activity/accountActivityBadge";
+import { initializeSessionOwnerReadStateInTx } from "@/app/session/personal/readState";
+
 import { applySessionAgentTransitionCutover } from "@/app/session/agentTransition/applySessionAgentTransitionCutover";
 import { commitSessionAgentCurrentViewInTx } from "@/app/session/agentTransition/commitSessionAgentCurrentView";
 import {
@@ -249,9 +252,12 @@ describe("applySessionAgentTransitionCutover (sqlite)", () => {
         expect(dividers[0]).toMatchObject({ localId, messageRole: "event", seq: result.dividerSeq });
     }, 60_000);
 
-    it("carries no user attention and does not move the read projection", async () => {
+    it("carries no user attention and keeps the owner private read projection caught up", async () => {
         const owner = await createOwner();
         const session = await createLayoutZeroSession(owner.id);
+        await inTx(tx => initializeSessionOwnerReadStateInTx(tx, {
+            accountId: owner.id, sessionId: session.id,
+        }));
         const before = await db.session.findUniqueOrThrow({
             where: { id: session.id },
             select: { lastViewedSessionSeq: true, latestReadyEventSeq: true, meaningfulActivityAt: true },
@@ -280,7 +286,8 @@ describe("applySessionAgentTransitionCutover (sqlite)", () => {
             affectsUnread: false,
             affectsMeaningfulActivity: false,
         });
-        expect(write.badgeAttentionChanged).toBe(false);
+        const badgeCounts = await computeAccountActivityBadgeCounts([owner.id]);
+        expect(badgeCounts.get(owner.id)).toBe(0);
 
         const after = await db.session.findUniqueOrThrow({
             where: { id: session.id },
@@ -289,16 +296,21 @@ describe("applySessionAgentTransitionCutover (sqlite)", () => {
         expect(after.latestReadyEventSeq).toBe(before.latestReadyEventSeq);
         expect(after.meaningfulActivityAt?.getTime() ?? null)
             .toBe(before.meaningfulActivityAt?.getTime() ?? null);
-        // The owner advances the read cursor past a non-unread row, which is how
-        // the divider leaves unread at zero instead of creating a phantom unread.
-        expect(after.lastViewedSessionSeq).toBe(result.dividerSeq);
+        expect(after.lastViewedSessionSeq).toBe(before.lastViewedSessionSeq);
+        const privateReadState = await db.accountSessionReadState.findUniqueOrThrow({
+            where: { accountId_sessionId: { accountId: owner.id, sessionId: session.id } },
+        });
+        expect(privateReadState).toMatchObject({
+            lastViewedSessionSeq: result.dividerSeq,
+            unreadSince: null,
+        });
     }, 60_000);
 
     it("returns the existing sequence for an identical re-append and writes nothing new", async () => {
         const owner = await createOwner();
         const session = await createLayoutZeroSession(owner.id);
         const localId = buildSessionAgentTransitionDividerLocalId(`submitted-${randomUUID()}`);
-        const content = dividerContent({ fromAgentId: "claude", toAgentId: "codex" });
+        const content = dividerContent({ fromAgentId: "claude", toAgentId: "codex", id: "transition\u0000divider" });
         const currentView = {
             kind: "legacy_v0" as const,
             expectedMetadataVersion: session.metadataVersion,

@@ -6,6 +6,8 @@ import { tombstoneSessionDraftForLifecycleInTx } from '@/app/account/sessionDraf
 import { SessionDeletedChangeHintV1Schema } from '@happier-dev/protocol/changes';
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx, resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
 import { deleteAutomationTx } from '@/app/automations/automationCrudService';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { hasSessionFollowSessionSource } from '@/app/session/follow/sessionFollowSourceIdentity';
 
 import { deleteSessionTree, SessionDeleteConditionLostError } from './deleteSessionTree';
 import { emitSessionDeletedUpdate } from './emitSessionDeletedUpdate';
@@ -21,12 +23,14 @@ import { loadSessionDeleteRecipients } from './loadSessionDeleteRecipients';
  *   between the read and the write (a concurrent metadata write, or a retention
  *   guard that stopped matching). Nothing was deleted and the row still exists,
  *   so this is retryable and must never be read as "already gone".
+ * - `active`: a caller initiated deletion before stopping the Session. Nothing
+ *   was deleted; the caller must stop the Session before requesting deletion.
  */
 export type DeleteOwnedSessionResult =
     | Readonly<{ ok: true }>
     | Readonly<{
         ok: false;
-        error: 'not-found' | 'conflict';
+        error: 'not-found' | 'conflict' | 'active';
     }>;
 
 type DeleteOwnedSessionCommonParams = Readonly<{
@@ -49,8 +53,17 @@ export async function deleteOwnedSession(
 ): Promise<DeleteOwnedSessionResult> {
     try {
         return await inTx(async (tx) => {
+            await acquireSessionAccountCursorLocksInTx(
+                tx,
+                [params.sessionId],
+                params.ownerAccountId ? [params.ownerAccountId] : [],
+                { includeLifecyclePublications: true },
+            );
             return await deleteSessionWithRecipientsInTx(tx, params);
-        }, { isolationLevel: "Serializable" /* Deletion recipient and draft census must serialize with grant and draft lifecycle writers. */ });
+        }, {
+            isolationLevel: 'ReadCommitted',
+            transactionClass: 'session-delete',
+        });
     } catch (error) {
         if (error instanceof SessionDeleteConditionLostError) {
             return { ok: false, error: 'conflict' };
@@ -84,6 +97,10 @@ export async function deleteSessionWithRecipientsInTx(
     }
 
     const isCallerInitiated = params.reason === 'user_request';
+    if (isCallerInitiated && session.active) {
+        return { ok: false, error: 'active' } as const;
+    }
+
     // Resolve recipients before the row disappears, and resolve them through
     // the canonical access owner so a Team- or Group-granted collaborator
     // receives the same draft tombstone and deletion projection a direct
@@ -95,14 +112,14 @@ export async function deleteSessionWithRecipientsInTx(
     );
     recipientAccountIds.add(session.accountId);
 
-    const [followEdges, reportsToEdges, runnerActivation] = await Promise.all([
+    const [followEdges, managerEdges, runnerActivation] = await Promise.all([
         tx.sessionFollowEdge.findMany({ where: { sourceSessionId: params.sessionId }, select: { destinationSessionId: true } }),
-        tx.sessionReportsTo.findMany({ where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
-            select: { sessionId: true, leadSessionId: true } }),
+        tx.sessionFollowEdge.findMany({ where: { relation: 'manager', OR: [{ sourceSessionId: params.sessionId }, { destinationSessionId: params.sessionId }] },
+            select: { sourceSessionId: true, destinationSessionId: true } }),
         tx.ephemeralRunnerActivation.findFirst({ where: { sessionId: params.sessionId, state: 'materialized' }, select: { creatorAccountId: true } }),
     ]);
     const relationRecipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: [
-        ...followEdges.map(edge => edge.destinationSessionId), ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+        ...followEdges.map(edge => edge.destinationSessionId), ...managerEdges.filter(hasSessionFollowSessionSource).flatMap(edge => [edge.sourceSessionId, edge.destinationSessionId]),
     ] });
     await acquireAccountChangePublicationLocksInTx(tx, [...recipientAccountIds, ...[...relationRecipients.values()].flat(),
         ...(runnerActivation ? [runnerActivation.creatorAccountId] : [])]);
@@ -112,6 +129,7 @@ export async function deleteSessionWithRecipientsInTx(
         ...(params.ownerAccountId ? { accountId: params.ownerAccountId } : {}),
         ...(isCallerInitiated
             ? {
+                active: false,
                 metadataLayoutVersion:
                     session.metadataLayoutVersion,
             }

@@ -3,6 +3,7 @@ import {
     deriveSessionFollowWakeEventLocalIdV1,
     type SessionFollowAcknowledgeRequestV1,
 } from "@happier-dev/protocol";
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import type { Tx } from "@/storage/inTx";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
@@ -12,9 +13,9 @@ import {
     observePendingSessionFollowForDestinationInTx,
 } from "./sessionFollowEdgeService";
 
-function runtimeFixture() {
+function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
     const row = (id: string, accountId: string) => ({
-        id, accountId, account: { status: "active" }, archivedAt: null as Date | null,
+        id, accountId, account: { status: "active" }, archivedAt: null as Date | null, deliveryMutes: null,
         publisherGeneration: 3n, seq: 2, latestReadyEventSeq: 0, agentStateVersion: 0,
         latestTurnId: null, latestTurnStatus: null, publicShare: null as { expiresAt: Date | null } | null,
         currentStorageState: "hosted", acceptedThroughServerSeq: null,
@@ -28,7 +29,9 @@ function runtimeFixture() {
     const audience = [{ id: "runtime" }];
     const edge = {
         sourceSessionId: source.id, destinationSessionId: destination.id,
-        mode: "next_turn" as "next_turn" | "wake_on_human_change",
+        relation: "follower" as "follower" | "manager",
+        attachedAt: new Date(100),
+        policyJson: JSON.stringify(policy),
         deliveredTranscriptSeq: 1, deliveredReadyEventSeq: 0, deliveredAgentStateVersion: 0,
         deliveredTurnId: null, deliveredTurnStatus: null,
     };
@@ -65,11 +68,6 @@ function runtimeFixture() {
                 return { count: 1 };
             }),
         },
-        sessionReportsTo: {
-            findMany: vi.fn(async () => [] as object[]),
-            findUnique: vi.fn(async () => null as object | null),
-            updateMany: vi.fn(async () => ({ count: 0 })),
-        },
     };
     // Database boundary only; the real access, audience, admission and frontier owners run below.
     const tx = storage as unknown as Tx;
@@ -80,6 +78,7 @@ function runtimeFixture() {
     const ackInput = {
         principal, destinationSessionId: destination.id,
         sourceSessionId: source.id, expectedPublisherGeneration: 3n,
+        policy,
         expected,
         observed: { ...expected, transcriptSeq: 2 },
         consumed: { ...expected, transcriptSeq: 2 },
@@ -103,22 +102,17 @@ function runtimeFixture() {
 }
 
 describe("ordinary Account Follow runtime admission", () => {
-    it("observes reportsTo through the same pairwise admission and fences reattachment at ACK", async () => {
-        const f = runtimeFixture();
-        const relation = { sessionId: 'source', leadSessionId: 'destination', attachedAt: new Date(100),
-            deliveredTranscriptSeq: 1, deliveredReadyEventSeq: 0, deliveredAgentStateVersion: 0,
-            deliveredTurnId: null, deliveredTurnStatus: null };
-        f.storage.sessionFollowEdge.findMany.mockResolvedValue([]);
-        f.storage.sessionReportsTo.findMany.mockResolvedValue([relation]);
-        f.storage.sessionReportsTo.findUnique.mockResolvedValue(relation);
-        const observed = await observePendingSessionFollowForDestinationInTx(f.tx, { ...f.observeInput, includeReportsTo: true });
-        expect(observed.observations).toEqual([expect.objectContaining({ edgeKind: 'reports_to', attachedAt: 100 })]);
-        relation.attachedAt = new Date(101);
-        expect(await acknowledgeSessionFollowFrontierInTx(f.tx, { ...f.ackInput, edgeKind: 'reports_to', attachedAt: 100 }))
+    it("observes a manager through the same pairwise admission and fences reattachment at ACK", async () => {
+        const f = runtimeFixture({ preset: 'important' });
+        f.edge.relation = 'manager';
+        const observed = await observePendingSessionFollowForDestinationInTx(f.tx, { ...f.observeInput, includeManager: true });
+        expect(observed.observations).toEqual([expect.objectContaining({ relation: 'manager', attachedAt: 100 })]);
+        f.edge.attachedAt = new Date(101);
+        expect(await acknowledgeSessionFollowFrontierInTx(f.tx, { ...f.ackInput, relation: 'manager', attachedAt: 100 }))
             .toEqual({ ok: false, rejection: 'stale_expected_frontier' });
-        expect(f.storage.sessionReportsTo.updateMany).not.toHaveBeenCalled();
+        expect(f.storage.sessionFollowEdge.updateMany).not.toHaveBeenCalled();
         f.source.shares = [];
-        expect(await observePendingSessionFollowForDestinationInTx(f.tx, { ...f.observeInput, includeReportsTo: true }))
+        expect(await observePendingSessionFollowForDestinationInTx(f.tx, { ...f.observeInput, includeManager: true }))
             .toEqual({ currentSourceSessionIds: [], observations: [] });
     });
     it("returns authoritative current membership even when no delivery delta is pending", async () => {
@@ -143,7 +137,8 @@ describe("ordinary Account Follow runtime admission", () => {
             currentSourceSessionIds: ["source"],
             observations: [{
                 sourceSessionId: "source", destinationSessionId: "destination",
-                mode: "next_turn",
+                policy: f.ackInput.policy,
+                relation: "follower",
                 delivered: f.ackInput.expected, observed: f.ackInput.consumed,
             }],
         });
@@ -187,10 +182,25 @@ describe("ordinary Account Follow runtime admission", () => {
         const f = runtimeFixture();
         const observations = [{
             sourceSessionId: f.ackInput.sourceSessionId,
+            policy: f.ackInput.policy,
+            relation: 'follower' as const,
             expected: f.ackInput.expected,
             consumed: f.ackInput.consumed,
         }];
-        const eventLocalId = deriveSessionFollowWakeEventLocalIdV1({
+        let eventLocalId = deriveSessionFollowWakeEventLocalIdV1({
+            destinationSessionId: f.ackInput.destinationSessionId,
+            publisherGeneration: f.ackInput.expectedPublisherGeneration.toString(),
+            observations,
+        });
+        f.commitWakeEvent(eventLocalId);
+        expect(await acknowledgeSessionFollowFrontierInTx(f.tx, { ...f.ackInput,
+            acceptance: { kind: 'context_only_wake', eventLocalId, observations } }))
+            .toEqual({ ok: false, rejection: "provider_acceptance_unverified" });
+        const wakePolicy: FollowPolicyV1 = { preset: 'custom', events: { person_wrote: { delivery: 'interrupt' } } };
+        f.edge.policyJson = JSON.stringify(wakePolicy);
+        f.ackInput.policy = wakePolicy;
+        observations[0].policy = wakePolicy;
+        eventLocalId = deriveSessionFollowWakeEventLocalIdV1({
             destinationSessionId: f.ackInput.destinationSessionId,
             publisherGeneration: f.ackInput.expectedPublisherGeneration.toString(),
             observations,
@@ -200,9 +210,6 @@ describe("ordinary Account Follow runtime admission", () => {
             eventLocalId,
             observations,
         };
-        expect(await acknowledgeSessionFollowFrontierInTx(f.tx, { ...f.ackInput, acceptance: wakeAcceptance }))
-            .toEqual({ ok: false, rejection: "provider_acceptance_unverified" });
-        f.edge.mode = "wake_on_human_change";
 
         expect(await acknowledgeSessionFollowFrontierInTx(f.tx, {
             ...f.ackInput,
@@ -229,10 +236,11 @@ describe("ordinary Account Follow runtime admission", () => {
     });
 
     it("binds a committed wake event to its exact source, generation, expected, and consumed batch", async () => {
-        const f = runtimeFixture();
-        f.edge.mode = "wake_on_human_change";
+        const f = runtimeFixture({ preset: 'everything' });
         const exactObservations = [{
             sourceSessionId: f.ackInput.sourceSessionId,
+            policy: f.ackInput.policy,
+            relation: 'follower' as const,
             expected: f.ackInput.expected,
             consumed: f.ackInput.consumed,
         }];
@@ -282,8 +290,7 @@ describe("ordinary Account Follow runtime admission", () => {
     });
 
     it("rechecks source authority before settling an already-committed wake event", async () => {
-        const f = runtimeFixture();
-        f.edge.mode = "wake_on_human_change";
+        const f = runtimeFixture({ preset: 'everything' });
         f.source.shares = [];
 
         expect(await acknowledgeSessionFollowFrontierInTx(f.tx, {
@@ -295,12 +302,16 @@ describe("ordinary Account Follow runtime admission", () => {
                     publisherGeneration: f.ackInput.expectedPublisherGeneration.toString(),
                     observations: [{
                         sourceSessionId: f.ackInput.sourceSessionId,
+                        policy: f.ackInput.policy,
+                        relation: 'follower',
                         expected: f.ackInput.expected,
                         consumed: f.ackInput.consumed,
                     }],
                 }),
                 observations: [{
                     sourceSessionId: f.ackInput.sourceSessionId,
+                    policy: f.ackInput.policy,
+                    relation: 'follower',
                     expected: f.ackInput.expected,
                     consumed: f.ackInput.consumed,
                 }],

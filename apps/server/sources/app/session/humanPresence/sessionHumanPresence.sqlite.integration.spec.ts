@@ -10,6 +10,12 @@ import { SessionHumanPresenceSnapshotV1Schema, type SessionHumanPresenceSnapshot
 import { inTx } from "@/storage/inTx";
 import { deleteSessionAccessGrantInTx, putSessionAccessGrantInTx } from "@/app/session/access/sessionAccessGrantService";
 import { notifySessionHumanPresenceAccessChanged } from "./sessionHumanPresenceService";
+import { notifyDiscussionHumanPresenceAccessChanged } from "./sessionHumanPresenceService";
+import { setDiscussionGrant, removeDiscussionGrant } from "@/app/discussions/accessService";
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
+import { decodeBase64 } from "@happier-dev/protocol/crypto/base64";
+import { eventRouter } from "@/app/events/eventRouter";
+import { discussionHumanPresenceRoom } from "./sessionHumanPresenceRooms";
 
 const visibleEvent = "session-human-presence:visible-replace";
 const snapshotEvent = "session-human-presence:snapshot";
@@ -31,13 +37,13 @@ function deferred<T = void>(): Readonly<{
 }
 
 /**
- * Pauses the real SQLite Discussion delegate after the first matching row has
- * been read. The third matching read is the next projection cycle only when
- * the active cycle performed a final pre-emit currentness read first.
+ * Pauses the real SQLite profile read after Discussion grant admission. The
+ * resource and grant are now stale if deletion commits during this boundary;
+ * the final resource read must prevent an outbound snapshot from that state.
  */
 function installDiscussionPresenceReadBarrier(input: Readonly<{
-    sessionId: string;
     discussionId: string;
+    accountId: string;
 }>): Readonly<{
     firstRead: Promise<void>;
     nextProjectionRead: Promise<void>;
@@ -47,37 +53,34 @@ function installDiscussionPresenceReadBarrier(input: Readonly<{
     const firstRead = deferred();
     const releaseFirst = deferred();
     const nextProjectionRead = deferred();
-    const originalDelegate = db.sessionDiscussion;
-    const originalFindFirst = originalDelegate.findFirst;
-    let matchingReadCount = 0;
+    const originalDelegate = db.discussion;
+    const originalFindUnique = originalDelegate.findUnique;
+    const accountDelegate = db.account;
+    const originalFindMany = accountDelegate.findMany;
+    let paused = false;
     let restored = false;
 
-    const delegate = new Proxy(originalDelegate, {
-        get(target, property, receiver) {
-            if (property !== "findFirst") {
-                const value: unknown = Reflect.get(target, property, receiver);
-                return typeof value === "function" ? value.bind(target) : value;
-            }
-            return async (...args: Parameters<typeof originalFindFirst>) => {
-                const result = await Reflect.apply(originalFindFirst, target, args);
-                const candidate = args[0] as Readonly<{
-                    where?: Readonly<{ id?: unknown; sessionId?: unknown }>;
-                }> | undefined;
-                if (candidate?.where?.id === input.discussionId
-                    && candidate.where.sessionId === input.sessionId) {
-                    matchingReadCount += 1;
-                    if (matchingReadCount === 1) {
-                        firstRead.resolve();
-                        await releaseFirst.promise;
-                    } else if (matchingReadCount === 3) {
-                        nextProjectionRead.resolve();
-                    }
-                }
-                return result;
-            };
-        },
-    }) as typeof originalDelegate;
-    Reflect.set(db, "sessionDiscussion", delegate);
+    // Intercept the real model method rather than replacing Prisma's computed
+    // model property (the generated client can ignore a replacement delegate).
+    Reflect.set(originalDelegate, "findUnique", async (...args: Parameters<typeof originalFindUnique>) => {
+        const result = await Reflect.apply(originalFindUnique, originalDelegate, args);
+        const candidate = args[0] as Readonly<{ where?: Readonly<{ id?: unknown }> }> | undefined;
+        if (paused && candidate?.where?.id === input.discussionId && result === null) nextProjectionRead.resolve();
+        return result;
+    });
+    Reflect.set(accountDelegate, "findMany", async (...args: Parameters<typeof originalFindMany>) => {
+        const result = await Reflect.apply(originalFindMany, accountDelegate, args);
+        const candidate = args[0] as Readonly<{
+            where?: Readonly<{ id?: Readonly<{ in?: readonly string[] }> }>;
+            select?: Readonly<{ name?: unknown }>;
+        }> | undefined;
+        if (!paused && candidate?.where?.id?.in?.includes(input.accountId) && candidate.select?.name === true) {
+            paused = true;
+            firstRead.resolve();
+            await releaseFirst.promise;
+        }
+        return result;
+    });
 
     return {
         firstRead: firstRead.promise,
@@ -87,7 +90,8 @@ function installDiscussionPresenceReadBarrier(input: Readonly<{
             if (restored) return;
             restored = true;
             releaseFirst.resolve();
-            Reflect.set(db, "sessionDiscussion", originalDelegate);
+            Reflect.set(originalDelegate, "findUnique", originalFindUnique);
+            Reflect.set(accountDelegate, "findMany", originalFindMany);
         },
     };
 }
@@ -185,8 +189,10 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             metadata: JSON.stringify({ t: "plain", v: {} }),
         } });
         const [discussionA, discussionB] = await Promise.all(["Discussion A", "Discussion B"].map(title =>
-            db.sessionDiscussion.create({ data: {
-                sessionId: session.id,
+            db.discussion.create({ data: {
+                ownerAccountId: owner.id,
+                encryptionMode: "plain",
+                dataEncryptionKey: new Uint8Array(decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER)),
                 creationLocalId: crypto.randomUUID(),
                 creationEqualityEvidenceV1: {},
                 createdByAccountId: owner.id,
@@ -204,6 +210,11 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
                 grant: { accessLevel: "edit", canApprovePermissions: false },
                 authentication: ownerAuthentication(),
             }))).toMatchObject({ ok: true, changed: true });
+            for (const discussion of [discussionA, discussionB]) {
+                expect(await setDiscussionGrant({ actorAccountId: owner.id, discussionId: discussion.id,
+                    authentication: ownerAuthentication(), request: { principal: { kind: "account", accountId: account.id }, accessLevel: "edit" },
+                })).toMatchObject({ ok: true });
+            }
         }
         const app = Fastify({ logger: false }) as unknown as AppFastify;
         startSocket(app);
@@ -231,17 +242,17 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             });
             return client;
         };
-        const locationA = { sessionId: session.id, discussionId: discussionA.id };
-        const locationB = { sessionId: session.id, discussionId: discussionB.id };
+        const locationA = { discussionId: discussionA.id };
+        const locationB = { discussionId: discussionB.id };
         const sortedLocations = [locationA, locationB].sort((left, right) =>
             left.discussionId.localeCompare(right.discussionId));
         const declare = (
             client: Socket,
             sessionIds: readonly string[],
-            locations: readonly Readonly<{ sessionId: string; discussionId: string }>[],
+            locations: readonly Readonly<{ discussionId: string }>[],
         ) => client.timeout(ACK_TIMEOUT_MS).emitWithAck(visibleEvent, { v: 1, sessionIds, locations });
         const latestAccountIds = (client: Socket, discussionId?: string) => observations.get(client)!
-            .filter(value => value.sessionId === session.id && value.discussionId === discussionId)
+            .filter(value => discussionId === undefined ? value.sessionId === session.id : value.discussionId === discussionId)
             .at(-1)?.viewers.map(value => value.account.accountId).sort();
         const expectLocation = async (client: Socket, accountIds: readonly string[], discussionId?: string) => {
             await expect.poll(() => latestAccountIds(client, discussionId), { timeout: ACK_TIMEOUT_MS })
@@ -311,7 +322,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             expect(await everywhereSocket.timeout(ACK_TIMEOUT_MS).emitWithAck(visibleEvent, {
                 v: 1,
                 sessionIds: [],
-                locations: [{ sessionId: session.id, discussionId: " " }],
+                locations: [{ discussionId: " " }],
             })).toEqual({ v: 1, ok: false, errorCode: "INVALID_REQUEST" });
             notifySessionHumanPresenceAccessChanged({ sessionId: session.id });
             await expectLocation(observerSocket, [owner.id, everywhereViewer.id]);
@@ -325,14 +336,23 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
                 authentication: ownerAuthentication(),
             }))).toMatchObject({ ok: true, changed: true });
             await expectLocation(observerSocket, [owner.id]);
+            // Removing source access cannot revoke an independent Discussion.
+            await expectLocation(observerSocket, [owner.id, discussionAViewer.id, everywhereViewer.id], discussionA.id);
+            await expectLocation(observerSocket, [owner.id, discussionBViewer.id, everywhereViewer.id], discussionB.id);
+            for (const discussion of [discussionA, discussionB]) {
+                expect(await removeDiscussionGrant({ actorAccountId: owner.id, discussionId: discussion.id,
+                    authentication: ownerAuthentication(), request: { principal: { kind: "account", accountId: everywhereViewer.id } },
+                })).toMatchObject({ ok: true });
+            }
             await expectLocation(observerSocket, [owner.id, discussionAViewer.id], discussionA.id);
             await expectLocation(observerSocket, [owner.id, discussionBViewer.id], discussionB.id);
 
             const discussionBSnapshotCount = observations.get(observerSocket)!
                 .filter(value => value.discussionId === discussionB.id).length;
-            await db.sessionDiscussion.delete({ where: { id: discussionA.id } });
+            await db.discussion.delete({ where: { id: discussionA.id } });
             const discussionADeletedAt = Date.now();
-            notifySessionHumanPresenceAccessChanged({ sessionId: session.id });
+            notifyDiscussionHumanPresenceAccessChanged({ discussionId: discussionA.id });
+            notifyDiscussionHumanPresenceAccessChanged({ discussionId: discussionB.id });
             await expect.poll(() => observations.get(observerSocket)!
                 .filter(value => value.discussionId === discussionB.id).length, { timeout: ACK_TIMEOUT_MS })
                 .toBeGreaterThan(discussionBSnapshotCount);
@@ -360,8 +380,10 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             encryptionMode: "plain",
             metadata: JSON.stringify({ t: "plain", v: {} }),
         } });
-        const discussion = await db.sessionDiscussion.create({ data: {
-            sessionId: session.id,
+        const discussion = await db.discussion.create({ data: {
+            ownerAccountId: owner.id,
+            encryptionMode: "plain",
+            dataEncryptionKey: new Uint8Array(decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER)),
             creationLocalId: crypto.randomUUID(),
             creationEqualityEvidenceV1: {},
             createdByAccountId: owner.id,
@@ -386,7 +408,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
         client.on(snapshotEvent, value => {
             const snapshot = SessionHumanPresenceSnapshotV1Schema.parse(value);
             observations.push(snapshot);
-            if (snapshot.sessionId === session.id && snapshot.discussionId === discussion.id) {
+            if (snapshot.discussionId === discussion.id) {
                 staleSnapshot.resolve(snapshot);
             }
         });
@@ -396,11 +418,11 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             client.connect();
         });
         const barrier = installDiscussionPresenceReadBarrier({
-            sessionId: session.id,
             discussionId: discussion.id,
+            accountId: owner.id,
         });
         try {
-            const location = { sessionId: session.id, discussionId: discussion.id };
+            const location = { discussionId: discussion.id };
             expect(await client.timeout(ACK_TIMEOUT_MS).emitWithAck(visibleEvent, {
                 v: 1,
                 sessionIds: [],
@@ -413,8 +435,8 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             });
             await barrier.firstRead;
 
-            await db.sessionDiscussion.delete({ where: { id: discussion.id } });
-            notifySessionHumanPresenceAccessChanged({ sessionId: session.id });
+            await db.discussion.delete({ where: { id: discussion.id } });
+            notifyDiscussionHumanPresenceAccessChanged({ discussionId: discussion.id });
             barrier.releaseFirst();
 
             const outcome = await Promise.race([
@@ -422,8 +444,18 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
                 staleSnapshot.promise.then(snapshot => ({ kind: "stale_snapshot" as const, snapshot })),
             ]);
             expect(outcome).toEqual({ kind: "current" });
-            expect(observations.filter(snapshot => snapshot.sessionId === session.id
-                && snapshot.discussionId === discussion.id)).toEqual([]);
+            const serverSocket = [...eventRouter.getConnections(owner.id) ?? []]
+                .find(connection => connection.socket.id === client.id)?.socket;
+            expect(serverSocket).toBeDefined();
+            // Wait for the queued deletion projection to finish evicting the
+            // actual socket, then flush the same transport with an acknowledged
+            // empty replacement before checking that no earlier packet leaked.
+            await expect.poll(() => serverSocket?.rooms.has(discussionHumanPresenceRoom({ discussionId: discussion.id })), {
+                timeout: ACK_TIMEOUT_MS,
+            }).toBe(false);
+            expect(await client.timeout(ACK_TIMEOUT_MS).emitWithAck(visibleEvent, { v: 1, sessionIds: [], locations: [] }))
+                .toEqual({ v: 1, ok: true, admittedSessionIds: [], admittedLocations: [] });
+            expect(observations.filter(snapshot => snapshot.discussionId === discussion.id)).toEqual([]);
         } finally {
             barrier.restore();
             client.close();
@@ -437,11 +469,10 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
         const session = await db.session.create({ data: {
             accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: JSON.stringify({ t: "plain", v: {} }),
         } });
-        const otherSession = await db.session.create({ data: {
-            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: JSON.stringify({ t: "plain", v: {} }),
-        } });
-        const discussion = await db.sessionDiscussion.create({ data: {
-            sessionId: session.id,
+        const discussion = await db.discussion.create({ data: {
+            ownerAccountId: owner.id,
+            encryptionMode: "plain",
+            dataEncryptionKey: new Uint8Array(decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER)),
             creationLocalId: crypto.randomUUID(),
             creationEqualityEvidenceV1: {},
             createdByAccountId: owner.id,
@@ -460,11 +491,20 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
         }
         expect(await putDirect(editor.id, "edit")).toMatchObject({ ok: true, changed: true });
         expect(await putDirect(viewer.id, "view")).toMatchObject({ ok: true, changed: true });
+        const putDiscussion = (accountId: string, accessLevel: "view" | "edit") => setDiscussionGrant({
+            actorAccountId: owner.id, discussionId: discussion.id, authentication: ownerAuthentication(),
+            request: { principal: { kind: "account", accountId }, accessLevel },
+        });
+        expect(await putDiscussion(editor.id, "edit")).toMatchObject({ ok: true });
+        expect(await putDiscussion(viewer.id, "view")).toMatchObject({ ok: true });
         const team = await db.team.create({ data: { name: crypto.randomUUID() } });
         const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: guest.id, role: "guest" } });
         const group = await db.teamGroup.create({ data: { teamId: team.id, name: "Guests", nameKey: "guests" } });
         await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id, teamMembershipId: membership.id } });
         await db.sessionGroupGrant.create({ data: { sessionId: session.id, teamGroupId: group.id, accessLevel: "edit", effectiveAt: new Date() } });
+        expect(await setDiscussionGrant({ actorAccountId: owner.id, discussionId: discussion.id, authentication: ownerAuthentication(),
+            request: { principal: { kind: "group", groupId: group.id, teamId: team.id }, accessLevel: "edit" },
+        })).toMatchObject({ ok: true });
         const app = Fastify({ logger: false }) as unknown as AppFastify;
         startSocket(app);
         await app.listen({ port: 0, host: "127.0.0.1" });
@@ -491,7 +531,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
         const declare = (
             client: Socket,
             sessionIds = [session.id],
-            locations: readonly Readonly<{ sessionId: string; discussionId: string }>[] = [],
+            locations: readonly Readonly<{ discussionId: string }>[] = [],
         ) => client.timeout(ACK_TIMEOUT_MS).emitWithAck(visibleEvent, {
             v: 1,
             sessionIds,
@@ -511,14 +551,12 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
                 .filter(value => value.sessionId === session.id && value.discussionId === undefined).at(-1);
             for (const client of [ownerSocket, editorSocket, viewerSocket, guestSocket, secondGuestSocket]) {
                 expect(await declare(client, [session.id], [
-                    { sessionId: session.id, discussionId: discussion.id },
-                    // The discussion id is real, but the qualified pair is not.
-                    { sessionId: otherSession.id, discussionId: discussion.id },
+                    { discussionId: discussion.id },
                 ])).toEqual({
                     v: 1,
                     ok: true,
                     admittedSessionIds: [session.id],
-                    admittedLocations: [{ sessionId: session.id, discussionId: discussion.id }],
+                    admittedLocations: [{ discussionId: discussion.id }],
                 });
             }
             await expect.poll(() => last()?.viewers.length).toBe(4);
@@ -530,11 +568,11 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             expect(observations.get(publisherSocket)).toEqual([]);
 
             viewerSocket.emit("session-human-presence:typing-set", {
-                v: 1, sessionId: session.id, discussionId: discussion.id, typing: true,
+                v: 1, discussionId: discussion.id, typing: true,
             });
-            await declare(viewerSocket, [session.id], [{ sessionId: session.id, discussionId: discussion.id }]);
+            await declare(viewerSocket, [session.id], [{ discussionId: discussion.id }]);
             editorSocket.emit("session-human-presence:typing-set", {
-                v: 1, sessionId: session.id, discussionId: discussion.id, typing: true,
+                v: 1, discussionId: discussion.id, typing: true,
             });
             await expect.poll(() => lastDiscussion()?.viewers.find(value => value.account.accountId === editor.id)?.typing).toBe(true);
             expect(lastDiscussion()?.viewers.find(value => value.account.accountId === viewer.id)?.typing).toBe(false);
@@ -544,7 +582,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             await expect.poll(() => lastDiscussion()?.viewers.find(value => value.account.accountId === editor.id)?.typing, { timeout: 8_000 }).toBe(false);
 
             editorSocket.emit("session-human-presence:typing-set", {
-                v: 1, sessionId: session.id, discussionId: discussion.id, typing: true,
+                v: 1, discussionId: discussion.id, typing: true,
             });
             await expect.poll(() => lastDiscussion()?.viewers.find(value => value.account.accountId === editor.id)?.typing).toBe(true);
             // Presence itself writes no read state, Follow or AccountChange; the
@@ -553,7 +591,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
             expect(await db.accountSessionReadState.count()).toBe(beforeReadStates);
             expect(await db.accountSessionFollow.count()).toBe(beforeFollows);
             expect(await db.accountChange.count()).toBe(beforeChanges);
-            expect(await putDirect(editor.id, "view")).toMatchObject({ ok: true, changed: true });
+            expect(await putDiscussion(editor.id, "view")).toMatchObject({ ok: true, value: { changed: true } });
             await expect.poll(() => lastDiscussion()?.viewers.find(value => value.account.accountId === editor.id)?.typing).toBe(false);
             expect(last()?.viewers.some(value => value.account.accountId === editor.id)).toBe(true);
             expect(await inTx(tx => deleteSessionAccessGrantInTx(tx, {
@@ -563,11 +601,14 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
                 authentication: ownerAuthentication(),
             }))).toMatchObject({ ok: true, changed: true });
             await expect.poll(() => last()?.viewers.some(value => value.account.accountId === editor.id)).toBe(false);
+            expect(await removeDiscussionGrant({ actorAccountId: owner.id, discussionId: discussion.id,
+                authentication: ownerAuthentication(), request: { principal: { kind: "account", accountId: editor.id } },
+            })).toMatchObject({ ok: true });
             await expect.poll(() => lastDiscussion()?.viewers.some(value => value.account.accountId === editor.id)).toBe(false);
             const afterRevocationReadStates = await db.accountSessionReadState.count();
             const afterRevocationFollows = await db.accountSessionFollow.count();
             const afterRevocationChanges = await db.accountChange.count();
-            expect(await declare(editorSocket, [session.id], [{ sessionId: session.id, discussionId: discussion.id }]))
+            expect(await declare(editorSocket, [session.id], [{ discussionId: discussion.id }]))
                 .toEqual({ v: 1, ok: true, admittedSessionIds: [], admittedLocations: [] });
             expect(await declare(guestSocket, [])).toEqual({ v: 1, ok: true, admittedSessionIds: [] });
             secondGuestSocket.close();

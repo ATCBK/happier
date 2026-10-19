@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1 } from '@happier-dev/protocol/sessions/board/actions';
 import { SessionBoardMutationV1Schema, SessionBoardMutationResultV1Schema, sessionBoardMutationUsesLayoutV1, type SessionBoardMutationV1 } from '@happier-dev/protocol/sessions/board/mutations';
 import { SessionBoardErrorV1Schema, SessionBoardFeatureGateErrorV1Schema } from '@happier-dev/protocol/sessions/board/errors';
@@ -73,7 +73,7 @@ export function registerSessionBoardRoutes(app: Fastify) {
         },
         errorHandler: sessionBoardRouteErrorHandler,
         schema: {
-            params: z.object({ sessionId: z.string().min(1) }),
+            params: z.object({ sessionId: z.string().check(z.minLength(1)) }),
             body: SessionBoardMutationV1Schema,
             response: {
                 200: SessionBoardMutationResultV1Schema,

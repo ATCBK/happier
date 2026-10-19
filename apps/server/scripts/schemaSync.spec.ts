@@ -10,6 +10,21 @@ import { generateMySqlSchemaFromPostgres, generateSqliteSchemaFromPostgres } fro
 const serverRoot = join(import.meta.dirname, "..");
 
 describe("schemaSync", () => {
+    it('preserves the full source id plus its domain prefix in MySQL Follow identity', () => {
+        const postgres = readFileSync(join(serverRoot, 'prisma/schema.prisma'), 'utf8');
+        const mysql = generateMySqlSchemaFromPostgres(postgres);
+        const follow = mysql.match(/model SessionFollowEdge\s*\{([\s\S]*?)^\}/mu)?.[1] ?? '';
+        // Prisma's MySQL String id is VARCHAR(191); the longest source prefix is discussion:.
+        expect(follow).toMatch(/^\s*sourceKey\s+String\s+@db\.VarChar\(202\)/mu);
+    });
+    it('preserves personal Follow policy and one-shot custody beyond MySQL default string width', () => {
+        const postgres = readFileSync(join(serverRoot, 'prisma/schema.prisma'), 'utf8');
+        const mysql = generateMySqlSchemaFromPostgres(postgres);
+        const follow = mysql.match(/model AccountSessionFollow\s*\{([\s\S]*?)^\}/mu)?.[1] ?? '';
+        for (const field of ['followPolicy', 'notifyOnce']) {
+            expect(follow).toMatch(new RegExp(`^\\s*${field}\\s+String\\?\\s+@db\\.LongText`, 'mu'));
+        }
+    });
     it("preserves exact retained KV identities within MySQL's full compound index capacity", () => {
         const postgres = readFileSync(join(serverRoot, "prisma/schema.prisma"), "utf8");
         const mysql = generateMySqlSchemaFromPostgres(postgres);

@@ -16,9 +16,9 @@ import {
 } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import {
-    SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
-    SessionDiscussionAgentPostRequestV1Schema, SessionDiscussionAgentPostResponseV1Schema,
-} from '@happier-dev/protocol/sessions/discussions/api';
+    DISCUSSION_AGENT_POST_EVENT_V1,
+    DiscussionAgentPostRequestV1Schema, DiscussionAgentPostResponseV1Schema,
+} from '@happier-dev/protocol/discussions/api';
 
 import { db } from '@/storage/db';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
@@ -39,6 +39,7 @@ const cases = [
         event: SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1,
         request: SessionFollowAcknowledgeRequestV1Schema.parse({ v: 1,
             destinationSessionId: sessionId, sourceSessionId, expectedPublisherGeneration: '1',
+            policy: { preset: 'important' },
             expected: frontier, observed: frontier, consumed: frontier,
             acceptance: { kind: 'admitted_input', localInputId: 'input', userMessageSeq: null },
         }),
@@ -64,15 +65,15 @@ const cases = [
         failure: 'internal', disabled: 'unsupported', denied: 'forbidden',
     },
     {
-        event: SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
-        request: SessionDiscussionAgentPostRequestV1Schema.parse({ v: 1, sessionId,
+        event: DISCUSSION_AGENT_POST_EVENT_V1,
+        request: DiscussionAgentPostRequestV1Schema.parse({ v: 1, sessionId,
             discussionId: randomUUID(), request: { localId: 'agent-message',
                 content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Hello' }] } }, mentionedAccountIds: [],
             },
         }),
-        response: SessionDiscussionAgentPostResponseV1Schema,
-        failure: 'session_discussions_unavailable', disabled: 'session_discussions_unavailable',
-        denied: 'session_discussion_post_denied',
+        response: DiscussionAgentPostResponseV1Schema,
+        failure: 'discussions_unavailable', disabled: 'discussions_unavailable',
+        denied: 'discussion_post_denied',
     },
 ] as const;
 
@@ -113,9 +114,17 @@ describe('Session socket Home feature read failure containment', () => {
             try {
                 const response: unknown = await client.timeout(1_000).emitWithAck(testCase.event, testCase.request);
                 expect(testCase.response.parse(response)).toEqual({ ok: false, v: 1, error: testCase.failure });
-                expect(warning.mock.calls.some(([fields, message]) => typeof fields === 'object' && fields !== null
-                    && 'module' in fields && fields.module === 'websocket'
-                    && typeof message === 'string' && message.includes('HomeSettings'))).toBe(true);
+                if (testCase.event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
+                    expect(warning.mock.calls).toEqual(expect.arrayContaining([[
+                        expect.objectContaining({ module: 'websocket', operation: 'session_follow_acknowledge', phase: 'feature',
+                            causes: [{ name: 'PrismaClientKnownRequestError', code: 'P2021' }] }),
+                        'Session Follow acknowledgment failed',
+                    ]]));
+                } else {
+                    expect(warning.mock.calls.some(([fields, message]) => typeof fields === 'object' && fields !== null
+                        && 'module' in fields && fields.module === 'websocket'
+                        && typeof message === 'string' && message.includes('HomeSettings'))).toBe(true);
+                }
             } finally {
                 await db.$executeRawUnsafe('ALTER TABLE "UnavailableHomeSettings" RENAME TO "HomeSettings"');
             }
@@ -130,8 +139,8 @@ describe('Session socket Home feature read failure containment', () => {
             expect(testCase.response.parse(denied)).toEqual({ ok: false, v: 1, error: testCase.denied });
             const invalid: unknown = await client.timeout(1_000).emitWithAck(testCase.event, {});
             expect(testCase.response.parse(invalid)).toEqual({ ok: false, v: 1,
-                error: testCase.event === SESSION_DISCUSSION_AGENT_POST_EVENT_V1
-                    ? 'session_discussion_invalid_content' : 'invalid_request' });
+                error: testCase.event === DISCUSSION_AGENT_POST_EVENT_V1
+                    ? 'discussion_invalid_content' : 'invalid_request' });
             expect(client.connected).toBe(true);
         } finally {
             warning.mockRestore();

@@ -2,14 +2,14 @@ import { InactiveAccountError } from "@/app/auth/accountStatus";
 import { inTx } from "@/storage/inTx";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionOwnerMetadataEnvelopeV1Schema, SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionInitialAccessMaterializedV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
 import { SessionInitialTriggerAdmissionV1Schema } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
 import { SessionCreateOriginFieldsV1Schema, refineSessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
-import { SessionReportsToV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
@@ -44,52 +44,57 @@ import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails }
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { isSessionCollaborationEnabled } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
-import { projectSessionReportsForRowsInTx } from "@/app/session/awareness/sessionReportsProjection";
+import { projectSessionManagerForRowsInTx } from "@/app/session/awareness/sessionManagerProjection";
 import { projectStoredSessionOrigin } from "@/app/session/listing/rows";
 
 import { type Fastify } from "../../types";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { auth, ApiTokenOperationError } from "@/app/auth/auth";
-import { verifyCurrentExternalActionPrincipal } from "@/app/auth/externalActionExecutionAuthorization";
+import { verifyCurrentExternalActionPrincipal, verifyExternalActionMachineRpcExecution } from "@/app/auth/externalActionExecutionAuthorization";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
-import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
-import { readSessionCreationApiTokenIdInTx } from "@/app/session/create/apiTokenSessionCreationAuthorization";
+import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
+import { readSessionCreationApiTokenIdInTx, type SessionCreationExecutionAuthorization } from "@/app/session/create/apiTokenSessionCreationAuthorization";
+import { DiscussionModelSessionCreationProofV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export function registerSessionCreateOrLoadRoute(app: Fastify) {
     app.post('/v1/sessions', {
         schema: {
-            body: z.union([z.object({
+            body: z.union([z.strictObject({
                 tag: z.string(),
                 metadata: z.string(),
-                agentState: z.string().nullish(),
-                dataEncryptionKey: z.string().nullish(),
-                encryptionMode: z.enum(["e2ee", "plain"]).optional(),
-                currentStorageState: z.literal("machine_only").optional(),
-            }).strict(), z.object({
+                agentState: z.nullish(z.string()),
+                dataEncryptionKey: z.nullish(z.string()),
+                encryptionMode: z.optional(z.enum(["e2ee", "plain"])),
+                currentStorageState: z.optional(z.literal("machine_only")),
+            }), z.strictObject({
                 tag: z.string(),
                 metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1),
-                sharedMetadata: z.object({ ciphertext: z.string().min(1) }).strict(),
+                sharedMetadata: z.strictObject({ ciphertext: z.string().check(z.minLength(1)) }),
                 ownerMetadata: SessionOwnerMetadataEnvelopeV1Schema,
-                agentState: z.string().nullish(),
-                dataEncryptionKey: z.string().nullish(),
-                encryptionMode: z.enum(["e2ee", "plain"]).optional(),
-                currentStorageState: z.literal("machine_only").optional(),
+                agentState: z.nullish(z.string()),
+                dataEncryptionKey: z.nullish(z.string()),
+                encryptionMode: z.optional(z.enum(["e2ee", "plain"])),
+                currentStorageState: z.optional(z.literal("machine_only")),
                 organizationPlacement: z.optional(SessionOrganizationPlacementV1Schema),
                 initialAccess: z.optional(SessionInitialAccessMaterializedV1Schema),
-                initialTriggers: z.array(SessionInitialTriggerAdmissionV1Schema).optional(),
-                primaryTeamId: z.string().min(1).nullable().optional(),
+                initialTriggers: z.optional(z.array(SessionInitialTriggerAdmissionV1Schema)),
+                primaryTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
                 teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema),
-                reportsTo: z.optional(SessionReportsToV1Schema),
+                manager: z.optional(SessionManagerV1Schema),
+                creationAuthorizationProof: z.optional(DiscussionModelSessionCreationProofV1Schema),
                 ...SessionCreateOriginFieldsV1Schema.shape,
-            }).strict().superRefine(refineSessionCreateOriginFieldsV1)])
+            }).check(z.superRefine(refineSessionCreateOriginFieldsV1))])
         },
         preHandler: app.authenticate
     }, async (request, reply) => {
-        let sessionCreationAuthorization: ExternalActionExecutionAuthorizationBindingV1 | undefined;
+        let sessionCreationAuthorization: SessionCreationExecutionAuthorization | undefined;
         const creationHeader = request.headers[SESSION_CREATION_AUTHORIZATION_HEADER_V1];
+        const nativeProof = 'creationAuthorizationProof' in request.body ? request.body.creationAuthorizationProof : undefined;
+        if (nativeProof && creationHeader === undefined) return reply.code(401).send({ error: 'invalid_token' });
         if (request.externalActionExecutionAuthorized === true) {
             const binding = request.externalActionExecutionAuthorizationBinding;
-            if (!binding || binding.accountId !== request.userId || binding.actionId !== 'session.spawn_new'
+            if (nativeProof || !binding || binding.accountId !== request.userId || binding.actionId !== 'session.spawn_new'
                 || request.externalActionEffectActionId !== 'session.spawn_new'
                 || creationHeader !== undefined && creationHeader !== request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]) {
                 return reply.code(401).send({ error: 'invalid_token' });
@@ -98,10 +103,23 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
         } else if (creationHeader !== undefined) {
             if (typeof creationHeader !== "string") return reply.code(401).send({ error: "invalid_token" });
             const binding = await auth.verifyExternalActionExecutionAuthorization(creationHeader);
-            if (!binding || binding.accountId !== request.userId || binding.actionId !== "session.spawn_new"
+            if (!binding || binding.accountId !== request.userId
                 || binding.serverIdentityId !== await getOrCreateServerIdentityId()) return reply.code(401).send({ error: "invalid_token" });
             if (!await verifyCurrentExternalActionPrincipal(binding)) return reply.code(401).send({ error: "invalid_token" });
-            sessionCreationAuthorization = binding;
+            if (binding.actionId === 'discussion.second_opinion.start' && nativeProof && 'sharedMetadata' in request.body) {
+                const source = nativeProof.sourceExecution;
+                if (source.externalActionExecution.authorization.token !== creationHeader
+                    || !sameStrictJsonValue(source.externalActionExecution.authorization.binding, binding)
+                    || !await verifyExternalActionMachineRpcExecution(source.externalActionExecution, {
+                        method: source.method, requestId: source.requestId, params: source.params,
+                        originalActionEnvelope: source.originalActionEnvelope,
+                        resolveCurrentSessionMachine: app.resolveCurrentSessionMachine,
+                    })) return reply.code(401).send({ error: 'invalid_token' });
+                const { creationAuthorizationProof: _proof, ...body } = request.body;
+                sessionCreationAuthorization = { binding, modelBirth: { body, proof: nativeProof, env: await readRequestHomeEnv(request) } };
+            } else if (binding.actionId === 'session.spawn_new' && !nativeProof) {
+                sessionCreationAuthorization = binding;
+            } else return reply.code(401).send({ error: 'invalid_token' });
         }
         const requestHomeEnv = await readRequestHomeEnv(request);
         const userId = request.userId;
@@ -150,9 +168,9 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
 
         function sendSessionCreateRejection(rejection: Layout1SessionCreateRejection) {
             switch (rejection.reason) {
-                case "session-reports-to-invalid":
-                    return reply.code(rejection.result.error === "reports_to_cycle" ? 400
-                        : rejection.result.error === "reports_to_cas_conflict" ? 409 : 403).send(rejection.result);
+                case "session-manager-invalid":
+                    return reply.code(rejection.result.error === "manager_cycle" ? 400
+                        : rejection.result.error === "manager_cas_conflict" ? 409 : 403).send(rejection.result);
                 case "session-origin-forbidden":
                     return reply.code(403).send({ error: "session-origin-forbidden" });
                 case "session-initial-trigger-invalid":
@@ -270,10 +288,12 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
             initialTriggers: layoutOneRequest.initialTriggers,
             primaryTeamId: layoutOneRequest.primaryTeamId,
             teamCredentialBindings: layoutOneRequest.teamCredentialBindings,
-                reportsTo: layoutOneRequest.reportsTo,
+                manager: layoutOneRequest.manager,
                 originKind: layoutOneRequest.originKind,
                 originSessionId: layoutOneRequest.originSessionId,
                 originRunId: layoutOneRequest.originRunId,
+                discussionParticipant: layoutOneRequest.discussionParticipant,
+                discussionParticipantLaunch: layoutOneRequest.discussionParticipantLaunch,
                 workDepth: layoutOneRequest.workDepth,
                 accountEncryptionMode,
                 storagePolicy: policy.storagePolicy,
@@ -332,7 +352,10 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                     });
                     createdFresh = true;
                     return created;
-                }, { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ });
+                }, {
+                    isolationLevel: "Serializable", // Creation admission must remain coherent with lifecycle and Account state.
+                    transactionClass: "session.legacy-create",
+                });
             } catch (error) {
                 if (error instanceof ApiTokenOperationError && error.code === "invalid_token") return reply.code(401).send({ error: "invalid_token" });
                 if (error instanceof InactiveAccountError) {
@@ -380,7 +403,10 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                         current = { ...current, currentStorageState: initialized.session.currentStorageState };
                     }
                     return await restoreSessionTagRejoinInTx(tx, current);
-                }, { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ }).catch((restoreError: unknown) => {
+                }, {
+                    isolationLevel: "Serializable", // Rejoin composes the canonical lifecycle transition.
+                    transactionClass: "session.legacy-rejoin",
+                }).catch((restoreError: unknown) => {
                     if (restoreError instanceof ApiTokenOperationError && restoreError.code === 'invalid_token') return null;
                     throw restoreError;
                 });
@@ -465,13 +491,16 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
         });
         // The relation can change independently of creation metadata. Reuse
         // the authorized current-row projector, including on tag rejoins.
-        const [organization] = await inTx((tx) => projectSessionReportsForRowsInTx(tx, {
+        const [organization] = await inTx((tx) => projectSessionManagerForRowsInTx(tx, {
             accountId: userId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
             sessions: [session],
             accessMode: "effective_access_v1",
             nowMs: Date.now(),
-        }), { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ });
+        }), {
+            isolationLevel: "Serializable", // Organization projection retains coherent access and relation facts.
+            transactionClass: "session.creation-projection",
+        });
         log({ module: "session-create", sessionId: resolvedSession.id, userId }, `Session resolved: ${resolvedSession.id}`);
         return reply.send({
             created: createdFresh,
@@ -480,7 +509,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                 : {}),
             session: {
                 ...session,
-                ...(organization?.reportsTo ? { reportsTo: organization.reportsTo } : {}),
+                ...(organization?.manager ? { manager: organization.manager } : {}),
             },
         });
     });

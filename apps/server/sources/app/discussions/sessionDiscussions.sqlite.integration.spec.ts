@@ -1,0 +1,1135 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import Fastify, { type FastifyRequest } from 'fastify';
+import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
+import { DiscussionInviteResponseV1Schema, DiscussionRemoveParticipantResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema, DiscussionPostResponseV1Schema, DiscussionMessagesResponseV1Schema, DiscussionAgentPostResponseV1Schema,
+    DISCUSSION_AGENT_POST_EVENT_V1, DISCUSSION_HTTP_PATHS_V1, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
+import { createDiscussionMessageRefV1, DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
+import { db } from '@/storage/db';
+import { inTx } from '@/storage/inTx';
+import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { archiveDiscussion, createDiscussion, postDiscussionMessage, renameDiscussion, restoreDiscussion } from './mutations';
+import { getDiscussion, listDiscussions, readDiscussionMessages } from './queries';
+import { setDiscussionReadCursor } from './readState';
+import { inviteDiscussionParticipant, listDiscussionParticipants, removeDiscussionParticipant, setDiscussionParticipantPolicy, setDiscussionGrant } from './accessService';
+import { observePendingSessionFollowForDestinationInTx, admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
+import { deriveDiscussionFollowInputLocalIdV1, SessionFollowPendingObservationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { createSessionInputReplyProgressInTx, projectSessionInputRepliesFromTurnInTx, readSessionMessageReplyInTx,
+    mutateSessionMessageReplyForMachineInTx } from '@/app/session/messages/sessionMessageReply';
+import { deriveSessionMessageReplyReturnLocalIdV1, SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { decodeBase64 } from 'privacy-kit';
+import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
+import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
+import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
+import { SessionPendingAdmissionSettlementResponseV1Schema, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema,
+    settleSessionInputRequestV1, withSessionInputAuthorityV1, withSessionInputRequestV1,
+    settleSessionMessageProvenanceV1, SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
+import { changeDeliveryMute } from '@/app/session/follow/sessionDeliveryMuteService';
+import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
+import { registerDiscussionRoutes } from '@/app/api/routes/discussions/registerDiscussionRoutes';
+import { enqueuePendingMessageByAuthenticatedMachine, materializeNextPendingMessage, settlePendingInputAdmission } from '@/app/session/pending/pendingMessageService';
+import { reconcileAutonomousExchangeAcceptedTurnInTx } from '@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx';
+import { updateAccountFollowCreationPreferencesInTx } from '@/app/session/follow/accountFollowCreationPreferences';
+import { type FollowPolicyV1, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+
+const document = (text: string) => ({ v: 1 as const, parts: [{ t: 'text' as const, text }] });
+const authentication = createPresentUserSessionAccessAuthentication();
+function createRequest(input: Readonly<{
+    creationLocalId?: string; firstLocalId?: string;
+    participants?: readonly { kind: 'account'; accountId: string }[];
+    anchor?: { kind: 'session'; sessionId: string; messageId?: string };
+}> = {}): DiscussionCreateRequestV1 {
+    return buildDiscussionMutationRequestBodyV1({
+        kind: 'create', creationLocalId: input.creationLocalId ?? crypto.randomUUID(),
+        titleContent: { t: 'plain', v: { v: 1, title: 'Independent discussion' } },
+        firstMessage: { localId: input.firstLocalId ?? crypto.randomUUID(), content: { t: 'plain', v: document('Hello') },
+            authoredContent: document('Hello'), mentionedAccountIds: [] },
+        ...(input.participants ? { participants: input.participants } : {}),
+        ...(input.anchor ? { anchor: input.anchor } : {}),
+    });
+}
+const postRequest = (text: string) => buildDiscussionMutationRequestBodyV1({
+    kind: 'post', localId: crypto.randomUUID(), content: { t: 'plain', v: document(text) }, authoredContent: document(text), mentionedAccountIds: [],
+});
+const plainMachine = (accountId: string) => db.machine.create({ data: { id: crypto.randomUUID(), installationId: crypto.randomUUID(), accountId,
+    metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+    dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+    operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] }, sessionMessageReply: { protocolVersions: [1] } },
+    operationProtocolCapabilitiesRevision: 1 } });
+
+describe('First-class Discussions service (SQLite)', () => {
+    let harness: LightSqliteHarness;
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-discussions-', initAuth: false,
+        env: { HAPPIER_FEATURE_SESSIONS__ENABLED: '1', HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED: '1',
+            HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' } }); }, 120_000);
+    afterAll(async () => { await harness?.close(); });
+    async function fixture(input: Parameters<typeof createRequest>[0] = {}) {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const invitee = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const request = createRequest({ participants: [{ kind: 'account', accountId: invitee.id }], ...input });
+        const result = await createDiscussion({ authentication, actorAccountId: owner.id, request });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.error);
+        return { owner, invitee, outsider, request, created: result.value, discussionId: result.value.discussion.id };
+    }
+    async function publisherSocket(accountId: string, sessionId: string) {
+        const machine = await plainMachine(accountId);
+        await db.accessKey.create({ data: { accountId, machineId: machine.id, sessionId, data: 'encrypted' } });
+        const socket = createAuthenticatedFakeSocket();
+        // Only Socket.IO is replaced. Current publisher admission and all writes remain real.
+        sessionUpdateHandler(accountId, socket as never, { connectionType: 'session-scoped', socket, userId: accountId, sessionId } as never,
+            { presence: createSessionPublisherPresence(), binding: { accountId, machineId: machine.id, sessionId } });
+        await getSocketHandler(socket, 'session-runtime-activity-snapshot')({ sessionId, mutationId: crypto.randomUUID(), snapshot: { state: 'idle', activeCount: 0 } }, () => {});
+        return { socket, machine };
+    }
+    it.each(['quiet', 'important'] as const)('carries persisted Discussion receive policy %s and the committed addressed event', async preset => {
+        const { owner, discussionId } = await fixture();
+        await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id,
+            patch: { discussionReceivePolicy: { preset } } }));
+        const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id } } })).toMatchObject({ ok: true });
+        // Later creation preferences must not rewrite an existing attachment.
+        await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id,
+            patch: { discussionReceivePolicy: { preset: preset === 'quiet' ? 'important' : 'quiet' } } }));
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Addressed question'), content: { t: 'plain', v: { v: 1, parts: [
+                { t: 'mention', participant: { kind: 'session', sessionId: receiver.id } },
+            ] } }, mentionedSessionIds: [receiver.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
+        }));
+        expect(observed.observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: receiver.id,
+            policy: { preset }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },
+            addressing: { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: receiver.id } }]);
+        const observation = observed.observations[0];
+        if (!observation || !('source' in observation) || observation.source.kind !== 'discussion') throw new Error('Missing Discussion observation');
+        expect(SessionFollowPendingObservationV1Schema.parse(observation)).toEqual(observation);
+        expect(resolveFollowDeliveryV1({ policies: [observation.policy], event: observation.event }).session)
+            .toEqual(preset === 'quiet' ? { nextTurn: true, wake: false } : { nextTurn: false, wake: true });
+    });
+    it.each(['human', 'agent'] as const)('skips a policy-off addressed original without starving the later selected %s watch event', async author => {
+        const { owner, discussionId } = await fixture();
+        const policy: FollowPolicyV1 = { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } },
+            person_wrote: { delivery: 'interrupt' }, message: { delivery: 'quiet' } } };
+        await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id, patch: { discussionReceivePolicy: policy } }));
+        const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const sender = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        for (const session of [receiver, sender]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Disabled decision'), content: { t: 'plain', v: { v: 1, parts: [
+                { t: 'mention', participant: { kind: 'session', sessionId: receiver.id } },
+            ] } }, mentionedSessionIds: [receiver.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const addressing = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: receiver.id };
+        const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
+        }));
+        expect((await observe()).observations).toEqual([]);
+        expect(await inTx(tx => admitDiscussionFollowAddressingInTx(tx, { accountId: owner.id, discussion: addressing }))).toBe(false);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(0);
+        expect(await setDiscussionParticipantPolicy({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id }, answerPolicy: 'watches_and_speaks_up' } })).toMatchObject({ ok: true });
+        const watch = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Selected ambient original'), ...(author === 'agent' ? { producer: { v: 1 as const, kind: 'agent' as const, sessionId: sender.id } } : {}) });
+        if (!watch.ok) throw new Error(watch.error);
+        expect((await observe()).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: receiver.id,
+            policy, event: { kind: author === 'human' ? 'person_wrote' : 'message' },
+            addressing: { discussionId, messageId: watch.value.message.id, throughSeq: watch.value.message.seq, participantSessionId: receiver.id } }]);
+        const observation = (await observe()).observations[0];
+        expect(SessionFollowPendingObservationV1Schema.parse(observation)).toEqual(observation);
+        // Malformed persisted policy cannot fall back to an executable preset.
+        await db.sessionFollowEdge.updateMany({ where: { destinationSessionId: receiver.id, sourceDiscussionId: discussionId }, data: { policyJson: '{"preset":"unknown"}' } });
+        expect((await observe()).observations).toEqual([]);
+        await db.sessionFollowEdge.updateMany({ where: { destinationSessionId: receiver.id, sourceDiscussionId: discussionId }, data: { policyJson: JSON.stringify(policy) } });
+        // Corrupt non-null provenance is not evidence of a human original.
+        await db.discussionMessage.update({ where: { id: watch.value.message.id }, data: { producerV1: { kind: 'agent' } } });
+        expect((await observe()).observations).toEqual([]);
+    });
+    it.each([false, true])('returns one protected answer to its original Discussion without readdressing the Agent asker (explicit new ask: %s)', async explicitNewAsk => {
+        const { owner, discussionId } = await fixture();
+        const sessions = await Promise.all(['asker', 'answerer', 'reviewer'].map(() => db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } })));
+        for (const session of sessions) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id,
+            discussionId, request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const [asker, answerer, reviewer] = sessions;
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: asker.id }, request: { ...postRequest('Question'),
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: answerer.id } }] } },
+                mentionedSessionIds: [answerer.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq,
+            participantSessionId: answerer.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
+            reply: { mode: 'return', discussion } }));
+        expect(progress).toMatchObject({ mode: 'return', discussion, disposition: 'return_pending' });
+        expect(await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
+            reply: { mode: 'return', discussion: { ...discussion, throughSeq: discussion.throughSeq + 1 } } }))).toBeNull();
+        expect(await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
+            reply: { mode: 'return', discussion, sourceSession: { sourceSessionId: asker.id,
+                sourceTurnId: 'a-caller-chosen-cause', via: 'action' } } }))).toBeNull();
+        const requestLocalId = crypto.randomUUID(), acceptedTurnId = 'discussion-answer-turn';
+        await db.sessionMessage.create({ data: { sessionId: answerer.id, localId: requestLocalId, seq: 1,
+            messageRole: 'user', content: { t: 'plain', v: {} }, replyDisposition: 'return_pending',
+            replyProgress: { ...progress!, acceptedTurnId } } });
+        const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: answerer.id, localId: requestLocalId, acceptedTurnId });
+        const input = { authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1 as const, kind: 'agent' as const, sessionId: answerer.id },
+            replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId }, request: { ...postRequest('Answer'), localId,
+                ...(explicitNewAsk ? { content: { t: 'plain' as const, v: { v: 1, parts: [
+                    { t: 'text', text: 'My answer. Please review it: ' }, { t: 'mention', participant: { kind: 'session', sessionId: reviewer.id } },
+                ] } }, mentionedSessionIds: [reviewer.id] } : {}),
+                replyTarget: { kind: 'message' as const, messageId: question.value.message.id } } };
+        const { socket } = await publisherSocket(owner.id, answerer.id);
+        const publish = async () => {
+            let response: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: answerer.id, discussionId,
+                request: input.request, replyReturn: input.replyReturn }, (value: unknown) => { response = value; });
+            return DiscussionAgentPostResponseV1Schema.parse(response);
+        };
+        expect(await postDiscussionMessage({ ...input, replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId: 'wrong-turn' } })).toMatchObject({ ok: false });
+        expect(await postDiscussionMessage({ ...input, producer: { ...input.producer, sessionId: asker.id } })).toMatchObject({ ok: false });
+        expect(await postDiscussionMessage({ ...input, request: { ...input.request,
+            replyTarget: { kind: 'message', messageId: 'another-question' } } })).toMatchObject({ ok: false });
+        const posted = await publish();
+        expect(posted).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: explicitNewAsk ? [reviewer.id] : [] } } } });
+        if (!posted.ok) throw new Error(posted.error);
+        // The exact ordinary terminal hook sees a different final text after the
+        // explicit publication ACK was lost. It must preserve the committed answer.
+        await db.sessionMessage.create({ data: { sessionId: answerer.id, seq: 2, messageRole: 'agent',
+            content: { t: 'plain', v: { text: 'A later final answer' } } } });
+        await inTx(tx => projectSessionInputRepliesFromTurnInTx(tx, { sessionId: answerer.id, turnId: acceptedTurnId,
+            status: 'completed', transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1], finalAssistantMessageSeq: 2 }) }));
+        expect(await publish()).toMatchObject({ ok: true, value: { message: { id: posted.value.message.id } } });
+        expect(await postDiscussionMessage({ ...input, replyReturn: undefined })).toMatchObject({ ok: false, error: 'discussion_idempotency_conflict' });
+        expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(1);
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: answerer.id, localId: requestLocalId } } })).replyProgress)
+            .toMatchObject({ disposition: 'returned', outcome: { kind: 'answer', publicationRef: { kind: 'discussion', messageId: posted.value.message.id } } });
+    });
+    it.each(['pass', 'failed', 'cancelled', 'terminal_no_result'] as const)('publishes a true %s return while retaining its original typed outcome', async kind => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        // The production post classifier supplies the immutable addressed snapshot.
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: session.id } }] } },
+                mentionedSessionIds: [session.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
+        expect(progress).not.toBeNull();
+        const requestLocalId = crypto.randomUUID(), acceptedTurnId = 'terminal-turn';
+        await db.sessionMessage.create({ data: { sessionId: session.id, localId: requestLocalId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: {} }, replyDisposition: 'return_pending', replyProgress: { ...progress!, acceptedTurnId, outcome: { kind } } } });
+        const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: session.id, localId: requestLocalId, acceptedTurnId });
+        const input = { authentication, actorAccountId: owner.id, discussionId, producer: { v: 1 as const, kind: 'agent' as const, sessionId: session.id },
+            replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId }, request: { ...postRequest(kind), localId,
+                replyTarget: { kind: 'message' as const, messageId: discussion.messageId } } };
+        expect(await postDiscussionMessage(input)).toMatchObject({ ok: true, value: { message: { producerV1: { replyReturn: { outcome: kind } }, addressingV1: { participantSessionIds: [] } } } });
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: requestLocalId } } })).replyProgress)
+            .toMatchObject({ disposition: 'returned', outcome: { kind } });
+        await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant: { kind: 'session', sessionId: session.id } } });
+        expect(await postDiscussionMessage({ ...input, request: { ...input.request, localId: crypto.randomUUID() } })).toMatchObject({ ok: false });
+    });
+    it('keeps the withdrawn original cancelled when the same Session is invited again', async () => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const participant = { kind: 'session' as const, sessionId: session.id };
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant }] } }, mentionedSessionIds: [session.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
+        expect(progress).not.toBeNull();
+        const requestLocalId = crypto.randomUUID();
+        await db.sessionPendingMessage.create({ data: { sessionId: session.id, localId: requestLocalId, position: 0,
+            content: { t: 'plain', v: {} }, requestedAction: { v: 1, kind: 'enqueue' }, replyProgress: progress!, replyDisposition: 'return_pending' } });
+        expect(await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        expect((await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: requestLocalId } } })).replyProgress)
+            .toMatchObject({ disposition: 'released', outcome: { kind: 'cancelled' } });
+        const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: session.id, localId: requestLocalId });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: session.id }, replyReturn: { serverId: 'home', requestLocalId },
+            request: { ...postRequest('A stale answer'), localId, replyTarget: { kind: 'message', messageId: discussion.messageId } } })).toMatchObject({ ok: false });
+        expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(0);
+    });
+    it('refuses provider readmission of a withdrawn materialized original after reinvitation', async () => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const participant = { kind: 'session' as const, sessionId: session.id };
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant }] } }, mentionedSessionIds: [session.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
+        expect(progress).not.toBeNull();
+        const { socket, machine } = await publisherSocket(owner.id, session.id);
+        const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+            discussionAddressing: discussion, replyIntent: { mode: 'return' } });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine', discussionAddressing: discussion,
+            admittedTarget: { homeId: await getOrCreateServerIdentityId(), accountId: owner.id, sessionId: session.id, machineId: machine.id, installationId: machine.installationId! } });
+        const finalContent = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Question' },
+            meta: withSessionInputAuthorityV1({}, settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })) } };
+        const localId = deriveDiscussionFollowInputLocalIdV1(discussion);
+        await db.sessionMessage.create({ data: { sessionId: session.id, localId, seq: 1, messageRole: 'user', content: finalContent,
+            inputAdmissionReceipt: receipt, replyProgress: progress!, replyDisposition: 'return_pending' } });
+        const readmit = async () => {
+            let response: unknown;
+            await getSocketHandler(socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1, sessionId: session.id, localId,
+                decision: { kind: 'admit', finalContent, validation: { reply: { mode: 'return', discussion } } } }, (value: unknown) => { response = value; });
+            return SessionPendingAdmissionSettlementResponseV1Schema.parse(response);
+        };
+        expect(await readmit()).toMatchObject({ result: { status: 'alreadyAccepted', localId } });
+        const mute = { authentication, accountId: owner.id, receiver: { kind: 'session' as const, sessionId: session.id },
+            scope: { kind: 'source' as const, source: { kind: 'discussion' as const, discussionId } } };
+        expect(await changeDeliveryMute({ ...mute, operation: 'set' })).toMatchObject({ ok: true });
+        expect(await readmit()).toMatchObject({ result: { status: 'rejected', code: 'session_input_muted' } });
+        expect(await changeDeliveryMute({ ...mute, operation: 'remove' })).toMatchObject({ ok: true });
+        expect(await readmit()).toMatchObject({ result: { status: 'alreadyAccepted', localId } });
+        expect(await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request: { participant } })).toMatchObject({ ok: true });
+        expect(await readmit()).toMatchObject({ result: { status: 'rejected', code: 'session_input_cancelled' } });
+    });
+    it('never exposes the causal Run as a Discussion destination or accepts its Session-return ACK', async () => {
+        const { owner, discussionId } = await fixture();
+        const [source, target] = await Promise.all([1, 2].map(() => db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } })));
+        for (const session of [source, target]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id,
+            discussionId, request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId: 'native-source-turn', sourceInputId: 'native-source-input', via: 'action' as const };
+        await db.sessionMessage.create({ data: { sessionId: source.id, localId: sourceSession.sourceInputId, seq: 1,
+            messageRole: 'user', content: { t: 'plain', v: {} }, acceptedTurnId: sourceSession.sourceTurnId, targetExecutionRunId: 'native-source-run' } });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: source.id, sourceSession }, request: { ...postRequest('Question'),
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } }, mentionedSessionIds: [target.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: target.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion, sourceSession } }));
+        expect(progress).not.toBeNull();
+        const machine = await plainMachine(owner.id);
+        const requestLocalId = 'original-discussion-input', acceptedTurnId = 'answer-turn';
+        await db.sessionMessage.create({ data: { sessionId: target.id, localId: requestLocalId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: {} }, replyDisposition: 'return_pending', replyProgress: { ...progress!, acceptedTurnId, outcome: { kind: 'pass' } },
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', admittedTarget: { homeId: await getOrCreateServerIdentityId(), accountId: owner.id,
+                sessionId: target.id, machineId: machine.id, installationId: machine.installationId! } } } });
+        const visible = await inTx(tx => readSessionMessageReplyInTx(tx, { accountId: owner.id, sessionId: target.id, localId: requestLocalId, authentication }));
+        expect(visible).toMatchObject({ status: 'available' });
+        expect.soft(visible).not.toHaveProperty('returnRecipient');
+        const returnedInputLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: target.id, localId: requestLocalId, acceptedTurnId });
+        await db.sessionPendingMessage.create({ data: { sessionId: source.id, localId: returnedInputLocalId, position: 0,
+            content: { t: 'plain', v: {} }, requestedAction: { v: 1, kind: 'enqueue' }, targetExecutionRunId: 'native-source-run',
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } } });
+        expect(await inTx(tx => mutateSessionMessageReplyForMachineInTx(tx, { accountId: owner.id, installationId: machine.installationId!, authentication,
+            mutation: { v: 1, machineId: machine.id, requestSessionId: target.id, requestLocalId,
+                operation: { kind: 'returned', returnedInputLocalId } } }))).toMatchObject({ ok: false, error: 'conflict' });
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: target.id, localId: requestLocalId } } })).replyProgress)
+            .toMatchObject({ disposition: 'return_pending', outcome: { kind: 'pass' } });
+    });
+    it('creates without a Session and admits only the independently invited Account', async () => {
+        const { owner, invitee, outsider, created, discussionId } = await fixture();
+        expect(created.discussion).toMatchObject({ ownerAccountId: owner.id, encryptionMode: 'plain', anchor: null, keyReadiness: true, dataEncryptionKey: null, messageSeq: 1 });
+        expect(created.firstMessage).toMatchObject({ seq: 1, authorAccountId: owner.id, producerV1: null });
+        expect(DiscussionCreateResponseV1Schema.safeParse(created).success).toBe(true);
+        expect(await getDiscussion({ authentication, actorAccountId: invitee.id, discussionId })).toMatchObject({ ok: true });
+        expect(await getDiscussion({ authentication, actorAccountId: outsider.id, discussionId })).toEqual({ ok: false, error: 'discussion_not_found' });
+        expect(await db.session.count({ where: { accountId: owner.id } })).toBe(0);
+    });
+    it('atomically creates an Agent first post from actual Session custody and retains producer retry equality without enrolling it', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const other = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const request = createRequest();
+        const producer = { v: 1 as const, kind: 'agent' as const, sessionId: session.id, toolCallId: 'create-tool' };
+        const input = { authentication, actorAccountId: owner.id, request, producer };
+        const result = await createDiscussion(input);
+        expect(result).toMatchObject({ ok: true, value: { firstMessage: { seq: 1, producerV1: producer }, discussion: { messageSeq: 1 } } });
+        if (!result.ok) throw new Error(result.error);
+        const discussionId = result.value.discussion.id;
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(0);
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(1);
+        expect(await createDiscussion(input)).toMatchObject({ ok: true, value: { firstMessage: { id: result.value.firstMessage.id, producerV1: producer } } });
+        expect(await createDiscussion({ ...input, producer: { ...producer, sessionId: other.id } })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        expect(await createDiscussion({ ...input, actorAccountId: outsider.id, request: createRequest() })).toEqual({ ok: false, error: 'discussion_post_denied' });
+        expect(await db.discussion.count({ where: { ownerAccountId: outsider.id } })).toBe(0);
+    });
+    it('admits Session participants only through actual input authority and pairwise disclosure', async () => {
+        const { owner, invitee, outsider, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const invite = () => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'when_addressed' } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: outsider.id, accessLevel: 'view' } });
+        expect(await invite()).toEqual({ ok: false, error: 'discussion_access_forbidden' });
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(0);
+        await db.sessionShare.deleteMany({ where: { sessionId: session.id } });
+        expect(await invite()).toMatchObject({ ok: true });
+        expect(await invite()).toMatchObject({ ok: true, value: { changed: false } });
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(1);
+        expect(await listDiscussionParticipants({ authentication, actorAccountId: owner.id, discussionId })).toMatchObject({ ok: true, value: {
+            participants: [{ participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'when_addressed' }],
+        } });
+        const otherSession = await db.session.create({ data: { accountId: invitee.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionShare.create({ data: { sessionId: otherSession.id, sharedByUserId: invitee.id, sharedWithUserId: owner.id, accessLevel: 'view' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: otherSession.id } } })).toEqual({ ok: false, error: 'discussion_access_forbidden' });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(1);
+        const detached = await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } });
+        expect(detached).toMatchObject({ ok: true, value: { changed: true } });
+        expect(detached).not.toHaveProperty('value.ownedSession');
+        expect(await db.session.findUnique({ where: { id: session.id } })).not.toBeNull();
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(0);
+    });
+    it('lets an invited human address the consenting participant without gaining Session control', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const target = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: target.id } } })).toMatchObject({ ok: true });
+        expect(await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: invitee.id, sessionId: target.id, authentication }))).toBeNull();
+        const question = await postDiscussionMessage({ authentication, actorAccountId: invitee.id, discussionId, request: {
+            localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } },
+            mentionedAccountIds: [], mentionedSessionIds: [target.id],
+        } });
+        expect(question).toMatchObject({ ok: true });
+        if (!question.ok) throw new Error(question.error);
+        const addressing = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: target.id };
+        expect(question.value.message.addressingV1).toEqual({ throughSeq: addressing.throughSeq, participantSessionIds: [target.id] });
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: target.id,
+        }))).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: target.id, addressing,
+            policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } }]);
+        expect(await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: invitee.id, sessionId: target.id, authentication }))).toBeNull();
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        await db.sessionShare.create({ data: { sessionId: target.id, sharedByUserId: owner.id, sharedWithUserId: outsider.id, accessLevel: 'view' } });
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: target.id,
+        }))).observations).toEqual([]);
+    });
+    it('admits a shared Discussion question without granting the receiver its private producer Session', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const source = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const target = await db.session.create({ data: { accountId: invitee.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        // The configuring actor needs actual input permission on the target;
+        // the reverse grant to the private source is deliberately absent.
+        await db.sessionShare.create({ data: { sessionId: target.id, sharedByUserId: invitee.id, sharedWithUserId: owner.id, accessLevel: 'edit' } });
+        for (const session of [source, target]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        expect(await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: invitee.id, sessionId: source.id, authentication }))).toBeNull();
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId: 'private-native-turn', sourceInputId: 'private-input', via: 'action' as const };
+        await db.sessionMessage.create({ data: { sessionId: source.id, localId: sourceSession.sourceInputId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: {} }, acceptedTurnId: sourceSession.sourceTurnId, targetExecutionRunId: 'private-run' } });
+        const publisher = await publisherSocket(owner.id, source.id);
+        let response: unknown;
+        await getSocketHandler(publisher.socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: source.id, discussionId, sourceSession,
+            request: { ...postRequest('A question, not disclosure of the private transcript'), content: { t: 'plain', v: { v: 1,
+                parts: [{ t: 'mention', participant: { kind: 'session', sessionId: target.id } }] } }, mentionedSessionIds: [target.id] } },
+            (value: unknown) => { response = value; });
+        const posted = DiscussionAgentPostResponseV1Schema.parse(response);
+        expect(posted).toMatchObject({ ok: true });
+        if (!posted.ok) throw new Error(posted.error);
+        const discussion = { discussionId, messageId: posted.value.message.id, throughSeq: posted.value.message.seq, participantSessionId: target.id };
+        expect.soft((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: invitee.id, authentication }, destinationSessionId: target.id,
+        }))).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: target.id, addressing: discussion,
+            policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } }]);
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        // Credential verification is the boundary; the real route, projection,
+        // Discussion access and Follow observation run against the same DB.
+        app.decorate('authenticate', async (request: FastifyRequest) => {
+            request.userId = invitee.id;
+            request.authAuthority = 'present_user';
+            request.authTokenKind = 'account';
+        });
+        registerDiscussionRoutes(app);
+        try {
+            const response = await app.inject({ method: 'GET',
+                url: DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', discussionId) });
+            expect(response.statusCode).toBe(200);
+            const page = DiscussionMessagesResponseV1Schema.parse(response.json());
+            expect(page.messages.find(message => message.id === discussion.messageId)).not.toHaveProperty('participantDeliveryV1');
+        } finally { await app.close(); }
+        expect(await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: invitee.id,
+            reply: { mode: 'return', discussion, sourceSession } }))).toMatchObject({ discussion, sourceSession, disposition: 'return_pending' });
+        expect(await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: invitee.id, sessionId: source.id, authentication }))).toBeNull();
+    });
+    it('holds the actual foreign Pending original visibly without starving a later local original on the same Follow attachment', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const foreign = await db.session.create({ data: { accountId: invitee.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const localSource = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionShare.create({ data: { sessionId: foreign.id, sharedByUserId: invitee.id, sharedWithUserId: owner.id, accessLevel: 'edit' } });
+        for (const session of [receiver, foreign, localSource]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const sourceSession = { sourceSessionId: foreign.id, sourceTurnId: 'foreign-turn', sourceInputId: 'foreign-input', via: 'action' as const };
+        const localSourceSession = { sourceSessionId: localSource.id, sourceTurnId: 'local-turn', sourceInputId: 'local-input', via: 'action' as const };
+        for (const [source, accountId] of [[sourceSession, invitee.id], [localSourceSession, owner.id]] as const) {
+            await db.sessionMessage.create({ data: { sessionId: source.sourceSessionId,
+                localId: source.sourceInputId, seq: 1, messageRole: 'user', content: { t: 'plain', v: {} },
+                acceptedTurnId: source.sourceTurnId, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: accountId, sessionRelationship: 'owner' } } });
+            await db.sessionTurn.create({ data: { sessionId: source.sourceSessionId, turnId: source.sourceTurnId,
+                status: 'in_progress', startedAt: 1n, updatedAt: 1n, transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1] }) } });
+        }
+        await getOrCreateServerIdentityId();
+        const { machine } = await publisherSocket(owner.id, receiver.id);
+        const current = await db.session.findUniqueOrThrow({ where: { id: receiver.id } });
+        const publisherAuthority = { accountId: owner.id, sessionId: receiver.id, machineId: machine.id, committedFence: current.lastActiveAt };
+        const request = () => ({ ...postRequest('Question'), content: { t: 'plain' as const, v: { v: 1,
+            parts: [{ t: 'mention', participant: { kind: 'session', sessionId: receiver.id } }] } }, mentionedSessionIds: [receiver.id] });
+        const foreignQuestion = await postDiscussionMessage({ authentication, actorAccountId: invitee.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: foreign.id, sourceSession }, request: request() });
+        if (!foreignQuestion.ok) throw new Error(foreignQuestion.error);
+        const local = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: localSource.id, sourceSession: localSourceSession }, request: request() });
+        if (!local.ok) throw new Error(local.error);
+        const page = await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId });
+        if (page.ok) expect(DiscussionMessagesResponseV1Schema.safeParse(page.value).success).toBe(true);
+        expect.soft(page).toMatchObject({ ok: true, value: { messages: expect.arrayContaining([
+            expect.objectContaining({ id: foreignQuestion.value.message.id }), expect.objectContaining({ id: local.value.message.id })]) } });
+        if (page.ok) for (const message of page.value.messages) expect.soft(message).not.toHaveProperty('participantDeliveryV1');
+        const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
+        }));
+        for (const [question, source, foreignCause] of [[foreignQuestion, sourceSession, true], [local, localSourceSession, false]] as const) {
+            const addressing = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: receiver.id };
+            expect.soft((await observe()).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: receiver.id, addressing,
+                policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } }]);
+            const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+            const reply = { mode: 'return' as const, discussion: addressing, sourceSession: source };
+            const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+                sourceSession: source, discussionAddressing: addressing, replyIntent: { mode: 'return' } });
+            const content = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Question' }, meta: { happierInputRequestV1: request } } };
+            const enqueue = () => enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
+                targetMachineId: machine.id, sessionId: receiver.id, localId, content, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1, reply });
+            expect(await enqueue()).toEqual({ status: 'accepted', localId });
+            expect(await enqueue()).toEqual({ status: 'alreadyAccepted', localId });
+            expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: receiver.id, publisherAuthority,
+                deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' })).toMatchObject(
+                    foreignCause ? { ok: true, didMaterialize: false } : { ok: true, didMaterialize: true, message: { localId } });
+            const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: receiver.id, localId } } });
+            const receipt = SessionInputAdmissionReceiptV1Schema.parse(pending.inputAdmissionReceipt);
+            const finalContent = { ...content, v: { ...content.v, meta: { ...withSessionInputAuthorityV1(content.v.meta, settleSessionInputRequestV1({
+                request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })),
+                [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request, requestedProvenance: undefined, inputAdmissionReceipt: receipt }) } } };
+            const settlement = await settlePendingInputAdmission({ actorUserId: owner.id, sessionId: receiver.id, localId, publisherAuthority,
+                decision: { kind: 'admit', finalContent, validation: { sourceSession: source, reply, autonomousCheckIn: { afterTurns: 5 } } } });
+            if (foreignCause) expect(settlement).not.toMatchObject({ result: { status: 'accepted' } });
+            else expect(settlement).toMatchObject({ ok: true, result: { status: 'accepted' } });
+            const visible = await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId });
+            if (!visible.ok) throw new Error(visible.error);
+            expect.soft(DiscussionMessagesResponseV1Schema.safeParse(visible.value).success).toBe(true);
+            expect.soft(visible.value.messages.find(message => message.id === foreignQuestion.value.message.id)?.participantDeliveryV1)
+                .toEqual([{ participantSessionId: receiver.id, disposition: 'held', code: 'session_input_target_unavailable' }]);
+            expect.soft(visible.value.messages.find(message => message.id === local.value.message.id)).not.toHaveProperty('participantDeliveryV1');
+        }
+        for (let scan = 0; scan < 3; scan += 1) expect((await observe()).observations).toEqual([]);
+        expect.soft((await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceDiscussionId_relation: {
+            destinationSessionId: receiver.id, sourceDiscussionId: discussionId, relation: 'follower' } } })).deliveredTranscriptSeq).toBe(local.value.message.seq);
+        expect(await db.discussionMessage.findUnique({ where: { id: foreignQuestion.value.message.id } })).not.toBeNull();
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(2);
+        await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id } } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id } } })).toMatchObject({ ok: true });
+        const reinvited = await readDiscussionMessages({ authentication, actorAccountId: owner.id, discussionId });
+        if (!reinvited.ok) throw new Error(reinvited.error);
+        expect(reinvited.value.messages.find(message => message.id === foreignQuestion.value.message.id)).not.toHaveProperty('participantDeliveryV1');
+        expect((await observe()).observations).toEqual([]);
+    });
+    it('retains a private foreign original as blocked custody without manufacturing permission authority', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const source = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const receiver = await db.session.create({ data: { accountId: invitee.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        // Only the inviter receives input permission; the receiver's owner never
+        // receives the source's private transcript or its permission authority.
+        await db.sessionShare.create({ data: { sessionId: receiver.id, sharedByUserId: invitee.id, sharedWithUserId: owner.id, accessLevel: 'edit' } });
+        for (const session of [source, receiver]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId: 'private-turn', sourceInputId: 'private-input', via: 'action' as const };
+        await db.sessionMessage.create({ data: { sessionId: source.id, localId: sourceSession.sourceInputId, seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: { private: 'never disclose this source' } }, acceptedTurnId: sourceSession.sourceTurnId, targetExecutionRunId: 'private-run' } });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: source.id, sourceSession }, request: { ...postRequest('Shared question'),
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: receiver.id } }] } }, mentionedSessionIds: [receiver.id] } });
+        if (!question.ok) throw new Error(question.error);
+        await getOrCreateServerIdentityId();
+        const { machine } = await publisherSocket(invitee.id, receiver.id);
+        const current = await db.session.findUniqueOrThrow({ where: { id: receiver.id } });
+        const publisherAuthority = { accountId: invitee.id, sessionId: receiver.id, machineId: machine.id, committedFence: current.lastActiveAt };
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: receiver.id };
+        const localId = deriveDiscussionFollowInputLocalIdV1(discussion);
+        const content = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Shared question' } } };
+        const input = { accountId: invitee.id, sourceMachineId: machine.id, targetMachineId: machine.id, sessionId: receiver.id,
+            localId, content, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1, reply: { mode: 'return' as const, discussion, sourceSession } };
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ ...input, reply: { ...input.reply,
+            sourceSession: { ...sourceSession, sourceInputId: 'forged-input' } } })).toMatchObject({ status: 'rejected' });
+        const forgedSource = { ...sourceSession, sourceInputId: 'forged-input' };
+        const forgedRequest = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+            sourceSession: forgedSource, discussionAddressing: discussion, replyIntent: { mode: 'return' } });
+        // Matching caller-authored request/reply fields must not replace the
+        // committed producer's causal original or escape its Pending hold.
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ ...input,
+            content: { ...content, v: { ...content.v, meta: { happierInputRequestV1: forgedRequest } } },
+            reply: { ...input.reply, sourceSession: forgedSource } })).toMatchObject({ status: 'rejected' });
+        expect(await enqueuePendingMessageByAuthenticatedMachine(input)).toEqual({ status: 'accepted', localId });
+        expect(await enqueuePendingMessageByAuthenticatedMachine(input)).toEqual({ status: 'alreadyAccepted', localId });
+        const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: receiver.id, localId } } });
+        expect(pending).toMatchObject({ content, status: 'queued', deliveryState: 'blocked', deliveryBlockedReason: 'session_input_target_unavailable' });
+        expect(pending.content).not.toHaveProperty('v.meta');
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(1);
+        expect(await materializeNextPendingMessage({ actorUserId: invitee.id, sessionId: receiver.id, publisherAuthority,
+            deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' })).toMatchObject({ ok: true, didMaterialize: false });
+        expect(await settlePendingInputAdmission({ actorUserId: invitee.id, sessionId: receiver.id, localId, publisherAuthority,
+            decision: { kind: 'admit', finalContent: content, validation: { sourceSession, reply: input.reply, autonomousCheckIn: { afterTurns: 5 } } } }))
+            .not.toMatchObject({ result: { status: 'accepted' } });
+        const page = await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId });
+        if (!page.ok) throw new Error(page.error);
+        expect(page.value.messages.find(message => message.id === question.value.message.id)?.participantDeliveryV1)
+            .toEqual([{ participantSessionId: receiver.id, disposition: 'held', code: 'session_input_target_unavailable' }]);
+        expect(await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: invitee.id, sessionId: source.id, authentication }))).toBeNull();
+        expect(JSON.stringify(page.value)).not.toContain('never disclose this source');
+    });
+    it('does not replay a prior cross-Account question after the same Session is reinvited', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const source = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const receiver = await db.session.create({ data: { accountId: invitee.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.sessionShare.create({ data: { sessionId: receiver.id, sharedByUserId: invitee.id, sharedWithUserId: owner.id, accessLevel: 'edit' } });
+        for (const session of [source, receiver]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const sourceSession = { sourceSessionId: source.id, sourceTurnId: 'original-turn', sourceInputId: 'original-input', via: 'action' as const };
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: source.id, sourceSession }, request: { localId: crypto.randomUUID(),
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: receiver.id } }] } },
+                mentionedAccountIds: [], mentionedSessionIds: [receiver.id] } });
+        if (!question.ok) throw new Error(question.error);
+        const read = () => readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId });
+        const beforeRemoval = await read();
+        if (!beforeRemoval.ok) throw new Error(beforeRemoval.error);
+        expect(beforeRemoval.value.messages.find(message => message.id === question.value.message.id)).not.toHaveProperty('participantDeliveryV1');
+        expect(await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id } } })).toMatchObject({ ok: true });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: receiver.id } } })).toMatchObject({ ok: true });
+        const page = await read();
+        if (!page.ok) throw new Error(page.error);
+        expect(page.value.messages.find(message => message.id === question.value.message.id)).not.toHaveProperty('participantDeliveryV1');
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, { principal: {
+            kind: 'destination_runtime', destinationRuntimeAccountId: invitee.id, authentication }, destinationSessionId: receiver.id }))).observations).toEqual([]);
+    });
+    it('reserves a model slot once before allocation and refuses a changed launch on retry', async () => {
+        const { owner, discussionId } = await fixture();
+        const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const participantSlotId = crypto.randomUUID();
+        const launch = { executionTarget: { serverId: 'home', machineId: machine.id }, directory: { kind: 'path' as const, path: '/tmp' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            modelSelection: { v: 1 as const, ref: { agentTargetKey: 'happier.agent.claude/claude', providerConnectionId: null, modelId: 'selected-model' }, updatedAt: 1 } };
+        const request = { participant: { kind: 'model' as const, participantSlotId, launch }, answerPolicy: 'when_addressed' as const };
+        const invite = () => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId, request });
+        const reserved = await invite();
+        expect(reserved).toMatchObject({ ok: true, value: { changed: true, modelParticipant: { sessionId: null, launch } } });
+        if (reserved.ok) expect(DiscussionInviteResponseV1Schema.safeParse(reserved.value).success).toBe(true);
+        expect(await invite()).toMatchObject({ ok: true, value: { changed: false, modelParticipant: { participant: { participantSlotId }, sessionId: null, launch } } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...request, participant: { ...request.participant, launch: { ...launch,
+                modelSelection: { ...launch.modelSelection, updatedAt: 2 } } } } }))
+            .toMatchObject({ ok: true, value: { changed: false, modelParticipant: { launch } } });
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(1);
+        expect(await db.session.count({ where: { accountId: owner.id } })).toBe(0);
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...request, participant: { ...request.participant, launch: { ...launch, title: 'Changed recipe' } } } })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        const { validateDiscussionParticipantBirthInTx, bindDiscussionParticipantSessionInTx } = await import('./accessService');
+        const discussionParticipant = { discussionId, participantSlotId };
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        expect(await inTx(tx => validateDiscussionParticipantBirthInTx(tx, { accountId: outsider.id, discussionParticipant, launch })))
+            .toMatchObject({ ok: false });
+        expect(await inTx(tx => validateDiscussionParticipantBirthInTx(tx, { accountId: owner.id, discussionParticipant,
+            launch: { ...launch, title: 'Changed recipe' } }))).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain',
+            originKind: 'discussion', originDiscussionId: discussionId, originDiscussionParticipantSlotId: participantSlotId } });
+        const bind = () => inTx(tx => bindDiscussionParticipantSessionInTx(tx, { accountId: owner.id, discussionParticipant, launch, sessionId: session.id }));
+        expect(await bind()).toMatchObject({ ok: true, value: { sessionId: session.id } });
+        expect(await bind()).toMatchObject({ ok: true, value: { sessionId: session.id } });
+        expect(await invite()).toMatchObject({ ok: true, value: { changed: false, modelParticipant: { sessionId: session.id } } });
+        const aliasLaunch = { ...launch, executionTarget: { ...launch.executionTarget, serverId: 'another-local-home-alias' } };
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...request, participant: { ...request.participant, launch: aliasLaunch } } }))
+            .toMatchObject({ ok: true, value: { changed: false, modelParticipant: { sessionId: session.id, launch } } });
+        expect(await inTx(tx => bindDiscussionParticipantSessionInTx(tx, { accountId: owner.id, discussionParticipant,
+            launch: aliasLaunch, sessionId: session.id }))).toMatchObject({ ok: true, value: { sessionId: session.id, launch } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...request, participant: { ...request.participant, launch: { ...aliasLaunch,
+                executionTarget: { ...aliasLaunch.executionTarget, machineId: crypto.randomUUID() } } } } }))
+            .toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        const remove = () => removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'model', participantSlotId } } });
+        const ownedSession = { discussionId, participantSlotId, sessionId: session.id };
+        const removed = await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } });
+        expect(removed).toMatchObject({ ok: true, value: { changed: true, ownedSession } });
+        if (removed.ok) expect(DiscussionRemoveParticipantResponseV1Schema.safeParse(removed.value).success).toBe(true);
+        expect(await remove()).toMatchObject({ ok: true, value: { changed: false, ownedSession } });
+        expect(await db.session.findUnique({ where: { id: session.id } })).toMatchObject({ archivedAt: null });
+        expect(await listDiscussionParticipants({ authentication, actorAccountId: owner.id, discussionId })).toMatchObject({ ok: true, value: { participants: [] } });
+        expect(await bind()).toMatchObject({ ok: false });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Removed model must not post'), producer: { v: 1, kind: 'agent', sessionId: session.id } })).toEqual({ ok: false, error: 'discussion_post_denied' });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Removed model must not receive a question'), mentionedSessionIds: [session.id],
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: session.id } }] } } } }))
+            .toEqual({ ok: false, error: 'discussion_invalid_mention' });
+    });
+    it('retires an unbound model invitation by its stable slot without allocating or resurrecting it on retry', async () => {
+        const { owner, discussionId } = await fixture();
+        const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const participantSlotId = crypto.randomUUID();
+        const launch = { executionTarget: { serverId: 'home', machineId: machine.id }, directory: { kind: 'path' as const, path: '/tmp' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } };
+        const invite = (slot: string) => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'model', participantSlotId: slot, launch } } });
+        expect(await invite(participantSlotId)).toMatchObject({ ok: true, value: { modelParticipant: { sessionId: null } } });
+        const remove = () => removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'model', participantSlotId } } });
+        const first = await remove();
+        expect(first).toMatchObject({ ok: true, value: { changed: true } });
+        expect(first).not.toHaveProperty('value.ownedSession');
+        const retired = await db.discussionParticipant.findUniqueOrThrow({ where: { discussionId_participantSlotId: { discussionId, participantSlotId } } });
+        expect(retired.removedAt).not.toBeNull();
+        expect(retired.sessionId).toBeNull();
+        const retried = await remove();
+        expect(retried).toMatchObject({ ok: true, value: { changed: false } });
+        expect(retried).not.toHaveProperty('value.ownedSession');
+        expect(await db.discussionParticipant.findUniqueOrThrow({ where: { discussionId_participantSlotId: { discussionId, participantSlotId } } })).toEqual(retired);
+        expect(await invite(participantSlotId)).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        expect(await invite(crypto.randomUUID())).toMatchObject({ ok: true, value: { modelParticipant: { sessionId: null } } });
+        expect(await listDiscussionParticipants({ authentication, actorAccountId: owner.id, discussionId }))
+            .toMatchObject({ ok: true, value: { participants: [{ participant: { kind: 'model' }, sessionId: null }] } });
+        expect(await db.session.count({ where: { accountId: owner.id } })).toBe(0);
+    });
+    it('returns exact owned Session archive operands on retry without archiving independent Sessions', async () => {
+        const { owner, discussionId } = await fixture();
+        const participantSlotId = crypto.randomUUID();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain',
+            originKind: 'discussion', originDiscussionId: discussionId, originDiscussionParticipantSlotId: participantSlotId } });
+        const independent = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: independent.id } } })).toMatchObject({ ok: true });
+        // A real persisted binding isolates archive's storage contract from birth.
+        await db.discussionParticipant.create({ data: { discussionId, participantSlotId, sessionId: session.id, createdByAccountId: owner.id,
+            modelLaunch: { executionTarget: { serverId: 'home', machineId: 'machine' }, directory: { kind: 'path', path: '/tmp' },
+                agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } } });
+        const ownedSessions = [{ discussionId, participantSlotId, sessionId: session.id }];
+        expect(await archiveDiscussion({ authentication, actorAccountId: owner.id, discussionId }))
+            .toMatchObject({ ok: true, value: { ownedSessions } });
+        expect(await archiveDiscussion({ authentication, actorAccountId: owner.id, discussionId }))
+            .toMatchObject({ ok: true, value: { ownedSessions } });
+        expect(await db.session.findUnique({ where: { id: session.id } })).toMatchObject({ archivedAt: null });
+        expect(await db.session.findUnique({ where: { id: independent.id } })).toMatchObject({ archivedAt: null });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Archived Discussion must not accept another question') })).toEqual({ ok: false, error: 'discussion_archived' });
+    });
+    it('uses the Follow attachment sequence, not equal millisecond timestamps, across reinvitation', async () => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const invite = () => inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } });
+        expect(await invite()).toMatchObject({ ok: true });
+        const ask = () => postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Question'), content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: session.id } }] } },
+                mentionedSessionIds: [session.id] } });
+        const prior = await ask();
+        if (!prior.ok) throw new Error(prior.error);
+        await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } });
+        expect(await invite()).toMatchObject({ ok: true });
+        const binding = await db.discussionParticipant.findUniqueOrThrow({ where: { discussionId_sessionId: { discussionId, sessionId: session.id } } });
+        // A real database Date millisecond is not a total-order boundary: old
+        // and new originals are deliberately indistinguishable by timestamp.
+        await db.discussionMessage.update({ where: { id: prior.value.message.id }, data: { createdAt: binding.createdAt } });
+        const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: session.id,
+        }));
+        expect((await observe()).observations).toEqual([]);
+        const newer = await ask();
+        if (!newer.ok) throw new Error(newer.error);
+        await db.discussionMessage.update({ where: { id: newer.value.message.id }, data: { createdAt: binding.createdAt } });
+        expect((await observe()).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: session.id,
+            policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },
+            addressing: { discussionId, messageId: newer.value.message.id, throughSeq: 3, participantSessionId: session.id } }]);
+    });
+    it('suppresses a muted sender original without masking a later eligible Discussion question', async () => {
+        const { owner, discussionId } = await fixture();
+        const [sender, receiver] = await Promise.all([0, 1].map(() => db.session.create({ data: {
+            accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain',
+        } })));
+        for (const session of [sender, receiver]) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        const request = () => ({ ...postRequest('Question'), content: { t: 'plain' as const, v: { v: 1, parts: [
+            { t: 'mention', participant: { kind: 'session', sessionId: receiver.id } },
+        ] } }, mentionedSessionIds: [receiver.id] });
+        const muted = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            producer: { v: 1, kind: 'agent', sessionId: sender.id }, request: request() });
+        if (!muted.ok) throw new Error(muted.error);
+        await db.session.update({ where: { id: receiver.id }, data: { deliveryMutes: JSON.stringify([{ kind: 'sender_session', sessionId: sender.id }]) } });
+        const later = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: request() });
+        if (!later.ok) throw new Error(later.error);
+        const pending = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
+        }));
+        expect(pending.observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: receiver.id,
+            policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },
+            addressing: { discussionId, messageId: later.value.message.id, throughSeq: 3, participantSessionId: receiver.id } }]);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(0);
+        const addressing = { discussionId, messageId: later.value.message.id, throughSeq: 3, participantSessionId: receiver.id };
+        const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+        await inTx(async tx => {
+            expect(await admitDiscussionFollowAddressingInTx(tx, { accountId: owner.id, discussion: addressing })).toBe(true);
+            const progress = await createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion: addressing } });
+            expect(progress).not.toBeNull();
+            await tx.sessionPendingMessage.create({ data: { sessionId: receiver.id, localId, position: 1,
+                content: { t: 'plain', v: {} }, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1,
+                replyProgress: progress!, replyDisposition: progress!.disposition,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing,
+                    admittedTarget: { homeId: 'home', accountId: owner.id, sessionId: receiver.id, machineId: 'machine', installationId: 'installation' } } } });
+            await acknowledgeDiscussionFollowInputInTx(tx, { addressing, localInputId: localId });
+        });
+        await db.session.update({ where: { id: receiver.id }, data: { deliveryMutes: null } });
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
+        }))).observations).toEqual([]);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(1);
+    });
+    it('admits a host-reviewed draft only while the deciding reviewer retains current publication access', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'drafts_for_approval' } })).toMatchObject({ ok: true });
+        const { socket } = await publisherSocket(owner.id, session.id);
+        // This is the existing trusted-host socket boundary. Private V2 review
+        // and exact Artifact/body binding are exercised by the CLI replay suite.
+        const publish = async (request = postRequest('Reviewed draft')) => {
+            let response: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: session.id, discussionId,
+                request, draftReview: { artifactId: 'reviewed-artifact', decidingAccountId: invitee.id } },
+            (value: unknown) => { response = value; });
+            return DiscussionAgentPostResponseV1Schema.parse(response);
+        };
+        const request = postRequest('Reviewed draft');
+        expect(await publish(request)).toMatchObject({ ok: true, value: { message: { authorAccountId: owner.id, producerV1: { sessionId: session.id } } } });
+        expect(await publish(request)).toMatchObject({ ok: true });
+        expect(await setDiscussionGrant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { principal: { kind: 'account', accountId: invitee.id }, accessLevel: 'view' } })).toMatchObject({ ok: true });
+        expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        await removeDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'account', accountId: invitee.id } } });
+        expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+    });
+    it.each(['primary', 'typed_pass'] as const)('settles the exact watch terminal quietly without preparing an automatic final publication (%s)', async boundary => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'watches_and_speaks_up' } })).toMatchObject({ ok: true });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: postRequest('Observe') });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
+        const localId = deriveDiscussionFollowInputLocalIdV1(discussion), turnId = crypto.randomUUID();
+        await db.sessionMessage.create({ data: { sessionId: session.id, localId, seq: 1, messageRole: 'user', content: { t: 'plain', v: {} },
+            replyDisposition: 'return_pending', replyProgress: { ...progress!, acceptedTurnId: turnId } } });
+        await db.sessionMessage.create({ data: { sessionId: session.id, seq: 2, messageRole: 'agent', content: { t: 'plain', v: {} } } });
+        if (boundary === 'primary') {
+            await inTx(tx => projectSessionInputRepliesFromTurnInTx(tx, { sessionId: session.id, turnId, status: 'completed',
+                transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [1], finalAssistantMessageSeq: 2 }) }));
+        } else {
+            const { socket } = await publisherSocket(owner.id, session.id);
+            let response: unknown;
+            await getSocketHandler(socket, SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1)({ v: 1, sessionId: session.id,
+                requestSessionId: session.id, requestLocalId: localId, operation: { kind: 'fulfill', turnId, outcome: { kind: 'pass' } } },
+            (value: unknown) => { response = value; });
+            expect(SessionMessageReplyMutationResultV1Schema.parse(response)).toMatchObject({ ok: true });
+        }
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } })).replyProgress)
+            .toMatchObject({ disposition: 'released', outcome: { kind: boundary === 'primary' ? 'answer' : 'pass' } });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+    });
+    it.each([false, true])('counts ambient watch starts through the existing Pending check-in root (explicit person address: %s)', async explicitlyAddressed => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'watches_and_speaks_up' } })).toMatchObject({ ok: true });
+        const question = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: {
+            ...postRequest('An observation'), ...(explicitlyAddressed ? {
+                content: { t: 'plain' as const, v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: session.id } }] } },
+                mentionedSessionIds: [session.id],
+            } : {}),
+        } });
+        if (!question.ok) throw new Error(question.error);
+        const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion } }));
+        expect(progress).not.toBeNull();
+        const { socket, machine } = await publisherSocket(owner.id, session.id);
+        const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+            discussionAddressing: discussion, replyIntent: { mode: 'return' } });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine', discussionAddressing: discussion,
+            admittedTarget: { homeId: await getOrCreateServerIdentityId(), accountId: owner.id, sessionId: session.id, machineId: machine.id, installationId: machine.installationId! } });
+        const pendingContent = { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'Observe quietly' },
+            meta: withSessionInputRequestV1({}, request) } };
+        const finalContent = { t: 'plain' as const, v: { ...pendingContent.v,
+            meta: { ...withSessionInputAuthorityV1(pendingContent.v.meta, settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })),
+                [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request, requestedProvenance: undefined, inputAdmissionReceipt: receipt }) } } };
+        const localId = deriveDiscussionFollowInputLocalIdV1(discussion);
+        await db.sessionPendingMessage.create({ data: { sessionId: session.id, localId, position: 0, deliveryState: 'delivering',
+            content: pendingContent, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1, inputAdmissionReceipt: receipt,
+            replyProgress: progress!, replyDisposition: 'return_pending' } });
+        let response: unknown;
+        await getSocketHandler(socket, SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1)({ v: 1, sessionId: session.id, localId,
+            decision: { kind: 'admit', finalContent, validation: { autonomousCheckIn: { afterTurns: 5 }, reply: { mode: 'return', discussion } } } },
+        (value: unknown) => { response = value; });
+        expect(SessionPendingAdmissionSettlementResponseV1Schema.parse(response).result).toEqual({ status: 'accepted', localId });
+        if (explicitlyAddressed) {
+            expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+                .toMatchObject({ autonomousExchangeCause: null, autonomousExchangeRootSessionId: null, autonomousExchangeRootLocalId: null });
+            return;
+        }
+        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+            .toMatchObject({ autonomousExchangeCause: 'agent_session', autonomousExchangeRootSessionId: session.id,
+                autonomousExchangeRootLocalId: localId, autonomousExchangeState: { observedStarts: 0, afterTurns: 5 } });
+        const turnId = crypto.randomUUID();
+        await inTx(async tx => {
+            await tx.sessionTurn.create({ data: { sessionId: session.id, turnId, status: 'running',
+                startedAt: BigInt(Date.now()), updatedAt: BigInt(Date.now()) } });
+            await tx.sessionMessage.update({ where: { sessionId_localId: { sessionId: session.id, localId } },
+                data: { acceptedTurnId: turnId, acceptedTurnKind: 'newTurn' } });
+            await reconcileAutonomousExchangeAcceptedTurnInTx(tx, { sessionId: session.id, turnId, startingInputId: localId });
+            await reconcileAutonomousExchangeAcceptedTurnInTx(tx, { sessionId: session.id, turnId, startingInputId: localId });
+        });
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } })).autonomousExchangeState)
+            .toMatchObject({ observedStarts: 1 });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+    });
+    it('sets existing participant policy through the canonical HTTP mutation and roster, denying non-admin and non-members', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
+        let actorAccountId = invitee.id;
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        // Only credential verification is replaced; route, policy, grants and DB remain real.
+        app.decorate('authenticate', async (request: FastifyRequest) => {
+            request.userId = actorAccountId; request.authAuthority = 'present_user'; request.authTokenKind = 'account';
+        });
+        registerDiscussionRoutes(app);
+        const url = `/v1/discussions/${discussionId}/participants/policy`;
+        const payload = { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'reads_only' };
+        try {
+            expect((await app.inject({ method: 'PUT', url, payload })).statusCode).toBe(403);
+            actorAccountId = owner.id;
+            expect((await app.inject({ method: 'PUT', url, payload })).statusCode).toBe(200);
+            const roster = await app.inject({ method: 'GET', url: DISCUSSION_HTTP_PATHS_V1.participants.replace(':discussionId', discussionId) });
+            expect(roster.json()).toMatchObject({ participants: [{ participant: payload.participant, answerPolicy: 'reads_only' }] });
+            expect((await app.inject({ method: 'PUT', url, payload })).json()).toMatchObject({ changed: false });
+            expect((await app.inject({ method: 'PUT', url, payload: { ...payload, participant: { kind: 'session', sessionId: 'not-invited' } } })).statusCode).toBe(400);
+            expect((await app.inject({ method: 'PUT', url, payload: { ...payload, reviewed: true } })).statusCode).toBe(400);
+        } finally { await app.close(); }
+        expect(await db.discussionParticipant.count({ where: { discussionId } })).toBe(1);
+    });
+    it('admits addressed drafts and opt-in watch originals through C1 while reads-only and own echoes stay silent', async () => {
+        const { owner, discussionId } = await fixture();
+        const draft = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const watcher = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const reader = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        for (const [sessionId, answerPolicy] of [[draft.id, 'drafts_for_approval'], [watcher.id, 'watches_and_speaks_up'], [reader.id, 'reads_only']] as const) {
+            expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+                request: { participant: { kind: 'session', sessionId }, answerPolicy } })).toMatchObject({ ok: true });
+        }
+        const asked = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: {
+            ...postRequest('Review please'), content: { t: 'plain', v: { v: 1, parts: [draft.id, reader.id].map(sessionId => ({ t: 'mention', participant: { kind: 'session', sessionId } })) } },
+            mentionedSessionIds: [draft.id, reader.id] } });
+        if (!asked.ok) throw new Error(asked.error);
+        expect(asked.value.message.addressingV1?.participantSessionIds).toEqual([draft.id, watcher.id].sort());
+        for (const sessionId of [draft.id, watcher.id]) {
+            const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+                principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: sessionId,
+            }));
+            expect(observed.observations).toContainEqual({ source: { kind: 'discussion', discussionId }, destinationSessionId: sessionId,
+                policy: { preset: 'quiet' }, event: sessionId === watcher.id ? { kind: 'person_wrote' } : { kind: 'needs_you', type: 'decision', mode: 'wait' },
+                addressing: { discussionId, messageId: asked.value.message.id, throughSeq: asked.value.message.seq, participantSessionId: sessionId } });
+        }
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: reader.id,
+        }))).observations).toEqual([]);
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Private draft'), producer: { v: 1, kind: 'agent', sessionId: draft.id } })).toEqual({ ok: false, error: 'discussion_post_denied' });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Reads-only cannot speak'), producer: { v: 1, kind: 'agent', sessionId: reader.id } })).toEqual({ ok: false, error: 'discussion_post_denied' });
+        const own = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Watch contribution'), producer: { v: 1, kind: 'agent', sessionId: watcher.id } });
+        expect(own).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: [] } } } });
+        expect(await setDiscussionParticipantPolicy({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: watcher.id }, answerPolicy: 'when_addressed' } })).toMatchObject({ ok: true });
+        expect((await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: watcher.id,
+        }))).observations).toEqual([]);
+    });
+    it('commits one immutable addressed set and cutoff, with reply addressing and silent negative controls', async () => {
+        const { owner, discussionId } = await fixture();
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const reader = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        for (const [sessionId, answerPolicy] of [[session.id, 'when_addressed'], [reader.id, 'reads_only']] as const) {
+            expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+                request: { participant: { kind: 'session', sessionId }, answerPolicy } })).toMatchObject({ ok: true });
+        }
+        const request = { ...postRequest('Question'), content: { t: 'plain' as const, v: { v: 1, parts: [session.id, reader.id].map(sessionId => ({ t: 'mention', participant: { kind: 'session', sessionId } })) } }, mentionedSessionIds: [session.id, reader.id] };
+        const asked = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request });
+        expect(asked).toMatchObject({ ok: true, value: { message: { addressingV1: { throughSeq: 2, participantSessionIds: [session.id] } } } });
+        if (!asked.ok) throw new Error(asked.error);
+        expect(DiscussionPostResponseV1Schema.safeParse(asked.value).success).toBe(true);
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request })).toMatchObject({ ok: true, value: { message: { id: asked.value.message.id, addressingV1: { throughSeq: 2 } } } });
+        const answered = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: postRequest('Answer'), producer: { v: 1, kind: 'agent', sessionId: session.id } });
+        if (!answered.ok) throw new Error(answered.error);
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('A self reply without a new explicit address'), replyTarget: { kind: 'message', messageId: answered.value.message.id } },
+            producer: { v: 1, kind: 'agent', sessionId: session.id } })).toMatchObject({ ok: true,
+                value: { message: { addressingV1: { throughSeq: 4, participantSessionIds: [] } } } });
+        expect((await db.discussion.findUniqueOrThrow({ where: { id: discussionId } })).messageSeq).toBe(4);
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(4);
+        const asker = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+            request: { participant: { kind: 'session', sessionId: asker.id } } })).toMatchObject({ ok: true });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Explicit new ask'), replyTarget: { kind: 'message', messageId: answered.value.message.id },
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: session.id } }] } },
+                mentionedSessionIds: [session.id] }, producer: { v: 1, kind: 'agent', sessionId: asker.id } })).toMatchObject({
+            ok: true, value: { message: { producerV1: { sessionId: asker.id }, addressingV1: { throughSeq: 5, participantSessionIds: [session.id] } } },
+        });
+        const replied = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...postRequest('Follow up'), replyTarget: { kind: 'message', messageId: answered.value.message.id } } });
+        expect(replied).toMatchObject({ ok: true, value: { message: { addressingV1: { throughSeq: 6, participantSessionIds: [session.id] } } } });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: postRequest('Unaddressed') })).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: [] } } } });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(7);
+        const observed = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+            principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: session.id,
+        }));
+        expect(observed.observations).toContainEqual({ source: { kind: 'discussion', discussionId }, destinationSessionId: session.id,
+            policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' },
+            addressing: { discussionId, messageId: asked.value.message.id, throughSeq: 2, participantSessionId: session.id } });
+        const uninvited = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: { ...request, localId: crypto.randomUUID(), mentionedSessionIds: [uninvited.id], content: { t: 'plain', v: { v: 1, parts: [{ t: 'mention', participant: { kind: 'session', sessionId: uninvited.id } }] } } } })).toEqual({ ok: false, error: 'discussion_invalid_mention' });
+    });
+    it('rejoins independent creation and first-message IDs and refuses changed semantic intent', async () => {
+        const { owner, request, created, discussionId } = await fixture();
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request })).toMatchObject({ ok: true, value: { discussion: { id: discussionId }, firstMessage: { id: created.firstMessage.id } } });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(1);
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request: { ...request, firstMessage: { ...request.firstMessage, content: { t: 'plain', v: document('Different') } } } })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        const other = await fixture({ creationLocalId: request.creationLocalId, firstLocalId: request.firstMessage.localId });
+        expect(other.discussionId).not.toBe(discussionId);
+    });
+    it('posts one attributed reply, reuses its identity and produces a committed Home reference', async () => {
+        const { owner, invitee, created, discussionId } = await fixture();
+        const request = { ...postRequest('Reply'), replyTarget: { kind: 'message' as const, messageId: created.firstMessage.id } };
+        const posted = await postDiscussionMessage({ authentication, actorAccountId: invitee.id, discussionId, request });
+        expect(posted.ok).toBe(true);
+        if (!posted.ok) return;
+        expect(DiscussionPostResponseV1Schema.safeParse(posted.value).success).toBe(true);
+        expect(posted.value.message).toMatchObject({ seq: 2, replyTarget: request.replyTarget, authorAccountId: invitee.id });
+        const ref = createDiscussionMessageRefV1({ serverId: 'captured-home', discussionId }, posted.value.message);
+        expect(DiscussionMessageRefV1Schema.safeParse(ref).success).toBe(true);
+        expect(ref).toEqual({ kind: 'discussion', discussion: { serverId: 'captured-home', discussionId }, messageId: posted.value.message.id });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: invitee.id, discussionId, request })).toMatchObject({ ok: true, value: { message: { id: posted.value.message.id, seq: 2 } } });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: invitee.id, discussionId, request: { ...request, replyTarget: undefined } })).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+        expect(await readDiscussionMessages({ authentication, actorAccountId: owner.id, discussionId, throughSeq: 1 })).toMatchObject({ ok: true, value: { messages: [expect.objectContaining({ id: created.firstMessage.id })], messageSeq: 1 } });
+    });
+    it('rejects another Discussion reply target before allocating a sequence', async () => {
+        const first = await fixture(), second = await fixture();
+        expect(await postDiscussionMessage({ authentication, actorAccountId: first.owner.id, discussionId: first.discussionId, request: { ...postRequest('Wrong thread'), replyTarget: { kind: 'message', messageId: second.created.firstMessage.id } } })).toEqual({ ok: false, error: 'discussion_invalid_reply_target' });
+        expect((await db.discussion.findUniqueOrThrow({ where: { id: first.discussionId } })).messageSeq).toBe(1);
+    });
+    it('retains history when an optional source Session is archived and deleted', async () => {
+        const sourceOwner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const source = await db.session.create({ data: { accountId: sourceOwner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: JSON.stringify({ t: 'plain', v: {} }) } });
+        const { owner, invitee, discussionId } = await fixture({ anchor: { kind: 'session', sessionId: source.id } });
+        await db.session.update({ where: { id: source.id }, data: { archivedAt: new Date() } });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: postRequest('Still here') })).toMatchObject({ ok: true });
+        await db.session.delete({ where: { id: source.id } });
+        expect(await getDiscussion({ authentication, actorAccountId: invitee.id, discussionId })).toMatchObject({ ok: true, value: { discussion: { anchor: { kind: 'session', sessionId: source.id }, messageSeq: 2 } } });
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+    });
+    it('keeps tool reads cursor-neutral and explicit visible reads monotonic and private', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const cursor = () => db.discussionReadState.findUniqueOrThrow({ where: { discussionId_accountId: { discussionId, accountId: invitee.id } } });
+        expect((await cursor()).lastReadSeq).toBe(0);
+        expect(await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId })).toMatchObject({ ok: true });
+        expect((await cursor()).lastReadSeq).toBe(0);
+        expect(await setDiscussionReadCursor({ authentication, actorAccountId: invitee.id, discussionId, lastReadSeq: 1 })).toMatchObject({ ok: true, value: { lastReadSeq: 1, didChange: true } });
+        expect(await setDiscussionReadCursor({ authentication, actorAccountId: invitee.id, discussionId, lastReadSeq: 0 })).toMatchObject({ ok: true, value: { lastReadSeq: 1, didChange: false } });
+        expect(await setDiscussionReadCursor({ authentication, actorAccountId: invitee.id, discussionId, lastReadSeq: 2 })).toEqual({ ok: false, error: 'discussion_read_cursor_invalid' });
+        expect((await db.discussionReadState.findUniqueOrThrow({ where: { discussionId_accountId: { discussionId, accountId: owner.id } } })).lastReadSeq).toBe(0);
+    });
+    it('archives without deleting history, rejoins accepted creates and restores via management authority', async () => {
+        const { owner, invitee, request, discussionId } = await fixture();
+        expect(await archiveDiscussion({ authentication, actorAccountId: invitee.id, discussionId })).toEqual({ ok: false, error: 'discussion_manage_denied' });
+        expect(await archiveDiscussion({ authentication, actorAccountId: owner.id, discussionId })).toMatchObject({ ok: true });
+        expect(await createDiscussion({ authentication, actorAccountId: owner.id, request })).toMatchObject({ ok: true, value: { discussion: { id: discussionId } } });
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: postRequest('Held') })).toEqual({ ok: false, error: 'discussion_archived' });
+        expect(await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId })).toMatchObject({ ok: true });
+        expect(await restoreDiscussion({ authentication, actorAccountId: owner.id, discussionId })).toMatchObject({ ok: true, value: { discussion: { archivedAt: null } } });
+    });
+    it('lists only independent grants and keeps local retry IDs private to their author', async () => {
+        const { owner, invitee, outsider, request, created, discussionId } = await fixture();
+        expect(await listDiscussions({ authentication, actorAccountId: outsider.id })).toMatchObject({ ok: true, value: { discussions: [] } });
+        expect(await listDiscussions({ authentication, actorAccountId: invitee.id })).toMatchObject({ ok: true, value: { discussions: expect.arrayContaining([expect.objectContaining({ id: discussionId, creationLocalId: null, latestMessage: expect.objectContaining({ localId: null }) })]) } });
+        expect(await getDiscussion({ authentication, actorAccountId: owner.id, discussionId })).toMatchObject({ ok: true, value: { discussion: { creationLocalId: created.discussion.creationLocalId } } });
+        expect(await listDiscussions({ authentication, actorAccountId: owner.id, creationLocalId: request.creationLocalId })).toMatchObject({
+            ok: true, value: { discussions: [expect.objectContaining({ id: discussionId, creationLocalId: request.creationLocalId })], nextCursor: null },
+        });
+        expect(await listDiscussions({ authentication, actorAccountId: invitee.id, creationLocalId: request.creationLocalId })).toEqual({ ok: true, value: { discussions: [], nextCursor: null } });
+        await archiveDiscussion({ authentication, actorAccountId: owner.id, discussionId });
+        expect(await listDiscussions({ authentication, actorAccountId: owner.id, creationLocalId: request.creationLocalId })).toEqual({ ok: true, value: { discussions: [], nextCursor: null } });
+        expect(await listDiscussions({ authentication, actorAccountId: owner.id, state: 'archived', creationLocalId: request.creationLocalId })).toMatchObject({
+            ok: true, value: { discussions: [expect.objectContaining({ id: discussionId })], nextCursor: null },
+        });
+    });
+    it('admits sparse mentions and content-free change fanout through current Discussion grants', async () => {
+        const { owner, invitee, outsider, discussionId } = await fixture();
+        const mentioned = (accountId: string) => {
+            const authoredContent = { v: 1 as const, parts: [{ t: 'mention' as const, participant: { kind: 'account' as const, accountId } }] };
+            return buildDiscussionMutationRequestBodyV1({ kind: 'post', localId: crypto.randomUUID(),
+                content: { t: 'plain', v: authoredContent }, authoredContent, mentionedAccountIds: [accountId] });
+        };
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: mentioned(invitee.id) })).toMatchObject({ ok: true });
+        expect(await db.accountChange.count({ where: { accountId: invitee.id, kind: 'discussion', entityId: discussionId } })).toBe(1);
+        expect(await db.accountChange.count({ where: { accountId: outsider.id, kind: 'discussion', entityId: discussionId } })).toBe(0);
+        expect(await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId, request: mentioned(outsider.id) })).toEqual({ ok: false, error: 'discussion_invalid_mention' });
+    });
+    it('fails mode mismatches closed, preserves title ordering and allocates concurrent sequences', async () => {
+        const { owner, invitee, discussionId } = await fixture();
+        const before = await db.discussion.findUniqueOrThrow({ where: { id: discussionId } });
+        expect(await renameDiscussion({ authentication, actorAccountId: owner.id, discussionId, titleContent: { t: 'plain', v: { v: 1, title: 'Renamed' } } })).toMatchObject({ ok: true });
+        expect((await db.discussion.findUniqueOrThrow({ where: { id: discussionId } })).lastMessageAt).toEqual(before.lastMessageAt);
+        const results = await Promise.all([owner.id, invitee.id].map(actorAccountId => postDiscussionMessage({ authentication, actorAccountId, discussionId, request: postRequest('Concurrent') })));
+        expect(results.every(result => result.ok)).toBe(true);
+        expect(results.flatMap(result => result.ok ? [result.value.message.seq] : []).sort()).toEqual([2, 3]);
+        await db.discussion.update({ where: { id: discussionId }, data: { titleContent: { t: 'encrypted', c: 'opaque' } } });
+        expect(await getDiscussion({ authentication, actorAccountId: owner.id, discussionId })).toEqual({ ok: false, error: 'discussion_encryption_mode_mismatch' });
+    });
+});

@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { SessionDiscussionCreateRequestV1 } from "@happier-dev/protocol";
+import type { DiscussionCreateRequestV1 } from "@happier-dev/protocol";
 import { db } from "@/storage/db";
 import {
-    createSessionDiscussion,
-    postSessionDiscussionMessage,
-} from "@/app/session/discussions/mutations";
+    createDiscussion,
+    postDiscussionMessage,
+} from "@/app/discussions/mutations";
 import { inTx } from "@/storage/inTx";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { resolveEffectiveSessionAccess } from "@/app/session/access/sessionAccess";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
@@ -22,7 +23,7 @@ async function scopedSessionIds(accountId: string, scope: "my_work" | "involving
         const rows = await tx.session.findMany({
             where: { AND: [
                 await buildSessionAccessWhere({ tx, accountId, capability: "readTranscript", mode: "effective_access_v1", authentication }),
-                createSessionListScopeWhere({ accountId, scope }),
+                await createSessionListScopeWhere({ tx, accountId, scope }),
             ] },
             select: { id: true },
         });
@@ -33,7 +34,8 @@ async function scopedSessionIds(accountId: string, scope: "my_work" | "involving
 describe("personal relevance producers and list scopes (SQLite)", () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => {
-        harness = await createLightSqliteHarness({ tempDirPrefix: "personal-relevance-", initAuth: false });
+        harness = await createLightSqliteHarness({ tempDirPrefix: "personal-relevance-", initAuth: false,
+            env: { HAPPIER_FEATURE_SHARING_SESSION__ENABLED: 'true' } });
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
 
@@ -54,9 +56,32 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
 
         const viewer = await loadSessionViewerProjection({ accountId: collaborator.id, sessionId: shared.id, authentication });
         expect(viewer?.relevance.reasons).toEqual(["shared_directly_with_me"]);
+        expect(viewer?.follow.defaultRelationships).toEqual({ assigned: false, direct: true, team: false, group: false });
 
         const ownerViewer = await loadSessionViewerProjection({ accountId: owner.id, sessionId: shared.id, authentication });
         expect(ownerViewer?.relevance.reasons).toEqual(["owned_by_me"]);
+        expect(ownerViewer?.follow.defaultRelationships).toEqual({ assigned: false, direct: false, team: false, group: false });
+    });
+
+    it("projects every current requester relationship even when strongest access explanations omit grants", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID() } });
+        const viewer = await db.account.create({ data: { publicKey: randomUUID() } });
+        const shared = await session(owner.id);
+        await db.sessionShare.create({ data: { sessionId: shared.id, sharedByUserId: owner.id,
+            sharedWithUserId: viewer.id, accessLevel: 'admin' } });
+        await db.session.update({ where: { id: shared.id }, data: { responsibleAccountId: viewer.id } });
+        const team = await db.team.create({ data: { name: randomUUID() } });
+        const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: viewer.id, role: 'member' } });
+        const group = await db.teamGroup.create({ data: { teamId: team.id, name: 'Readers', nameKey: 'readers' } });
+        await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id, teamMembershipId: membership.id } });
+        await db.sessionTeamGrant.create({ data: { sessionId: shared.id, teamId: team.id, accessLevel: 'view', effectiveAt: new Date() } });
+        await db.sessionGroupGrant.create({ data: { sessionId: shared.id, teamGroupId: group.id, accessLevel: 'view', effectiveAt: new Date() } });
+        const access = await inTx(tx => resolveEffectiveSessionAccess(tx, { accountId: viewer.id, sessionId: shared.id, authentication }));
+        expect(access?.sources.map(source => source.kind)).toEqual(['direct']);
+        expect((await loadSessionViewerProjection({ accountId: viewer.id, sessionId: shared.id, authentication }))?.follow.defaultRelationships)
+            .toEqual({ assigned: true, direct: true, team: true, group: true });
+        expect((await loadSessionViewerProjection({ accountId: owner.id, sessionId: shared.id, authentication }))?.follow.defaultRelationships)
+            .toEqual({ assigned: false, direct: false, team: false, group: false });
     });
 
     it("counts authenticated human transcript authorship and never a machine-admitted row", async () => {
@@ -138,10 +163,11 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
             await share(discussed.id, owner.id, account.id);
         }
 
-        const created = await createSessionDiscussion({
+        const created = await createDiscussion({
             actorAccountId: author.id,
-            sessionId: discussed.id,
             request: {
+                anchor: { kind: "session", sessionId: discussed.id },
+                participants: [{ kind: "account", accountId: mentioned.id }, { kind: "account", accountId: agentRuntime.id }],
                 creationLocalId: "scope-c1",
                 titleContent: { t: "plain", v: { v: 1, title: "Rollout" } },
                 firstMessage: {
@@ -149,23 +175,26 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
                     content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "please look" }] } },
                     mentionedAccountIds: [mentioned.id],
                 },
-            } as SessionDiscussionCreateRequestV1,
+            } as DiscussionCreateRequestV1,
             authentication,
         });
         expect(created.ok).toBe(true);
         if (!created.ok) return;
+        const runtimeSession = await db.session.create({ data: {
+            accountId: agentRuntime.id, tag: randomUUID(), encryptionMode: "plain", metadata: JSON.stringify({ t: "plain", v: {} }),
+        } });
+        await db.discussionParticipant.create({ data: { discussionId: created.value.discussion.id, participantSlotId: runtimeSession.id, sessionId: runtimeSession.id } });
         // Agent production recorded against its own execution Account is not a
         // human post by that Account, and its mention of nobody adds nothing.
-        expect((await postSessionDiscussionMessage({
+        expect((await postDiscussionMessage({
             actorAccountId: agentRuntime.id,
-            sessionId: discussed.id,
             discussionId: created.value.discussion.id,
             request: {
                 localId: "scope-agent",
                 content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "agent output" }] } },
                 mentionedAccountIds: [],
             },
-            producer: { v: 1, kind: "agent", sessionId: discussed.id },
+            producer: { v: 1, kind: "agent", sessionId: runtimeSession.id },
             authentication,
         })).ok).toBe(true);
 
@@ -180,7 +209,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         // their own, exactly as the collective-reader case below does.
         await db.sessionShare.deleteMany({ where: { sessionId: discussed.id } });
         const select = async (accountId: string, scope: "my_work" | "involving_me") => (await db.session.findMany({
-            where: { AND: [{ id: discussed.id }, createSessionListScopeWhere({ accountId, scope })] },
+            where: { AND: [{ id: discussed.id }, await createSessionListScopeWhere({ accountId, scope })] },
             select: { id: true },
         })).map((row) => row.id);
 
@@ -206,7 +235,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         // collective (Team/Group) reader is represented exactly: personal
         // organization facts are My work relevance, never participation.
         const select = async (scope: "my_work" | "involving_me") => (await db.session.findMany({
-            where: { AND: [{ id: collective.id }, createSessionListScopeWhere({ accountId: viewer.id, scope })] },
+            where: { AND: [{ id: collective.id }, await createSessionListScopeWhere({ accountId: viewer.id, scope })] },
             select: { id: true },
         })).map((row) => row.id);
         expect(await select("my_work")).toEqual([collective.id]);
@@ -234,7 +263,7 @@ describe("personal relevance producers and list scopes (SQLite)", () => {
         const select = async () => (await db.session.findMany({
             where: { AND: [
                 { id: reminded.id },
-                createSessionListScopeWhere({ accountId: viewer.id, scope: "my_work" }),
+                await createSessionListScopeWhere({ accountId: viewer.id, scope: "my_work" }),
             ] },
             select: { id: true },
         })).map((row) => row.id);

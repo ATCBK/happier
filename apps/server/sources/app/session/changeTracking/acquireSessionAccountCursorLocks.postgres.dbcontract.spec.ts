@@ -5,6 +5,8 @@ import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { encodeAutomationSessionLifecycleConfiguration } from "@/app/automations/automationSessionLifecycleConfigurationCodec";
 import { prepareSessionAccountCursorLocks } from "./acquireSessionAccountCursorLocksInTx";
+import { markSessionProjectionRecipientsChanged } from "./markSessionProjectionRecipientsChanged";
+import { sourceKeyForSessionFollowSourceV1 } from "@/app/session/follow/sessionFollowSourceIdentity";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Prepared Session cursor audience", () => {
     let connected = false;
@@ -19,10 +21,14 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
 
-    it("replays a changed incoming-child audience and fences outgoing, incoming and Archive lifecycle Accounts", async () => {
+    it.each(["Serializable", "ReadCommitted"] as const)("replays a changed follower audience and fences outgoing, incoming and Archive lifecycle Accounts at %s", async isolationLevel => {
         const accounts = await Promise.all(Array.from({ length: 6 }, () => db.account.create({
             data: { publicKey: randomUUID(), encryptionMode: "plain" },
         })));
+        const followerOwner = await db.account.create({ data: {
+            id: `000-follow-${randomUUID()}`, publicKey: randomUUID(), encryptionMode: "plain",
+        } });
+        accounts.push(followerOwner);
         const [sourceOwner, leadOwner, childOwner, automationOwner, scopeOwner, recipient] = accounts;
         try {
             const createSession = (accountId: string) => db.session.create({ data: {
@@ -31,11 +37,15 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
             const source = await createSession(sourceOwner.id);
             const lead = await createSession(leadOwner.id);
             const child = await createSession(childOwner.id);
+            const follower = await createSession(followerOwner.id);
             const scope = await createSession(scopeOwner.id);
-            await db.sessionReportsTo.createMany({ data: [
-                { sessionId: source.id, leadSessionId: lead.id },
-                { sessionId: child.id, leadSessionId: source.id },
-            ] });
+            await db.sessionFollowEdge.createMany({ data: [
+                { sourceSessionId: source.id, destinationSessionId: lead.id, relation: 'manager', managerSourceSessionId: source.id },
+                { sourceSessionId: source.id, destinationSessionId: lead.id, relation: 'follower' },
+                { sourceSessionId: child.id, destinationSessionId: source.id, relation: 'manager', managerSourceSessionId: child.id },
+                { sourceSessionId: source.id, destinationSessionId: follower.id, relation: 'follower' },
+            ].map(edge => ({ ...edge, policyJson: JSON.stringify({ preset: 'important' }),
+                sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: edge.sourceSessionId }) })) });
             const automation = await db.automation.create({ data: {
                 accountId: automationOwner.id, name: "Archive audience", templateCiphertext: "{}", scopeSessionId: scope.id,
             } });
@@ -51,7 +61,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                 expect(preparations).toBe(2);
                 expect(await tx.$queryRaw<Array<{ isolation: string }>>`
                     SELECT current_setting('transaction_isolation') AS isolation
-                `).toEqual([{ isolation: "serializable" }]);
+                `).toEqual([{ isolation: isolationLevel === "Serializable" ? "serializable" : "read committed" }]);
                 // Each independent contender must observe the actual row fence;
                 // checking a union would hide a missing later audience member.
                 for (const account of accounts) {
@@ -59,8 +69,15 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                         SELECT id FROM "Account" WHERE id = ${account.id} FOR NO KEY UPDATE NOWAIT
                     `).rejects.toMatchObject({ code: "P2010", meta: { code: "55P03" } });
                 }
+                await tx.session.update({ where: { id: source.id }, data: { seq: { increment: 1 } } });
+                await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id });
+                expect(await tx.accountChange.findMany({ where: { sessionId: follower.id },
+                    orderBy: { accountId: 'asc' }, select: { accountId: true, hint: true } }))
+                    .toEqual([followerOwner.id, recipient.id].sort().map(accountId => ({ accountId, hint: null })));
+                expect(await tx.account.findUniqueOrThrow({ where: { id: leadOwner.id }, select: { seq: true } }))
+                    .toEqual({ seq: 1 });
             }, {
-                isolationLevel: "Serializable",
+                isolationLevel,
                 prepare: async () => {
                     preparations += 1;
                     const fence = await prepareSessionAccountCursorLocks([source.id], [], { includeLifecyclePublications: true });
@@ -68,7 +85,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                         // A real committed grant between discovery and mutation
                         // must refresh the whole sorted fence, never extend it.
                         await db.sessionShare.create({ data: {
-                            sessionId: child.id, sharedByUserId: childOwner.id, sharedWithUserId: recipient.id,
+                            sessionId: follower.id, sharedByUserId: followerOwner.id, sharedWithUserId: recipient.id,
                         } });
                     }
                     return fence;

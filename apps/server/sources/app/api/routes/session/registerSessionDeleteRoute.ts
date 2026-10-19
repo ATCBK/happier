@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { sessionDelete } from "@/app/session/sessionDelete";
 import { type Fastify } from "../../types";
 
@@ -18,7 +18,7 @@ export function registerSessionDeleteRoute(app: Fastify) {
                     ),
                 }),
                 409: z.object({
-                    error: z.literal('Session delete condition was lost'),
+                    error: z.enum(['Session is active', 'Session delete condition was lost']),
                 }),
             },
         },
@@ -32,6 +32,9 @@ export function registerSessionDeleteRoute(app: Fastify) {
         );
 
         if (!result.ok) {
+            if (result.error === 'active') {
+                return reply.code(409).send({ error: 'Session is active' });
+            }
             // A lost delete condition means the session still exists and nothing was
             // removed. Answering 404 there told the client the session was gone and
             // invited it to retire local copies of live data.

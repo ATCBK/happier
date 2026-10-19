@@ -62,45 +62,12 @@ export function createSessionPersonalAttentionCandidateWhere(params: Readonly<{
             },
         },
     } satisfies Prisma.SessionWhereInput;
+    // Candidacy only: the source-backed projector admits fulfilled exact
+    // occurrences. Armed or malformed custody creates no attention.
+    const onceWhere = { accountFollows: { some: { accountId: params.accountId, notifyOnce: { not: null } } } } satisfies Prisma.SessionWhereInput;
 
-    return {
-        AND: [
-            {
-                OR: [
-                    createSessionPersonallyTrackedWhere(params.accountId),
-                    dueReminderWhere,
-                ],
-            },
-            {
-                OR: [
-                    // Presence is only candidacy. The canonical resolver owns
-                    // the cross-model Session/read-frontier comparison.
-                    { accountReadStates: { some: { accountId: params.accountId } } },
-                    // Lane 05 owns the discussion cursor/message comparison.
-                    // One relational EXISTS avoids Account-wide ID loading.
-                    {
-                        discussions: {
-                            some: {
-                                readStates: { some: { accountId: params.accountId } },
-                            },
-                        },
-                    },
-                    { latestTurnStatus: "failed", lastRuntimeIssue: { not: null } },
-                    { pendingPermissionRequestCount: { gt: 0 } },
-                    { pendingUserActionRequestCount: { gt: 0 } },
-                    { pendingBlockedCount: { gt: 0 } },
-                    {
-                        sessionAttentionStandings: {
-                            some: {
-                                accountId: params.accountId,
-                                standing: true,
-                                remindAt: null,
-                            },
-                        },
-                    },
-                    dueReminderWhere,
-                ],
-            },
-        ],
-    };
+    // Independent Discussion cursors are admitted through their resource grants.
+    // Tracking, due reminders and one-shot custody form the provider-safe
+    // candidate superset; bounded projection applies the exact attention policy.
+    return { OR: [createSessionPersonallyTrackedWhere(params.accountId), dueReminderWhere, onceWhere] };
 }

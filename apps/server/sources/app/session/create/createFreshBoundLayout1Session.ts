@@ -10,7 +10,7 @@ import {
     SessionInitialAccessError,
     SessionInitialTriggerAdmissionError,
     SessionCreationOriginError,
-    SessionCreationReportsToError,
+    SessionCreationManagerError,
     type Layout1SessionCreateOutcome,
 } from "./layout1SessionRowWrite";
 import type {
@@ -32,7 +32,7 @@ export function classifyLayout1SessionCreateThrow(
     error: unknown,
 ): FreshBoundLayout1SessionCreateRejection | null {
     if (error instanceof SessionCreationOriginError) return { reason: "session-origin-forbidden" };
-    if (error instanceof SessionCreationReportsToError) return { reason: "session-reports-to-invalid", result: error.result };
+    if (error instanceof SessionCreationManagerError) return { reason: "session-manager-invalid", result: error.result };
     if (isSessionCreationPlacementError(error)) return { reason: "invalid-organization-placement" };
     if (isSessionOwnerEnvelopeError(error)) return { reason: "invalid-params" };
     if (error instanceof SessionInitialAccessError) {

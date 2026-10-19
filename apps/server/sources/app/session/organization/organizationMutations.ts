@@ -4,7 +4,6 @@ import { type SetSessionAttentionStandingRequest } from '@happier-dev/protocol/s
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
-import { acknowledgeCurrentSessionDiscussionFrontiersInTx } from "@/app/session/discussions/readState";
 import { applyViewerReadCursorOperationInTx } from "@/app/session/personal/readState";
 import { afterTx, inTx } from "@/storage/inTx";
 import {
@@ -495,12 +494,6 @@ export async function setSessionAttentionStandingInTx(tx: SessionOrganizationTx,
         });
         if (!read.ok && read.error !== "session-not-tracked") {
             return { error: "session-not-found" };
-        }
-        if (read.ok) {
-            await acknowledgeCurrentSessionDiscussionFrontiersInTx(tx, {
-                accountId: params.accountId,
-                sessionId: params.sessionId,
-            });
         }
     }
 

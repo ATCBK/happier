@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MAX_SESSION_SUBAGENT_CUSTODY_RECORDS, MAX_SESSION_SUBAGENT_CUSTODY_RECEIPTS, SESSION_SUBAGENT_CUSTODY_CAPABILITY_V1, SESSION_SUBAGENT_CUSTODY_RECEIPT_RETENTION_MS, SessionSubagentCustodyCapabilityV1Schema, SessionSubagentCustodyListQueryV1Schema, SessionSubagentCustodyMutationRequestV1Schema, SessionSubagentCustodyMutationResponseV1Schema, SessionSubagentCustodyPageV1Schema, SessionSubagentCustodyRetirementRequestV1Schema, SessionSubagentCustodyRetirementResponseV1Schema } from '@happier-dev/protocol/sessions/subagents/durableCustodyV1';
 import {
@@ -10,8 +10,8 @@ import { readCurrentSessionAccessForOperation } from "@/app/session/access/sessi
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import type { Fastify } from '../../types';
 
-const ParamsSchema = z.object({ sessionId: z.string().trim().min(1) }).strict();
-const ErrorSchema = z.object({ error: z.string(), code: z.string().optional() }).strict();
+const ParamsSchema = z.strictObject({ sessionId: z.string().check(z.trim(), z.minLength(1)) });
+const ErrorSchema = z.strictObject({ error: z.string(), code: z.optional(z.string()) });
 
 function mutationErrorStatus(error: string): 400 | 404 | 409 | 500 {
     if (error === 'session-not-found') return 404;

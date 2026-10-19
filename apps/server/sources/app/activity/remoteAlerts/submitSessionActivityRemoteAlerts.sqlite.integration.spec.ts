@@ -10,6 +10,12 @@ import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherP
 import { db } from "@/storage/db";
 import { eventRouter } from "@/app/events/eventRouter";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { setAccountSessionFollow, removeAccountSessionFollow, acceptAccountSessionFollowOnceDelivery } from '@/app/session/follow/accountFollowService';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { parsePersistedPersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { registerSessionFollowRoutes } from '@/app/api/routes/session/registerSessionFollowRoutes';
+import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { listSessionPersonalEventRecipients } from '@/app/session/personal/eventEligibility';
 
 const sendPushNotificationsAsyncSpy = vi.hoisted(() => vi.fn(async (messages: unknown[]) => messages.map(() => ({ status: "ok" }))));
 
@@ -53,7 +59,7 @@ async function enrollRemoteAlerts(accountId: string, settings: string, device: D
         where: { id: accountId },
         data: { remoteAlertPolicy: { settingsVersion: account.settingsVersion, policy } },
     });
-    const token = `ExponentPushToken[${accountId.slice(0, 12)}]`;
+    const token = `ExponentPushToken[${accountId}]`;
     await db.accountPushToken.create({
         data: { accountId, token, ...(device === null ? {} : { remoteAlerts: device }) },
     });
@@ -98,7 +104,7 @@ describe("Home remote alert submission (SQLite)", () => {
     afterAll(async () => { await harness?.close(); });
     afterEach(() => { sendPushNotificationsAsyncSpy.mockClear(); eventRouter.clearIo(); });
 
-    async function fixture() {
+    async function fixture(policy: 'important' | 'everything' = 'everything') {
         const owner = await db.account.create({ data: { publicKey: randomUUID() } });
         const follower = await db.account.create({ data: { publicKey: randomUUID() } });
         const reader = await db.account.create({ data: { publicKey: randomUUID() } });
@@ -108,11 +114,133 @@ describe("Home remote alert submission (SQLite)", () => {
                 sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
             })),
         });
-        await db.accountSessionFollow.create({
-            data: { sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important" },
+        // Channel/transport tests select Everything explicitly; Important's
+        // deliberately quiet completion is exercised by its own contract below.
+        await db.accountSessionFollow.createMany({
+            data: [owner, follower].map(account => ({ sessionId: session.id, accountId: account.id,
+                following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: policy }) })),
         });
         return { owner, follower, reader, session };
     }
+
+    it('applies HTTP receiver mute and Undo to personal eligibility and remote alerts without changing Follow', async () => {
+        const { owner, follower, session } = await fixture();
+        const other = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}' } });
+        await db.sessionShare.create({ data: { sessionId: other.id, sharedByUserId: owner.id,
+            sharedWithUserId: follower.id, accessLevel: 'view' } });
+        await db.accountSessionFollow.create({ data: { accountId: follower.id, sessionId: other.id,
+            following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: 'everything' }) } });
+        const ownerToken = await enrollRemoteAlerts(owner.id, accountSettingsWithRemoteAlerts());
+        const followerToken = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
+        const app = createAuthenticatedTestApp();
+        registerSessionFollowRoutes(app);
+        await app.ready();
+        const headers = { 'x-test-user-id': follower.id };
+        const url = '/v2/account/session-delivery-mutes';
+        const scope = { kind: 'source', source: { kind: 'session', sessionId: session.id } };
+        const event = { sessionId: session.id, event: 'ready' as const,
+            committedMessage: { domain: 'session_transcript' as const, seq: 1 } };
+        const recipientIds = async (sessionId: string) => (await listSessionPersonalEventRecipients({ sessionId, event: 'ready' }))
+            .map(recipient => recipient.accountId).sort();
+        // Account badge refresh is an independent tracked-source transport.
+        // This contract owns the event alert and its companion content-free wake.
+        const remoteTokens = () => [...submittedAlertPayloads(), ...submittedWakePayloads()].map(message => message.to);
+        try {
+            expect(await recipientIds(session.id)).toEqual([owner.id, follower.id].sort());
+            const initialFollow = await db.accountSessionFollow.findUniqueOrThrow({ where: {
+                accountId_sessionId: { accountId: follower.id, sessionId: session.id },
+            } });
+            const saved = await app.inject({ method: 'PUT', url, headers, payload: { scope } });
+            expect([saved.statusCode, saved.json()]).toEqual([200, { changed: true, disposition: 'muted' }]);
+            expect((await app.inject({ method: 'GET', url, headers })).json()).toEqual({ scopes: [scope] });
+            expect(await recipientIds(session.id)).toEqual([owner.id]);
+            expect(await recipientIds(other.id)).toEqual([owner.id, follower.id].sort());
+            expect(await submitSessionActivityRemoteAlerts(event)).toEqual([owner.id]);
+            expect(remoteTokens()).toContain(ownerToken);
+            expect(remoteTokens()).not.toContain(followerToken);
+            expect(await db.accountSessionFollow.findUniqueOrThrow({ where: {
+                accountId_sessionId: { accountId: follower.id, sessionId: session.id },
+            } })).toEqual(initialFollow);
+
+            const removed = await app.inject({ method: 'DELETE', url, headers, payload: { scope } });
+            expect([removed.statusCode, removed.json()]).toEqual([200, { changed: true, disposition: 'unmuted' }]);
+            expect(await recipientIds(session.id)).toEqual([owner.id, follower.id].sort());
+            sendPushNotificationsAsyncSpy.mockClear();
+            expect([...(await submitSessionActivityRemoteAlerts(event))].sort()).toEqual([owner.id, follower.id].sort());
+            expect(remoteTokens()).toContain(followerToken);
+
+            await db.account.update({ where: { id: follower.id }, data: { deliveryMutes: '{invalid' } });
+            expect(await recipientIds(session.id)).toEqual([owner.id]);
+            sendPushNotificationsAsyncSpy.mockClear();
+            expect(await submitSessionActivityRemoteAlerts(event)).toEqual([owner.id]);
+            expect(remoteTokens()).not.toContain(followerToken);
+        } finally { await app.close(); }
+    });
+
+    it('keeps Important completion quiet and uses the same source policy for an explicit Custom interruption', async () => {
+        const { owner, follower, session } = await fixture('important');
+        await enrollRemoteAlerts(owner.id, accountSettingsWithRemoteAlerts());
+        const token = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
+        const submit = () => submitSessionActivityRemoteAlerts({
+            sessionId: session.id, event: 'ready', committedMessage: { domain: 'session_transcript', seq: 1 },
+        });
+        expect(await submit()).toEqual([]);
+        expect(submittedAlertPayloads()).toEqual([]);
+        await db.accountSessionFollow.update({
+            where: { accountId_sessionId: { accountId: follower.id, sessionId: session.id } },
+            data: { followPolicy: JSON.stringify({ preset: 'custom', events: { finished: { delivery: 'interrupt' } } }) },
+        });
+        sendPushNotificationsAsyncSpy.mockClear();
+        expect(await submit()).toEqual([follower.id]);
+        expect(submittedAlertPayloads()).toEqual([expect.objectContaining({ to: token,
+            data: expect.objectContaining({ event: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: 1 } }),
+        })]);
+    });
+
+    it('keeps a manager-handled one-shot quiet even when there is no persistent policy', async () => {
+        const { owner, session } = await fixture();
+        await enrollRemoteAlerts(owner.id, accountSettingsWithRemoteAlerts());
+        const key = { accountId: owner.id, sessionId: session.id };
+        const authentication = createPresentUserSessionAccessAuthentication();
+        await removeAccountSessionFollow({ ...key, authentication });
+        await setAccountSessionFollow({ ...key, authentication, preferences: { once: { kind: 'first_needs_you' } } });
+        await db.session.update({ where: { id: session.id }, data: {
+            agentStateVersion: 1, pendingUserActionRequestCount: 1,
+        } });
+        expect(await submitSessionActivityRemoteAlerts({
+            sessionId: session.id, event: 'user_action_required', committedRequestId: 'manager-question',
+            followEvent: { kind: 'needs_you', type: 'decision', mode: 'wait', handling: 'manager' },
+            onceOccurrence: { event: 'user_action_required', requestId: 'manager-question', agentStateVersion: 1 },
+        })).toEqual([]);
+        expect(submittedAlertPayloads()).toEqual([]);
+        const follow = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        expect(parsePersistedPersonalFollowOnceV1(follow.notifyOnce)).toMatchObject({ state: 'fulfilled' });
+        expect(follow).toMatchObject({ following: false, notificationLevel: 'none' });
+    });
+
+    it('delivers the committed terminal one-shot winner without enrolling ongoing Follow or replaying it', async () => {
+        const { follower, session } = await fixture();
+        const token = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
+        const key = { accountId: follower.id, sessionId: session.id };
+        const authentication = createPresentUserSessionAccessAuthentication();
+        await removeAccountSessionFollow({ ...key, authentication });
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'once-turn', latestTurnStatus: 'in_progress' } });
+        await setAccountSessionFollow({ ...key, authentication, preferences: { once: { kind: 'turn_finished', sourceTurnId: 'once-turn' } } });
+        const armed = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        if (!armed.notifyOnce) throw new Error('Expected an armed one-shot');
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'once-turn', status: 'completed', startedAt: 1, updatedAt: 2, terminalAt: 2 } });
+        const onceOccurrence = { event: 'ready' as const, turnId: 'once-turn', agentStateVersion: 0, transcriptSeq: 1 };
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, expectedOnce: armed.notifyOnce, occurrence: onceOccurrence })).toBe(true);
+        const event = { sessionId: session.id, event: 'ready' as const, committedTurnId: 'once-turn',
+            committedMessage: { domain: 'session_transcript' as const, seq: 1 }, onceOccurrence, onceOnly: true };
+        expect(await submitSessionActivityRemoteAlerts({ ...event, acceptedOnceAccountIds: [follower.id] })).toEqual([follower.id]);
+        expect(submittedAlertPayloads()).toEqual([expect.objectContaining({ to: token })]);
+        expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } }))
+            .toMatchObject({ following: false, notificationLevel: 'none' });
+        sendPushNotificationsAsyncSpy.mockClear();
+        expect(await submitSessionActivityRemoteAlerts(event)).toEqual([]);
+        expect(submittedAlertPayloads()).toEqual([]);
+    });
 
     it("submits nothing while the sole Session Follow feature is disabled", async () => {
         const { follower, session } = await fixture();
@@ -124,7 +252,8 @@ describe("Home remote alert submission (SQLite)", () => {
             event: "ready",
             committedMessage: { domain: "session_transcript", seq: 1 },
             })).toEqual([]);
-            expect(submittedPayloads()).toEqual([]);
+            expect(submittedAlertPayloads()).toEqual([]);
+            expect(submittedWakePayloads()).toEqual([]);
         } finally {
             process.env.HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED = "true";
         }
@@ -231,6 +360,34 @@ describe("Home remote alert submission (SQLite)", () => {
         expect(JSON.stringify(payload)).not.toContain(session.tag);
         expect(payload?.title).toBe("Happier");
         expect(payload?.mutableContent).toBe(true);
+    });
+
+    it.each(['failed', 'cancelled', 'message', 'human_message'] as const)('keeps legacy %s fallback and delegates only supported explicitly declared semantic alerts', async event => {
+        const { owner, session } = await fixture();
+        if (event === 'message') await db.accountSessionFollow.update({ where: {
+            accountId_sessionId: { accountId: owner.id, sessionId: session.id },
+        }, data: { followPolicy: JSON.stringify({ preset: 'custom', events: { message: { delivery: 'interrupt' } } }) } });
+        const machine = await db.machine.create({ data: { id: `machine-${randomUUID()}`,
+            accountId: owner.id, metadata: '{}', kind: 'persistent' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        await enrollRemoteAlerts(owner.id, accountSettingsWithRemoteAlerts());
+        const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
+        const presence = createSessionPublisherPresence();
+        const registration = await presence.registerPublisher({ socket: {}, binding,
+            completeActivitySnapshot: { state: 'unknown', activeCount: 0 } });
+        if (registration.status !== 'registered') throw new Error('Missing actual publisher');
+        const runtimeComposition = { publisherAuthority: { ...binding, committedFence: registration.committedFence },
+            ownerActivityDelivery: 'rich_sender' as const };
+        expect(await submitSessionActivityRemoteAlerts({ sessionId: session.id, event,
+            committedMessage: { domain: 'session_transcript', seq: 12 },
+            committedTurnId: 'terminal-turn',
+            runtimeComposition })).toContain(owner.id);
+        const current = await submitSessionActivityRemoteAlerts({ sessionId: session.id, event,
+            committedMessage: { domain: 'session_transcript', seq: 12 },
+            committedTurnId: 'terminal-turn',
+            runtimeComposition: { ...runtimeComposition, ownerActivityDeliveryWasReported: true } });
+        if (event === 'human_message') expect(current).toContain(owner.id);
+        else expect(current).not.toContain(owner.id);
     });
 
     it("includes the owner when an active persistent Machine's publisher authority was superseded", async () => {

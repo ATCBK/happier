@@ -1,11 +1,8 @@
-import type { SessionDiscussionAttentionFactsV1 } from '@happier-dev/protocol/sessions/discussions/models';
+import type { DiscussionAttentionFactsV1 } from '@happier-dev/protocol/discussions/models';
+import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 
 import type { Tx } from "@/storage/inTx";
-import {
-    listSessionIdsWithDiscussionCursorsInTx,
-    loadSessionDiscussionAttentionForAccountsInTx,
-    loadSessionDiscussionParticipationForAccountInTx,
-} from "@/app/session/discussions/attentionFacts";
+import { loadDiscussionSessionFactsForAccountInTx } from "@/app/discussions/attentionFacts";
 
 /**
  * The narrow Lane 05 discussion port, mirroring `followFacts` in shape.
@@ -42,7 +39,7 @@ export const QUIET_SESSION_PERSONAL_DISCUSSION_FACTS: SessionPersonalDiscussionF
  * no history may be replayed as unread.
  */
 export function projectDiscussionAttentionSignals(
-    facts: SessionDiscussionAttentionFactsV1 | undefined,
+    facts: DiscussionAttentionFactsV1 | undefined,
 ): Readonly<{ hasUnread: boolean; hasMention: boolean }> {
     return {
         hasUnread: (facts?.unreadConversationCount ?? 0) > 0,
@@ -50,13 +47,34 @@ export function projectDiscussionAttentionSignals(
     };
 }
 
+/** Resource-admitted cursor facts use the same attention decision as Session rows. */
+export function doesDiscussionViewerNeedAttention(facts: DiscussionAttentionFactsV1 | undefined): boolean {
+    return resolveSessionPersonalAttentionV1({
+        tracked: facts !== undefined,
+        accessible: facts !== undefined,
+        accountSuspended: false,
+        contentAvailable: true,
+        visibleSessionSeq: 0,
+        readState: { state: 'not_started' },
+        latestReadyEventSeq: null,
+        hasPrimarySessionFailure: false,
+        pendingBlockedCount: 0,
+        pendingPermissionRequestCount: 0,
+        pendingUserActionRequestCount: 0,
+        capabilities: { canSubmitAgentInput: false, canApprovePermissions: false },
+        responsible: false,
+        discussion: projectDiscussionAttentionSignals(facts),
+        attentionStanding: 'none',
+        reminderDue: false,
+    }).needsAttention;
+}
+
 /**
  * Loads both discussion fact families for a page of Sessions in one bounded set.
  *
- * Participation is two existence queries over the whole page. Attention is
- * narrowed first to the Sessions where this Account actually holds a cursor, so
- * an ordinary page of Sessions without conversations costs one extra lookup and
- * never visits Lane 05's per-Session unread derivation at all.
+ * The Discussion owner shares candidate discovery and access admission across
+ * participation and unread attention. An ordinary page without Discussions
+ * costs one lookup; final row projection can reuse these exact observed facts.
  */
 export async function loadSessionPersonalDiscussionFactsInTx(tx: Tx, params: Readonly<{
     accountId: string;
@@ -66,21 +84,10 @@ export async function loadSessionPersonalDiscussionFactsInTx(tx: Tx, params: Rea
     const facts = new Map<string, SessionPersonalDiscussionFacts>();
     if (sessionIds.length === 0) return facts;
 
-    const participation = await loadSessionDiscussionParticipationForAccountInTx(tx, {
+    const { participation, attention } = await loadDiscussionSessionFactsForAccountInTx(tx, {
         accountId: params.accountId,
         sessionIds,
     });
-    const trackedSessionIds = await listSessionIdsWithDiscussionCursorsInTx(tx, {
-        accountIds: [params.accountId],
-        sessionIds,
-    });
-    const attention = trackedSessionIds.length === 0
-        ? undefined
-        : (await loadSessionDiscussionAttentionForAccountsInTx(tx, {
-            accountIds: [params.accountId],
-            sessionIds: trackedSessionIds,
-        })).get(params.accountId);
-
     for (const sessionId of sessionIds) {
         const signals = projectDiscussionAttentionSignals(attention?.get(sessionId));
         const participated = participation.get(sessionId);

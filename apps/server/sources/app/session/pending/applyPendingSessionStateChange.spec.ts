@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Tx } from "@/storage/inTx";
 import { applyPendingSessionStateChange } from "./applyPendingSessionStateChange";
-import { createAccountCursorRawQueryTransactionModel, createEmptySessionReportsToTransactionModel } from "@/app/api/testkit/txHarness";
+import { createAccountCursorRawQueryTransactionModel, createEmptySessionFollowEdgeTransactionModel } from "@/app/api/testkit/txHarness";
 
 vi.mock("@/storage/inTx", async (importOriginal) => ({
     ...await importOriginal<typeof import("@/storage/inTx")>(),
@@ -122,7 +122,6 @@ function createConcurrentDecrementTx() {
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
         sessionFollowEdge: { findMany: vi.fn(async () => []) },
-        sessionReportsTo: { findUnique: vi.fn(async () => null) },
         account: {
             update: vi.fn(async () => {
                 state.accountSeq += 1;
@@ -138,7 +137,7 @@ function createConcurrentDecrementTx() {
         // Test boundary fake implements the Tx methods this helper reaches.
         tx: {
             ...tx,
-            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+            sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
             $queryRawUnsafe: createAccountCursorRawQueryTransactionModel(tx),
         } as unknown as Tx,
         readState: () => ({
@@ -226,7 +225,6 @@ function createConcurrentEnqueueAfterFailedDecrementTx() {
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
         sessionFollowEdge: { findMany: vi.fn(async () => []) },
-        sessionReportsTo: { findUnique: vi.fn(async () => null) },
         account: {
             update: vi.fn(async () => {
                 state.accountSeq += 1;
@@ -242,7 +240,7 @@ function createConcurrentEnqueueAfterFailedDecrementTx() {
         // Test boundary fake implements the Tx methods this helper reaches.
         tx: {
             ...tx,
-            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+            sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
             $queryRawUnsafe: createAccountCursorRawQueryTransactionModel(tx),
         } as unknown as Tx,
         accountChangeUpsert,

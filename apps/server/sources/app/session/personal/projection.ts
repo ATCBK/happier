@@ -4,6 +4,7 @@ import { projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@ha
 import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
+import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 import { inTx } from "@/storage/inTx";
 import {
@@ -37,13 +38,15 @@ export function createSessionPersonalProjectionSelect(accountId: string) {
         lastRuntimeIssue: true,
         pendingBlockedCount: true,
         pendingPermissionRequestCount: true,
+        pendingSharedActionConfirmationCount: true,
         pendingUserActionRequestCount: true,
         // Lane 04's derived authenticated-authorship projection, bounded by its
         // `[authorAccountId, sessionId]` index. Existence is the whole fact; no
         // transcript row, content, or count is read here.
         messages: { where: { authorAccountId: accountId }, take: 1, select: { id: true } },
         accountReadStates: { where: { accountId }, select: { accountId: true, lastViewedSessionSeq: true, unreadSince: true } },
-        accountFollows: { where: { accountId }, select: { accountId: true, following: true, notificationLevel: true, includeInVoice: true } },
+        accountFollows: { where: { accountId }, select: { accountId: true, following: true, notificationLevel: true, includeInVoice: true,
+            followPolicy: true, notifyOnce: true, hasPersistentFollow: true } },
         sessionPins: { where: { accountId }, select: { accountId: true } },
         sessionAttentionStandings: { where: { accountId }, select: { accountId: true, standing: true, remindAt: true } },
         ...createSessionDataKeyEnvelopeViewerSelect({ viewerAccountId: accountId }),
@@ -71,6 +74,7 @@ export function createSessionPersonalAttentionProjectionSelectForAccounts(accoun
         lastRuntimeIssue: true,
         pendingBlockedCount: true,
         pendingPermissionRequestCount: true,
+        pendingSharedActionConfirmationCount: true,
         pendingUserActionRequestCount: true,
         accountReadStates: {
             where: { accountId: { in: ids } },
@@ -78,7 +82,7 @@ export function createSessionPersonalAttentionProjectionSelectForAccounts(accoun
         },
         accountFollows: {
             where: { accountId: { in: ids } },
-            select: { accountId: true, following: true, notificationLevel: true },
+            select: { accountId: true, following: true, notificationLevel: true, followPolicy: true, notifyOnce: true, hasPersistentFollow: true },
         },
         sessionAttentionStandings: {
             where: { accountId: { in: ids } },
@@ -165,7 +169,7 @@ function projectSessionViewerAttentionState(params: Readonly<{
         latestReadyEventSeq: sequences.latestReadyEventSeq ?? null,
         hasPrimarySessionFailure: row.latestTurnStatus === "failed" && issue?.scope === "primary_session" && issue.status === "failed",
         pendingBlockedCount: live ? row.pendingBlockedCount : 0,
-        pendingPermissionRequestCount: live ? row.pendingPermissionRequestCount : 0,
+        pendingPermissionRequestCount: live ? row.pendingPermissionRequestCount + row.pendingSharedActionConfirmationCount : 0,
         pendingUserActionRequestCount: live ? row.pendingUserActionRequestCount : 0,
         capabilities: {
             canSubmitAgentInput: access?.capabilities.submitAgentInput === true,
@@ -175,6 +179,7 @@ function projectSessionViewerAttentionState(params: Readonly<{
         discussion: { hasUnread: discussion.hasUnread, hasMention: discussion.hasMention },
         attentionStanding: standingFacts.attentionStanding,
         reminderDue: standingFacts.reminderDue,
+        onceDelivery: follow.onceDelivery,
     });
     return { access, attention, follow, now, ownedByMe, readState, responsible, standing };
 }
@@ -208,7 +213,10 @@ export function projectSessionViewer(params: Readonly<{
     });
     return {
         readState: state.readState,
-        follow: state.follow,
+        follow: { ...state.follow, ...(state.access && row.responsibleAccountId !== undefined ? {
+            defaultRelationships: projectSessionFollowDefaultRelationshipsV1({ responsibleForMe: state.responsible,
+                relationshipKinds: state.access.relationshipKinds }),
+        } : {}) },
         notification: resolveSessionEffectiveNotificationV1({ facts: state.follow, isSessionOwner: state.ownedByMe }),
         relevance: resolveSessionPersonalRelevanceV1({
             ownedByMe: state.ownedByMe, responsibleForMe: state.responsible,
@@ -222,6 +230,7 @@ export function projectSessionViewer(params: Readonly<{
             authoredByMe: (row.messages?.length ?? 0) > 0 || discussion.authored,
             mentionedInDiscussion: discussion.mentioned,
             followedByMe: state.follow.follows,
+            followOnce: Boolean(state.follow.once || state.follow.onceDelivery),
             pinnedByMe: row.sessionPins?.some(value => value.accountId === viewerAccountId) === true,
             explicitAttention: resolveSessionAttentionStandingProjectionFacts(
                 state.standing,

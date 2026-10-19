@@ -6,6 +6,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { markSessionProjectionRecipientsChanged } from "./markSessionProjectionRecipientsChanged";
 import { eventRouter } from "@/app/events/eventRouter";
 import { PrismaClient } from "../../../../generated/sqlite-client";
+import { sourceKeyForSessionFollowSourceV1 } from "@/app/session/follow/sessionFollowSourceIdentity";
 
 describe("markSessionProjectionRecipientsChanged publication privacy (SQLite integration)", () => {
     let harness: LightSqliteHarness;
@@ -25,7 +26,6 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
         eventRouter.clearIo();
         await harness.resetDbTables([
             () => db.sessionFollowEdge.deleteMany(),
-            () => db.sessionReportsTo.deleteMany(),
             () => db.sessionShare.deleteMany(),
             () => db.accountChange.deleteMany(),
             () => db.session.deleteMany(),
@@ -74,9 +74,14 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
                 await db.sessionShare.createMany({ data: [source, ...destinations].flatMap(session => accounts.slice(1).map(account => ({
                     sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view",
                 }))) });
-                await db.sessionReportsTo.create({ data: { sessionId: source.id, leadSessionId: lead.id } });
+                await db.sessionFollowEdge.create({ data: { sourceSessionId: source.id, destinationSessionId: lead.id,
+                    sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }),
+                    policyJson: JSON.stringify({ preset: 'important' }),
+                    relation: 'manager', managerSourceSessionId: source.id } });
                 await db.sessionFollowEdge.createMany({ data: destinations.map(destination => ({
                     sourceSessionId: source.id, destinationSessionId: destination.id,
+                    sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }),
+                    policyJson: JSON.stringify({ preset: 'important' }),
                 })) });
                 await db.accountChange.createMany({ data: accounts.map((account, index) => ({
                     accountId: account.id, kind: "session", entityId: lead.id, sessionId: lead.id,
@@ -86,6 +91,7 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
                 statements.length = 0;
                 wake.mockClear();
                 const cursors = await inTx(async tx => {
+                    await tx.session.update({ where: { id: source.id }, data: { seq: { increment: 1 } } });
                     const result = await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id,
                         recipientAccountIds: accounts.map(account => account.id),
                         hint: { latestTurnId: "private-turn", latestTurnStatus: "failed" } });
@@ -96,8 +102,8 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
                 const trace = [...statements];
                 await settleBroadcasts();
                 expect(cursors.map(cursor => cursor.accountId)).toEqual([owner.id]);
-                const changes = await db.accountChange.findMany({ where: { sessionId: { in: [source.id, lead.id] } },
-                    select: { accountId: true, sessionId: true, hint: true } });
+                const changes = await db.accountChange.findMany({ where: { sessionId: { in: [source.id, ...destinations.map(destination => destination.id)] } },
+                    select: { accountId: true, sessionId: true, hint: true, cursor: true } });
                 expect(changes.filter(change => change.sessionId === lead.id).map(change => change.accountId).sort())
                     .toEqual(accounts.map(account => account.id).sort());
                 for (const [index, account] of accounts.entries()) {
@@ -108,18 +114,25 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
                     accountId: owner.id, hint: { latestTurnId: "private-turn", latestTurnStatus: "failed" },
                 })]);
                 for (const destination of destinations) {
-                    expect([...new Set(broadcast.mock.calls.filter(([input]) => input.sessionId === destination.id)
-                        .map(([input]) => input.userId))].sort()).toEqual(accounts.map(account => account.id).sort());
+                    const destinationChanges = changes.filter(change => change.sessionId === destination.id);
+                    expect(destinationChanges.map(change => change.accountId).sort()).toEqual(accounts.map(account => account.id).sort());
+                    expect(broadcast.mock.calls.filter(([input]) => input.sessionId === destination.id)
+                        .map(([input]) => input.userId).sort()).toEqual(accounts.map(account => account.id).sort());
+                    if (destination.id !== lead.id) expect(destinationChanges.every(change => change.hint === null)).toBe(true);
                 }
                 const beforeRollback = await db.account.findMany({ where: { id: { in: accounts.map(account => account.id) } },
                     orderBy: { id: "asc" }, select: { id: true, seq: true } });
                 for (const account of beforeRollback) {
+                    expect(account.seq).toBe(destinationCount + (account.id === owner.id ? 1 : 0));
+                    const accountCursors = changes.filter(change => change.accountId === account.id).map(change => change.cursor);
+                    expect(new Set(accountCursors).size).toBe(accountCursors.length);
                     expect(wake.mock.calls.some(([input]) => input.userId === account.id
                         && input.payload.seq === account.seq && input.payload.body.t === "account-change")).toBe(true);
                 }
                 broadcast.mockClear();
                 wake.mockClear();
                 await expect(inTx(async tx => {
+                    await tx.session.update({ where: { id: source.id }, data: { seq: { increment: 1 } } });
                     await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id });
                     throw new Error("relation-rollback");
                 })).rejects.toThrow("relation-rollback");

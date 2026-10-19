@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { decodeSessionDataKeyEnvelopeCursorV1, PatchSessionDataKeyEnvelopesResultV1Schema, PatchSessionDataKeyEnvelopesV1Schema, SessionDataKeyEnvelopePageQueryV1Schema, SessionDataKeyEnvelopePageV1Schema } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 
@@ -26,7 +26,7 @@ import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/uti
  * gating the transport would instead break direct-share preparation.
  */
 
-const errorSchema = <Code extends z.ZodType>(code: Code) => z.object({ error: code }).strict();
+const errorSchema = <Code extends z.ZodMiniType>(code: Code) => z.strictObject({ error: code });
 const InvalidRequestErrorSchema = errorSchema(z.literal("invalid_request"));
 const PageBadRequestErrorSchema = errorSchema(z.enum(["invalid_request", "invalid_cursor"]));
 const ForbiddenErrorSchema = z.union([
@@ -41,7 +41,7 @@ const PatchConflictErrorSchema = errorSchema(z.enum([
     "recipient_key_unavailable",
     "session_data_key_unavailable",
 ]));
-const ParamsSchema = z.object({ sessionId: z.string().min(1) }).strict();
+const ParamsSchema = z.strictObject({ sessionId: z.string().check(z.minLength(1)) });
 
 /** One code decides one status; there are no per-item errors or retry hints. */
 function statusForPageError(error: SessionDataKeyEnvelopePageError): 400 | 403 | 404 | 409 | 503 {

@@ -3,7 +3,7 @@ import { PendingActivationFailureDetailsV1Schema, PendingActivationRuntimeFailur
 import { SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
 import {
     createAccountCursorRawQueryTransactionModel,
-    createEmptySessionReportsToTransactionModel,
+    createEmptySessionFollowEdgeTransactionModel,
 } from '@/app/api/testkit/txHarness';
 
 import { Prisma } from '@prisma/client';
@@ -52,7 +52,7 @@ function createTx(session: Record<string, unknown>, row?: Record<string, unknown
         account,
         accountChange,
         $queryRawUnsafe: vi.fn(createAccountCursorRawQueryTransactionModel({ account, accountChange })),
-        sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+        sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
         sessionShare: { findMany: vi.fn(async () => []) },
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
@@ -102,6 +102,7 @@ describe('pending activation authorization owner', () => {
             status: 'failed', failureCode: 'runtime_start_failed' });
         expect(mapPendingActivationFailureDetails(session)).toEqual({ reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' });
         expect(mapPendingActivationFailureDetails({ ...session, lastActiveAt: new Date(102) })).toBeUndefined();
+        expect(mapPendingActivationAuthorization({ ...session, pendingActivationFailureCode: 'unknown_future_failure' })).toBeUndefined();
     });
     it('arms an eligible Account-authored send_now beyond the publisher fence', async () => {
         const session = {

@@ -7,11 +7,11 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { deleteSessionTree } from '@/app/session/delete/deleteSessionTree';
-import { setSessionReportsTo } from './sessionReportsToService';
+import { setSessionManager } from '../follow/sessionManagerService';
 
 const authentication = createPresentUserSessionAccessAuthentication({ env: {} });
 
-describe('reportsTo never grants Session authority (SQLite integration)', () => {
+describe('manager never grants Session authority (SQLite integration)', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-reports-nongrant-' }); }, 180_000);
     afterAll(async () => { await harness?.close(); });
@@ -32,8 +32,8 @@ describe('reportsTo never grants Session authority (SQLite integration)', () => 
             groupGrants: await tx.sessionGroupGrant.findMany({ where: { sessionId: { in: [child.id, lead.id] } } }),
         }));
         const before = await snapshot();
-        expect(await setSessionReportsTo({ accountId: owner.id, sessionId: child.id, leadSessionId: lead.id,
-            expectedLeadSessionId: null, authentication })).toMatchObject({ ok: true });
+        expect(await setSessionManager({ accountId: owner.id, sessionId: child.id, managerSessionId: lead.id,
+            expectedManagerSessionId: null, authentication })).toMatchObject({ ok: true });
         expect(await snapshot()).toEqual(before);
     });
 
@@ -44,14 +44,14 @@ describe('reportsTo never grants Session authority (SQLite integration)', () => 
             latestTurnId: randomUUID(), latestTurnStatus: 'in_progress',
         } });
         const [child, lead] = await Promise.all([create(), create()]);
-        expect((await setSessionReportsTo({ accountId: owner.id, sessionId: child.id, leadSessionId: lead.id,
-            expectedLeadSessionId: null, authentication })).ok).toBe(true);
+        expect((await setSessionManager({ accountId: owner.id, sessionId: child.id, managerSessionId: lead.id,
+            expectedManagerSessionId: null, authentication })).ok).toBe(true);
         await inTx((tx) => deleteSessionTree(tx, {
             sessionId: lead.id, sessionUpdatedAt: lead.updatedAt, actorAccountId: owner.id, reason: 'user_request',
         }));
         expect(await db.session.findUniqueOrThrow({ where: { id: child.id } })).toMatchObject({
             active: true, latestTurnId: child.latestTurnId, latestTurnStatus: 'in_progress',
         });
-        expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
+        expect(await db.sessionFollowEdge.findUnique({ where: { managerSourceSessionId: child.id } })).toBeNull();
     });
 });

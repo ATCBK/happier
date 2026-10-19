@@ -146,6 +146,30 @@ describe('installed Session proposal admission at the Home mint route', () => {
             expect(authorization.binding.authentication).toMatchObject({ kind, tokenEpoch: 0 });
             expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toMatchObject({ authority: 'account_automation' });
             expect(Boolean(await verifyProposalCurrentness(authorization))).toBe(true);
+            expect(await verifyExternalActionExecutionAuthorizationCurrentness({
+                ...signedRequestProof(authorization,
+                    bindExternalActionExecutionAuthorizationVerifyHttpPathV1(actionId), { v: 1 }),
+                outerActionId: actionId, machineSignature: '',
+            })).toBeNull();
+            const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+                createdBy: { surface: 'agent', sessionId: 'session' }, requestedSurface: 'agent', actionId,
+                actionArgs: body.envelope.input, summary: 'Read Teams', executionOriginV1: {
+                    v: 1, authority: 'account_automation', surface: 'agent', caller: body.sessionActionOrigin.caller,
+                    serverId: 'profile', serverIdentityId: authorization.binding.serverIdentityId, accountId: 'account',
+                    sessionId: 'session', machineId: 'machine', actionId, requestId: body.envelope.requestId,
+                    callerPermissionMode: null,
+                    sessionInputSource: { sourceSessionId: 'session', sourceTurnId: 'turn', via: 'action' },
+                    target: body.envelope.target, externalActionExecutionAuthorization: authorization,
+                    externalActionInputSignature: signExternalActionApprovalInputV1({ authorizationToken: authorization.token,
+                        actionId, input: body.envelope.input, target: body.envelope.target, privateKey: installation.secretKey }),
+                } });
+            // The authenticated Artifact dependency is the I/O boundary. Home
+            // minting, signature codecs and the public Action executor stay real.
+            const publicReader = createActionExecutor({ approvalsGet: async () => approval } as unknown as ActionExecutorDeps);
+            const observed = await publicReader.execute('approval.request.get', { artifactId: 'minted-approval' }, { surface: 'cli' });
+            expect(observed).toMatchObject({ ok: true, result: { request: { actionId, status: 'open' } } });
+            expect(JSON.stringify(observed).includes(authorization.token)).toBe(false);
+            expect(JSON.stringify(observed)).not.toContain('externalActionInputSignature');
             for (const invalid of [
                 { ...body, installationProof: undefined },
                 { ...body, sessionActionSource: undefined },

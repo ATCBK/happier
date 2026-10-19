@@ -22,7 +22,7 @@ import * as privacyKit from "privacy-kit";
 import { enforceSessionPublicLinkExternalSharingPolicyInTx } from "@/app/session/access/sessionAccessExternalSharingPolicy";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
-import { removeUnsafeSessionReportsToEdgesForAccessChangeInTx } from "@/app/session/relations/sessionReportsToService";
+import { removeUnsafeSessionManagerEdgesForAccessChangeInTx } from "@/app/session/follow/sessionManagerService";
 import { readHomeConfigEnvInTx } from "@/app/home/settings/homeSettings";
 import { readHomeConfigEnvOrigin } from "@/app/home/settings/homeConfigOverlay";
 function equalBytes(left: Uint8Array | null, right: Uint8Array | null): boolean {
@@ -194,7 +194,7 @@ export async function writeSessionPublicShare(input: SessionPublicShareWrite) {
         }
         if (isPublicSessionShareActive(publicShare)) {
             await removeUnsafeSessionFollowEdgesForAccessChangeInTx(tx, { sessionId });
-            await removeUnsafeSessionReportsToEdgesForAccessChangeInTx(tx, { sessionId });
+            await removeUnsafeSessionManagerEdgesForAccessChangeInTx(tx, { sessionId });
         }
         const shareCursor = await markAccountChanged(tx, { accountId: userId, kind: 'share', entityId: sessionId });
         const sessionCursor = await markAccountChanged(tx, { accountId: userId, kind: 'session', entityId: sessionId });

@@ -1,3 +1,4 @@
+import { normalizeSessionMessageContentForStorage } from "@/app/session/normalizeSessionMessageContentForStorage";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
@@ -19,6 +20,28 @@ import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages
 import { notifySessionTranscriptMutationAfterCommit } from '../sessionTranscriptMutationObserver';
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { SessionMessageReplyProgressV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+
+/** Pending is the sole custody owner until retirement, including when a transcript row already exists. */
+async function carryOriginalReplyProgressInTx(tx: Tx, sessionId: string, localId: string, messageId: string): Promise<void> {
+    const pending = await tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } },
+        select: { replyProgress: true, replyTargetMachineId: true } });
+    if (pending?.replyProgress == null) return;
+    const progress = SessionMessageReplyProgressV1Schema.parse(pending.replyProgress);
+    await tx.sessionMessage.update({ where: { id: messageId }, data: { replyProgress: progress,
+        replyDisposition: progress.disposition, replyTargetMachineId: pending.replyTargetMachineId,
+        replySourceSessionId: progress.sourceSession?.sourceSessionId ?? null, replySourceTurnId: progress.sourceSession?.sourceTurnId ?? null } });
+}
+
+/** Pending retains the host's exact Turn-begin witness until its Message exists. */
+async function carryTurnStartWitnessInTx(tx: Tx, sessionId: string, localId: string, messageId: string): Promise<void> {
+    const pending = await tx.sessionPendingMessage.findUnique({
+        where: { sessionId_localId: { sessionId, localId } }, select: { turnStartWitnessId: true },
+    });
+    if (!pending?.turnStartWitnessId) return;
+    await tx.sessionMessage.updateMany({ where: { id: messageId, turnStartWitnessId: null },
+        data: { turnStartWitnessId: pending.turnStartWitnessId } });
+}
 
 export type PendingTranscriptMessage = {
     id: string;
@@ -91,7 +114,9 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
     error: "storage-mode-conflict";
     code: SessionTranscriptWriteRejectionCode;
 }> {
-    const { sessionId, localId, content, messageRole } = params;
+    const { sessionId, localId, messageRole } = params;
+    const content = normalizeSessionMessageContentForStorage(params.content);
+    if (!content) return { ok: false, error: "transcript-conflict", conflict: "content" };
     const targetExecutionRunId = params.targetExecutionRunId ?? null;
     const inputAdmissionReceipt = params.inputAdmissionReceipt === undefined
         ? undefined
@@ -302,6 +327,8 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
             });
         }
 
+        await carryOriginalReplyProgressInTx(tx, sessionId, localId, row.id);
+        await carryTurnStartWitnessInTx(tx, sessionId, localId, row.id);
         return {
             ok: true,
             didWrite: false,
@@ -344,6 +371,8 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
         return persisted;
     }
     const created = persisted.message;
+    await carryOriginalReplyProgressInTx(tx, sessionId, localId, created.id);
+    await carryTurnStartWitnessInTx(tx, sessionId, localId, created.id);
     if (targetExecutionRunId !== null) {
         // Keep this server-private binding inside the Pending commit owner. The
         // canonical transcript writer intentionally has no public/general

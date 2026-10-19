@@ -19,6 +19,9 @@ import {
 import { EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 } from "@happier-dev/protocol/actions/externalActionApi";
 import { createExternalActionDaemonDispatcher } from "@/app/api/socket/externalActionDispatcher";
 import { Server } from "socket.io";
+import { symbols, type DestinationStream } from 'pino';
+import { logger } from '@/utils/logging/log';
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
 import {
     type RegisterExternalActionRoutesDependencies,
     registerExternalActionRoutes,
@@ -109,6 +112,82 @@ function externalActionV2JsonPayloadWithByteLength(byteLength: number): string {
 }
 
 describe("registerExternalActionRoutes", () => {
+    it.each([false, true])('excludes multiline exception content from the real HTTP log (unproven stack: %s)', unproven => {
+        const records: unknown[] = [];
+        const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
+        const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
+        const failure = new Error('private message\n    at /CREDENTIAL_SENTINEL.js:7:9');
+        if (unproven) failure.stack = '    at /UNPROVEN_SENTINEL.js:1:2';
+        try {
+            logUnexpectedRequestError(failure, { module: 'external-action-error', httpRequestId: 'http-request' });
+            expect(JSON.stringify(records)).not.toContain('SENTINEL');
+            expect(records).toEqual([expect.objectContaining({ errorClass: 'Error',
+                stackFrames: unproven ? [] : expect.arrayContaining([
+                    expect.objectContaining({ file: expect.stringContaining('registerExternalActionRoutes.test.ts') }),
+                ]) })]);
+        } finally { sink.mockRestore(); }
+    });
+
+    it.each([
+        { name: 'PrismaClientKnownRequestError', code: 'P2028', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2028',
+            file: '/srv/happier/apps/server/sources/storage/inTx.ts' },
+        { name: 'private-name', code: 'private-code', errorClass: 'Error', prismaCode: undefined,
+            file: 'C:\\happier\\apps\\server\\sources\\storage\\inTx.ts' },
+        { name: 'TypeError', code: 'E_PRIVATE_TOKEN', errorClass: 'TypeError', prismaCode: undefined,
+            file: '/srv/happier/action.ts' },
+    ])('logs safe unexpected-error pointers for $errorClass correlated to the Action request without exception content', async diagnostic => {
+        const requestId = '887f79a3-8bf6-4152-a141-312b294b1b23';
+        const failure = Object.assign(new Error('private-driver-message'), { name: diagnostic.name, code: diagnostic.code,
+            stack: `${diagnostic.name}: private-driver-message\nSQL private-query\n    at privateFunction (${diagnostic.file}:250:18)\n    at privateFunction (https://private-host/source.js?private-token:1:2)` });
+        const records: unknown[] = [];
+        const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
+        const sink = vi.spyOn(stream, 'write').mockImplementation(chunk => { records.push(JSON.parse(String(chunk))); });
+        const app = createApp({ beforeRegister: instance => {
+            // Authentication/driver failure arrives at Fastify's route error boundary.
+            instance.addHook('preHandler', async () => { throw failure; });
+        } });
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/actions/session.spawn_new', headers: patHeaders,
+                payload: { v: 1, requestId, input: { private: 'private-input' } } });
+            expect(response.statusCode).toBe(500);
+            expect(response.json()).toMatchObject({ code: 'action_not_admitted', requestId });
+            expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ module: 'external-action-error',
+                requestId, actionId: 'session.spawn_new', phase: 'action_request',
+                httpRequestId: expect.any(String), errorClass: diagnostic.errorClass,
+                errorCode: diagnostic.prismaCode ?? null,
+                ...(diagnostic.prismaCode ? { prismaCode: diagnostic.prismaCode } : {}),
+                stackFrames: [{ file: diagnostic.file, line: 250, column: 18 }] })]));
+            expect(JSON.stringify(records.filter(record => record && typeof record === 'object'
+                && 'module' in record && record.module === 'external-action-error'))).not.toContain('private-');
+            expect(response.body).not.toContain('P2028');
+        } finally { sink.mockRestore(); await app.close(); }
+    });
+
+    it.each(['skills.list', 'skills.read'] as const)('admits the interactive Account plugin-library reader %s without a Session origin', async (actionId) => {
+        const app = createApp({ beforeRegister: instance => {
+            // Credential authentication is the boundary; catalog admission stays real.
+            instance.addHook('onRequest', async (request: FastifyRequest) => {
+                request.authTokenLegacy = false;
+                request.authTokenEpoch = 1;
+            });
+        } });
+        try {
+            const response = await app.inject({ method: 'POST', url: `/v1/actions/${actionId}`,
+                headers: { authorization: 'Bearer signed-account-token', 'x-test-user-id': 'account-1', 'x-test-auth-token-kind': 'account' },
+                payload: { v: 1, requestId: 'plugin-library-read', target: { kind: 'machine', machineId: 'machine-1' },
+                    input: actionId === 'skills.read' ? { skillId: 'plugin:example.plugin/check' } : {} },
+            });
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ actionId, execution: { ok: true } });
+            const write = await app.inject({ method: 'POST', url: '/v1/actions/skills.duplicate',
+                headers: { authorization: 'Bearer signed-account-token', 'x-test-user-id': 'account-1', 'x-test-auth-token-kind': 'account' },
+                payload: { v: 1, requestId: 'plugin-library-write', target: { kind: 'machine', machineId: 'machine-1' },
+                    input: { skillId: 'plugin:example.plugin/check' } },
+            });
+            expect(write.statusCode).toBe(401);
+        } finally { await app.close(); }
+    });
+
     it('reports a paired terminal decision authority refusal without calling its credential invalid', async () => {
         const dispatch = vi.fn();
         const app = createApp({ dispatch, beforeRegister: instance => {

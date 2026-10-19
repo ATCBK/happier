@@ -60,6 +60,7 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
     afterEach(async () => {
         vi.restoreAllMocks();
         harness.resetEnv();
+        await db.machine.deleteMany();
         await db.account.deleteMany();
     });
 
@@ -110,6 +111,7 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
         };
         const io = new Server();
         const app = createTestApp(createExternalActionDaemonDispatcher({ io, forwardRpc }));
+        io.attach(app.server);
         await app.listen({ host: "127.0.0.1", port: 0 });
         try {
             const address = app.server.address();
@@ -130,8 +132,8 @@ describe("registerExternalActionRoutes (API-token provenance) (integration)", ()
             expect(admitted).toEqual(["brief"]);
             expect(signed).not.toBeNull();
         } finally {
+            await new Promise<void>(resolve => { io.close(() => resolve()); });
             await app.close();
-            io.close();
         }
     });
 

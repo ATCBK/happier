@@ -16,10 +16,11 @@ import { registerSessionFollowSourceRoutes } from "./registerSessionFollowSource
 import { registerSessionMessageRoutes } from "./registerSessionMessageRoutes";
 import { registerSessionTurnMutationRoute } from "./registerSessionTurnMutationRoute";
 import { registerSessionFollowRoutes } from "./registerSessionFollowRoutes";
-import { registerSessionReportsToRoutes } from "./registerSessionReportsToRoutes";
+import { registerSessionManagerRoutes } from "./registerSessionManagerRoutes";
 import { registerSessionSubagentCustodyRoutes } from "./registerSessionSubagentCustodyRoutes";
 import { registerSessionDataKeyEnvelopeRoutes } from "./registerSessionDataKeyEnvelopeRoutes";
 import { registerSessionOrganizationRoutes } from "./registerSessionOrganizationRoutes";
+import { registerSessionListingRoutes } from "./registerSessionListingRoutes";
 
 describe("authenticated Session pure reads (SQLite integration)", () => {
     let harness: LightSqliteHarness;
@@ -37,6 +38,53 @@ describe("authenticated Session pure reads (SQLite integration)", () => {
     }, 120_000);
     afterAll(async () => { await harness.close(); });
 
+    it('keeps waiting readable for released readers and preserves it for cumulative V4 readers', async () => {
+        // cli-v0.2.16 / cli-v0.2.16-preview.1, b8d1c449c46ab4dfa8637db36b66f643d149e66d,
+        // strictly parse the four-state status on Session reads and turn history.
+        const account = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: crypto.randomUUID(), metadata: '{}',
+            encryptionMode: 'plain', active: true, seq: 9, latestTurnId: 'waiting-turn', latestTurnStatus: 'waiting',
+            latestReadyEventSeq: 9, latestReadyEventAt: new Date(100) } });
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'waiting-turn', status: 'waiting',
+            startedAt: 100n, updatedAt: 200n, terminalAt: 200n,
+            transcriptAnchorsJson: JSON.stringify({ userMessageSeqs: [4], startSeqInclusive: 4, endSeqInclusive: 4 }),
+            transcriptAnchorProjectionVersion: 1, transcriptAnchorMinSeq: 4, transcriptAnchorMaxSeq: 4 } });
+        await db.sessionMessage.create({ data: { sessionId: session.id, seq: 4, messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'question input' } } },
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } } });
+        await withAuthenticatedTestApp(app => { registerSessionListingRoutes(app); registerSessionLookupByTagsRoute(app);
+            registerSessionTurnMutationRoute(app); registerSessionMessageRoutes(app); }, async app => {
+            for (const version of [undefined, 2, 3, 4]) {
+                const headers = { 'x-test-user-id': account.id,
+                    ...(version === undefined ? {} : { 'x-happier-account-stored-content-protocol': String(version) }) };
+                const current = version === 4;
+                for (const request of [
+                    { method: 'GET' as const, url: `/v2/sessions/${session.id}` },
+                    { method: 'GET' as const, url: '/v2/sessions' },
+                    { method: 'GET' as const, url: '/v2/sessions/active' },
+                    { method: 'POST' as const, url: '/v2/sessions/lookup-by-tags', payload: { tags: [session.tag] } },
+                ]) {
+                    const response = await app.inject({ ...request, headers });
+                    expect(response.statusCode, request.url).toBe(200);
+                    const payload = response.json();
+                    const row = payload.session ?? payload.sessions.find((row: { id: string }) => row.id === session.id);
+                    expect(row, `${request.url} v${version}`).toMatchObject({ latestTurnStatus: current ? 'waiting' : null,
+                        latestReadyEventSeq: current ? 9 : null });
+                }
+                const response = await app.inject({ method: 'GET', url: `/v1/sessions/${session.id}/turns`, headers });
+                expect(response.statusCode).toBe(200);
+                expect(response.json().turns).toEqual(current ? [expect.objectContaining({ turnId: 'waiting-turn', status: 'waiting' })] : []);
+                expect(response.json().latestTurnId).toBe(current ? 'waiting-turn' : undefined);
+                const external = await app.inject({ method: 'GET',
+                    url: `/v1/sessions/${session.id}/messages?afterSeq=0&projection=externalShareableV1`, headers });
+                expect(external.statusCode).toBe(200);
+                expect(external.json()).toMatchObject({ hasMore: true,
+                    externalShareableSnapshot: { turnSettlementBlockedFromSeq: 4,
+                        turns: [] } });
+            }
+        });
+    });
+
     it("returns committed lookup, access, Follow and draft facts while a primary write is pending", async () => {
         const account = await db.account.create({ data: { publicKey: "session-read-owner", encryptionMode: "plain", seq: 1 } });
         const session = await db.session.create({ data: {
@@ -48,7 +96,7 @@ describe("authenticated Session pure reads (SQLite integration)", () => {
             accountId: account.id, tag: "session-read-source", encryptionMode: "plain", metadata: "{}",
         } });
         const authentication = { env: process.env, authority: "present_user" as const, authenticationEvidence: undefined };
-        expect(await setSessionFollowSource({
+        expect(await setSessionFollowSource({ policy: { preset: 'important' as const },
             accountId: account.id, destinationSessionId: session.id, sourceSessionId: source.id, authentication,
         })).toMatchObject({ ok: true });
         const message = await db.sessionMessage.create({ data: {
@@ -98,7 +146,7 @@ describe("authenticated Session pure reads (SQLite integration)", () => {
             registerSessionMessageRoutes(app);
             registerSessionTurnMutationRoute(app);
             registerSessionFollowRoutes(app);
-            registerSessionReportsToRoutes(app);
+            registerSessionManagerRoutes(app);
             registerSessionSubagentCustodyRoutes(app);
             registerSessionDataKeyEnvelopeRoutes(app);
             registerSessionOrganizationRoutes(app);
@@ -116,7 +164,7 @@ describe("authenticated Session pure reads (SQLite integration)", () => {
                 { method: "GET" as const, url: `/v1/sessions/${session.id}/turns` },
                 { method: "GET" as const, url: `/v2/sessions/${session.id}/follow` },
                 { method: "GET" as const, url: "/v2/account/session-follow-preferences" },
-                { method: "POST" as const, url: `/v1/sessions/${session.id}/reports-to/options`, payload: { candidateSessionIds: [source.id] } },
+                { method: "POST" as const, url: `/v1/sessions/${session.id}/manager/options`, payload: { candidateSessionIds: [source.id] } },
                 { method: "GET" as const, url: `/v2/sessions/${session.id}/subagents/custody/capability` },
                 { method: "GET" as const, url: `/v2/sessions/${session.id}/subagents/custody?${custodyQuery}` },
                 { method: "GET" as const, url: `/v2/sessions/${session.id}/data-key/envelopes` },

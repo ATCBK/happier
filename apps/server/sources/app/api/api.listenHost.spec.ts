@@ -52,6 +52,7 @@ describe('API_CORS_ALLOWED_HEADERS', () => {
       'content-type',
       ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
       'idempotency-key',
+      'if-none-match',
       'x-happier-session-list-timing',
       SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
     ]));
@@ -87,6 +88,7 @@ describe('createApiCorsOptions', () => {
           'content-type',
           ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
           'idempotency-key',
+          'if-none-match',
           'x-happier-session-list-timing',
           SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
           AUTHORITY_CEILING_HEADER_V1,
@@ -107,6 +109,7 @@ describe('createApiCorsOptions', () => {
       ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     );
     expect(preflight.headers['access-control-allow-headers']).toContain('idempotency-key');
+    expect(preflight.headers['access-control-allow-headers']).toContain('if-none-match');
     expect(preflight.headers['access-control-allow-headers']).toContain('x-happier-session-list-timing');
     expect(preflight.headers['access-control-allow-headers']).toContain(
       SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,

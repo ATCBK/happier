@@ -11,6 +11,7 @@ import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happ
 import {
     type ExternalActionDaemonDispatcher,
 } from "@/app/api/socket/externalActionDispatcher";
+import { ExternalActionAdmissionUnexpectedError } from '@/app/machines/managed/managedAcquire';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { auth, ApiTokenOperationError } from "@/app/auth/auth";
 import { resolveMachineAdmission } from "@/app/machines/machineAccess";
@@ -37,12 +38,21 @@ import { verifyCurrentExternalActionPrincipal, verifyCurrentExternalActionPrinci
     readExternalActionSessionProposalSurface, hasCurrentExternalActionWorkflowOriginInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { ManagedMachineError, readManagedAdmissionState, projectManagedMachine, requireCurrentManagedMachineInTx, sameManagedInput } from '@/app/machines/managed/managedRows';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { Fastify } from "../../types";
 
 type ExternalActionRouteParams = Readonly<{
     actionId: string;
 }>;
+
+function readExternalActionRouteRequestId(body: unknown): string | undefined {
+    const envelope = ExternalActionRequestEnvelopeSchema.safeParse(body && typeof body === 'object'
+        && 'envelope' in body ? body.envelope : body);
+    return envelope.success ? envelope.data.requestId : undefined;
+}
 
 /** Both public dispatch and proof issuance consume the same installed Session provenance. */
 async function readInstalledSessionRequestPrincipal(
@@ -470,6 +480,7 @@ export function registerExternalActionRoutes(
     dependencies: RegisterExternalActionRoutesDependencies = {},
 ): void {
     const dispatch = dependencies.dispatch ?? app.forwardExternalActionToMachine;
+    const dispatchedRequests = new WeakSet<FastifyRequest>();
 
     app.post<{ Params: ExternalActionRouteParams; Body: unknown }>(
         EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HTTP_PATH_TEMPLATE_V1,
@@ -667,7 +678,7 @@ export function registerExternalActionRoutes(
             connectionAuthFailureError: "invalid_token",
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "actions"),
         },
-        errorHandler: (error, _request, reply) => {
+        errorHandler: (error, request, reply) => {
             if (isFastifyBodyLimitError(error)) {
                 sendExternalActionHttpError(reply, "request_too_large");
                 return;
@@ -676,7 +687,20 @@ export function registerExternalActionRoutes(
                 sendExternalActionHttpError(reply, "invalid_envelope");
                 return;
             }
-            sendExternalActionHttpError(reply, "internal_error");
+            const admission = error instanceof ExternalActionAdmissionUnexpectedError ? error : null;
+            const originalError = admission ? admission.cause : error;
+            const databaseError = readDatabaseErrorCode(originalError);
+            if (databaseError) {
+                sendExternalActionHttpError(reply, databaseError, readExternalActionRouteRequestId(request.body));
+                return;
+            }
+            const requestId = readExternalActionRouteRequestId(request.body) ?? request.id;
+            const actionId = ExternalActionActionIdV1Schema.safeParse(request.params.actionId);
+            logUnexpectedRequestError(originalError, { module: 'external-action-error', httpRequestId: request.id,
+                requestId, ...(actionId.success ? { actionId: actionId.data } : {}),
+                phase: admission ? 'managed_admission' : 'action_request' });
+            const committed = admission ? admission.admissionCommitted : dispatchedRequests.has(request) ? null : false;
+            sendExternalActionHttpError(reply, projectUnexpectedActionFailureV1(committed, requestId).errorCode, requestId);
         },
         onRequest: async (request, reply) => {
             reply.header("cache-control", "no-store");
@@ -760,6 +784,7 @@ export function registerExternalActionRoutes(
                 return sendExternalActionHttpError(reply, 'invalid_envelope', envelope.data.requestId);
             }
 
+            dispatchedRequests.add(request);
             const result = await withWebLatencyTrace(envelope.data.requestId, () => timeWebLatencyPhase('action.http.dispatch', () => dispatch({
                 actionId: actionId.data,
                 envelope: envelope.data,

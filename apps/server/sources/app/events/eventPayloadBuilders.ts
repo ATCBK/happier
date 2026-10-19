@@ -19,6 +19,7 @@ import { type SessionMessageRole } from '@happier-dev/protocol/sessions/messages
 import { type SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { applySessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { projectSessionInputAdmissionReceipt } from "@/app/session/messages/sessionInputAdmission";
+import { projectSessionFollowWakeBatchDelivery } from "@/app/session/follow/projectSessionFollowWakeBatchDelivery";
 import { serializeMachineKeyBasis } from "@/app/machines/machineSerialization";
 import type { MachineKeyBasisV1 } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
 import type { DevcontainerChildProjectionV1 } from "@happier-dev/protocol/machines/managed/devcontainerV1";
@@ -37,6 +38,9 @@ type UpdateMessagePayloadInput = Readonly<{
     localId: string | null;
     sidechainId?: string | null;
     deliveryResolution?: SessionMessageDeliveryResolutionV1 | null;
+    acceptedTurnKind?: string | null;
+    acceptedTurnId?: string | null;
+    turnStartWitnessId?: string | null;
     createdAt: Date;
     updatedAt: Date;
     sourceCreatedAt?: Date | null;
@@ -65,6 +69,7 @@ function serializeUpdateMessage(message: UpdateMessagePayloadInput, options?: Up
         ...(typeof message.messageRole === "string" ? { messageRole: message.messageRole } : {}),
         ...(typeof message.sidechainId === "string" && message.sidechainId ? { sidechainId: message.sidechainId } : {}),
         ...(message.deliveryResolution ? { deliveryResolution: message.deliveryResolution } : {}),
+        ...projectSessionFollowWakeBatchDelivery(message),
         ...(options?.attentionImpact ? { attentionImpact: options.attentionImpact } : {}),
         createdAt: message.createdAt.getTime(),
         updatedAt: message.updatedAt.getTime(),

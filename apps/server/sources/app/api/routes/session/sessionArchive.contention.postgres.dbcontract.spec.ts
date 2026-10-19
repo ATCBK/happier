@@ -7,6 +7,7 @@ import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTrac
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { registerSessionArchiveRoutes } from "./registerSessionArchiveRoutes";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Session archive HTTP owner under parent publication", () => {
     let connected = false;
@@ -43,7 +44,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
         }
     });
 
-    it.each(["archive", "unarchive"] as const)("commits %s while the live Reports-to parent keeps publishing", async operation => {
+    it.each(["archive", "unarchive"] as const)("commits %s while the live manager keeps publishing", async operation => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const parent = await db.session.create({ data: {
             accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", active: true,
@@ -53,8 +54,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             archivedAt: operation === "unarchive" ? new Date(123) : null, seq: 9,
             originKind: "session", originSessionId: parent.id,
         } });
-        await db.sessionReportsTo.create({ data: { sessionId: child.id, leadSessionId: parent.id, deliveredTranscriptSeq: 2 } });
-        await db.sessionFollowEdge.create({ data: { sourceSessionId: parent.id, destinationSessionId: child.id, deliveredTranscriptSeq: 0 } });
+        await db.sessionFollowEdge.create({ data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: child.id }),
+            sourceSessionId: child.id, destinationSessionId: parent.id, relation: 'manager', managerSourceSessionId: child.id,
+            policyJson: JSON.stringify({ preset: 'important' }), deliveredTranscriptSeq: 2 } });
+        await db.sessionFollowEdge.create({ data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: parent.id }),
+            sourceSessionId: parent.id, destinationSessionId: child.id, policyJson: JSON.stringify({ preset: 'quiet' }), deliveredTranscriptSeq: 0 } });
         const voiceFrontier = JSON.stringify({ v: 1, transcriptSeq: 2, readyEventSeq: 0, agentStateVersion: 0, turn: null });
         await db.accountSessionFollow.create({ data: {
             accountId: owner.id, sessionId: child.id, following: true, includeInVoice: true, voiceDeliveredFrontier: voiceFrontier,
@@ -112,11 +116,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
                 expect(response.statusCode, response.body).toBe(200);
                 expect(publications).toBeGreaterThan(before);
                 expect((await db.session.findUniqueOrThrow({ where: { id: child.id } })).archivedAt === null).toBe(operation === "unarchive");
-                expect(await db.sessionReportsTo.findUniqueOrThrow({ where: { sessionId: child.id } })).toMatchObject({
-                    leadSessionId: parent.id, deliveredTranscriptSeq: operation === "unarchive" ? 9 : 2,
+                expect(await db.sessionFollowEdge.findUniqueOrThrow({ where: { managerSourceSessionId: child.id } })).toMatchObject({
+                    destinationSessionId: parent.id, deliveredTranscriptSeq: operation === "unarchive" ? 9 : 2,
                 });
-                const edge = await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceSessionId: {
-                    destinationSessionId: child.id, sourceSessionId: parent.id,
+                const edge = await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceSessionId_relation: {
+                    destinationSessionId: child.id, sourceSessionId: parent.id, relation: 'follower',
                 } } });
                 if (operation === "unarchive") {
                     expect(edge.deliveredTranscriptSeq).toBeGreaterThan(0);

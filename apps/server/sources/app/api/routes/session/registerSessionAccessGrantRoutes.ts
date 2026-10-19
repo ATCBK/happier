@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema, SetSessionAccessGrantRequestV1Schema, SetSessionAccessGrantResponseV1Schema, RemoveSessionAccessGrantRequestV1Schema, RemoveSessionAccessGrantResponseV1Schema, SetSessionAccessContextRequestV1Schema, SetSessionAccessContextResponseV1Schema, ResolveSessionAccessPrincipalsRequestV1Schema, ResolveSessionAccessPrincipalsResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
@@ -70,6 +70,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
         const result = await inspectSessionAccessGrants({
             actorAccountId: request.userId,
             sessionId: request.body.sessionId,
+            ...(request.body.recipientAccountId === undefined ? {} : { recipientAccountId: request.body.recipientAccountId }),
             authentication: readSessionAccessAuthenticationFromRequest(request),
         });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });

@@ -1,10 +1,10 @@
-import type { EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
+import { SESSION_ACCESS_SESSION_BATCH_SIZE, type EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
 import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionInputMachineTargetV1Schema, type SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { CallerInputConstraintsV1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 import type { Tx } from '@/storage/inTx';
-import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
+import { resolveMachineAdmissionInTx, resolveMachineAdmissionsInTx } from '@/app/machines/machineAccess';
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 
 /** Exact input placement comes from the requester tuple and C41, never a first-key guess. */
@@ -24,13 +24,41 @@ export async function readCurrentSessionInputMachineTargetInTx(tx: Tx, input: Re
 
 /** Retained placement cannot follow a replacement installation or another Home. */
 export async function isCurrentSessionInputMachineTargetInTx(tx: Tx, target: SessionInputMachineTargetV1): Promise<boolean> {
-    const current = await readCurrentSessionInputMachineTargetInTx(tx, target);
-    if (!current || current.homeId !== target.homeId || current.installationId !== target.installationId) return false;
-    const session = await tx.session.findUnique({ where: { id: target.sessionId },
-        select: { runtimeMachineTarget: true } });
-    if (session?.runtimeMachineTarget == null) return true;
-    const committed = createStoredReadSchema(SessionInputMachineTargetV1Schema).safeParse(session.runtimeMachineTarget);
-    return committed.success && sameMachineTarget(committed.data, target);
+    return (await areCurrentSessionInputMachineTargetsInTx(tx, [target]))[0] ?? false;
+}
+
+/** One coherent set of placement facts; results correspond to the supplied targets. */
+export async function areCurrentSessionInputMachineTargetsInTx(tx: Tx, targets: readonly SessionInputMachineTargetV1[]): Promise<readonly boolean[]> {
+    if (targets.length === 0) return [];
+    if (targets.length > SESSION_ACCESS_SESSION_BATCH_SIZE) {
+        const currentness: boolean[] = [];
+        for (let offset = 0; offset < targets.length; offset += SESSION_ACCESS_SESSION_BATCH_SIZE) {
+            currentness.push(...await areCurrentSessionInputMachineTargetsInTx(tx, targets.slice(offset, offset + SESSION_ACCESS_SESSION_BATCH_SIZE)));
+        }
+        return currentness;
+    }
+    const sessions = await tx.session.findMany({ where: { id: { in: [...new Set(targets.map(target => target.sessionId))] } },
+        select: { id: true, accountId: true, runtimeMachineTarget: true } });
+    const bySession = new Map(sessions.map(session => [session.id, session]));
+    const keys = await tx.accessKey.findMany({ where: { OR: targets.map(({ accountId, sessionId, machineId }) => ({ accountId, sessionId, machineId })) },
+        select: { accountId: true, sessionId: true, machineId: true } });
+    const bindingKey = (value: Readonly<{ accountId: string; sessionId: string; machineId: string }>) => JSON.stringify([value.accountId, value.sessionId, value.machineId]);
+    const bindings = new Set(keys.map(bindingKey));
+    const homeId = await readCurrentServerIdentityId(process.env, tx);
+    const byAccount = new Map<string, Awaited<ReturnType<typeof resolveMachineAdmissionsInTx>>>();
+    for (const accountId of new Set(targets.map(target => target.accountId))) {
+        byAccount.set(accountId, await resolveMachineAdmissionsInTx(tx, { actorAccountId: accountId,
+            machineIds: targets.filter(target => target.accountId === accountId).map(target => target.machineId) }));
+    }
+    return targets.map(target => {
+        const session = bySession.get(target.sessionId);
+        const admission = byAccount.get(target.accountId)?.get(target.machineId);
+        if (!session || session.accountId !== target.accountId || !bindings.has(bindingKey(target)) || !homeId || homeId !== target.homeId
+            || admission?.kind !== 'admitted' || admission.installationId !== target.installationId) return false;
+        if (session.runtimeMachineTarget == null) return true;
+        const committed = createStoredReadSchema(SessionInputMachineTargetV1Schema).safeParse(session.runtimeMachineTarget);
+        return committed.success && sameMachineTarget(committed.data, target);
+    });
 }
 
 function sameMachineTarget(left: SessionInputMachineTargetV1, right: SessionInputMachineTargetV1): boolean {
@@ -100,11 +128,12 @@ export function buildSessionInputAdmissionReceipt(input:
     });
 }
 
-/** Authenticated wire projection; absent legacy receipts remain absent. */
+/** Shared transcript readers receive attribution, never the native-only private rule proof. */
 export function projectSessionInputAdmissionReceipt(value: unknown): Readonly<{ inputAdmissionReceipt?: SessionInputAdmissionReceiptV1 }> {
-    return value === null || value === undefined ? {} : {
-        inputAdmissionReceipt: createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).parse(value),
-    };
+    if (value === null || value === undefined) return {};
+    const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).parse(value);
+    const { followSources: _privateFollowSources, followRelations: _privateFollowRelations, ...publicReceipt } = receipt;
+    return { inputAdmissionReceipt: publicReceipt };
 }
 
 /** Relationship changes never change the identity of an already admitted input. */

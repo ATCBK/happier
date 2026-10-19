@@ -613,7 +613,7 @@ export function resolveExternalShareableTranscriptTurnSettlementBlockedFromSeq(p
 
     const isTerminalOwner = (row: SessionTurnStoredRow, seq: number): boolean => {
         const status = PrimaryTurnStatusV1Schema.safeParse(row.status);
-        if (!status.success || status.data === "in_progress") return false;
+        if (!status.success || status.data === "in_progress" || status.data === "waiting") return false;
         const anchors = parseStoredSessionTurnTranscriptAnchors(row.transcriptAnchorsJson);
         if (!anchors) return false;
         if (anchors.userMessageSeqs?.includes(seq)) return true;

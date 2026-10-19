@@ -8,7 +8,7 @@ import { restoreTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "./sessionRecipients";
 import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
-import { setSessionReportsTo } from "@/app/session/relations/sessionReportsToService";
+import { setSessionManager } from "@/app/session/follow/sessionManagerService";
 import { setSessionFollowSource } from "@/app/session/follow/sessionFollowEdgeService";
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audience expansion writer fences (PostgreSQL)", () => {
@@ -44,7 +44,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
             await sourceHeld;
             let writerSettled = false;
             const writer = setSessionFollowSource({ accountId: destinationOwner.id, sourceSessionId: source.id,
-                destinationSessionId: destination.id,
+                destinationSessionId: destination.id, policy: { preset: 'quiet' },
                 authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] } });
             const writerOutcome = Promise.allSettled([writer]).finally(() => { writerSettled = true; });
             try {
@@ -83,8 +83,8 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
         const authentication = { env: process.env, authority: "present_user", authenticationEvidence: [] } as const;
         try {
             await db.sessionShare.create({ data: { sessionId: child.id, sharedByUserId: childOwner.id, sharedWithUserId: leadOwner.id, accessLevel: "edit" } });
-            expect(await setSessionReportsTo({ accountId: leadOwner.id, sessionId: child.id, leadSessionId: lead.id,
-                expectedLeadSessionId: null, authentication })).toMatchObject({ ok: true });
+            expect(await setSessionManager({ accountId: leadOwner.id, sessionId: child.id, managerSessionId: lead.id,
+                expectedManagerSessionId: null, authentication })).toMatchObject({ ok: true });
             await db.userRelationship.create({ data: { fromUserId: leadOwner.id, toUserId: reader.id, status: "friend" } });
             let holderPid = -1;
             const holder = inTx(async tx => {
@@ -119,7 +119,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                     if (outcome.status === "rejected") throw outcome.reason;
                 }
             }
-            expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
+            expect(await db.sessionFollowEdge.findUnique({ where: { managerSourceSessionId: child.id } })).toBeNull();
         } finally {
             release();
             await db.session.deleteMany({ where: { id: { in: [child.id, lead.id] } } });
@@ -256,11 +256,11 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                 const writerOutcome = Promise.allSettled([writer]);
                 await mutationComplete;
                 try {
-                    // Admission and native transitions remain real; NOWAIT observes
-                    // the Account fence without timing or internal spies.
-                    await expect(inTx(tx => tx.$queryRawUnsafe(
+                    // Observe one NOWAIT attempt. The production transaction owner
+                    // retries 55P03, which would outwait this test's held writer.
+                    await expect(db.$queryRawUnsafe(
                         'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
-                    ), { isolationLevel: "ReadCommitted" })).rejects.toThrow();
+                    )).rejects.toMatchObject({ meta: { code: '55P03' } });
                 } finally {
                     release();
                     for (const outcome of await writerOutcome) if (outcome.status === "rejected") throw outcome.reason;

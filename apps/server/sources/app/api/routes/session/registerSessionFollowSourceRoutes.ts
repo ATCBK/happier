@@ -1,27 +1,34 @@
-import { ListSessionFollowSourcesResponseSchema, RemoveSessionFollowSourceResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceRequestSchema, SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { ListSessionFollowSourcesResponseSchema, RemoveSessionFollowSourceResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceRequestSchema, SetSessionFollowSourceResponseSchema, SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { SessionFollowSourceProjectionRequestV1Schema, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
-import { z } from "zod";
+import { SessionFollowObserveInactiveRequestV1Schema, SessionFollowObserveInactiveResponseV1Schema,
+    SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { z } from "zod/mini";
+import { FollowListActionOutputV1Schema } from '@happier-dev/protocol/sessions/follow/actions';
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import {
     listSessionFollowSources,
+    listSessionFollowers,
     removeSessionFollowSource,
     setSessionFollowSource,
     projectSessionFollowSourceForRunner,
+    observePendingSessionFollowForInactiveDestination,
+    observeSessionFollowSourceRoutes,
     type SessionFollowSourceFailure,
 } from "@/app/session/follow/sessionFollowEdgeService";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
-const destinationParamsSchema = z.object({
-    destinationSessionId: z.string().min(1),
-}).strict();
+const destinationParamsSchema = z.strictObject({
+    destinationSessionId: z.string().check(z.minLength(1)),
+});
+const occurrenceParamsSchema = z.strictObject({ sourceSessionId: z.string().check(z.minLength(1)) });
 
-const sourceParamsSchema = destinationParamsSchema.extend({
-    sourceSessionId: z.string().min(1),
-}).strict();
+const sourceParamsSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(destinationParamsSchema, {
+    sourceSessionId: z.string().check(z.minLength(1)),
+}));
 
 /**
  * The one closed failure mapping for the Follow source resource.
@@ -55,6 +62,71 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         { error: "feature_unavailable" },
     );
 
+    app.get(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.followers, {
+        preHandler: [app.authenticate, requireFeature],
+        config: { apiTokenSessionAction: 'follow.list', restrictedCredentialBinding: {
+            scope: 'session', session: 'params.sourceSessionId', allowSessionRuntime: false,
+        } },
+        schema: { params: occurrenceParamsSchema, response: { 200: FollowListActionOutputV1Schema, ...errorResponses } },
+    }, async (request, reply) => {
+        const params = occurrenceParamsSchema.safeParse(request.params);
+        if (!params.success) return reply.code(400).send({ error: 'invalid_parameters' });
+        const result = await listSessionFollowers({ accountId: request.userId, sourceSessionId: params.data.sourceSessionId,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
+    app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.occurrenceRoutes, {
+        preHandler: [app.authenticate, requireFeature],
+        schema: {
+            params: occurrenceParamsSchema,
+            response: { 200: SessionFollowObserveSourceRoutesResponseV1Schema,
+                400: SessionFollowObserveSourceRoutesResponseV1Schema,
+                403: z.union([SessionFollowObserveSourceRoutesResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
+                404: z.strictObject({ error: z.literal('feature_unavailable') }) },
+        },
+    }, async (request, reply) => {
+        const params = occurrenceParamsSchema.safeParse(request.params);
+        const body = SessionFollowObserveSourceRoutesRequestV1Schema.safeParse(request.body);
+        if (!params.success || !body.success) return reply.code(400).send({ ok: false, v: 1, error: 'invalid_request' });
+        if (request.externalActionExecutionAuthorized === true
+            || request.authTokenKind !== 'account' && request.authTokenKind !== 'terminal') {
+            return reply.code(403).send({ ok: false, v: 1, error: 'forbidden' });
+        }
+        const result = await observeSessionFollowSourceRoutes({ accountId: request.userId,
+            sourceSessionId: params.data.sourceSessionId, request: body.data,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        return result.ok ? reply.send(result) : reply.code(403).send(result);
+    });
+
+    app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.inactiveObservations, {
+        preHandler: [app.authenticate, requireFeature],
+        schema: {
+            params: destinationParamsSchema,
+            response: {
+                200: SessionFollowObserveInactiveResponseV1Schema,
+                400: SessionFollowObserveInactiveResponseV1Schema,
+                403: z.union([SessionFollowObserveInactiveResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
+                404: z.strictObject({ error: z.literal('feature_unavailable') }),
+            },
+        },
+    }, async (request, reply) => {
+        const params = destinationParamsSchema.safeParse(request.params);
+        const body = SessionFollowObserveInactiveRequestV1Schema.safeParse(request.body);
+        if (!params.success || !body.success) return reply.code(400).send({ ok: false, v: 1, error: 'invalid_request' });
+        if (request.externalActionExecutionAuthorized === true
+            || request.authTokenKind !== 'account' && request.authTokenKind !== 'terminal') {
+            return reply.code(403).send({ ok: false, v: 1, error: 'forbidden' });
+        }
+        return reply.send(await observePendingSessionFollowForInactiveDestination({
+            accountId: request.userId,
+            destinationSessionId: params.data.destinationSessionId,
+            machineId: body.data.machineId,
+            installationId: body.data.installationId,
+            authentication: readSessionAccessAuthenticationFromRequest(request),
+        }));
+    });
+
     app.post("/v2/sessions/:destinationSessionId/follows/source-projection", {
         preHandler: [app.authenticate, requireFeature],
         config: {
@@ -65,10 +137,10 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             body: SessionFollowSourceProjectionRequestV1Schema,
             response: {
                 200: SessionFollowSourceProjectionResponseV1Schema,
-                403: z.object({ error: z.literal(PRESENT_USER_REQUIRED_ERROR) }).strict(),
+                403: z.strictObject({ error: z.literal(PRESENT_USER_REQUIRED_ERROR) }),
                 404: z.union([
-                    z.object({ error: z.literal("session_follow_source_unavailable") }).strict(),
-                    z.object({ error: z.literal("feature_unavailable") }).strict(),
+                    z.strictObject({ error: z.literal("session_follow_source_unavailable") }),
+                    z.strictObject({ error: z.literal("feature_unavailable") }),
                 ]),
             },
         },
@@ -90,7 +162,7 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.get("/v2/sessions/:destinationSessionId/follows/sessions", {
         preHandler: [app.authenticate, requireFeature],
-        config: { apiTokenSessionAction: 'session.follow.sources.list',
+        config: { apiTokenSessionAction: 'follow.list',
             restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId', allowSessionRuntime: false } },
         schema: {
             params: destinationParamsSchema,
@@ -111,7 +183,7 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.put("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {
         preHandler: [app.authenticate, requireFeature],
-        config: { apiTokenSessionAction: 'session.follow.sources.set', restrictedCredentialBinding: {
+        config: { apiTokenSessionAction: 'follow.set', restrictedCredentialBinding: {
             scope: 'session', session: 'params.destinationSessionId', additionalSessions: ['params.sourceSessionId'], allowSessionRuntime: false,
         } },
         schema: {
@@ -130,7 +202,7 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             accountId: request.userId,
             destinationSessionId: params.data.destinationSessionId,
             sourceSessionId: params.data.sourceSessionId,
-            mode: body.data.mode,
+            policy: body.data.policy,
             authentication: readSessionAccessAuthenticationFromRequest(request),
         });
         if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
@@ -139,7 +211,7 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
 
     app.delete("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {
         preHandler: [app.authenticate, requireFeature],
-        config: { apiTokenSessionAction: 'session.follow.sources.remove', restrictedCredentialBinding: {
+        config: { apiTokenSessionAction: 'follow.remove', restrictedCredentialBinding: {
             scope: 'session', session: 'params.destinationSessionId', additionalSessions: ['params.sourceSessionId'], allowSessionRuntime: false,
         } },
         schema: {

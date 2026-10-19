@@ -34,6 +34,7 @@ import {
 } from "@/app/session/pending/selectPendingProviderInvocation";
 import { reconcilePendingActivationAuthorizationForRemovedRequestInTx } from "@/app/session/pending/pendingActivationAuthorization";
 import { readStoredSessionInputAdmissionReceipt, isSessionInputTargetCurrentForPublisherInTx } from '@/app/session/messages/sessionInputAdmission';
+import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 type RecipientCursor = SessionRecipientCursor;
 class PublisherAuthorityLostError extends Error {}
@@ -532,7 +533,16 @@ async function materializePendingTargetInTx(
                 select: { localId: true, messageRole: true, content: true, requestedAction: true, providerAction: true, inputAdmissionReceipt: true, status: true, deliveryState: true, deliveryBlockedReason: true, position: true, createdAt: true, updatedAt: true },
             });
             const invocationSelection = selectPendingProviderInvocation({
-                rows: pendingCandidates,
+                // C7-held Discussion originals already have protected Pending
+                // custody. They stay visible there without blocking independent
+                // later questions; ordinary blocked FIFO items keep their contract.
+                rows: pendingCandidates.filter(row => {
+                    if (row.deliveryState !== 'blocked' || row.deliveryBlockedReason !== 'session_input_target_unavailable') return true;
+                    const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
+                    const address = receipt?.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;
+                    return !address || address.participantSessionId !== sessionId
+                        || deriveDiscussionFollowInputLocalIdV1(address) !== row.localId;
+                }),
                 foregroundState,
                 deliveryTiming,
                 readRuntimeActivity: () => {

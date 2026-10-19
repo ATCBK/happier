@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataInactiveModelIntentPatchSuccessV1Schema, SessionMetadataInactiveModelIntentPatchV1Schema, SessionMetadataInactiveModelIntentVersionConflictV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
@@ -19,16 +19,16 @@ import { SessionTeamCredentialBindingMetadataPatchV1Schema, SessionTeamCredentia
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 
 export function registerSessionPatchRoute(app: Fastify) {
-    const legacyPatchBodySchema = z.object({
-        metadata: z.object({
+    const legacyPatchBodySchema = z.strictObject({
+        metadata: z.optional(z.strictObject({
             ciphertext: z.string(),
-            expectedVersion: z.number().int().min(0),
-        }).strict().optional(),
-        agentState: z.object({
-            ciphertext: z.string().nullable(),
-            expectedVersion: z.number().int().min(0),
-        }).strict().optional(),
-    }).strict();
+            expectedVersion: z.number().check(z.int(), z.minimum(0)),
+        })),
+        agentState: z.optional(z.strictObject({
+            ciphertext: z.nullable(z.string()),
+            expectedVersion: z.number().check(z.int(), z.minimum(0)),
+        })),
+    });
     app.patch('/v2/sessions/:sessionId', {
         preHandler: app.authenticate,
         attachValidation: true,
@@ -49,15 +49,15 @@ export function registerSessionPatchRoute(app: Fastify) {
                     SessionMetadataInactiveModelIntentVersionConflictV1Schema,
                     z.object({
                         success: z.literal(true),
-                        metadata: z.object({ version: z.number() }).optional(),
-                        agentState: z.object({ version: z.number() }).optional(),
+                        metadata: z.optional(z.object({ version: z.number() })),
+                        agentState: z.optional(z.object({ version: z.number() })),
                     }),
                     z.object({
                         success: z.literal(false),
                         error: z.literal("version-mismatch"),
-                        metadataLayoutVersion: z.number().int().nonnegative().optional(),
-                        metadata: z.object({ version: z.number(), value: z.string().nullable() }).optional(),
-                        agentState: z.object({ version: z.number(), value: z.string().nullable() }).optional(),
+                        metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+                        metadata: z.optional(z.object({ version: z.number(), value: z.nullable(z.string()) })),
+                        agentState: z.optional(z.object({ version: z.number(), value: z.nullable(z.string()) })),
                     }),
                 ]),
                 400: z.object({ error: z.literal("Invalid parameters") }),
@@ -74,11 +74,11 @@ export function registerSessionPatchRoute(app: Fastify) {
                     }),
                     SessionMetadataVersionConflictV1Schema,
                     SessionMetadataActiveConflictV1Schema,
-                    z.object({
+                    z.strictObject({
                         code: z.literal(
                             "session_publisher_authority_lost",
                         ),
-                    }).strict(),
+                    }),
                     SessionTeamCredentialBindingMutationRejectionV1Schema,
                 ]),
                 426: z.unknown(),

@@ -48,6 +48,7 @@ import {
 } from "@/app/accountSettings/accountEncryptionTransitionCensus";
 import { migrateAuthoringMemoryForAccountModeInTx } from "@/app/kv/authoringMemoryEncryptionMigration";
 import { migratePromptLibraryForAccountModeInTx } from '@/app/account/prompts/promptLibraryEncryptionMigration';
+import { migrateAccountFollowRulesForAccountModeInTx } from '@/app/session/follow/accountFollowRuleEncryptionMigration';
 import { migrateConfiguredAgentCatalogForAccountModeInTx } from '@/app/account/agents/configuredAgentRowsEncryptionMigration';
 import { migrateMcpServerCatalogForAccountModeInTx } from '@/app/account/mcp/serverCatalogEncryptionMigration';
 import { migrateProviderConnectionsForAccountModeInTx } from '@/app/account/providers/providerConnectionsEncryptionMigration';
@@ -101,6 +102,10 @@ export async function updateAccountEncryptionMode(params: Readonly<{
         }
         if (fence.status !== "ready") return fence;
         const account = fence.account;
+        if (account.currentness.encryptionMode !== params.mode
+            && await tx.discussion.count({ where: { ownerAccountId: params.accountId } }) > 0) {
+            return { status: 'migration_required' };
+        }
 
         if (
             account.currentness.encryptionMode === "plain"
@@ -123,6 +128,8 @@ export async function updateAccountEncryptionMode(params: Readonly<{
         if (authoringMemory.status !== "applied") return { status: "migration_required" };
         const promptLibrary = await migratePromptLibraryForAccountModeInTx(tx, { accountId: params.accountId, toMode: params.mode });
         if (promptLibrary.status !== 'applied') return { status: 'migration_required' };
+        const followRules = await migrateAccountFollowRulesForAccountModeInTx(tx, { accountId: params.accountId, toMode: params.mode });
+        if (followRules.status !== 'applied') return { status: 'migration_required' };
         const acpCatalog = await migrateConfiguredAgentCatalogForAccountModeInTx(tx, { accountId: params.accountId, toMode: params.mode });
         if (acpCatalog.status !== 'applied') return { status: 'migration_required' };
         const mcpServerCatalog = await migrateMcpServerCatalogForAccountModeInTx(tx, { accountId: params.accountId, toMode: params.mode });

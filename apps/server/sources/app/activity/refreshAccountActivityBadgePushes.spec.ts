@@ -11,16 +11,16 @@ const getPushNotificationReceiptsAsyncSpy = vi.hoisted(() => vi.fn(async (_ids: 
 // Badge counting now resolves personal attention through the canonical viewer
 // owners (owner-or-active-Follow tracking plus Discussion attention), so the
 // delegates those owners read must exist here or the migrated path is never
-// exercised: `accountSessionFollow` and `sessionDiscussionReadState` are the
-// Lane 09B/09C tables, `sessionDiscussion.groupBy` the latest-activity read,
+// exercised: `accountSessionFollow` and `discussionReadState` are the
+// Lane 09B/09C tables, `discussion.groupBy` the latest-activity read,
 // and `teamMembership` the collective-access snapshot the badge admission
 // resolves for each Account through the canonical access owner.
 const dbMocks = createDbMocks({
     account: ["findMany"],
     session: ["findMany"],
-    sessionDiscussion: ["findMany", "groupBy"],
-    sessionDiscussionMessage: ["findMany"],
-    sessionDiscussionReadState: ["findMany"],
+    discussion: ["findMany", "groupBy"],
+    discussionMessage: ["findMany"],
+    discussionReadState: ["findMany"],
     accountSessionFollow: ["findMany"],
     accountPushToken: ["findMany", "deleteMany"],
     teamMembership: ["findMany"],
@@ -101,18 +101,18 @@ describe("refreshAccountActivityBadgePushes", () => {
         sendPushNotificationsAsyncSpy.mockClear();
         getPushNotificationReceiptsAsyncSpy.mockClear();
         dbMocks.db.account.findMany.mockReset();
-        dbMocks.db.sessionDiscussion.findMany.mockReset();
-        dbMocks.db.sessionDiscussion.groupBy.mockReset();
-        dbMocks.db.sessionDiscussionMessage.findMany.mockReset();
-        dbMocks.db.sessionDiscussionReadState.findMany.mockReset();
+        dbMocks.db.discussion.findMany.mockReset();
+        dbMocks.db.discussion.groupBy.mockReset();
+        dbMocks.db.discussionMessage.findMany.mockReset();
+        dbMocks.db.discussionReadState.findMany.mockReset();
         dbMocks.db.accountSessionFollow.findMany.mockReset();
         dbMocks.db.teamMembership.findMany.mockReset();
         dbMocks.db.teamMembership.findMany.mockResolvedValue([]);
         dbMocks.db.account.findMany.mockResolvedValue([{ id: "a1" }, { id: "a2" }]);
-        dbMocks.db.sessionDiscussion.findMany.mockResolvedValue([]);
-        dbMocks.db.sessionDiscussion.groupBy.mockResolvedValue([]);
-        dbMocks.db.sessionDiscussionMessage.findMany.mockResolvedValue([]);
-        dbMocks.db.sessionDiscussionReadState.findMany.mockResolvedValue([]);
+        dbMocks.db.discussion.findMany.mockResolvedValue([]);
+        dbMocks.db.discussion.groupBy.mockResolvedValue([]);
+        dbMocks.db.discussionMessage.findMany.mockResolvedValue([]);
+        dbMocks.db.discussionReadState.findMany.mockResolvedValue([]);
         // No Follow rows by default: an Account is tracked only where it owns the
         // Session, which is exactly the quiet-by-default relation under test.
         dbMocks.db.accountSessionFollow.findMany.mockResolvedValue([]);

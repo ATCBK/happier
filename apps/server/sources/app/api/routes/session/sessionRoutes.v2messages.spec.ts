@@ -13,6 +13,9 @@ import {
     resetSessionRouteMocks,
 } from "./sessionRoutes.testkit";
 
+// Route graph loading is suite setup, outside the request behavior's test budget.
+await createSessionRouteTestBuilder("GET", "/v2/sessions/:sessionId/messages/by-local-id/:localId");
+
 describe("sessionRoutes v2 messages", () => {
     beforeEach(() => {
         resetSessionRouteMocks();
@@ -56,6 +59,62 @@ describe("sessionRoutes v2 messages", () => {
                 updatedAt: updatedAt.getTime(),
             },
         });
+    });
+
+    it("projects accepted Follow wake status from the same batch event without exposing source observations", async () => {
+        const { txSessionMessageFindFirst } = await import("./sessionRoutes.testkit");
+        const timestamp = new Date("2020-01-01T00:00:00.000Z");
+        txSessionMessageFindFirst.mockResolvedValueOnce({
+            id: "wake-message", seq: 11, localId: "session-follow-wake:batch-1",
+            messageRole: "non_user", content: { t: "encrypted", c: "cipher" },
+            acceptedTurnKind: "followUp", acceptedTurnId: "native-turn-1",
+            turnStartWitnessId: "native-turn-1",
+            followWakeObservations: [{ sourceSessionId: "private-source" }],
+            autonomousExchangeRootSessionId: "private-root-source",
+            autonomousExchangeRootLocalId: "private-root-local",
+            createdAt: timestamp, updatedAt: timestamp,
+        });
+
+        const route = await createSessionRouteTestBuilder("GET", "/v2/sessions/:sessionId/messages/by-local-id/:localId");
+        const { response } = await route.invoke({
+            params: { sessionId: "s1", localId: "session-follow-wake:batch-1" },
+            headers: {}, query: {},
+        });
+
+        expect(response).toMatchObject({ message: {
+            followDeliveryProjection: { status: "woke", reason: null },
+        } });
+        expect(JSON.stringify(response)).not.toContain("private-source");
+        expect(JSON.stringify(response)).not.toContain("private-root-source");
+
+        txSessionMessageFindFirst.mockResolvedValueOnce({
+            id: "wake-message", seq: 11, localId: "session-follow-wake:batch-1",
+            messageRole: "non_user", content: { t: "encrypted", c: "cipher" },
+            acceptedTurnKind: "newTurn", acceptedTurnId: "native-turn-1",
+            turnStartWitnessId: null,
+            createdAt: timestamp, updatedAt: timestamp,
+        });
+        const withoutStart = await route.invoke({
+            params: { sessionId: "s1", localId: "session-follow-wake:batch-1" },
+            headers: {}, query: {},
+        });
+        expect(withoutStart.response).toMatchObject({ message: {
+            followDeliveryProjection: { status: null, reason: null },
+        } });
+
+        txSessionMessageFindFirst.mockResolvedValueOnce({
+            id: "wake-message", seq: 11, localId: "session-follow-wake:batch-1",
+            messageRole: "non_user", content: { t: "encrypted", c: "cipher" },
+            acceptedTurnKind: null, acceptedTurnId: null, turnStartWitnessId: null,
+            createdAt: timestamp, updatedAt: timestamp,
+        });
+        const preEffectOrAckUnknown = await route.invoke({
+            params: { sessionId: "s1", localId: "session-follow-wake:batch-1" },
+            headers: {}, query: {},
+        });
+        expect(preEffectOrAckUnknown.response).toMatchObject({ message: {
+            followDeliveryProjection: { status: null, reason: null },
+        } });
     });
 
     it("returns 404 when message localId is not found", async () => {

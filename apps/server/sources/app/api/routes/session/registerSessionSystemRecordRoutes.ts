@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { pick } from "zod/mini";
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 
@@ -25,11 +25,11 @@ import { SessionPermissionMediationRecordIdentityV1Schema } from '@happier-dev/p
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 
-const PERMISSION_MEDIATION_RECORD_ERROR_RESPONSE_SCHEMA = z.object({
+const PERMISSION_MEDIATION_RECORD_ERROR_RESPONSE_SCHEMA = z.strictObject({
     error: z.string(),
     code: z.string(),
-    currentRevision: z.string().optional(),
-}).strict();
+    currentRevision: z.optional(z.string()),
+});
 
 const PERMISSION_MEDIATION_RECORD_ROUTE_PARAMS_SCHEMA = SessionPermissionMediationRecordIdentityV1Schema;
 const PERMISSION_MEDIATION_RECORD_LIST_ROUTE_PARAMS_SCHEMA = pick(SessionPermissionMediationRecordIdentityV1Schema, {
@@ -126,7 +126,7 @@ function sendPermissionMediationRecordError(
 }
 
 export function registerSessionSystemRecordRoutes(app: Fastify) {
-    const withPluginRecordError = <T extends z.ZodTypeAny>(legacy: T) => (
+    const withPluginRecordError = <T extends z.ZodMiniType>(legacy: T) => (
         z.union([legacy, SessionSystemRecordErrorResponseSchema])
     );
 
@@ -268,10 +268,10 @@ export function registerSessionSystemRecordRoutes(app: Fastify) {
         },
         schema: {
             params: z.object({ sessionId: z.string() }),
-            querystring: z.union([
+            querystring: z.optional(z.union([
                 SessionSystemRecordListQuerySchema,
                 LegacyHostSessionSystemRecordListQuerySchema,
-            ]).optional(),
+            ])),
             response: {
                 200: z.union([SessionSystemRecordStoredPageResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema]),
                 400: withPluginRecordError(z.object({ error: z.literal("Invalid parameters") })),
@@ -452,10 +452,10 @@ export function registerSessionSystemRecordRoutes(app: Fastify) {
             body: z.union([SessionSystemRecordStoredUpsertRequestSchema, LegacyHostSessionSystemRecordUpsertRequestSchema]),
             response: {
                 200: z.union([SessionSystemRecordStoredUpsertResponseSchema, LegacyHostSessionSystemRecordUpsertResponseSchema]),
-                400: withPluginRecordError(z.object({ error: z.literal("Invalid parameters"), code: z.string().optional() }).passthrough()),
+                400: withPluginRecordError(z.looseObject({ error: z.literal("Invalid parameters"), code: z.optional(z.string()) })),
                 403: withPluginRecordError(z.object({ error: z.literal("Forbidden") })),
                 404: withPluginRecordError(z.object({ error: z.enum(["Session not found", "not_found"]) })),
-                409: withPluginRecordError(z.object({ error: z.literal("Conflict"), code: z.string() }).passthrough()),
+                409: withPluginRecordError(z.looseObject({ error: z.literal("Conflict"), code: z.string() })),
                 503: SessionSystemRecordErrorResponseSchema,
                 500: withPluginRecordError(z.object({ error: z.literal("Failed to upsert system record") })),
             },
@@ -523,12 +523,12 @@ export function registerSessionSystemRecordRoutes(app: Fastify) {
             body: SessionSystemRecordDeleteRequestSchema,
             response: {
                 200: SessionSystemRecordDeleteResponseSchema,
-                400: z.object({ error: z.string(), code: z.string().optional() }).passthrough(),
-                403: z.object({ error: z.string(), code: z.string() }).passthrough(),
-                404: z.object({ error: z.string(), code: z.string() }).passthrough(),
-                409: z.object({ error: z.string(), code: z.string(), currentRevision: z.string().optional() }).passthrough(),
-                503: z.object({ error: z.string(), code: z.string() }).passthrough(),
-                500: z.object({ error: z.string(), code: z.string() }).passthrough(),
+                400: z.looseObject({ error: z.string(), code: z.optional(z.string()) }),
+                403: z.looseObject({ error: z.string(), code: z.string() }),
+                404: z.looseObject({ error: z.string(), code: z.string() }),
+                409: z.looseObject({ error: z.string(), code: z.string(), currentRevision: z.optional(z.string()) }),
+                503: z.looseObject({ error: z.string(), code: z.string() }),
+                500: z.looseObject({ error: z.string(), code: z.string() }),
             },
         },
     }, async (request, reply) => {

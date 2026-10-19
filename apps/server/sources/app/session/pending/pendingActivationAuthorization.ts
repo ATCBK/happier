@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod/mini';
 import { PendingRequestedActionV1StoredSchema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
@@ -8,17 +9,20 @@ import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions
 import { TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { getActivePrismaRuntime } from '@/storage/db';
-import { resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
+import { readManagedPendingActivationHoldReasonInTx, resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
+import { projectManagedMachine } from '@/app/machines/managed/managedRows';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { readStoredSessionInputAdmissionReceipt, isCurrentSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import type { EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { PendingActivationFailureCodeV1Schema, PendingActivationFailureDetailsV1Schema,
-    type PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+    type PendingActivationFailureDetailsV1, type PendingActivationHoldReasonV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import type { PendingMessageRowRaw } from './mapPendingMessageRow';
 
-const StoredActivationFailureSchema = PendingActivationFailureDetailsV1Schema.extend({ failureCode: PendingActivationFailureCodeV1Schema }).strict();
+const StoredActivationFailureSchema = z.extend(PendingActivationFailureDetailsV1Schema, { failureCode: PendingActivationFailureCodeV1Schema });
 
 function readStoredActivationFailure(value: unknown) {
-    if (value === 'runtime_start_failed') return { failureCode: value } as const;
+    const code = PendingActivationFailureCodeV1Schema.safeParse(value);
+    if (code.success) return { failureCode: code.data };
     if (typeof value !== 'string') return undefined;
     try { return StoredActivationFailureSchema.safeParse(JSON.parse(value)).data; } catch { return undefined; }
 }
@@ -86,6 +90,36 @@ export function shouldArmPendingActivationAuthorization(params: Readonly<{
 }>): boolean {
     return params.requestedAction.kind !== 'reset_start' && (params.resumeWhenAvailable === true
         || (params.resumeWhenAvailable !== false && params.requestedAction.kind === 'send_now'));
+}
+
+/** Queue diagnostics use current admitted placement; they never create activation or block ordinary delivery. */
+export async function readPendingActivationHoldReasonsInTx(tx: Tx, input: Readonly<{
+    sessionId: string; actorAccountId: string; rows: readonly PendingMessageRowRaw[];
+}>): Promise<ReadonlyMap<string, PendingActivationHoldReasonV1>> {
+    const holds = new Map<string, PendingActivationHoldReasonV1>();
+    const session = await tx.session.findUnique({ where: { id: input.sessionId }, select: AUTHORIZATION_SELECT });
+    if (!session || session.accountId !== input.actorAccountId) return holds;
+    const candidates = input.rows.flatMap(row => {
+        const action = PendingRequestedActionV1StoredSchema.safeParse(row.requestedAction ?? { v: 1, kind: 'enqueue' });
+        if (row.status !== 'queued' || row.targetExecutionRunId != null || row.deliveryState != null
+            || row.providerAction != null || !action.success || !['enqueue', 'send_now'].includes(action.data.kind)) return [];
+        const receipt = readPendingOwnerInputAdmission({ sessionId: input.sessionId, accountId: session.accountId,
+            pending: { messageRole: typeof row.messageRole === 'string' ? row.messageRole : null,
+                authorAccountId: row.authorAccountId, inputAdmissionReceipt: row.inputAdmissionReceipt } });
+        return receipt?.admittedTarget ? [{ localId: row.localId, target: receipt.admittedTarget }] : [];
+    });
+    const activation = mapPendingActivationAuthorization(session);
+    const targets = new Map(candidates.map(candidate => [JSON.stringify(candidate.target), candidate.target]));
+    for (const target of targets.values()) {
+        if (!await isCurrentSessionInputMachineTargetInTx(tx, target)) continue;
+        const resumeRequested = Boolean(activation?.status === 'waiting' && activation.managedWakeTargetV1
+            && candidates.some(candidate => candidate.localId === activation.requestId
+            && isDeepStrictEqual(candidate.target, target)));
+        const reason = await readManagedPendingActivationHoldReasonInTx(tx, { actorAccountId: session.accountId,
+            machineId: target.machineId, homeId: target.homeId, resumeRequested });
+        if (reason) for (const candidate of candidates) if (isDeepStrictEqual(candidate.target, target)) holds.set(candidate.localId, reason);
+    }
+    return holds;
 }
 
 const AUTHORIZATION_SELECT = {
@@ -306,6 +340,22 @@ export async function markPendingActivationAuthorizationFailedInTx(params: Reado
     failureDetails?: PendingActivationFailureDetailsV1;
 }>): Promise<boolean> {
     await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId]);
+    if (params.failureCode === 'runtime_start_failed') {
+        const session = await params.tx.session.findUnique({ where: { id: params.sessionId }, select: AUTHORIZATION_SELECT });
+        const authorization = session ? mapPendingActivationAuthorization(session) : undefined;
+        const target = authorization?.managedWakeTargetV1;
+        if (authorization?.status === 'waiting' && target && authorization.requestId === params.requestId
+            && authorization.requestedAt === params.requestedAt.getTime()) {
+            // A runtime report cannot settle compute's still-pending wake.
+            // Its signed policy owner reports definite power/Ask failures;
+            // ordinary Agent-start failures apply only after compute runs.
+            const row = await params.tx.managedMachine.findUnique({ where: { id: target.managedId } });
+            if (!row || row.homeId !== target.homeId || row.enrolledMachineId !== target.enrolledMachineId) return false;
+            const machine = projectManagedMachine(row);
+            if (machine.observation?.availability !== 'present' || machine.observation.power !== 'running'
+                || machine.observation.storage === 'lost' || machine.submittedNativeEffect) return false;
+        }
+    }
     const updated = await params.tx.session.updateMany({
         where: {
             id: params.sessionId,

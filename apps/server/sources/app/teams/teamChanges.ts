@@ -1,6 +1,7 @@
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
+import { reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/accessService";
 
 /**
  * The stable coalescing identity for Team invalidation.
@@ -24,6 +25,7 @@ async function publishTeamsChangedInTx(
 ): Promise<number> {
     const teamIds = [...new Set(input.teamIds)].sort();
     if (teamIds.length === 0) return 0;
+    await reconcileDiscussionGrantAudienceForTeamsInTx(tx, { teamIds, additionalAccountIds: input.additionalAccountIds });
     const excluded = new Set(input.excludeAccountIds ?? []);
     const memberships = await tx.teamMembership.findMany({
         where: { teamId: { in: teamIds } },

@@ -20,6 +20,7 @@ import {
     updateSessionMetadataEnvelopeTuple,
 } from "@/app/session/sessionWriteService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { holdSqliteWriteLock } from "@/testkit/sqliteWriteLock";
 
 import { createSessionPublisherPresence, expireSessionPublisherCandidates, readSessionPublisherAuthorityProjection } from "./sessionPublisherPresence";
 import { resolveCurrentSessionPublisherFromServer } from "@/app/api/socket/externalActionDispatcher";
@@ -101,6 +102,33 @@ describe("session publisher presence on SQLite", () => {
             where: { id: seeded.binding.sessionId },
             select: { active: true, lastActiveAt: true, publisherGenerationLastActiveAt: true, runtimeActivityRevision: true },
         })).resolves.toEqual(registered);
+    });
+
+    it("reads current publisher authority while an unrelated database writer holds its lock", async () => {
+        const seeded = await seed();
+        const presence = createSessionPublisherPresence({ now: () => seeded.fence });
+        const socket = {};
+        const registered = await presence.registerPublisher({
+            socket, binding: seeded.binding,
+            completeActivitySnapshot: { state: "unknown", activeCount: 0 },
+        });
+        if (registered.status !== "registered") throw new Error("expected registration");
+        const writer = await holdSqliteWriteLock();
+        let observed: Awaited<ReturnType<typeof presence.readCurrentPublisherPrecondition>> | undefined;
+        const read = presence.readCurrentPublisherPrecondition({ socket }).then(value => { observed = value; });
+        try {
+            // Observation window only: authority is a read and must finish before writer release.
+            await vi.waitFor(() => expect(observed).toEqual({
+                machineId: seeded.binding.machineId,
+                committedFenceMs: registered.committedFence.getTime(),
+                publisherGeneration: registered.publisherGeneration.toString(),
+            }), { timeout: 1_000 });
+        } finally {
+            await writer.release();
+            await read;
+        }
+        await db.machine.update({ where: { id: seeded.binding.machineId }, data: { revokedAt: new Date() } });
+        await expect(presence.readCurrentPublisherPrecondition({ socket })).resolves.toBeNull();
     });
 
     async function seedEphemeralRunner() {
@@ -381,6 +409,10 @@ describe("session publisher presence on SQLite", () => {
             binding: seeded.binding,
             completeSnapshot: { state: "active", activeCount: 2 },
         })).resolves.toEqual({ status: "rejected", reason: "superseded" });
+        await expect(presence.publishSnapshot({
+            socket: predecessor, binding: seeded.binding,
+            completeSnapshot: { state: "idle", activeCount: 0 },
+        })).resolves.toEqual({ status: "rejected", reason: "superseded" });
         await expect(presence.touchPublisher({ socket: predecessor })).resolves.toEqual({ status: "superseded" });
         await expect(presence.closePublisher({ socket: predecessor })).resolves.toEqual({ status: "superseded" });
         await expect(db.session.findUniqueOrThrow({
@@ -527,6 +559,9 @@ describe("session publisher presence on SQLite", () => {
             binding: seeded.binding,
             completeSnapshot: { state: "active", activeCount: 1 },
         })).resolves.toEqual({ status: "rejected", reason: "superseded" });
+        await expect(presence.publishSnapshot({ socket, binding: seeded.binding,
+            completeSnapshot: { state: "idle", activeCount: 0 },
+        })).resolves.toEqual({ status: "rejected", reason: "superseded" });
         await expect(presence.touchPublisher({ socket })).resolves.toEqual({ status: "superseded" });
         await expect(db.session.findUniqueOrThrow({
             where: { id: seeded.binding.sessionId },
@@ -542,6 +577,9 @@ describe("session publisher presence on SQLite", () => {
             binding: seeded.binding,
             completeSnapshot: { state: "active", activeCount: 1 },
         })).resolves.toEqual({ status: "rejected", reason: "archived" });
+        await expect(presence.publishSnapshot({ socket, binding: seeded.binding,
+            completeSnapshot: { state: "idle", activeCount: 0 },
+        })).resolves.toEqual({ status: "rejected", reason: "archived" });
 
         await db.session.update({ where: { id: seeded.binding.sessionId }, data: { archivedAt: null } });
         const replacementMachineId = `replacement-${randomUUID()}`;
@@ -556,6 +594,9 @@ describe("session publisher presence on SQLite", () => {
             socket,
             binding: seeded.binding,
             completeSnapshot: { state: "active", activeCount: 1 },
+        })).resolves.toEqual({ status: "rejected", reason: "unauthorized" });
+        await expect(presence.publishSnapshot({ socket, binding: seeded.binding,
+            completeSnapshot: { state: "idle", activeCount: 0 },
         })).resolves.toEqual({ status: "rejected", reason: "unauthorized" });
     });
 

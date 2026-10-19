@@ -12,6 +12,7 @@ import { registerEphemeralRunnerRoutes } from "@/app/ephemeralRunner/routes";
 import { authRoutes } from "./routes/auth/authRoutes";
 import { pushRoutes } from "./routes/push/pushRoutes";
 import { sessionRoutes } from "./routes/session/sessionRoutes";
+import { registerDiscussionRoutes } from "./routes/discussions/registerDiscussionRoutes";
 import { connectRoutes } from "./routes/connect/connectRoutes";
 import { accountRoutes } from "./routes/account/accountRoutes";
 import { homeGovernanceRoutes } from "./routes/home/homeGovernanceRoutes";
@@ -100,6 +101,7 @@ export const API_CORS_ALLOWED_HEADERS = [
     AUTHORITY_CEILING_HEADER_V1,
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     'idempotency-key',
+    'if-none-match',
     V2_SESSION_LIST_SERVER_TIMING_REQUEST_HEADER,
     SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
 ];
@@ -183,6 +185,7 @@ export function registerApiRoutes(typed: Fastify, params: Readonly<{
     });
     pushRoutes(typed);
     sessionRoutes(typed);
+    registerDiscussionRoutes(typed);
     registerEphemeralRunnerRoutes(typed);
     accountRoutes(typed);
     homeGovernanceRoutes(typed);

@@ -2,6 +2,7 @@ import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/ses
 import { inReadSnapshot, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { getSessionLifecycleAutomationPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
+import { hasSessionFollowSessionSource } from "@/app/session/follow/sessionFollowSourceIdentity";
 
 type SessionAccountCursorLockOptions = Readonly<{ includeLifecyclePublications?: boolean }>;
 
@@ -17,14 +18,16 @@ async function readSessionAccountCursorAudienceInTx(
         ? await getSessionLifecycleAutomationPublicationAudienceInTx(tx, ids)
         : { sessionIds: [], accountIds: [] };
     const sourceSessionIds = [...new Set([...ids, ...lifecycle.sessionIds])].sort();
-    // Archive/rejoin invalidates both Reports-to endpoints, including children
-    // of a lead. Follow's destination wake is socket-only and allocates no cursor.
-    const reportsTo = sourceSessionIds.length > 0 ? await tx.sessionReportsTo.findMany({
-        where: { OR: [{ sessionId: { in: sourceSessionIds } }, { leadSessionId: { in: sourceSessionIds } }] },
-        select: { sessionId: true, leadSessionId: true },
+    // Every outgoing relation publishes a destination cursor. Archive/rejoin
+    // also invalidates incoming Manager children, so fence both endpoints there.
+    const relationEdges = sourceSessionIds.length > 0 ? await tx.sessionFollowEdge.findMany({
+        where: { OR: [{ sourceSessionId: { in: sourceSessionIds } },
+            { relation: 'manager', destinationSessionId: { in: sourceSessionIds } }] },
+        select: { sourceSessionId: true, destinationSessionId: true },
     }) : [];
     const projectionSessionIds = [...new Set([
-        ...sourceSessionIds, ...reportsTo.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+        ...sourceSessionIds, ...relationEdges.filter(hasSessionFollowSessionSource)
+            .flatMap(edge => [edge.sourceSessionId, edge.destinationSessionId]),
     ])].sort();
     const recipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, {
         sessionIds: projectionSessionIds, includeUnpublishedGrants: true, includeInactiveAccounts: true,
@@ -88,7 +91,7 @@ async function fenceSessionAccountCursorAudienceInTx(
             ...accountIds, ...projectionSessionIds,
         );
     }
-    // ReadCommitted can admit a grant or ReportsTo change between discovery
+    // ReadCommitted can admit a grant or manager change between discovery
     // and lock acquisition. Never extend a captured lock set out of order:
     // roll back and let inTx replay the complete transaction on its own budget.
     const current = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds, options);

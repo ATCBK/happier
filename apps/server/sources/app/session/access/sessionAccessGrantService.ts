@@ -20,9 +20,6 @@ import type { SessionAccessAuthentication } from "./sessionAccessAuthentication"
 import {
     resolveSubjectMemberAccountIdsInTx,
 } from "./sessionGrantSubjects";
-import {
-    applySessionAutoFollowForRelationshipChangeInTx,
-} from "@/app/session/follow/accountFollowService";
 import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
 import {
     resolveSessionAccessGrantSubjectInTx,
@@ -368,19 +365,6 @@ export async function applyInitialSessionAccessInTx(
         before,
         after,
     });
-    const newlyGranted = new Set(effects.grantedAccountIds);
-    for (const item of resolved) {
-        const accountIds = item.subject.kind === "account"
-            ? [item.subject.accountId]
-            : (await resolveAffectedAccountIdsInTx(tx, item.subject))
-                .filter((accountId) => newlyGranted.has(accountId));
-        if (accountIds.length === 0) continue;
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            accountIds,
-            relationship: item.subject.kind === "account" ? "direct" : item.subject.kind,
-        });
-    }
     return { ok: true, effects, directShares };
 }
 
@@ -791,20 +775,6 @@ export async function putSessionAccessGrantInTx(
         ...(subject.kind === "account" ? { directGrantChangedAccountId: subject.accountId } : {}),
     });
 
-    if (stored === null) {
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            // A direct share is itself the newly-created relationship, even when
-            // the recipient already reads through a Team. Derived Team/Group
-            // relationships still qualify only Accounts that gained effective
-            // read. Eligibility, explicit-choice precedence and conditional
-            // insertion remain in the Follow owner.
-            accountIds: subject.kind === "account"
-                ? [subject.accountId]
-                : effects.grantedAccountIds,
-            relationship: subject.kind === "account" ? "direct" : subject.kind,
-        });
-    }
 
     return {
         ok: true,
@@ -1094,13 +1064,6 @@ export async function setSessionAccessContextInTx(
         before,
         after,
     });
-    if (targetTeamRequired && targetTeamGrant === null) {
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            accountIds: effects.grantedAccountIds,
-            relationship: "team",
-        });
-    }
     return { ok: true, changed: true, primaryTeamId: params.primaryTeamId };
 }
 
@@ -1119,7 +1082,7 @@ export async function eraseSessionAccessGrantsForAccountInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const shares = await tx.sessionShare.findMany({
+    const readShares = () => tx.sessionShare.findMany({
         where: {
             OR: [{ sharedByUserId: params.accountId }, { sharedWithUserId: params.accountId }],
             session: { accountId: { not: params.accountId } },
@@ -1132,6 +1095,15 @@ export async function eraseSessionAccessGrantsForAccountInTx(
         },
         orderBy: [{ sessionId: "asc" }, { id: "asc" }],
     });
+    const capturedShares = await readShares();
+    if (capturedShares.length === 0) return;
+    // Retirement has closed new grants received or authored by this Account.
+    // Surviving Session owners can still remove a captured share, so use the
+    // ordinary grant-transition fence before reading access or changing rows.
+    // Reread after the fence: a share removed during discovery is already gone.
+    await acquireSessionAccessTransitionCursorLocksInTx(tx,
+        [...new Set(capturedShares.map(share => share.sessionId))], [params.accountId]);
+    const shares = await readShares();
     for (const share of shares) {
         const accountIds = [share.sharedWithUserId];
         const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {

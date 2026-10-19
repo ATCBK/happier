@@ -7,7 +7,7 @@ import {
     resolveSessionCollectiveAccessSnapshotsInTx,
 } from "@/app/session/access/sessionAccessWhere";
 import {
-    countSessionPersonalAttentionRowsForAccountsInTx,
+    countAccountPersonalAttentionRowsForAccountsInTx,
     type SessionPersonalAttentionAccountAdmission,
 } from "@/app/session/personal/queries";
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
@@ -173,8 +173,8 @@ export function didViewerActivityBadgeContributionChange(
 }
 
 /**
- * Count the same viewer-private attention membership used before list
- * pagination, for background badge refresh.
+ * Count viewer-private Session and first-class Discussion attention for
+ * background badge refresh, deduplicating counted Session anchors.
  *
  * Background refresh presents no credential, so it reads the one access owner
  * with the evidence it actually has. A restricted Team therefore contributes to
@@ -256,8 +256,9 @@ export async function computeAccountActivityBadgeCountsInTx(
         });
     }
 
-    const grouped = await countSessionPersonalAttentionRowsForAccountsInTx(tx, {
+    const grouped = await countAccountPersonalAttentionRowsForAccountsInTx(tx, {
         admissions,
+        authentication,
     });
     for (const accountId of activeAccountIds) {
         counts.set(accountId, grouped.get(accountId) ?? 0);

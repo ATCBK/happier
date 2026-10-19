@@ -1,4 +1,5 @@
 import { normalizeSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import type { SessionFollowDeliveredTurnStatus } from '@/storage/enums.generated';
 
 /**
  * Persistence adapter between Session relation columns and Protocol's
@@ -43,8 +44,8 @@ export function readCurrentSourceSessionFollowFrontier(row: SessionFollowSourceF
 }
 
 /**
- * Writes one deliverable turn fact into the existing pair: terminal facts use
- * the terminal enum; a stalled turn uses its exact id with a null terminal
+ * Writes one deliverable turn fact into the existing pair: terminal and waiting
+ * facts use the delivered-status enum; a stalled turn uses its exact id with a null
  * status. Both null means no consumed turn. No new presence cursor is needed.
  */
 export function writeSessionFollowFrontierColumns(frontier: SessionFollowFrontierV1): {
@@ -52,7 +53,7 @@ export function writeSessionFollowFrontierColumns(frontier: SessionFollowFrontie
     deliveredReadyEventSeq: number;
     deliveredAgentStateVersion: number;
     deliveredTurnId: string | null;
-    deliveredTurnStatus: "completed" | "failed" | "cancelled" | null;
+    deliveredTurnStatus: SessionFollowDeliveredTurnStatus | null;
 } {
     return {
         deliveredTranscriptSeq: frontier.transcriptSeq,

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { SESSION_RESPONSIBILITY_ASSIGNEE_UNAVAILABLE_V1, SESSION_RESPONSIBILITY_CANDIDATES_INVALID_CURSOR_V1, SessionResponsibilityCandidatesRequestSchema, SessionResponsibilityCandidatesResponseSchema, SetSessionResponsibilityRequestSchema, SetSessionResponsibilityResponseSchema } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import {

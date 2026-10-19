@@ -339,6 +339,39 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
         }
     });
 
+    it.each(['downgraded', 'revoked'] as const)('readmits exact recipient access after its grant is %s during inspection', async (scenario) => {
+        const fixture = await createSharedSessionFixture();
+        const share = { sessionId_sharedWithUserId: { sessionId: fixture.sessionId, sharedWithUserId: fixture.collaboratorId } };
+        await db.sessionShare.update({ where: share, data: { accessLevel: 'edit' } });
+        const params = { actorAccountId: fixture.ownerId, sessionId: fixture.sessionId,
+            recipientAccountId: fixture.collaboratorId, authentication: createPresentUserSessionAccessAuthentication() };
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.session;
+        const original = delegate.findUniqueOrThrow.bind(delegate);
+        const reached = deferred();
+        const release = deferred();
+        let paused = false;
+        Object.defineProperty(delegate, 'findUniqueOrThrow', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                if (!paused && args[0]?.select?.shares) { paused = true; reached.resolve(); await release.promise; }
+                return await original(...args);
+            } });
+        const response = inspectSessionAccessGrants(params);
+        try {
+            await expectBarrierEnteredBeforeResponse({ reached: reached.promise }, response);
+            if (scenario === 'revoked') await revokeShare(fixture);
+            else await db.sessionShare.update({ where: share, data: { accessLevel: 'view' } });
+            release.resolve();
+            expect(await response).toMatchObject({ ok: true, value: { visibility: 'complete', recipientAccess: {
+                accountId: fixture.collaboratorId,
+                effectiveAccess: scenario === 'revoked' ? null : { level: 'view', capabilities: { readTranscript: true, submitAgentInput: false } },
+            } } });
+        } finally {
+            release.resolve(); await response;
+            Object.defineProperty(delegate, 'findUniqueOrThrow', { configurable: true, writable: true, value: original });
+        }
+    });
+
     it.each(['owner', 'mode mismatch', 'revoked'] as const)('confirms fresh detail admission with one read (%s)', async (scenario) => {
         const fixture = await createSharedSessionFixture();
         await db.account.update({ where: { id: fixture.ownerId }, data: {

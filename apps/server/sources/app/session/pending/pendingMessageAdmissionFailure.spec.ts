@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SessionPendingEnqueueByMachineResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import type { SessionAccessProjectionRow } from '@/app/session/access/sessionAccess';
 import { createRouteTestBuilder } from '@/app/api/testkit/routeTestBuilder';
 
@@ -32,17 +33,20 @@ describe('Machine input admission transaction failures', () => {
         { code: 'P2034', message: 'Transaction failed due to a write conflict or a deadlock.' },
         { code: 'P2010', message: 'Raw query failed. Code: 40001. could not serialize access due to concurrent update' },
         { code: 'P2028', message: 'Unable to start a transaction in the given time.' },
+        { code: 'P2028', message: 'Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 15000 ms, however 15048 ms passed since the start of the transaction.' },
     ])('reports $code as a definite rejection after the transaction owner exhausts recovery', async (failure) => {
         vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
         vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
         database.transaction.mockRejectedValue(Object.assign(new Error(failure.message), {
             code: failure.code, meta: { error: failure.message, ...(failure.code === 'P2010' ? { code: '40001' } : {}) },
         }));
-        await expect(enqueuePendingMessageByAuthenticatedMachine({
+        const result = await enqueuePendingMessageByAuthenticatedMachine({
             accountId: 'account', sourceMachineId: 'machine', targetMachineId: 'machine',
             sessionId: 'session', localId: 'first-input', content: { t: 'encrypted', c: 'opaque-input' },
             requestedAction: { v: 1, kind: 'enqueue' },
-        })).resolves.toEqual({ status: 'rejected', code: 'session_input_storage_unavailable' });
+        });
+        expect(SessionPendingEnqueueByMachineResponseV1Schema.parse({ v: 1, result }).result)
+            .toEqual({ status: 'rejected', code: 'session_input_storage_unavailable' });
     });
 
     it('does not claim rejection when the database outcome is indeterminate', async () => {

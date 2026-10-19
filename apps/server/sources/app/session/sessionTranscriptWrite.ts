@@ -1,3 +1,4 @@
+import { normalizeSessionMessageContentForStorage } from "@/app/session/normalizeSessionMessageContentForStorage";
 import { isSessionAgentTransitionDividerLocalId } from '@happier-dev/protocol/sessions/agentTransitionDivider';
 import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
 import { type SessionMessageAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
@@ -280,6 +281,9 @@ export async function writeSessionTranscriptMessageInTx(
     tx: Tx,
     params: SessionTranscriptMessageWriteParams,
 ) {
+    const content = normalizeSessionMessageContentForStorage(params.content);
+    if (!content) throw new Error("Session message content cannot be represented in storage");
+    params = { ...params, content };
     const storageAdmission = validateSessionTranscriptStoredContent(params);
     if (!storageAdmission.ok) return storageAdmission;
 
@@ -440,7 +444,10 @@ async function writeHistoricalSessionMessageBatchWithModeInTx(
     }
 
     const itemByLocalId = new Map<string, HistoricalSessionMessageItem>();
-    for (const item of params.items) {
+    for (const rawItem of params.items) {
+        const content = normalizeSessionMessageContentForStorage(rawItem.content);
+        if (!content) return { ok: false as const, error: "invalid-item" as const };
+        const item = { ...rawItem, content };
         if (!item.localId) return { ok: false as const, error: "invalid-item" as const };
         // The Agent-transition divider local-ID namespace is reserved for the
         // owner-only transition service. It is refused HERE, at the canonical

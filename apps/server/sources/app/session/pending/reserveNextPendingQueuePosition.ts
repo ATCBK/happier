@@ -9,6 +9,7 @@ export async function inPendingQueuePositionTx<T>(
     sessionId: string,
     fn: (tx: Tx) => Promise<T>,
     targetMachineId?: string,
+    readAdditionalPublicationAccountsInTx?: (tx: Tx) => Promise<readonly string[]>,
 ): Promise<T> {
     return inTx(async (tx) => {
         const committedTarget = targetMachineId === undefined
@@ -18,7 +19,8 @@ export async function inPendingQueuePositionTx<T>(
         // Publication and mode-bound writers share Account→Session order.
         // Keep every recipient cursor fenced before admission begins, including
         // a different Session's heartbeat on the same Account.
-        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], controllerAccountIds);
+        const additionalAccountIds = await readAdditionalPublicationAccountsInTx?.(tx) ?? [];
+        await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [...controllerAccountIds, ...additionalAccountIds]);
         const currentCommittedTarget = targetMachineId === undefined
             ? await readCurrentCommittedSessionInputMachineTargetInTx(tx, sessionId) : undefined;
         const currentControllerAccountIds = await readPendingActivationControllerAccountIdsInTx(
@@ -28,7 +30,8 @@ export async function inPendingQueuePositionTx<T>(
         // must replay before Session locking can turn a new lower Account into
         // an inversion against another publisher's ordered acquisition.
         if (!isDeepStrictEqual(committedTarget, currentCommittedTarget)
-            || !isDeepStrictEqual(controllerAccountIds, currentControllerAccountIds)) {
+            || !isDeepStrictEqual(controllerAccountIds, currentControllerAccountIds)
+            || !isDeepStrictEqual(additionalAccountIds, await readAdditionalPublicationAccountsInTx?.(tx) ?? [])) {
             throw new TransactionReplayRequiredError("pending-activation-target-changed");
         }
         if (getDbProviderFromEnv(process.env, "postgres") === "postgres") {

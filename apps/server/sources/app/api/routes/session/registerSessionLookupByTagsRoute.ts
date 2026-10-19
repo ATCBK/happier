@@ -1,6 +1,7 @@
 import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2, SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol/sessions/control/contract';
-import { z } from "zod";
+import { z } from "zod/mini";
+import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
 
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
@@ -20,6 +21,7 @@ import {
 
 export function registerSessionLookupByTagsRoute(app: Fastify) {
     app.post("/v2/sessions/lookup-by-tags", {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         schema: {
             body: SessionLookupByTagsRequestV2Schema,

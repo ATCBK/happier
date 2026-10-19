@@ -1,0 +1,145 @@
+import { isDeepStrictEqual } from 'node:util';
+import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
+import { DiscussionMessageAddressingV1Schema, type DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
+import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
+import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { isDiscussionReplyDestinationCurrentInTx } from '@/app/session/messages/sessionMessageReply';
+import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
+import type { Tx } from '@/storage/inTx';
+import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
+import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
+import { FollowPolicyV1Schema, resolveFollowDeliveryV1, serializeFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { readAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
+/** Attachment and delivery progress belong to C1, never the policy-only participant row. */
+export async function attachDiscussionFollowSourceInTx(tx: Tx, input: Readonly<{ discussionId: string; destinationSessionId: string }>): Promise<void> {
+    const existing = await tx.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceDiscussionId_relation: {
+        destinationSessionId: input.destinationSessionId, sourceDiscussionId: input.discussionId, relation: 'follower' } }, select: { sourceKey: true } });
+    if (existing) return;
+    const discussion = await tx.discussion.findUniqueOrThrow({ where: { id: input.discussionId }, select: { messageSeq: true } });
+    const receiver = await tx.session.findUniqueOrThrow({ where: { id: input.destinationSessionId }, select: { accountId: true } });
+    const defaults = await readAccountFollowCreationPreferencesInTx(tx, receiver.accountId);
+    await tx.sessionFollowEdge.upsert({ where: { destinationSessionId_sourceDiscussionId_relation: {
+        destinationSessionId: input.destinationSessionId, sourceDiscussionId: input.discussionId, relation: 'follower' } },
+        create: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'discussion', discussionId: input.discussionId }),
+            sourceDiscussionId: input.discussionId, destinationSessionId: input.destinationSessionId,
+            relation: 'follower', policyJson: serializeFollowPolicyV1(defaults.discussionReceivePolicy), deliveredTranscriptSeq: discussion.messageSeq }, update: {} });
+    await invalidateSessionRelationProjectionsInTx(tx, [input.destinationSessionId]);
+}
+
+/** Removing a binding destroys its C1 attachment; a later invite seeds the then-current sequence. */
+export async function detachDiscussionFollowSourceInTx(tx: Tx, input: Readonly<{ discussionId: string; destinationSessionId?: string }>): Promise<void> {
+    const edges = await tx.sessionFollowEdge.findMany({ where: { sourceDiscussionId: input.discussionId,
+        ...(input.destinationSessionId ? { destinationSessionId: input.destinationSessionId } : {}) }, select: { destinationSessionId: true } });
+    await tx.sessionFollowEdge.deleteMany({ where: { sourceDiscussionId: input.discussionId,
+        ...(input.destinationSessionId ? { destinationSessionId: input.destinationSessionId } : {}) } });
+    if (edges.length) await invalidateSessionRelationProjectionsInTx(tx, edges.map(edge => edge.destinationSessionId));
+}
+
+/** The existing content-free Follow invalidation reaches the admitted destination runtime after commit. */
+export async function invalidateDiscussionFollowDestinationsInTx(tx: Tx, discussionId: string): Promise<void> {
+    const edges = await tx.sessionFollowEdge.findMany({ where: { sourceDiscussionId: discussionId }, select: { destinationSessionId: true } });
+    if (edges.length) await invalidateSessionRelationProjectionsInTx(tx, edges.map(edge => edge.destinationSessionId));
+}
+
+function receiptHasAddressing(value: unknown, addressing: DiscussionAddressingV1): boolean {
+    const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(value);
+    return receipt.success && receipt.data.issuer === 'authenticatedMachine'
+        && receipt.data.admittedTarget?.sessionId === addressing.participantSessionId
+        && isDeepStrictEqual(receipt.data.discussionAddressing, addressing);
+}
+
+/**
+ * One oldest selected, executable unaccepted original per attachment. Pages use the
+ * Discussion owner's indexed (discussionId, seq) traversal; accepted originals
+ * are batch-read by their existing exact Pending/materialized identity. The
+ * delivered frontier normally excludes all prior accepted history. Unaddressed
+ * rows since that frontier are revisited, not hidden behind an invented cap.
+ * Receiver Pending owns check-in admission for its Account, including questions
+ * authored by another Account. This source projection never skips an original
+ * because its author and receiver belong to different Accounts.
+ * Routing carries the persisted relation policy and committed addressing/author
+ * classification; current creation defaults never reinterpret an attachment.
+ */
+export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly<{
+    destinationSessionId: string; destinationRuntimeAccountId: string;
+}>): Promise<SessionFollowDiscussionPendingObservationV1[]> {
+    const edges = await tx.sessionFollowEdge.findMany({ where: { destinationSessionId: input.destinationSessionId,
+        sourceDiscussionId: { not: null }, relation: 'follower' },
+        select: { sourceDiscussionId: true, deliveredTranscriptSeq: true, policyJson: true }, orderBy: { sourceDiscussionId: 'asc' } });
+    const observations: SessionFollowDiscussionPendingObservationV1[] = [];
+    for (const edge of edges) {
+        const discussionId = edge.sourceDiscussionId;
+        if (!discussionId) continue;
+        let policy: FollowPolicyV1;
+        try {
+            policy = createStoredReadSchema(FollowPolicyV1Schema).parse(JSON.parse(edge.policyJson));
+        } catch {
+            continue;
+        }
+        let afterSeq = edge.deliveredTranscriptSeq;
+        for (;;) {
+            const rows = await tx.discussionMessage.findMany({ where: { discussionId, seq: { gt: afterSeq } },
+                select: { id: true, discussionId: true, seq: true, addressingV1: true, producerV1: true }, orderBy: { seq: 'asc' }, take: DISCUSSION_DEFAULT_PAGE_SIZE_V1 });
+            if (!rows.length) break;
+            const candidates = rows.flatMap(row => {
+                const snapshot = createStoredReadSchema(DiscussionMessageAddressingV1Schema).safeParse(row.addressingV1);
+                if (!snapshot.success || snapshot.data.throughSeq !== row.seq
+                    || !snapshot.data.participantSessionIds.includes(input.destinationSessionId)) return [];
+                const producer = row.producerV1 === null ? null : createStoredReadSchema(DiscussionProducerV1Schema).safeParse(row.producerV1);
+                if (producer && !producer.success) return [];
+                const event: FollowEventV1 = snapshot.data.watcherSessionIds?.includes(input.destinationSessionId)
+                    ? { kind: producer?.success ? 'message' : 'person_wrote' }
+                    : { kind: 'needs_you', type: 'decision', mode: 'wait' };
+                const addressing = { discussionId, messageId: row.id, throughSeq: row.seq, participantSessionId: input.destinationSessionId };
+                return [{ addressing, localId: deriveDiscussionFollowInputLocalIdV1(addressing), event,
+                    senderSessionId: producer?.success ? producer.data.sessionId : undefined }];
+            });
+            const localIds = candidates.map(candidate => candidate.localId);
+            const accepted = localIds.length ? await Promise.all([
+                tx.sessionPendingMessage.findMany({ where: { sessionId: input.destinationSessionId, localId: { in: localIds } }, select: { localId: true, inputAdmissionReceipt: true } }),
+                tx.sessionMessage.findMany({ where: { sessionId: input.destinationSessionId, localId: { in: localIds } }, select: { localId: true, inputAdmissionReceipt: true } }),
+            ]) : [];
+            for (const candidate of candidates) {
+                if (accepted.flat().some(original => original.localId === candidate.localId && receiptHasAddressing(original.inputAdmissionReceipt, candidate.addressing))) continue;
+                if (!await isDiscussionReplyDestinationCurrentInTx(tx, { accountId: input.destinationRuntimeAccountId, discussion: candidate.addressing })) continue;
+                // Shared receiver policy suppresses a muted original. A later
+                // accepted eligible original may cross it; there is no second
+                // deferred queue or suppression receipt for that earlier ask.
+                if (await isDeliveryMutedInTx(tx, { accountId: input.destinationRuntimeAccountId,
+                    receiver: { kind: 'session', sessionId: input.destinationSessionId }, candidate: {
+                        source: { kind: 'discussion', discussionId }, ...(candidate.senderSessionId ? { senderSessionId: candidate.senderSessionId } : {}),
+                    } }) !== false) continue;
+                if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event }).selected) continue;
+                observations.push({ source: { kind: 'discussion', discussionId }, destinationSessionId: input.destinationSessionId,
+                    addressing: candidate.addressing, policy, event: candidate.event });
+                break;
+            }
+            if (observations.some(observation => observation.source.discussionId === discussionId) || rows.length < DISCUSSION_DEFAULT_PAGE_SIZE_V1) break;
+            afterSeq = rows[rows.length - 1]!.seq;
+        }
+    }
+    return observations;
+}
+
+/** Pending admission re-enters C1's exact current occurrence, not caller-authored routing. */
+export async function admitDiscussionFollowAddressingInTx(tx: Tx, input: Readonly<{ accountId: string; discussion: DiscussionAddressingV1 }>): Promise<boolean> {
+    const current = await observeDiscussionFollowSourcesInTx(tx, { destinationSessionId: input.discussion.participantSessionId,
+        destinationRuntimeAccountId: input.accountId });
+    return current.some(observation => isDeepStrictEqual(observation.addressing, input.discussion));
+}
+
+/** Accepted existing Pending custody is the effect: commit its ACK atomically, not at a second queue. */
+export async function acknowledgeDiscussionFollowInputInTx(tx: Tx, input: Readonly<{ addressing: DiscussionAddressingV1; localInputId: string }>): Promise<void> {
+    if (deriveDiscussionFollowInputLocalIdV1(input.addressing) !== input.localInputId) throw new Error('Discussion Follow input identity mismatch');
+    const original = await tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
+        sessionId: input.addressing.participantSessionId, localId: input.localInputId } }, select: { inputAdmissionReceipt: true } });
+    if (!original || !receiptHasAddressing(original.inputAdmissionReceipt, input.addressing)) throw new Error('Discussion Follow Pending acceptance is unavailable');
+    // Advance only through this exact accepted original; receiver admission
+    // retains unaccepted questions before any Pending receipt or source ACK.
+    const changed = await tx.sessionFollowEdge.updateMany({ where: { destinationSessionId: input.addressing.participantSessionId,
+        sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'discussion', discussionId: input.addressing.discussionId }),
+        relation: 'follower', deliveredTranscriptSeq: { lt: input.addressing.throughSeq } }, data: { deliveredTranscriptSeq: input.addressing.throughSeq } });
+    if (changed.count !== 1) throw new Error('Discussion Follow attachment changed before Pending acceptance');
+}

@@ -3,11 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
-import { setSessionReportsToInTx } from '@/app/session/relations/sessionReportsToService';
+import { setSessionManagerInTx } from '@/app/session/follow/sessionManagerService';
 import { db, initDbMysql, initDbPostgres } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 
-describe('SessionReportsTo Home fence', () => {
+describe('SessionManager Home fence', () => {
     let connected = false;
 
     beforeAll(async () => {
@@ -15,7 +15,7 @@ describe('SessionReportsTo Home fence', () => {
         const provider = (process.env.HAPPIER_DB_PROVIDER ?? process.env.HAPPY_DB_PROVIDER ?? 'postgres').toLowerCase();
         if (provider === 'mysql') await initDbMysql();
         else if (provider === 'postgres' || provider === 'postgresql') initDbPostgres();
-        else throw new Error(`Unsupported reportsTo fence contract provider: ${provider}`);
+        else throw new Error(`Unsupported manager fence contract provider: ${provider}`);
         await db.$connect();
         connected = true;
     });
@@ -55,31 +55,31 @@ describe('SessionReportsTo Home fence', () => {
             entered += 1;
             if (entered === accounts.length) release();
             await allEntered;
-            return setSessionReportsToInTx(tx, {
+            return setSessionManagerInTx(tx, {
                 accountId: account.id,
                 sessionId: index === 1 ? second.id : first.id,
-                leadSessionId: index === 1 ? first.id : second.id,
-                expectedLeadSessionId: null,
+                managerSessionId: index === 1 ? first.id : second.id,
+                expectedManagerSessionId: null,
                 authentication,
             });
         }));
         const results = await Promise.all(contenders);
         expect(results.filter((result) => result.ok)).toHaveLength(1);
         expect(results.filter((result) => !result.ok)).toEqual(expect.arrayContaining([
-            expect.objectContaining({ ok: false, error: 'reports_to_cycle' }),
+            expect.objectContaining({ ok: false, error: 'manager_cycle' }),
         ]));
         for (const result of results) {
-            if (!result.ok) expect(['reports_to_cycle', 'reports_to_cas_conflict']).toContain(result.error);
+            if (!result.ok) expect(['manager_cycle', 'manager_cas_conflict']).toContain(result.error);
         }
-        const edges = await db.sessionReportsTo.findMany({
-            where: { sessionId: { in: [first.id, second.id] } },
-            select: { sessionId: true, leadSessionId: true },
+        const edges = await db.sessionFollowEdge.findMany({
+            where: { relation: 'manager', sourceSessionId: { in: [first.id, second.id] } },
+            select: { sourceSessionId: true, destinationSessionId: true },
         });
         expect(edges).toHaveLength(1);
         const winner = results.find((result) => result.ok);
         expect(winner?.ok && edges[0]).toEqual(winner?.ok ? {
-            sessionId: winner.sessionId,
-            leadSessionId: winner.leadSessionId,
+            sourceSessionId: winner.sessionId,
+            destinationSessionId: winner.managerSessionId,
         } : undefined);
     });
 });
