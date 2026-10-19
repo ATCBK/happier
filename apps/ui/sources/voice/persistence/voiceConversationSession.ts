@@ -590,10 +590,13 @@ async function spawnVoiceConversationSession(params: Readonly<{
         });
     }
     if (action.result.type !== 'success') {
+        // The strict Action result already carries the launch owner's typed
+        // cause. Keep its code without exposing diagnostic prose to Voice.
+        const launchErrorCode = 'launchError' in action.result ? action.result.launchError?.code : undefined;
         throw toVoiceConversationSpawnError(action.result.type === 'error'
             ? {
-                errorCode: action.result.code,
-                errorMessage: action.result.code,
+                errorCode: launchErrorCode ?? action.result.code,
+                errorMessage: launchErrorCode ?? action.result.code,
                 retryableProviderFailure:
                     'providerError' in action.result
                     && action.result.providerError?.retryable === true

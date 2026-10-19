@@ -1121,6 +1121,25 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     }));
   });
 
+  it('preserves the typed launch refusal without exposing its diagnostic message', async () => {
+    spawnResponse.mockResolvedValue({
+      type: 'error',
+      code: 'spawn_failed',
+      retryable: true,
+      launchError: {
+        kind: 'launch_error',
+        code: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        message: 'private credential transport detail',
+      },
+    });
+
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForVoiceHome()).rejects.toMatchObject({
+      code: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      message: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+    });
+  });
+
   it('surfaces the authoritative spawn operation failure for a raw online machine record', async () => {
     spawnResponse.mockResolvedValue({
       type: 'error',
