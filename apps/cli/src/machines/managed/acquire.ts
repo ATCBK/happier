@@ -449,9 +449,11 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 } catch (error) {
                     // The successful admission response proves desired intent committed.
                     // A later unreadable Home cannot prove that intent was withdrawn
-                    // or that native submission did not commit. Keep the same operation
-                    // unconfirmed; definite native refusals keep their own settlement.
-                    if (!(error instanceof ManagedMachineControllerError) || !error.details) throw error;
+                    // or that native submission did not commit. Native reconciliation
+                    // also explicitly retains unknown delivery. Keep both unconfirmed;
+                    // definite native refusals keep their own settlement.
+                    if (!(error instanceof ManagedMachineControllerError) || error instanceof ManagedMachineNativeRefusal
+                        || (!error.details && error.code !== 'native_intent_unconfirmed')) throw error;
                     return unconfirmed(error, true);
                 }
                 return accepted;
