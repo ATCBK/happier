@@ -51,7 +51,7 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
   };
   // Readiness belongs to the refresh, including an equal-row publication
   // which intentionally produces no broad Account notification.
-  const completion = refresh(refreshInput, reobserve, observeReadable);
+  const completion = refresh(refreshInput, reobserve ? 'reobserve' : 'read', observeReadable);
   // Source preference handoff still precedes this publication; optional
   // history maintenance remains with the loader without holding admission.
   const result = await Promise.race([completion, readable]);
@@ -70,10 +70,10 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
 /** Demand-load the sole catalog in the caller's existing Account custody. */
 export function refreshActiveProviderConnectionsCatalog(input: RefreshInput,
   options?: Readonly<{ afterChange?: boolean }>): Promise<ProviderConnectionsCatalogSnapshotV1> {
-  return refresh(input, options?.afterChange === true);
+  return refresh(input, options?.afterChange === true ? 'change' : 'read');
 }
 
-function refresh(input: RefreshInput, afterChange = false, onReadable?: () => void): Promise<ProviderConnectionsCatalogSnapshotV1> {
+function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 'read', onReadable?: () => void): Promise<ProviderConnectionsCatalogSnapshotV1> {
   const context = input.operationContext;
   const scopeKey = resolveAccountSettingsScopeKey(input.credentials);
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
@@ -84,7 +84,10 @@ function refresh(input: RefreshInput, afterChange = false, onReadable?: () => vo
   if (!current() || input.signal?.aborted) return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
   const existing = context ? undefined : pending.get(key);
   if (existing) {
-    if (afterChange) {
+    // Readers arriving before the row is published share that observation.
+    // A later explicit read must reobserve authority, even while the previous
+    // read's optional cleanup continues; actual changes always invalidate it.
+    if (intent === 'change' || intent === 'reobserve' && existing.readable) {
       existing.readable = false;
       reloadAfterPending.add(key); beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
     }
@@ -160,5 +163,5 @@ export async function refreshDemandedActiveProviderConnectionsCatalog(input: Rea
   if (getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog === undefined) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await refresh({ credentials, signal: input.signal }, true);
+  await refresh({ credentials, signal: input.signal }, 'change');
 }

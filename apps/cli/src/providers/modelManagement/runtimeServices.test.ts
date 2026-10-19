@@ -34,6 +34,7 @@ import { createSavedSecretMaterializerV1 } from '@/settings/secrets/savedSecretC
 import { commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
+import * as providerContributions from '@/providers/registry/contributions';
 import {
   resolveProviderProbeAuthorization,
   resolveProviderSpawnAuthorization,
@@ -59,6 +60,51 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   resetActiveAccountSettingsSnapshotForTests();
   await Promise.all(temporaryPaths.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
+
+it('cancels broker eligibility inside its pending catalog HTTP read', async () => {
+  const credentials = { token: 'eligibility-cancellation', encryption: null };
+  const snapshot = providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1);
+  setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  const controller = new AbortController();
+  let enterRow = () => {};
+  let releaseRow = () => {};
+  const rowEntered = new Promise<void>(resolve => { enterRow = resolve; });
+  const rowReleased = new Promise<void>(resolve => { releaseRow = resolve; });
+  let transportAborted = false;
+  vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') {
+      const signal = options?.signal;
+      const abort = () => { transportAborted = true; releaseRow(); };
+      signal?.addEventListener?.('abort', abort, { once: true });
+      enterRow();
+      try { await rowReleased; if (signal?.aborted) throw new Error('HTTP read cancelled'); }
+      finally { signal?.removeEventListener?.('abort', abort); }
+      // Cleanup also works on the unfixed path after the assertion deadline.
+      return { status: 200, data: { status: 'absent' } };
+    }
+    throw new Error(`Unexpected cancelled eligibility HTTP boundary: ${path}`);
+  });
+  const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
+    featureGate: { isEnabled: () => true },
+    modelSettingsMutation: async (): Promise<never> => { throw new Error('No model mutation during eligibility'); } });
+  const eligibility = services.resolveTeamCredentialBrokerEligibility({ machineId: 'machine-a',
+    teamId: 'team-a', resourceId: 'resource-a', expectedResourceRevision: 1,
+    source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection', connectionId: 'connection-a',
+      connectionSecurityFingerprint: 'connection-security:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', credentialSlotId: 'slot-a' }),
+    application: { agentTargetKey: 'agent:acme.example/a', implementationIdentity: { pluginId: 'acme.example', localId: 'provider' },
+      endpointTemplateId: 'chat', protocol: 'openai-chat' }, modelId: 'model-a', sourceRevision: 'revision-a',
+  }, controller.signal);
+  try {
+    await rowEntered;
+    controller.abort();
+    await vi.waitFor(() => expect(transportAborted).toBe(true));
+    await expect(eligibility).resolves.toMatchObject({ status: 'unavailable' });
+  } finally { releaseRow(); await eligibility; }
 });
 
 async function runtimeStoreWithState(state = createEmptyProviderRuntimeStateFileV1('machine-a')) {
@@ -419,7 +465,10 @@ describe('runtime provider model-management composition', () => {
       })) };
       observedRevision += 1;
     }
+    // Observe real work; do not substitute the catalog owner or connection resolver.
+    const nameCatalogReads = vi.spyOn(providerContributions, 'readProviderModelNameCatalog');
     const result = await services.projectModels({ machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex' });
+    expect(nameCatalogReads).toHaveBeenCalledTimes(1);
     if (custody === 'ambient') expect(result).toMatchObject({ status: 'success', groups: [
       expect.objectContaining({ connectionId, connectionName: 'Current Gateway' }),
     ] });
@@ -605,11 +654,13 @@ describe('runtime provider model-management composition', () => {
     // A prepared projection exists concurrently, but the held lease is the
     // operation's authority. The next operation observes that prepared lease.
     currentLease = preparedLease;
+    nameCatalogReads.mockClear();
     const nextResult = await services.projectModels({
       machineId: 'machine-a',
       agentTargetKey: 'agent:happier.agent.codex/codex',
       includeTeamCredentialRequestPolicySupport: true,
     });
+    expect(nameCatalogReads).toHaveBeenCalledTimes(1);
     expect(nextResult).toMatchObject({
       status: 'success',
       groups: [{ rows: [{
