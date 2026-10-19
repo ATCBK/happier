@@ -34,6 +34,29 @@ describe('TokenStorage (web) server-scoped credentials', () => {
         else process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = previousStorageScope;
     });
 
+    it('retains genuine same-Account history on refresh while exact replacement can forget it', async () => {
+        restoreLocalStorage = installLocalStorageMock().restore;
+        const { TokenStorage } = await import('./tokenStorage');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const token = (sub: string, nonce: string) => `e30.${Buffer.from(JSON.stringify({ sub, nonce })).toString('base64url')}.sig`;
+        const endpoint = 'https://historical-storage.test';
+        const target = { serverId: 'srv_historical_storage' };
+        const original = { token: token('alice', 'old'), secret: encodeBase64(new Uint8Array(32).fill(8), 'base64url') };
+        await TokenStorage.setCredentialsForServerUrl(endpoint, target, original);
+        const next = { token: token('alice', 'new') };
+        await TokenStorage.setCredentialsForServerUrl(endpoint, { ...target, preserveHistoricalEncryption: true }, next);
+        expect(await TokenStorage.getCredentialsForServerUrl(endpoint, target)).toEqual({ ...original, ...next });
+        await TokenStorage.setCredentialsForServerUrl(endpoint, target, next);
+        expect(await TokenStorage.getCredentialsForServerUrl(endpoint, target)).toEqual(next);
+        await TokenStorage.setCredentialsForServerUrl(endpoint, target, original);
+        const other = { token: token('bob', 'new') };
+        await TokenStorage.setCredentialsForServerUrl(endpoint, { ...target, preserveHistoricalEncryption: true }, other);
+        expect(await TokenStorage.getCredentialsForServerUrl(endpoint, target)).toEqual(other);
+        await TokenStorage.setCredentialsForServerUrl(endpoint, target, original);
+        expect(await TokenStorage.setCredentialsForServerUrl(endpoint, { ...target, preserveHistoricalEncryption: true }, { token: 'unknown-identity' })).toBe(false);
+        expect(await TokenStorage.getCredentialsForServerUrl(endpoint, target)).toEqual(original);
+    });
+
     it('restores the previous exact credential bytes after an admitted write', async () => {
         const local = installLocalStorageMock();
         restoreLocalStorage = local.restore;
@@ -46,6 +69,12 @@ describe('TokenStorage (web) server-scoped credentials', () => {
         if (!receipt) throw new Error('Expected admitted credential write');
         expect(await receipt.rollback()).toBe(true);
         expect(local.store).toEqual(before);
+        local.setItemMock.mockClear();
+        local.removeItemMock.mockClear();
+        expect(await receipt.rollback()).toBe(true);
+        expect(local.store).toEqual(before);
+        expect(local.setItemMock).not.toHaveBeenCalled();
+        expect(local.removeItemMock).not.toHaveBeenCalled();
     });
 
     it.each(['read', 'remove', 'restore'] as const)('surfaces an actual rollback storage %s failure', async (operation) => {
@@ -80,7 +109,8 @@ describe('TokenStorage (web) server-scoped credentials', () => {
         const beforeRollback = new Map(local.store);
         local.setItemMock.mockClear();
         local.removeItemMock.mockClear();
-        await receipt.rollback();
+        expect(await receipt.rollback()).toBe(false);
+        expect(await receipt.rollback()).toBe(false);
         expect(local.store).toEqual(beforeRollback);
         expect(local.setItemMock).not.toHaveBeenCalled();
         expect(local.removeItemMock).not.toHaveBeenCalled();
@@ -1073,7 +1103,7 @@ describe('TokenStorage (web) server-scoped credentials', () => {
                 target,
                 { token: 'newer-same-identity-token' },
             )).resolves.toBe(true);
-            await expect(receipt!.rollback()).resolves.toBe(true);
+            await expect(receipt!.rollback()).resolves.toBe(false);
 
             await expect(TokenStorage.getCredentialsForServerUrl(endpoint, target))
                 .resolves.toEqual({ token: 'newer-same-identity-token' });

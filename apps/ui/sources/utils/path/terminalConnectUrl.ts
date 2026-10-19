@@ -261,7 +261,7 @@ export function buildTerminalConnectWebHref(params: Readonly<{
     supportsTokenOnly?: boolean;
     serverIdentityId?: string;
     homeConnectionDescriptor?: HomeConnectionDescriptorV1;
-}>): string {
+}>): `${typeof TERMINAL_CONNECT_WEB_PATH}#${string}` {
     const publicKeyB64Url = String(params.publicKeyB64Url ?? '').trim();
     if (params.homeConnectionDescriptor) {
         const payload = buildTerminalConnectV4Payload({ ...params, homeConnectionDescriptor: params.homeConnectionDescriptor });
@@ -270,15 +270,13 @@ export function buildTerminalConnectWebHref(params: Readonly<{
     const safeServerUrl = normalizeServerUrl(params.serverUrl ?? '');
 
     const serverSuffix = safeServerUrl ? `&server=${encodeURIComponent(safeServerUrl)}` : '';
-    const hash =
-        `#key=${encodeURIComponent(publicKeyB64Url)}${serverSuffix}`
-        + `${buildPairingQuerySuffix(params.pairing, params.supportsTokenOnly === true, params.serverIdentityId)}`;
+    const hash: `#${string}` = `#key=${encodeURIComponent(publicKeyB64Url)}${serverSuffix}${buildPairingQuerySuffix(params.pairing, params.supportsTokenOnly === true, params.serverIdentityId)}`;
 
     return `${TERMINAL_CONNECT_WEB_PATH}${hash}`;
 }
 
 /** Translates an incoming link to the web carrier without upgrading its pairing authority. */
-export function resolveTerminalConnectWebHref(url: string): string | null {
+export function resolveTerminalConnectWebHref(url: string): ReturnType<typeof buildTerminalConnectWebHref> | null {
     const terminal = parseTerminalConnectUrl(url);
     if (!terminal) return null;
     if (terminal.compatibility?.admission === 'update_required') {
@@ -293,7 +291,7 @@ export function resolveTerminalConnectWebHref(url: string): string | null {
 
 export function buildTerminalConnectAuthRedirectHref(params: Readonly<{
     serverUrl: string | null | undefined;
-}>): string {
+}>): '/' | `/?server=${string}` {
     const safeServerUrl = normalizeServerUrl(params.serverUrl ?? '');
     if (!safeServerUrl) return '/';
     return `/?server=${encodeURIComponent(safeServerUrl)}`;

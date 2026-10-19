@@ -100,11 +100,11 @@ describe('Account Directory OAuth exchange custody', () => {
         };
     }
 
-    it('does not offer a retry for an invalid request TypeError', async () => {
+    it('refuses a malformed Account Service endpoint before dispatch', async () => {
         const input = await storedInput();
-        boundary.request.mockRejectedValueOnce(new TypeError('Invalid URL'));
-        const result = await accountDirectoryAuthClient.exchangeOAuth(input);
+        const result = await accountDirectoryAuthClient.exchangeOAuth({ ...input, endpointUrl: 'not a URL' });
         expect(result).toMatchObject({ kind: 'failed', retryable: false });
+        expect(boundary.request).not.toHaveBeenCalled();
     });
 
     it('commits only restricted credentials and returns to the recorded surface without Directory or Home work', async () => {

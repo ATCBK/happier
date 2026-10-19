@@ -1,5 +1,7 @@
 import { Platform } from 'react-native';
-import { z } from 'zod';
+import tweetnacl from 'tweetnacl';
+import { parseToken } from '@/utils/auth/parseToken';
+import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountContinuationIntent } from '@happier-dev/cli-common/accountService';
@@ -76,6 +78,8 @@ export type ServerCredentialLookupOptions = Readonly<{
     serverId?: string | null;
     /** Only write when the currently stored credential still owns this scope. */
     expectedCredentials?: AuthCredentials;
+    /** Ordinary authentication refresh retains genuine keys for the same Account. Exact replacement remains the default. */
+    preserveHistoricalEncryption?: boolean;
 }>;
 
 /**
@@ -95,6 +99,8 @@ export type ServerCredentialReadOptions = ServerCredentialLookupOptions & Readon
  * that write Home credentials before a final profile adoption must call
  * `rollback()` when that adoption fails. `serverId` is the canonical identity
  * the write was keyed by (null for a legacy URL-scope write).
+ * Rollback reports false if a successor owns primary before restoration; a
+ * successfully completed rollback remains an idempotent true without writes.
  */
 export type HomeCredentialWriteRollback = Readonly<{
     serverUrl: string;
@@ -171,45 +177,45 @@ export type AccountHomeAuthenticationContinuation = Readonly<Pick<AccountDirecto
     | 'credentialTokenDigest'
 > & { homeServerIdentityId: string }>;
 
-const ContinuationIdentitySchema = z.string().trim().min(1);
+const ContinuationIdentitySchema = z.string().check(z.trim(), z.minLength(1));
 const AccountContinuationIntentSchema = z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('refresh') }).strict(),
-    z.object({ kind: z.literal('link'), homeServerIdentityId: ContinuationIdentitySchema }).strict(),
-    z.object({ kind: z.literal('enroll'), homeServerIdentityId: ContinuationIdentitySchema }).strict(),
-    z.object({ kind: z.literal('enter'), target: z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('automatic') }).strict(),
-        z.object({ kind: z.literal('explicit'), homeServerIdentityId: ContinuationIdentitySchema }).strict(),
-    ]) }).strict(),
+    z.strictObject({ kind: z.literal('refresh') }),
+    z.strictObject({ kind: z.literal('link'), homeServerIdentityId: ContinuationIdentitySchema }),
+    z.strictObject({ kind: z.literal('enroll'), homeServerIdentityId: ContinuationIdentitySchema }),
+    z.strictObject({ kind: z.literal('enter'), target: z.discriminatedUnion('kind', [
+        z.strictObject({ kind: z.literal('automatic') }),
+        z.strictObject({ kind: z.literal('explicit'), homeServerIdentityId: ContinuationIdentitySchema }),
+    ]) }),
 ]);
-const ContinuationEndpointSchema = z.string().transform((value, context) => {
+const ContinuationEndpointSchema = z.pipe(z.string(), z.transform((value, context) => {
     const endpoint = normalizeAccountDirectoryEndpoint(value);
     if (endpoint) return endpoint;
-    context.addIssue({ code: 'custom', message: 'Invalid Account-service endpoint' });
+    context.issues.push({ code: 'custom', message: 'Invalid Account-service endpoint', input: context.value });
     return z.NEVER;
-});
-const ContinuationReturnPathSchema = z.string().transform((value, context) => {
+}));
+const ContinuationReturnPathSchema = z.pipe(z.string(), z.transform((value, context) => {
     const path = normalizeInternalReturnPath(value);
     if (path) return path;
-    context.addIssue({ code: 'custom', message: 'Invalid internal return path' });
+    context.issues.push({ code: 'custom', message: 'Invalid internal return path', input: context.value });
     return z.NEVER;
-});
-const AccountHomeAuthenticationContinuationSchema = z.object({
+}));
+const AccountHomeAuthenticationContinuationSchema = z.strictObject({
     endpoint: ContinuationEndpointSchema,
     canonicalServerUrl: ContinuationEndpointSchema,
     serverIdentityId: ContinuationIdentitySchema,
     homeServerIdentityId: ContinuationIdentitySchema,
     entryIntent: AccountContinuationIntentSchema,
     returnTo: ContinuationReturnPathSchema,
-    accountEntryReturnTo: ContinuationReturnPathSchema.optional(),
-    credentialTokenDigest: z.string().refine(isAccountDirectoryCredentialTokenDigest),
-}).strict().superRefine((row, context) => {
+    accountEntryReturnTo: z.optional(ContinuationReturnPathSchema),
+    credentialTokenDigest: z.string().apply((base) => base.check(z.refine<z.output<typeof base>>(isAccountDirectoryCredentialTokenDigest)) as typeof base & z.ZodMiniType<string, z.input<typeof base>>),
+}).check(z.superRefine((row, context) => {
     const intentTarget = row.entryIntent.kind === 'enter'
         ? row.entryIntent.target.kind === 'explicit' ? row.entryIntent.target.homeServerIdentityId : null
         : row.entryIntent.kind === 'refresh' ? null : row.entryIntent.homeServerIdentityId;
     if (intentTarget && intentTarget !== row.homeServerIdentityId) {
         context.addIssue({ code: 'custom', path: ['entryIntent'], message: 'Home continuation target mismatch' });
     }
-});
+}));
 
 export function parseAccountHomeAuthenticationContinuation(value: unknown): AccountHomeAuthenticationContinuation | null {
     const parsed = AccountHomeAuthenticationContinuationSchema.safeParse(value);
@@ -817,12 +823,12 @@ export type AuthCredentials =
     | LegacyAuthCredentials
     | DataKeyAuthCredentials;
 
-const CredentialStringSchema = z.string().min(1).refine((value) => value.trim() === value);
-const AuthCredentialsSchema = z.object({
+const CredentialStringSchema = z.string().check(z.minLength(1), z.refine((value) => value.trim() === value));
+const AuthCredentialsSchema = z.pipe(z.strictObject({
     token: CredentialStringSchema,
-    secret: CredentialStringSchema.optional(),
-    encryption: z.object({ publicKey: CredentialStringSchema, machineKey: CredentialStringSchema }).strict().optional(),
-}).strict().superRefine((record, context) => {
+    secret: z.optional(CredentialStringSchema),
+    encryption: z.optional(z.strictObject({ publicKey: CredentialStringSchema, machineKey: CredentialStringSchema })),
+}).check(z.superRefine((record, context) => {
     // Known material fields select the credential shape; dropping additive
     // fields must never reinterpret E2EE or conflicting material as keyless.
     if ((Object.hasOwn(record, 'secret') && record.secret === undefined)
@@ -830,10 +836,10 @@ const AuthCredentialsSchema = z.object({
         || (Object.hasOwn(record, 'secret') && Object.hasOwn(record, 'encryption'))) {
         context.addIssue({ code: 'custom', message: 'Invalid credential material shape' });
     }
-}).transform((record): AuthCredentials => record.secret !== undefined
+})), z.transform((record): AuthCredentials => record.secret !== undefined
     ? { token: record.token, secret: record.secret }
     : record.encryption !== undefined ? { token: record.token, encryption: record.encryption }
-        : { token: record.token });
+        : { token: record.token }));
 const StoredAuthCredentialsSchema = createStoredReadSchema(AuthCredentialsSchema);
 
 /** Strict credential admission; stored reads derive their projection from this same schema. */
@@ -1206,15 +1212,15 @@ function isPendingAccountDirectoryAuthFieldsValid(
     return isNonEmptyString(identity);
 }
 
-const PendingAccountDirectoryAuthSchema = z.object({
+const PendingAccountDirectoryAuthSchema = z.strictObject({
     endpoint: z.string(), serverIdentityId: z.string(), canonicalServerUrl: z.string(),
     credentialTarget: z.literal('account_directory'), purpose: z.literal('account_directory'),
-    entryIntent: AccountContinuationIntentSchema, provider: z.string(), pending: z.string().optional(),
-    createdAt: z.number(), expiresAt: z.number(), mode: z.enum(['keyed', 'keyless']).optional(),
-    proof: z.string().optional(), secret: z.string().optional(), returnTo: z.string().optional(),
-    accountEntryReturnTo: z.string().optional(), linkHomeServerIdentityId: z.string().optional(),
-    explicitHomeServerIdentityId: z.string().optional(), state: z.string().optional(), nonce: z.string().optional(),
-}).strict().refine(isPendingAccountDirectoryAuthFieldsValid);
+    entryIntent: AccountContinuationIntentSchema, provider: z.string(), pending: z.optional(z.string()),
+    createdAt: z.number(), expiresAt: z.number(), mode: z.optional(z.enum(['keyed', 'keyless'])),
+    proof: z.optional(z.string()), secret: z.optional(z.string()), returnTo: z.optional(z.string()),
+    accountEntryReturnTo: z.optional(z.string()), linkHomeServerIdentityId: z.optional(z.string()),
+    explicitHomeServerIdentityId: z.optional(z.string()), state: z.optional(z.string()), nonce: z.optional(z.string()),
+}).apply((base) => base.check(z.refine<z.output<typeof base>>(isPendingAccountDirectoryAuthFieldsValid)) as typeof base & z.ZodMiniType<PendingAccountDirectoryAuthStoredRecord, z.input<typeof base>>);
 const StoredPendingAccountDirectoryAuthSchema = createStoredReadSchema(PendingAccountDirectoryAuthSchema);
 
 function normalizePendingAccountDirectoryAuth(
@@ -1458,32 +1464,32 @@ function isPendingExternalAuthFieldsValid(value: unknown): value is PendingExter
     return maybe.intent === 'signup' || maybe.intent === 'reset';
 }
 
-const PendingExternalAuthSchema = z.object({
+const PendingExternalAuthSchema = z.strictObject({
     provider: z.string(),
     presentation: zMini.optional(AuthEntryProviderPresentationV1Schema),
-    proof: z.string().optional(),
-    secret: z.string().optional(),
-    mode: z.enum(['keyed', 'keyless']).optional(),
-    intent: z.enum(['signup', 'reset']).optional(),
-    serverId: z.string().optional(),
-    serverUrl: z.string().optional(),
-    returnTo: z.string().optional(),
-    accountContinuation: AccountHomeAuthenticationContinuationSchema.optional(),
-    teamContinuation: z.object({
+    proof: z.optional(z.string()),
+    secret: z.optional(z.string()),
+    mode: z.optional(z.enum(['keyed', 'keyless'])),
+    intent: z.optional(z.enum(['signup', 'reset'])),
+    serverId: z.optional(z.string()),
+    serverUrl: z.optional(z.string()),
+    returnTo: z.optional(z.string()),
+    accountContinuation: z.optional(AccountHomeAuthenticationContinuationSchema),
+    teamContinuation: z.optional(z.strictObject({
         v: z.literal(1), purpose: z.literal('team_admission'),
         admissionReference: z.string(), teamId: z.string(), homeServerIdentityId: z.string(),
-        destination: z.object({ kind: z.literal('team_sign_in'), teamId: z.string() }).strict(),
-    }).strict().optional(),
+        destination: z.strictObject({ kind: z.literal('team_sign_in'), teamId: z.string() }),
+    })),
     postAuthInvitation: zMini.optional(TeamInvitationPostAuthContinuationV1Schema),
-    accountEncryptionFirstKey: z.object({
+    accountEncryptionFirstKey: z.optional(z.strictObject({
         accountId: z.string(), requestDigest: z.string(), requestJson: z.string(),
-        createdAt: z.number(), expiresAt: z.number(), pending: z.string().optional(),
-        migrationSubmissionAttempted: z.literal(true).optional(), rejectedCredentialTokenDigest: z.string().optional(),
-    }).strict().optional(),
+        createdAt: z.number(), expiresAt: z.number(), pending: z.optional(z.string()),
+        migrationSubmissionAttempted: z.optional(z.literal(true)), rejectedCredentialTokenDigest: z.optional(z.string()),
+    })),
     // This recognized custody is intentionally never persisted; it cannot
     // become an ignorable future field in the stored projection.
-    accountPasswordEnrollment: z.never().optional(),
-}).strict().refine(isPendingExternalAuthFieldsValid);
+    accountPasswordEnrollment: z.optional(z.never()),
+}).apply((base) => base.check(z.refine<z.output<typeof base>>(isPendingExternalAuthFieldsValid)) as typeof base & z.ZodMiniType<PendingExternalAuth, z.input<typeof base>>);
 const StoredPendingExternalAuthSchema = createStoredReadSchema(PendingExternalAuthSchema);
 
 function isPendingExternalAuthRecord(value: unknown): value is PendingExternalAuth {
@@ -2711,6 +2717,33 @@ type HomeCredentialWriteOutcome = Readonly<{
     rollback: (() => Promise<boolean>) | null;
 }>;
 
+/** Select custody during refresh without giving credential shape authority over Account mode. */
+function credentialsForAuthenticationRefresh(previous: AuthCredentials | null, incoming: AuthCredentials): AuthCredentials | null {
+    if (!previous || !isTokenOnlyAuthCredentials(incoming)) return incoming;
+    // Only genuine predecessor material is eligible for historical custody.
+    try {
+        if (isLegacyAuthCredentials(previous)) {
+            if (decodeBase64(previous.secret).length !== 32) return incoming;
+        } else if (isDataKeyAuthCredentials(previous)) {
+            const key = decodeBase64(previous.encryption.machineKey);
+            const publicKey = decodeBase64(previous.encryption.publicKey);
+            if (key.length !== 32 || publicKey.length !== 32) return incoming;
+            const derived = tweetnacl.box.keyPair.fromSecretKey(key).publicKey;
+            if (!derived.every((value, index) => value === publicKey[index])) return incoming;
+        } else return incoming;
+    } catch { return incoming; }
+    let previousAccountId: string;
+    let nextAccountId: string;
+    try {
+        previousAccountId = parseToken(previous.token);
+        nextAccountId = parseToken(incoming.token);
+    } catch {
+        // Refuse the write rather than silently discarding unassociated genuine material.
+        return null;
+    }
+    return previousAccountId === nextAccountId ? { ...previous, token: incoming.token } : incoming;
+}
+
 /**
  * Single canonical writer for explicit Home credential scopes. The write keys
  * the primary scope by the canonical stable identity (which may precede profile
@@ -2741,28 +2774,36 @@ async function writeHomeCredentialsForServerScope(
     if (!keys) return { stored: false, serverId: null, rollback: null };
 
     return await serializeCredentialScopeOperations([keys.primary, ...keys.legacy], async () => {
-    const json = JSON.stringify(credentials);
-    const previousPrimaryRaw = await readCredentialRawByKey(keys.primary);
-    const previousLegacyRaws = await Promise.all(keys.legacy.map((legacyKey) => readCredentialRawByKey(legacyKey)));
+    const readFailure = options.preserveHistoricalEncryption ? 'surface' : 'absent';
+    const previousPrimaryRaw = await readCredentialRawByKey(keys.primary, readFailure);
+    const previousLegacyRaws = await Promise.all(keys.legacy.map((legacyKey) => readCredentialRawByKey(legacyKey, readFailure)));
+    const currentCredentials = parseCredentialsRaw(previousPrimaryRaw)
+        ?? previousLegacyRaws.map(parseCredentialsRaw).find((value): value is AuthCredentials => value !== null)
+        ?? null;
     if (options.expectedCredentials) {
-        const currentCredentials = parseCredentialsRaw(previousPrimaryRaw)
-            ?? previousLegacyRaws.map(parseCredentialsRaw).find((value): value is AuthCredentials => value !== null)
-            ?? null;
         if (!areCredentialsEqual(currentCredentials, options.expectedCredentials)) {
             return { stored: false, serverId: identity.serverId, rollback: null };
         }
     }
 
+    const effectiveCredentials = options.preserveHistoricalEncryption
+        ? credentialsForAuthenticationRefresh(currentCredentials, credentials) : credentials;
+    if (!effectiveCredentials) return { stored: false, serverId: identity.serverId, rollback: null };
+    const json = JSON.stringify(effectiveCredentials);
     const written = await writeCredentialRawByKey(keys.primary, json);
     if (!written) return { stored: false, serverId: identity.serverId, rollback: null };
     for (const legacyKey of keys.legacy) {
         await removeCredentialByKey(legacyKey);
     }
-    emitHomeCredentialMutation('credentials_set', serverUrl, options, credentials);
+    emitHomeCredentialMutation('credentials_set', serverUrl, options, effectiveCredentials);
 
+    let rollbackCompleted = false;
     const rollback = async (): Promise<boolean> => {
         return await serializeCredentialScopeOperations([keys.primary, ...keys.legacy], async () => {
-        let restored = true;
+        // Only this receipt's successful restoration makes later calls an
+        // idempotent success. A successor taking primary is not a rollback.
+        if (rollbackCompleted) return true;
+        let restored = false;
         let mutated = false;
         // Remove what this write created only while its content is still ours;
         // a key rewritten concurrently belongs to its new writer.
@@ -2791,6 +2832,7 @@ async function writeHomeCredentialsForServerScope(
             }
         }
         if (restored && mutated) {
+            rollbackCompleted = true;
             emitHomeCredentialMutation('credentials_removed', serverUrl, options);
         }
         return restored;
@@ -3103,12 +3145,18 @@ export const TokenStorage = {
         }
     },
 
-    async setCredentials(credentials: AuthCredentials): Promise<boolean> {
+    async setCredentials(credentials: AuthCredentials, options: Readonly<{ preserveHistoricalEncryption?: boolean }> = {}): Promise<boolean> {
         return await withHomeMutationAuthority(undefined, async (authority) => {
         const keys = await getAuthKeys();
         if (!keys) return false;
         return await serializeCredentialScopeOperations([keys.primary, ...keys.legacy], async () => {
-        const json = JSON.stringify(credentials);
+        const previousRaws = options.preserveHistoricalEncryption
+            ? await Promise.all([keys.primary, ...keys.legacy].map(key => readCredentialRawByKey(key, 'surface'))) : [];
+        const previous = previousRaws.map(parseCredentialsRaw).find((value): value is AuthCredentials => value !== null) ?? null;
+        const effectiveCredentials = options.preserveHistoricalEncryption
+            ? credentialsForAuthenticationRefresh(previous, credentials) : credentials;
+        if (!effectiveCredentials) return false;
+        const json = JSON.stringify(effectiveCredentials);
         const written = await writeCredentialRawByKey(keys.primary, json);
         if (!written) return false;
         await TokenStorage.setAuthAutoRedirectSuppressedUntil(0);
@@ -3117,7 +3165,7 @@ export const TokenStorage = {
         }
         emitHomeCredentialMutation('credentials_set', getActiveServerUrl(), {
             serverId: getActiveServerId(),
-        }, credentials);
+        }, effectiveCredentials);
         return true;
         }, authority);
         });

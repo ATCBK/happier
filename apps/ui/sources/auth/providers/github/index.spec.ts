@@ -1,13 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-
-vi.mock('@/sync/domains/server/serverConfig', () => ({
-    getServerUrl: () => 'https://server.test',
-}));
-
-vi.mock('@/utils/timing/time', () => ({
-    backoff: async <T>(fn: () => Promise<T>) => await fn(),
-}));
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { resetEndpointSupervisorPoolForTests } from '@/sync/runtime/connectivity/endpointSupervisorPool';
+import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -21,30 +16,20 @@ vi.mock('@/text', async () => {
 
 import { githubAuthProvider } from './index';
 
-type MockFetchResponse = {
-    ok: boolean;
-    status: number;
-    json: () => Promise<unknown>;
-};
-
-function jsonResponse(params: { ok: boolean; status: number; body: unknown }): MockFetchResponse {
-    return {
-        ok: params.ok,
-        status: params.status,
-        json: async () => params.body,
-    };
-}
-
 const credentials: AuthCredentials = { token: 'token', secret: 'secret' };
 
 function stubFetch(body: unknown) {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => {
-        return jsonResponse({ ok: true, status: 200, body }) as Response;
+        return Response.json(body);
     });
+    setRuntimeFetch(fetchMock);
     vi.stubGlobal('fetch', fetchMock);
 }
 
-afterEach(() => {
+afterEach(async () => {
+    await resetEndpointSupervisorPoolForTests();
+    await resetServerReachabilitySupervisors();
+    resetRuntimeFetch();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
 });

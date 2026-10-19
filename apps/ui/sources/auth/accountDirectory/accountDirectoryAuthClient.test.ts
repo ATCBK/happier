@@ -187,7 +187,6 @@ describe('accountDirectoryAuthClient', () => {
         expect(probeServerFeaturesAtUrlMock).toHaveBeenCalledWith({
             endpointUrl: 'https://accounts-b.example.test',
             force: true,
-            timeoutMs: 0,
         });
         expect(activeSnapshot).not.toHaveBeenCalled();
         expect(getActiveCredentials).not.toHaveBeenCalled();
@@ -278,7 +277,6 @@ describe('accountDirectoryAuthClient', () => {
         expect(probeServerFeaturesAtUrlMock).toHaveBeenCalledWith({
             endpointUrl: 'https://accounts-b.example.test',
             force: true,
-            timeoutMs: 0,
         });
         expect(activeSnapshot).not.toHaveBeenCalled();
     });
@@ -307,7 +305,6 @@ describe('accountDirectoryAuthClient', () => {
             homeCarrier,
             signal: controller.signal,
             force: true,
-            timeoutMs: 0,
         });
         expect(result).not.toHaveProperty('runtimeOrigin');
         expect(result).not.toHaveProperty('homeCarrier');
@@ -361,7 +358,6 @@ describe('accountDirectoryAuthClient', () => {
             endpointUrl: 'https://accounts.example.test',
             serverId: 'directory-1',
             force: true,
-            timeoutMs: 0,
         });
         expect(directoryCredentialsSet).not.toHaveBeenCalled();
         expect(pendingSet).not.toHaveBeenCalled();

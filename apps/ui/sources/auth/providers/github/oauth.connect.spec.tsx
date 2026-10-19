@@ -92,7 +92,7 @@ afterEach(() => {
 });
 
 describe('/oauth/[provider] (connect flow)', () => {
-    it('clears pending connect state when callback contains an oauth error', async () => {
+    it('clears failed connect custody and returns to its saved destination', async () => {
         setAuthenticated();
         replaceSpy.mockReset();
         clearPendingExternalConnectMock.mockClear();
@@ -109,7 +109,7 @@ describe('/oauth/[provider] (connect flow)', () => {
         await runWithOAuthScreen(async () => {
             await flushOAuthEffects();
             expect(clearPendingExternalConnectMock).toHaveBeenCalledTimes(1);
-            expect(replaceSpy).toHaveBeenCalledWith('/settings/account');
+            expect(replaceSpy).toHaveBeenCalledWith('/friends');
         });
 
         alertSpy.mockRestore();

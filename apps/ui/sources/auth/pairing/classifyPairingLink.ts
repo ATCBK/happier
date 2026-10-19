@@ -10,7 +10,7 @@ export type ClassifiedPairingLink =
     | Readonly<{ kind: 'account_connect'; publicKeyB64Url: string }>
     | Readonly<{ kind: 'terminal_connect'; terminal: ParsedTerminalConnectUrl }>
     /** A Team join link: `path` is its in-app join destination, carrying the bearer and Home target verbatim. */
-    | Readonly<{ kind: 'team_join'; path: string }>
+    | Readonly<{ kind: 'team_join'; path: `/join/${string}` }>
     | Readonly<{ kind: 'unknown' }>;
 
 const UNKNOWN: ClassifiedPairingLink = Object.freeze({ kind: 'unknown' });
@@ -62,7 +62,7 @@ const TEAM_JOIN_PATH = /\/join\/([^/]+)\/?$/u;
  * token and its Home binding, as it does for a link opened any other way. A link without a Home target
  * is not a join link: one is never issued without it.
  */
-function readTeamJoinPath(rawLink: string): string | null {
+function readTeamJoinPath(rawLink: string): `/join/${string}` | null {
     let url: URL;
     try {
         url = new URL(rawLink);
@@ -74,6 +74,5 @@ function readTeamJoinPath(rawLink: string): string | null {
     const target = url.searchParams.get('target')?.trim();
     if (!token || !target) return null;
     const targetBinding = url.searchParams.get('targetBinding')?.trim();
-    return `/join/${token}?target=${encodeURIComponent(target)}`
-        + (targetBinding ? `&targetBinding=${encodeURIComponent(targetBinding)}` : '');
+    return `/join/${token}?target=${encodeURIComponent(target)}${targetBinding ? `&targetBinding=${encodeURIComponent(targetBinding)}` : ''}`;
 }

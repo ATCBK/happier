@@ -69,6 +69,8 @@ export type AuthCredentialPersistenceOptions = Readonly<{
         target?: HomeCredentialTarget;
         /** Refuse adoption when another Account replaced the captured one. */
         expectedCredentials?: AuthCredentials;
+        /** Used only after the historical-key Forget action confirms destructive discard. */
+        discardHistoricalEncryption?: boolean;
     }>;
 
 export interface AuthContextType {
@@ -209,12 +211,19 @@ export function AuthProvider({ children, initialCredentials }: { children: React
                 {
                     ...(target.serverId ? { serverId: target.serverId } : {}),
                     ...(options?.expectedCredentials ? { expectedCredentials: options.expectedCredentials } : {}),
+                    preserveHistoricalEncryption: options?.discardHistoricalEncryption !== true,
                 },
                 newCredentials,
             )
-            : await TokenStorage.setCredentials(newCredentials);
+            : await TokenStorage.setCredentials(newCredentials, { preserveHistoricalEncryption: options?.discardHistoricalEncryption !== true });
         if (!success) {
             throw new Error('Failed to save credentials');
+        }
+        const effectiveCredentials = target
+            ? await TokenStorage.getCredentialsForServerUrl(target.serverUrl, { serverId: target.serverId })
+            : await TokenStorage.getCredentials();
+        if (!effectiveCredentials || effectiveCredentials.token !== newCredentials.token) {
+            throw new Error('Stored credential changed during authentication');
         }
         // Mark this device as one where the user has authenticated at least once.
         // We persist this through the store (not raw saveLocalSettings) so the
@@ -243,7 +252,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
                 return { kind: 'completed' };
             }
         }
-        setCredentials(newCredentials);
+        setCredentials(effectiveCredentials);
         setIsAuthenticated(true);
         isLoginSyncInFlightRef.current = true;
         loginSyncServerKeyRef.current = resolveActiveServerKey(getActiveServerSnapshot());
