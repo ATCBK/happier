@@ -283,7 +283,7 @@ const ProjectRightSidebarContext = React.createContext<ReturnType<typeof useProj
 
 export function ProjectRightSidebarProvider(props: React.PropsWithChildren<ProjectRightPanelProps>): React.ReactElement {
     const model = useProjectRightSidebarModel(props);
-    // The Project page announces its checkout's reachability once (ProjectCockpitShell); its panes inherit it.
+    // The Project page and this pane each head their column with the checkout's reachability line; surfaces beneath inherit it.
     return <ProjectRightSidebarContext.Provider value={model}>
         <CheckoutReachabilityScope scope={model.workspaceScope}>{props.children}</CheckoutReachabilityScope>
     </ProjectRightSidebarContext.Provider>;
@@ -384,9 +384,8 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                 onClose={deviceType === 'phone' ? props.onRequestClose ?? props.model.pane.closeRight : undefined}
                 testID="project-rightpanel-header"
             />
-            {/* A phone pane is its own page over the Project, whose line it covers: it says it here, once. */}
-            {deviceType === 'phone'
-                ? <CheckoutReachabilityLine scope={workspaceScope} testID="project-rightpanel-reachability" /> : null}
+            {/* The page's line spans only its own column, and a phone pane covers it: the pane says it under its header too. */}
+            <CheckoutReachabilityLine scope={workspaceScope} testID="project-rightpanel-reachability" />
             <View style={styles.body}>
                 <SurfaceStateSizeProvider size={deviceType === 'phone' ? 'phone' : 'pane'}>
                 {rightTabSelection.kind === 'unresolved' ? (

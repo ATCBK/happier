@@ -125,6 +125,17 @@ describe('workspace browser demanded history', () => {
         await hook.rerender(nextHead);
         expect(renders.find(render => render.demandedHead === nextHead)).toEqual({ demandedHead: nextHead, stale: true, known: true });
     });
+    it('keeps last-known facts current while a wider demand on the same HEAD is read', async () => {
+        historyRpc.mockImplementation(async request => (request.payload as { paths: string[] }).paths.length > 1
+            ? new Promise(() => {}) : { success: true, headOid: oldHead, entries: [{ path: 'README.md', kind: 'none' }] });
+        const hook = await renderHook((paths: string[]) => useWorkspaceEntryHistory({ scope, repoRootPath: scope.rootPath, folder: '',
+            paths, headOid: oldHead, enabled: true }), { initialProps: ['README.md'] });
+        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+        await hook.rerender(['README.md', 'src']);
+        // More rows becoming visible is not the checkout changing: nothing on screen may say it did.
+        expect(hook.getCurrent()).toMatchObject({ status: 'pending', stale: false });
+        expect(hook.getCurrent().entries.get('README.md')?.kind).toBe('none');
+    });
     it('batches real visible entry facts and discards a retired HEAD response', async () => {
         directoryRpc.mockImplementation(async (_machine, request) => ({
             ok: true, path: request.path, truncated: false, gitIgnoreAvailable: true,

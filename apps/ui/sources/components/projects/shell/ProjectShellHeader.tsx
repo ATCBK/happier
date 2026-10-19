@@ -325,6 +325,7 @@ export const ProjectCheckoutChip = React.memo(function ProjectCheckoutChip(
             hovered?: boolean;
           }) => [
             styles.chip,
+            props.compact && !row ? styles.chipCompact : null,
             row ? styles.row : null,
             HAPPIER_FOCUS_RING_DELEGATED_STYLE,
             {
@@ -469,6 +470,9 @@ const styles = StyleSheet.create(() => ({
     minWidth: 0,
     maxWidth: 320,
   },
+  // A compact band gives its room to the page tabs first: a long branch ellipsizes before a tab moves
+  // behind More (lab `p-overview` FIT keeps five labelled tabs beside a branch-only chip).
+  chipCompact: { maxWidth: 180 },
   chipText: {
     ...Typography.default(),
     fontSize: HAPPIER_SEGMENTED_METRICS.plain.labelFontSizePx,
