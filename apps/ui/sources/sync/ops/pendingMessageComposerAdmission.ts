@@ -15,6 +15,8 @@ import {
     sessionRpcWithServerAccountScope,
     sessionRpcWithServerScope,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 type PendingMessageComposerAdmissionOptions = Readonly<{
     serverId?: string | null;
@@ -34,14 +36,27 @@ async function pendingMessageComposerAdmissionRpc<R, A>(params: Readonly<{
     payload: A;
     options?: PendingMessageComposerAdmissionOptions;
 }>): Promise<R> {
+    params.options?.signal?.throwIfAborted();
     const lifetime = params.options?.accountLifetime;
     if (!lifetime) {
-        return await sessionRpcWithServerScope<R, A>({
+        const call = (signal: AbortSignal | undefined) => sessionRpcWithServerScope<R, A>({
             sessionId: params.sessionId,
             serverId: params.options?.serverId,
             method: params.method,
             payload: params.payload,
-            signal: params.options?.signal,
+            signal,
+        });
+        const serverId = params.options?.serverId;
+        if (!serverId) return await call(params.options?.signal);
+        // Post-acceptance settlement belongs to the original Home, even after
+        // the sending view leaves. Its credential owner still retires the wait.
+        return await runWithHomeCredentialRequestSignal(serverId, async credentialSignal => {
+            const cancellation = mergeAbortSignals([credentialSignal, params.options?.signal]);
+            try {
+                return await call(cancellation.signal);
+            } finally {
+                cancellation.dispose();
+            }
         });
     }
     if (!lifetime.isCurrent()) throw exactScopeRetiredError();

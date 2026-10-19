@@ -2312,6 +2312,7 @@ async function enqueuePendingMessageV2Owned(params: {
     requestedAction?: PendingRequestedActionV1;
     resumeWhenAvailable?: true;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
     isCurrent?: () => boolean | Promise<boolean>;
 }): Promise<PendingMessageEnqueueResultV2> {
     const { sessionId, encryption, request } = params;
@@ -2424,7 +2425,7 @@ async function enqueuePendingMessageV2Owned(params: {
         const response = await preparePendingMessageComposerAdmission(sessionId, {
             localId, text,
             structuredInput: RawIngressStructuredInputV1Schema.parse(metaOverrides?.[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]),
-        }, composerAdmissionOptions);
+        }, { ...composerAdmissionOptions, signal: params.signal });
         if (!response.ok) throw Object.assign(new Error(response.error), { code: response.errorCode });
         prepared = response;
         if (params.isCurrent && !await params.isCurrent()) {

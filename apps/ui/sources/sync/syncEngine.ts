@@ -6079,6 +6079,7 @@ class Sync {
             outboxScope,
             serverWireMode,
             accountLifetime: options?.accountLifetime,
+            signal: options?.signal,
             isCurrent: options?.signal ? async () => !options.signal!.aborted && await isCurrent() : isCurrent,
             requestedAction: options?.requestedAction ?? { v: 1, kind: 'enqueue' },
             ...(options?.initialContent ? { initialContent: options.initialContent } : {}),
