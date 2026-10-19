@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as privacyKit from 'privacy-kit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol';
+import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { artifactsRoutes } from '@/app/api/routes/artifacts/artifactsRoutes';
 import { db, getDbProviderFromEnv, initDbPostgres } from '@/storage/db';
 import { listArtifactHeadersForCallerInTx } from './artifactAccessService';
 
@@ -17,6 +20,43 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('A
         connected = true;
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it('filters kinds and unclassified rows through the same current grant admission', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const recipient = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const stranger = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const bytes = (value: unknown) => privacyKit.decodeBase64(encodePlainArtifactStoredContent(value));
+        const data = (accountId: string, kind: 'skill' | 'prompt' | null) => ({ id: randomUUID(), accountId, kind,
+            header: bytes({ title: 'Coarse inventory' }), body: bytes({ body: 'Private content' }),
+            dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER), headerVersion: 1, bodyVersion: 1 });
+        const skill = await db.artifact.create({ data: data(owner.id, 'skill') });
+        await db.artifact.create({ data: data(owner.id, 'prompt') });
+        const unknown = await db.artifact.create({ data: data(owner.id, null) });
+        await db.artifact.create({ data: data(stranger.id, null) });
+        await db.artifactAccountGrant.createMany({ data: [skill, unknown].map(artifact => ({ artifactId: artifact.id,
+            accountId: recipient.id, accessLevel: 'view' as const, createdByAccountId: owner.id })) });
+        await db.$transaction(async tx => {
+            const rows = await listArtifactHeadersForCallerInTx(tx, { actorAccountId: recipient.id, kind: 'skill', limit: 500, cursor: null });
+            expect(rows).toMatchObject([{ id: skill.id, kind: 'skill', access: 'view' }]);
+            expect(rows).toHaveLength(1);
+            const unclassified = await listArtifactHeadersForCallerInTx(tx, { actorAccountId: recipient.id, kind: null, limit: 1, cursor: null });
+            expect(unclassified.map(row => row.id)).toEqual([unknown.id]);
+        }, { isolationLevel: 'RepeatableRead' });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': recipient.id,
+                'x-happier-account-stored-content-protocol': String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
+            const filtered = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill&limit=1', headers });
+            expect(filtered.statusCode, filtered.body).toBe(200);
+            expect(filtered.json()).toMatchObject({ items: [{ id: skill.id, kind: 'skill' }], hasUnclassified: true });
+            await db.artifactAccountGrant.deleteMany({ where: { artifactId: unknown.id, accountId: recipient.id } });
+            const afterRevocation = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill&limit=1', headers });
+            expect(afterRevocation.statusCode, afterRevocation.body).toBe(200);
+            expect(afterRevocation.json()).toMatchObject({ items: [{ id: skill.id }], hasUnclassified: false });
+        });
+        await db.$transaction(async tx => {
+            expect(await listArtifactHeadersForCallerInTx(tx, { actorAccountId: recipient.id, kind: null, limit: 1, cursor: null })).toEqual([]);
+        }, { isolationLevel: 'RepeatableRead' });
+    });
 
     it('keeps a populated page near batched relation work when PostgreSQL compiles the access query', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });

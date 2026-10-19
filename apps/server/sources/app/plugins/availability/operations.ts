@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
 import { type ManagedResourceDependencyV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import { PluginAccountPluginIntentV1Schema, PluginAccountPluginPackageAssetLinkV1Schema, PluginAccountPluginUiArtifactLinkV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE, isExactPluginMachineMaterializationReleaseCorrespondenceV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, PluginMachineMaterializationSnapshotV1Schema, PluginMachineMaterializationV1Schema, PluginUiArtifactHostingCapabilityV1Schema, PluginUiReleaseSlotV1Schema, normalizePluginMachineMaterializationSnapshotV1, projectPluginMachineMaterializationReportFactsV1, normalizePluginReleaseFactsV1, pluginReleaseFactsEqualV1, type PluginAccountPluginUiArtifactLinkV1, type PluginAccountPluginPackageAssetLinkV1, type PluginMachineMaterializationV1, type PluginMachineMaterializationSnapshotV1, type PluginReleaseFactsV1, type PluginUiArtifactHostingCapabilityV1, type PluginUiReleaseSlotV1 } from '@happier-dev/protocol/plugins/availability/v1';
@@ -10,7 +11,7 @@ import { isPluginCollectionSchemaWideningV1, type PluginCollectionQuotaDimension
 import { supportsMachineOperationProtocolCapabilityV1, type MachineOperationProtocolCapabilityNameV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import { type ArtifactAccountEncryptionMigrationOwnershipV1 } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
-import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
+import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1, PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
 import * as privacyKit from "privacy-kit";
 import semver from "semver";
 
@@ -27,7 +28,7 @@ import {
     isPlainArtifactDataKeyBytes,
     openArtifactStoredContentPair,
 } from "@/app/artifacts/artifactStoredContent";
-import { decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1, type PluginUiArtifactArchiveOpenedV1 } from '@happier-dev/protocol/plugins/ui';
+import { decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1, PLUGIN_UI_ARTIFACT_ARCHIVE_KIND_V1, type PluginUiArtifactArchiveOpenedV1 } from '@happier-dev/protocol/plugins/ui';
 import { deriveGeneratedHostedWebAssetPolicyV1, resolveHostedWebAssetPolicy, type GeneratedHostedWebAssetPolicyV1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
 import { type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import {
@@ -2166,8 +2167,8 @@ export function createPluginAvailabilityOperations(options: Readonly<{
 
         try {
             const outcome = await inTx(async (tx) => {
-                const release = input.desiredVersion === null
                 await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
+                const release = input.desiredVersion === null
                     ? null
                     : await resolveReleaseTx(tx, params.accountId, {
                         pluginId: input.pluginId,
@@ -2501,6 +2502,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             const created = await createArtifactTx(tx, {
                 actorUserId: params.accountId,
                 artifactId: input.accountArtifactId,
+                kind: deriveArtifactCoarseKindV1({ kind: PLUGIN_UI_ARTIFACT_ARCHIVE_KIND_V1 }),
                 header: artifact.header,
                 body: artifact.body,
                 dataEncryptionKey: artifact.dataEncryptionKey,
@@ -2795,6 +2797,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             const created = await createArtifactTx(tx, {
                 actorUserId: params.accountId,
                 artifactId: input.artifactId,
+                kind: deriveArtifactCoarseKindV1({ kind: PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1 }),
                 header: envelope.header,
                 body: envelope.body,
                 dataEncryptionKey: envelope.dataEncryptionKey,

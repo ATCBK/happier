@@ -108,7 +108,7 @@ export type ArtifactApiOptions = Readonly<{
     ownerAccountId?: string;
 }>;
 
-/** Old Homes have strict mutation/query schemas: only an advertised bit admits kind metadata. */
+/** Current Homes may disable kind filtering by build policy; only an enabled bit admits kind metadata. */
 export async function supportsArtifactKindFiltering(options: Pick<ArtifactApiOptions, 'serverId' | 'signal'> = {}): Promise<boolean> {
     const snapshot = await getServerFeaturesSnapshot(options);
     options.signal?.throwIfAborted();

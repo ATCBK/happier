@@ -8,6 +8,7 @@ import type { WorkflowDefinitionArtifactOperations } from '@happier-dev/protocol
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
 import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
+import { encodeArtifactListCursor, supportsArtifactKindFiltering } from '@/sync/api/artifacts/apiArtifacts';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -252,8 +253,11 @@ export function createUiPromptLibraryArtifactStore(
       throwIfAborted(options?.signal);
       account?.assertCurrent();
       const scope = account?.accountLifetime.scope;
+      // A supported selective read must not wait for an unrelated full inventory scan.
+      const filtered = options?.coarseKind !== undefined && account !== undefined
+        && await supportsArtifactKindFiltering({ serverId: account.serverId, signal: options?.signal });
       let rows = scope ? readCompleteAccountArtifactInventory(scope) : null;
-      if (!rows && account && scope
+      if (!filtered && !rows && account && scope
         && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
         && areServerAccountScopesEqual(readRegisteredStorageState()?.settingsScope, scope)) {
         await withActionAccountRequestSignal(account, options?.signal, async signal => {
@@ -281,7 +285,11 @@ export function createUiPromptLibraryArtifactStore(
           updatedAtMs: item.updatedAt, owned: item.access === 'owner' })), coverage: page.coverage,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
       }
-      const page = await artifacts.list({ ...options, includeBody: false });
+      const page = account ? await listArtifactHeadersV1({
+        options: { ...options, includeBody: false },
+        readPage: pageOptions => account.listArtifacts(pageOptions ?? {}),
+        encodeCursor: encodeArtifactListCursor,
+      }) : await artifacts.list({ ...options, includeBody: false });
       return {
         items: page.items.map((item) => ({
           id: item.artifactId,

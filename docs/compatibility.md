@@ -54,35 +54,33 @@ clients testing against an upgraded daemon ends. The moving predecessor at
 
 Artifact kind filtering is an additive HTTP and persistence extension, negotiated
 by `artifacts.kindFiltering`. Current readers send the optional `kind` query and
-write metadata only after an explicit enabled bit. Otherwise they retain the
-unfiltered array response and previous write shape. The inspected immutable
-`server-v0.2.16-preview.1` source (`22ac8263cfdbcdb845441b9044ff18199cf7652e`)
-and moving 0.2 predecessor (`077db90d049ee283ef99196c45c6074a3160c91d`, relevant
-Artifact route clean) have no coarse-kind contract. This observation is source
-provenance, not a claim about a currently deployed Home.
+write metadata only after an explicit enabled bit. Current 0.3 Homes can disable
+the feature through `HAPPIER_BUILD_FEATURES_DENY=artifacts.kindFiltering`.
+Those Homes retain the unfiltered array response; keyholding readers select
+locally through the same `listArtifactHeadersV1` owner, and writers omit kind
+metadata. Missing or malformed bits also fail closed.
 
-This field negotiation alone does not establish complete 0.3-client/0.2-Home
-Artifact compatibility: those 0.2 list/read projections omit `ownerAccountId`,
-`access`, and `encryptionMode`, which the current keyholding readers require.
-They continue to refuse missing authority. Supporting that older projection
-requires a provenance-bound adapter at the Artifact transport owner; it must not
-fabricate access or infer Account mode from key presence.
+The one-way 0.3 upgrade does not support a 0.3 client against a 0.2 Home.
+No legacy-server adapter is required or provided. Current readers still require
+authenticated owner, access and Account-mode projections. The compatibility
+obligation is retained 0.2-created data opened through the current Home.
 
-Old writers remain accepted by the new Home. Historical writes have null kind;
+Writes without kind remain accepted by the current Home. Historical rows have null kind;
 an opaque header edit without kind invalidates its previous classification. New
 writers derive the coarse hint through Protocol's `deriveArtifactCoarseKindV1`.
 The filtered response reports readable unclassified rows, and the shared
 `listArtifactHeadersV1` owner restarts a full scan while any remain. Header
-decryption, content validation and access remain authoritative. The client
-inventory backfill uses an authorized header-version-fenced metadata-only write;
-it does not convert envelopes or change content versions.
+decryption, content validation and access remain authoritative. Inventory and
+Inbox reads leave stored kind metadata untouched, including missing or stale
+development hints. Readers classify opened headers locally; ordinary explicit
+content writes derive the current hint without a separate read-time backfill.
 
 The new nullable column and Account/kind index require an additive migration
 before loading the new server Prisma projection. Migration deployment and shared
 Prisma client generation belong to the environment owner; source validation may
 generate private clients for disposable test databases without changing live
-clients. The old full-scan path remains until unsupported Homes and unclassified
-rows are no longer reachable.
+clients. Full scans remain necessary for current Homes with filtering disabled
+and for inventories with unclassified rows.
 
 ## Map the seam
 
@@ -256,6 +254,25 @@ Generated compatibility publication, real stored-row/revision checks and current
 package validation remain required integration gates. Retire the storage adapter
 when those persisted 0.2 inputs leave the supported data window, not merely when
 old processes disappear. This integration is unreleased and still under validation.
+
+### Retained quiet input (0.3 development)
+
+Pending Input revision 5 adds the closed `retainedContext` materialization proof
+for exact informational originals still retained by the current publisher's
+local queue. The parent proof-bearing request is also closed. A CLI sends this
+operand only after observing revision 5 support; an older or unknown Home leaves
+the operation unavailable instead of silently ignoring the proof. Ordinary
+requests without retained context retain the existing revision 2–4 ingress.
+The server verifies the same-Session claimed rows, informational admission and
+current publisher before excluding them from rejoin/claim selection. It does not
+resolve those rows or infer native acceptance. No persisted format changes.
+
+The inspected moving 0.2 predecessor at
+`077db90d049ee283ef99196c45c6074a3160c91d` advertises revision 2 and ignores
+unknown fields at its materialization ingress; its relevant paths were clean.
+That reader cannot safely consume this proof, hence the operation-scoped
+capability requirement. This is a 0.3 development contract, not a released
+mixed-version or loaded-runtime certification.
 
 ### Pending reset starts (0.3 development)
 
@@ -1733,6 +1750,14 @@ transitions opt into the V2 draft directive when captured Account-owned content 
 older strict servers reject that directive before mutation. The
 [Account transition contract](./encryption.md#account-mode-transition-status) owns resealing and
 replay; Session-bound drafts never participate solely because their address uses V2.
+
+New Discussion V2 addresses may carry an optional UUID `draftId`, serialized as
+`new-discussion/<draftId>`. The unkeyed `new-discussion` address retains the ordinary
+New Discussion draft. Keyed drafts use the same rows, encryption, CAS and Account-mode
+transition owner; they do not alias or replace the retained singleton. The key is
+closed identity data: an unavailable V2 operation retains the keyed local draft and
+must never retry it as an unkeyed write. This is part of the one-way development
+upgrade below, not a new V1 address or mixed-version coexistence contract.
 
 New-Session V2 authoring retains the title, creation identity, explicit memory choice and qualified
 prompt stack in the canonical synchronized field catalog. Another client can therefore reopen a

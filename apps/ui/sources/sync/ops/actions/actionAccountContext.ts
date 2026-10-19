@@ -31,6 +31,7 @@ import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
+import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
 import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import { HappyError } from '@/utils/errors/errors';
 import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -427,7 +428,10 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         };
         const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
             read: (...args) => readArtifactDocument(true, ...args),
-            list: listArtifacts,
+            // A coarse-kind read is one filtered request while every row is classified; the shared selector
+            // restarts from the full inventory when the server reports unclassified rows.
+            list: (options) => options.coarseKind === undefined ? listArtifacts(options)
+                : listArtifactHeadersV1({ options, readPage: listArtifacts, encodeCursor: encodeArtifactListCursor }),
             create: async (input) => (await createArtifactDocument(input)).artifactId,
             update: updateArtifactDocument,
             delete: async (artifactId, options) => {

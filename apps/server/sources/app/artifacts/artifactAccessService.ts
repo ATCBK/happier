@@ -322,18 +322,30 @@ export async function listArtifactHeadersForCallerInTx(tx: Tx, input: Readonly<{
     return result;
 }
 
-export async function listArtifactHeadersForCaller(input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<ArtifactListItemForCaller[]> {
-    return await readSnapshotWithCurrentAdmission(tx => listArtifactHeadersForCallerInTx(tx, input), async (tx, captured) => {
-        if (captured.length === 0) return captured;
-        const rows = await tx.artifact.findMany({ where: { id: { in: captured.map(row => row.id) }, ...artifactVisibleWhere },
+/** The filtered page and its completeness witness share the canonical stable read snapshot. */
+export async function listArtifactHeaderPageForCaller(input: Parameters<typeof listArtifactHeadersForCallerInTx>[1]): Promise<{
+    items: ArtifactListItemForCaller[]; hasUnclassified: boolean;
+}> {
+    return await readSnapshotWithCurrentAdmission(async tx => ({
+        items: await listArtifactHeadersForCallerInTx(tx, input),
+        hasUnclassified: input.kind !== undefined && (await listArtifactHeadersForCallerInTx(tx, {
+            actorAccountId: input.actorAccountId, kind: null, limit: 1, cursor: null,
+        })).length > 0,
+    }), async (tx, captured) => {
+        if (captured.items.length === 0) return captured;
+        const rows = await tx.artifact.findMany({ where: { id: { in: captured.items.map(row => row.id) }, ...artifactVisibleWhere },
             select: artifactReadAdmissionSelect(input.actorAccountId) });
         const currentById = new Map(rows.map(row => [row.id, projectArtifactAdmittedHeader(row, input.actorAccountId)]));
-        return captured.flatMap(artifact => {
-            const current = currentById.get(artifact.id);
-            return current?.ok && artifactContentAdmissionMatches(current.artifact, artifact)
-                && (input.kind === undefined || current.artifact.kind === input.kind)
-                ? [{ ...artifact, access: current.artifact.access }] : [];
-        });
+        return {
+            // This conservative snapshot witness requests a fresh authorized full scan;
+            // losing one witness's admission cannot establish completeness.
+            hasUnclassified: captured.hasUnclassified,
+            items: captured.items.flatMap(artifact => {
+                const current = currentById.get(artifact.id);
+                return current?.ok && artifactContentAdmissionMatches(current.artifact, artifact)
+                    ? [{ ...artifact, access: current.artifact.access }] : [];
+            }),
+        };
     });
 }
 

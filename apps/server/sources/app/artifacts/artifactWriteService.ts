@@ -2,10 +2,13 @@ import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import * as privacyKit from 'privacy-kit';
 import { artifactConversionBlobKey, artifactConversionBlobCustody, type PreparedArtifactAccountEncryptionConversionBlob, type PreparedArtifactAccountEncryptionConversionBlobs } from './artifactEncryptionConversionBlobService';
 import { db } from '@/storage/db';
+import { isPrismaErrorCode } from '@/storage/prisma';
+import { readArtifactStorageEnv } from '@/app/features/catalog/readFeatureEnv';
 import { deletePrivateFile } from '@/storage/blob/files';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupArtifactOrphanBlobsAfterCommit, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -43,7 +46,19 @@ import {
 import { admitArtifactMemoryDecisionInTx, type ArtifactMemoryDecisionWriteContext, type MemoryDecisionAdmissionError } from './artifactMemoryDecisionAdmission';
 import { artifactContextStorageAdapter, newArtifactContextStorageAdapter } from './artifactContextInjection';
 
-type Cursor = number;
+type Cursor = AccountChangePublication;
+
+/** Plain writers already expose the header; opaque writers supply their search hint. */
+function artifactWriteKind(header: Uint8Array, dataEncryptionKey: Uint8Array, kind?: ArtifactCoarseKindV1): ArtifactCoarseKindV1 | null {
+    if (!isPlainArtifactDataKeyBytes(dataEncryptionKey)) return kind ?? null;
+    const value: unknown = decodePlainArtifactStoredContent(privacyKit.encodeBase64(new Uint8Array(header)));
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? deriveArtifactCoarseKindV1(value as Record<string, unknown>) : kind ?? null;
+}
+
+class ArtifactCreateIdConflictError extends Error {
+    constructor() { super("Artifact id was created concurrently"); this.name = "ArtifactCreateIdConflictError"; }
+}
 
 export class ArtifactAccountEncryptionMigrationConflictError extends Error {
     constructor() {
@@ -641,6 +656,7 @@ type ArtifactRow = {
 export async function createArtifact(params: {
     actorUserId: string;
     artifactId: string;
+    kind?: ArtifactCoarseKindV1;
     header: Uint8Array;
     body: Uint8Array;
     dataEncryptionKey: Uint8Array;
@@ -669,6 +685,7 @@ export async function createArtifact(params: {
         const result = await inTx(async (tx) => await createArtifactTx(tx, {
             actorUserId,
             artifactId,
+            kind: params.kind,
             header,
             body,
             dataEncryptionKey,
@@ -679,33 +696,44 @@ export async function createArtifact(params: {
         }), { transactionClass: "artifact-create" });
         admitted = result.ok && result.didWrite;
         return result;
-    } catch {
+    } catch (error) {
+        if (error instanceof ArtifactCreateIdConflictError) {
+            // A failed PostgreSQL insert has aborted its transaction. Project
+            // the incumbent through the same replay owner only after rollback.
+            try {
+                return await inTx(async tx => {
+                    await acquireAccountChangePublicationLocksInTx(tx, [actorUserId], { includeSingleAccount: true, intent: "content" });
+                    const state = await readArtifactCreateStateInTx(tx, { ...params, actorUserId, artifactId, header, body, dataEncryptionKey });
+                    return "ok" in state ? state : { ok: false as const, error: "internal" as const };
+                }, { transactionClass: "artifact-create-replay" });
+            } catch { return { ok: false, error: "internal" }; }
+        }
         return { ok: false, error: "internal" };
     } finally {
         if (!admitted) await discardArtifactBlobCandidate(preparedBlob);
     }
 }
 
-export async function createArtifactTx(
-    tx: Tx,
-    params: {
-        actorUserId: string;
-        artifactId: string;
-        header: Uint8Array;
-        body: Uint8Array;
-        dataEncryptionKey: Uint8Array;
-        provenance?: Uint8Array;
-        provenanceDataEncryptionKey?: Uint8Array;
-        blob?: ArtifactBlobWriteV1;
-        preparedBlob?: PreparedArtifactBlobWrite;
-        /**
-         * A qualified owner may replace the generic Artifact invalidation only
-         * while composing its classification in this same transaction.
-         */
-        markChanged?: (artifactId: string) => Promise<Cursor>;
-    } & ArtifactMemoryDecisionWriteContext
-): Promise<CreateArtifactResult> {
-    await acquireAccountChangePublicationLocksInTx(tx, [params.actorUserId], { includeSingleAccount: true });
+type CreateArtifactTxParams = {
+    actorUserId: string;
+    artifactId: string;
+    kind?: ArtifactCoarseKindV1;
+    header: Uint8Array;
+    body: Uint8Array;
+    dataEncryptionKey: Uint8Array;
+    provenance?: Uint8Array;
+    provenanceDataEncryptionKey?: Uint8Array;
+    blob?: ArtifactBlobWriteV1;
+    preparedBlob?: PreparedArtifactBlobWrite;
+    /**
+     * A qualified owner may replace the generic Artifact invalidation only
+     * while composing its classification in this same transaction.
+     */
+    markChanged?: (artifactId: string) => Promise<Cursor>;
+} & ArtifactMemoryDecisionWriteContext;
+
+/** Creation and a rolled-back concurrent insert use one idempotent projection. */
+async function readArtifactCreateStateInTx(tx: Tx, params: CreateArtifactTxParams): Promise<CreateArtifactResult | { mode: "plain" | "e2ee" }> {
     const account = await tx.account.findUnique({
         where: { id: params.actorUserId },
         select: {
@@ -807,14 +835,26 @@ export async function createArtifactTx(
         };
     }
 
+    return { mode: currentness.currentness.encryptionMode };
+}
+
+export async function createArtifactTx(tx: Tx, params: CreateArtifactTxParams): Promise<CreateArtifactResult> {
+    await acquireAccountChangePublicationLocksInTx(tx, [params.actorUserId], {
+        includeSingleAccount: true,
+        intent: !params.markChanged && readArtifactStorageEnv(process.env).accountLimitBytes !== null ? "exclusive" : "content",
+    });
+    const state = await readArtifactCreateStateInTx(tx, params);
+    if ("ok" in state) return state;
+    const mode = state.mode;
+
     const decisionFailure = await admitArtifactMemoryDecisionInTx(tx, { ...params, actorAccountId: params.actorUserId,
         destinationAdapter: newArtifactContextStorageAdapter({ artifactId: params.artifactId, ownerAccountId: params.actorUserId,
-            encryptionMode: currentness.currentness.encryptionMode }) });
+            encryptionMode: mode }) });
     if (decisionFailure) return { ok: false, error: decisionFailure };
 
     if (
         !artifactStoredContentMatchesAccountMode({
-        mode: currentness.currentness.encryptionMode,
+        mode,
         header: params.header,
         body: params.body,
         dataEncryptionKey: params.dataEncryptionKey,
@@ -825,7 +865,7 @@ export async function createArtifactTx(
 
     const plain = isPlainArtifactDataKeyBytes(params.dataEncryptionKey);
     if (params.provenanceDataEncryptionKey && !params.provenance) return { ok: false, error: 'invalid-params' };
-    if (!artifactProvenanceMatchesAccountMode({ mode: currentness.currentness.encryptionMode,
+    if (!artifactProvenanceMatchesAccountMode({ mode,
         artifactId: params.artifactId, bodyVersion: 1, provenance: params.provenance,
         provenanceDataEncryptionKey: params.provenanceDataEncryptionKey })) return { ok: false, error: "invalid-params" };
     const storedProvenance = params.provenance == null ? null : plain
@@ -854,7 +894,7 @@ export async function createArtifactTx(
 
     if (params.markChanged && params.blob) return { ok: false, error: 'invalid-params' };
     if (!params.markChanged && !await admitArtifactBlobWriteInTx(tx, { artifactId: params.artifactId,
-        mode: currentness.currentness.encryptionMode, body: params.body, blob: params.blob, prepared: params.preparedBlob })) {
+        mode, body: params.body, blob: params.blob, prepared: params.preparedBlob })) {
         return { ok: false, error: 'invalid-params' };
     }
 
@@ -872,6 +912,7 @@ export async function createArtifactTx(
             id: params.artifactId,
             accountId: params.actorUserId,
             header: Buffer.from(storedHeader),
+            kind: artifactWriteKind(params.header, params.dataEncryptionKey, params.kind),
             headerVersion: 1,
             body: Buffer.from(storedBody),
             bodyVersion: 1,
@@ -894,6 +935,9 @@ export async function createArtifactTx(
             provenance: true,
             provenanceDataEncryptionKey: true,
         },
+    }).catch((error: unknown) => {
+        if (isPrismaErrorCode(error, "P2002")) throw new ArtifactCreateIdConflictError();
+        throw error;
     });
 
     if (params.preparedBlob?.candidate) {
@@ -927,7 +971,7 @@ export type UpdateArtifactResult =
     | ({ ok: false } & ArtifactQuotaExceeded)
     | {
         ok: true;
-        cursor: Cursor;
+        cursor?: Cursor;
         recipientUpdates: readonly Readonly<{
             accountId: string;
             cursor: Cursor;
@@ -957,6 +1001,8 @@ export type UpdateArtifactResult =
 export async function updateArtifact(params: {
     actorUserId: string;
     artifactId: string;
+    kind?: ArtifactCoarseKindV1;
+    expectedHeaderVersion?: number;
     header?: { bytes: Uint8Array; expectedVersion: number };
     body?: { bytes: Uint8Array; expectedVersion: number };
     provenance?: Uint8Array;
@@ -971,7 +1017,7 @@ export async function updateArtifact(params: {
     if (!actorUserId || !artifactId) {
         return { ok: false, error: "invalid-params" };
     }
-    if (!header && !body) {
+    if (!header && !body && (params.kind === undefined || params.expectedHeaderVersion === undefined)) {
         return { ok: false, error: "invalid-params" };
     }
     if (params.blob !== undefined && !body) return { ok: false, error: "invalid-params" };
@@ -990,7 +1036,7 @@ export async function updateArtifact(params: {
             transactionClass: "artifact-update-admission",
         });
         if (!access || access.level === 'view') return { ok: false, error: 'not-found' };
-        await cleanupArtifactOrphanBlobs(artifactId);
+        if (header || body) await cleanupArtifactOrphanBlobs(artifactId);
         if (params.blob) {
             if (!body) return { ok: false, error: 'invalid-params' };
             const owner = await db.artifact.findUnique({ where: { id: artifactId }, select: { accountId: true } });
@@ -1001,6 +1047,8 @@ export async function updateArtifact(params: {
         const result = await inTx(async (tx) => await updateArtifactTx(tx, {
             actorUserId,
             artifactId,
+            kind: params.kind,
+            expectedHeaderVersion: params.expectedHeaderVersion,
             header,
             body,
             provenance: params.provenance,
@@ -1009,7 +1057,7 @@ export async function updateArtifact(params: {
             blob: params.blob, preparedBlob,
         }), { transactionClass: "artifact-update" });
         admitted = result.ok;
-        if (result.ok) await cleanupArtifactOrphanBlobsAfterCommit(artifactId);
+        if (result.ok && (header || body)) await cleanupArtifactOrphanBlobsAfterCommit(artifactId);
         return result;
     } catch {
         return { ok: false, error: "internal" };
@@ -1023,6 +1071,8 @@ export async function updateArtifactTx(
     params: {
         actorUserId: string;
         artifactId: string;
+        kind?: ArtifactCoarseKindV1;
+        expectedHeaderVersion?: number;
         header?: { bytes: Uint8Array; expectedVersion: number };
         body?: { bytes: Uint8Array; expectedVersion: number };
         provenance?: Uint8Array;
@@ -1033,6 +1083,10 @@ export async function updateArtifactTx(
         restoredBlobId?: string | null;
     } & ArtifactMemoryDecisionWriteContext,
 ): Promise<UpdateArtifactResult> {
+    // A hint without replacement header bytes must describe this exact header revision.
+    if (params.kind !== undefined && !params.header && params.expectedHeaderVersion === undefined && params.expectedRevision === undefined) {
+        return { ok: false, error: "invalid-params" };
+    }
     await acquireArtifactPublicationLocksInTx(tx, params.artifactId);
     const access = await resolveArtifactAccessInTx(tx, {
         actorAccountId: params.actorUserId,
@@ -1071,6 +1125,7 @@ export async function updateArtifactTx(
         select: {
             id: true,
             seq: true,
+            kind: true,
             header: true,
             headerVersion: true,
             body: true,
@@ -1111,6 +1166,7 @@ export async function updateArtifactTx(
     }
 
     const headerMismatch = (params.header && current.headerVersion !== params.header.expectedVersion)
+        || (params.expectedHeaderVersion !== undefined && current.headerVersion !== params.expectedHeaderVersion)
         || (params.expectedRevision && current.headerVersion !== params.expectedRevision.headerVersion);
     const bodyMismatch = (params.body && current.bodyVersion !== params.body.expectedVersion)
         || (params.expectedRevision && current.bodyVersion !== params.expectedRevision.bodyVersion);
@@ -1125,6 +1181,13 @@ export async function updateArtifactTx(
                 body: openedCurrent.body,
             },
         };
+    }
+
+    const nextKind = params.header
+        ? artifactWriteKind(params.header.bytes, current.dataEncryptionKey, params.kind)
+        : params.kind !== undefined ? artifactWriteKind(openedCurrent.header, current.dataEncryptionKey, params.kind) : undefined;
+    if (!params.header && !params.body && nextKind === current.kind) {
+        return { ok: true, recipientUpdates: [] };
     }
 
     // Opaque older-client body writes cannot prove whether the file is retained
@@ -1150,9 +1213,11 @@ export async function updateArtifactTx(
         currentBlobId?: string | null;
         provenance?: Uint8Array<ArrayBuffer> | null;
         provenanceDataEncryptionKey?: Uint8Array<ArrayBuffer>;
+        kind?: ArtifactCoarseKindV1 | null;
     } = {
         updatedAt: new Date(),
         seq: current.seq + 1,
+        ...(nextKind !== undefined ? { kind: nextKind } : {}),
     };
 
     let headerUpdate: { bytes: Uint8Array; version: number } | undefined;
@@ -1215,6 +1280,7 @@ export async function updateArtifactTx(
             id: params.artifactId,
             accountId: ownerAccountId,
             ...(params.header && { headerVersion: params.header.expectedVersion }),
+            ...(params.expectedHeaderVersion !== undefined ? { headerVersion: params.expectedHeaderVersion } : {}),
             ...(params.body && { bodyVersion: params.body.expectedVersion }),
             ...(params.expectedRevision && { headerVersion: params.expectedRevision.headerVersion, bodyVersion: params.expectedRevision.bodyVersion }),
             ...(params.provenanceDataEncryptionKey && { provenanceDataEncryptionKey: current.provenanceDataEncryptionKey }),
@@ -1278,7 +1344,8 @@ export async function updateArtifactTx(
     const recipients = await resolveArtifactAudienceInTx(tx, params.artifactId);
     const recipientCursors = await markAccountsChanged(tx, { accountIds: recipients, kind: "artifact", entityId: params.artifactId });
     const recipientUpdates = [];
-    for (const { accountId, cursor } of recipientCursors) {
+    for (const cursor of recipientCursors) {
+        const { accountId } = cursor;
         // The access owner projects current recipient custody, never the writer's wrap.
         const read = await readArtifactForCallerInTx(tx, { actorAccountId: accountId, artifactId: params.artifactId });
         if (read.ok) {
@@ -1288,9 +1355,9 @@ export async function updateArtifactTx(
             throw new Error("Artifact owner cannot read its committed update");
         }
     }
-    const cursor = recipientCursors.find((recipient) => recipient.accountId === params.actorUserId)?.cursor;
+    const cursor = recipientCursors.find((recipient) => recipient.accountId === params.actorUserId);
     if (cursor === undefined) throw new Error("Artifact writer is missing from its authorized audience");
-    const ownerCursor = recipientCursors.find((recipient) => recipient.accountId === ownerAccountId)?.cursor;
+    const ownerCursor = recipientCursors.find((recipient) => recipient.accountId === ownerAccountId);
     if (ownerCursor === undefined) throw new Error("Artifact owner is missing from its authorized audience");
     return { ok: true, cursor, recipientUpdates,
         ...(headerUpdate ? { header: headerUpdate } : {}), ...(bodyUpdate ? { body: bodyUpdate } : {}) };
@@ -1372,7 +1439,8 @@ export async function deleteArtifact(params: {
             let cursor: Cursor | undefined;
             // Write changes while the FK target still exists; deletion nulls the
             // projection link, retaining the entity id for a removal refresh.
-            for (const { accountId, cursor: recipientCursor } of await markAccountsChanged(tx, { accountIds: audience, kind: "artifact", entityId: artifactId })) {
+            for (const recipientCursor of await markAccountsChanged(tx, { accountIds: audience, kind: "artifact", entityId: artifactId })) {
+                const { accountId } = recipientCursor;
                 if (accountId === actorUserId) cursor = recipientCursor;
             }
             if (cursor === undefined) throw new Error("Artifact owner is missing from its authorized audience");

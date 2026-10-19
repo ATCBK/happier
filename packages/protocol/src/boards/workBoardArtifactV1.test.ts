@@ -4,6 +4,7 @@ import { buildWorkBoardPreviewLayoutV1, createWorkBoardArtifactPortV1, readWorkB
 import { buildWorkBoardItemKeyV1, createWorkBoardV1, WorkBoardIntentV1Schema } from './workBoardV1.js';
 import { normalizeSessionListFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
 import { prepareArtifactHeaderForBodyV1, prepareArtifactHeaderForRevisionV1 } from '../artifacts/artifactHeaderRestorationV1.js';
+import { deriveArtifactCoarseKindV1 } from '../artifacts/artifactKindV1.js';
 import { createActionExecutor, type ActionExecutorDeps } from '../actions/actionExecutor.js';
 
 describe('one Artifact per Board', () => {
@@ -254,6 +255,25 @@ describe('one Artifact per Board', () => {
             { id: 'two', name: 'Two', pinnedInSessions: false, source: { sections: [] } },
         ]);
         expect(b.reads).toEqual([]);
+    });
+
+    it('asks the Artifact list for Board-kind rows only, so listing never scans unrelated Account headers', async () => {
+        const b = createWorkBoardArtifactBoundary([createWorkBoardV1({ id: 'one', name: 'One' }), createWorkBoardV1({ id: 'two', name: 'Two' })]);
+        const boards = (await b.transport.list({ limit: 500 })).items;
+        const unrelated = Array.from({ length: 1200 }, (_, index) => ({ artifactId: `other-${index}`, header: { kind: 'memory_doc.v1' }, headerVersion: 1 }));
+        const requested: unknown[] = [];
+        let served = 0;
+        // Genuine boundary: the Artifact server applies the coarse-kind selection before paging.
+        const port = createWorkBoardArtifactPortV1({ ...b.transport, list: async options => {
+            requested.push(options.coarseKind);
+            const items = [...unrelated, ...boards].filter(item => !options.coarseKind || deriveArtifactCoarseKindV1(item.header) === options.coarseKind);
+            served += items.length;
+            return { items };
+        } });
+        expect((await port.list()).map(item => item.id)).toEqual(['one', 'two']);
+        expect((await port.read()).boards.map(board => board.id)).toEqual(['one', 'two']);
+        expect(requested).toEqual(['work_board', 'work_board']);
+        expect(served).toBe(4);
     });
 
     it('preserves an unreadable Board, unknown kind, unknown header fields and source values on neighboring edits', async () => {

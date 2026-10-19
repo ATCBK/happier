@@ -7,6 +7,7 @@ describe('Artifact coarse kind', () => {
     expect(deriveArtifactCoarseKindV1({ kind: 'prompt_bundle.v2', bundleSchemaId: 'generic.v1' })).toBe('prompt');
     expect(deriveArtifactCoarseKindV1({ kind: 'prompt_doc.v2' })).toBe('prompt');
     expect(deriveArtifactCoarseKindV1({ kind: 'plugin.ui.archive' })).toBe('plugin_ui');
+    expect(deriveArtifactCoarseKindV1({ kind: 'work-board.v1', v: 1, title: 'private' })).toBe('work_board');
     expect(deriveArtifactCoarseKindV1({ kind: 'memory_doc.v1' })).toBe('other');
     expect(deriveArtifactCoarseKindV1({ kind: 'future.unknown' })).toBe('other');
     expect(deriveArtifactCoarseKindV1({})).toBe('other');

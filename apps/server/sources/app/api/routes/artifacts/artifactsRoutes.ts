@@ -8,7 +8,7 @@ import { inReadSnapshot, inTx } from "@/storage/inTx";
 import {
     commitArtifactRecipientKeyEnvelopesInTx,
     listArtifactAccessGrants,
-    listArtifactHeadersForCaller,
+    listArtifactHeaderPageForCaller,
     readArtifactForCaller,
     readArtifactBatchForCaller,
     readArtifactRecipientCensus,
@@ -258,13 +258,12 @@ export function artifactsRoutes(app: Fastify) {
         const cursor = parseArtifactListCursor(query.cursor);
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
 
-        const artifacts = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: listLimit, cursor,
+        const page = await listArtifactHeaderPageForCaller({ actorAccountId: userId, limit: listLimit, cursor,
             includeBody: query.includeBody === 'true', kind: query.kind });
 
-        const projected = artifacts.map(projectArtifactListItem);
+        const projected = page.items.map(projectArtifactListItem);
         if (query.kind === undefined) return reply.send(projected);
-        const unclassified = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: 1, cursor: null, kind: null });
-        return reply.send({ items: projected, hasUnclassified: unclassified.length > 0 });
+        return reply.send({ items: projected, hasUnclassified: page.hasUnclassified });
     });
 
     // Selected details and current recipient facts share a read-only capture.

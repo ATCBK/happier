@@ -16,7 +16,7 @@ function advertise(enabled: boolean) {
 }
 
 describe('Artifact coarse-kind wire compatibility', () => {
-    it.each([true, false])('negotiates filtered pages and keeps old Home query/write shapes (support=%s)', async supported => {
+    it.each([true, false])('respects current Home kind-filtering policy for queries and writes (enabled=%s)', async supported => {
         advertise(supported);
         const paths: string[] = [];
         const writes: Record<string, unknown>[] = [];
@@ -58,10 +58,10 @@ describe('Artifact coarse-kind wire compatibility', () => {
             request: async () => Response.json({ items: [row] }) })).rejects.toMatchObject({ code: 'artifact_content_unavailable' });
     });
 
-    it('refreshes an expired enabled bit before contacting a downgraded Home', async () => {
+    it('refreshes an expired enabled bit after the current Home disables filtering', async () => {
         const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
-        const fixture = await createPlainArtifactHomeFixture('https://kind-downgraded-home.test', {
-            serverFeatures: { features: {}, capabilities: {} },
+        const fixture = await createPlainArtifactHomeFixture('https://kind-disabled-home.test', {
+            serverFeatures: { features: { artifacts: { kindFiltering: { enabled: false } } }, capabilities: {} },
         });
         try {
             primeServerFeaturesSnapshot({ serverId: fixture.home.id, ttlMs: -1, snapshot: { status: 'ready',

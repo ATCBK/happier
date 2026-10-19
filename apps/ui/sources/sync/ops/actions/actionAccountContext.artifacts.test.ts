@@ -10,6 +10,7 @@ import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest } from '@/s
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { createAccountArtifactStoredEnvelope, openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import { ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
+import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createUiArtifactAction } from './artifactActionDeps';
 import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
@@ -863,6 +864,42 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(reads).toEqual([]);
             expect(await account.workflowArtifacts.create({ artifactId, header: {}, body: 'workflow body' })).toBe(artifactId);
             expect(reads).toEqual([]);
+        } finally { account.dispose(); }
+    });
+    it.each([{ unclassified: false }, { unclassified: true }])('lists WorkBoards through one filtered Artifact request, and from the full inventory while rows are unclassified (unclassified=$unclassified)', async ({ unclassified }) => {
+        const home = await upsertAndActivateServer({ serverUrl: `https://board-listing-${unclassified}.test`, scope: 'tab' });
+        const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const row = (id: string, header: Record<string, unknown>, kind: string | null): Artifact & { kind: string | null } => ({
+            id, kind, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: 'retained body' }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        });
+        const board = (id: string) => ({ kind: 'work-board.v1', v: 1, title: id, pinnedInSessions: false, readsNeedsYou: false });
+        const rows = [...Array.from({ length: 700 }, (_, index) => row(`other-${index}`, { kind: 'memory_doc.v1' }, 'other')),
+            row('board-classified', board('board-classified'), 'work_board'),
+            // A legacy row is only discoverable through the full inventory.
+            row('board-legacy', board('board-legacy'), unclassified ? null : 'work_board')];
+        const urls: URL[] = [];
+        runtimeFetch.mockImplementation(async (url: unknown) => {
+            const target = new URL(String(url));
+            if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
+            if (target.pathname === '/v1/features') return json({ features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if (target.pathname !== '/v1/artifacts') return json({ error: 'unexpected_route' }, 404);
+            urls.push(target);
+            const kind = target.searchParams.get('kind');
+            if (!kind) return json(rows.slice(0, Number(target.searchParams.get('limit') ?? 100)));
+            return json({ items: rows.filter(item => item.kind === kind), hasUnclassified: rows.some(item => item.kind === null) });
+        });
+        const account = await captureLazyActionAccountContext(home.id);
+        try {
+            const port = createWorkBoardArtifactPortV1(account.workflowArtifacts);
+            expect((await port.list()).map(item => item.id).sort()).toEqual(['board-classified', 'board-legacy']);
+            expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['work_board', null] : ['work_board']);
         } finally { account.dispose(); }
     });
     it('selects ordinary Artifact lists across structural pages without leaking filters or truncating omitted limits', async () => {

@@ -29,7 +29,7 @@ describe('Account Artifact coarse kind transport', () => {
   beforeEach(() => { get.mockReset(); post.mockReset(); resetServerFeaturesClientForTests(); });
   afterEach(() => { vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); });
 
-  it.each([true, undefined, 'true'])('negotiates classification for create, update, binary upload and restore (advertised=%s)', async enabled => {
+  it.each([true, false, undefined, 'true'])('negotiates classification for create, update, binary upload and restore (advertised=%s)', async enabled => {
     advertise(enabled);
     const current = row(artifactId, skillHeader, 1);
     get.mockImplementation(async (url: string) => ({ status: 200, data: new URL(url).pathname.endsWith('/revisions')
@@ -99,7 +99,7 @@ describe('Account Artifact coarse kind transport', () => {
     expect(next.nextCursor).toBeUndefined();
   });
 
-  it.each([undefined, 'true'])('uses the full scan without a new query against unsupported or malformed feature bits (%s)', async enabled => {
+  it.each([false, undefined, 'true'])('uses the full scan when current Home filtering is disabled or its bit is missing or malformed (%s)', async enabled => {
     advertise(enabled);
     get.mockImplementation(async (url: string) => {
       expect(new URL(url).searchParams.has('kind')).toBe(false);
@@ -116,11 +116,11 @@ describe('Account Artifact coarse kind transport', () => {
     await expect(store().list({ coarseKind: 'skill', limit: 1 })).rejects.toMatchObject({ code: 'list_failed' });
   });
 
-  it('refuses the released 0.2 header envelope without inventing missing Artifact authority', async () => {
+  it('refuses an unfiltered response missing authenticated Artifact authority', async () => {
     advertise(undefined);
-    // server-v0.2.16-preview.1 (22ac8263cfdbcdb845441b9044ff18199cf7652e)
-    // artifactsRoutes.ts lists only these fields. Ciphertext is the existing
-    // captured 0.2 writer vector; the absent authority fields are the deciding seam.
+    // Retained ciphertext from server-v0.2.16-preview.1
+    // (22ac8263cfdbcdb845441b9044ff18199cf7652e) is valid stored data.
+    // Missing current Home authority must still be refused before opening it.
     get.mockImplementation(async (url: string) => {
       expect(new URL(url).searchParams.has('kind')).toBe(false);
       return { status: 200, data: [{ id: 'retained-0.2',
