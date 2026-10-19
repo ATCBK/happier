@@ -75,6 +75,41 @@ locked/inconsistent/migration-required result before content disclosure or mutat
 while preserving the stored value; it must not become absence, defaults, or a
 fallback to the other branch.
 
+### Raw Account-KV cipher and lazy re-seal (0.3 development)
+
+`packages/protocol/src/crypto/accountKvCipher.ts` owns raw Account-KV cipher
+selection and lazy re-sealing for UI and CLI/daemon. Persisted Account mode
+selects the representation: plain Accounts keep explicit `{ t: 'plain', v }`
+envelopes without creating or requiring any Account key. E2EE writers use the
+Account content private key with the existing AES-GCM V0 frame, including when
+the writer holds a recovery secret. That holder derives the content private key
+through `deriveAccountMachineKeyFromRecoverySecret`; credential kind does not
+select a different write cipher.
+
+Recovery-secret readers accept both released raw secretbox rows and data-key
+rows. Data-key-only readers accept data-key rows and fail closed on historical
+secretbox rows: the derived key cannot recover the recovery secret. Explicit
+plain/encrypted envelopes are parsed and checked against Account mode; failed
+opening never becomes plaintext or empty/default content.
+
+An ordinary raw-JSON KV read that authenticates a legacy secretbox row re-seals
+the complete opened JSON under the data key with the observed row-version CAS,
+before domain projection. A successful re-seal returns its new revision. A CAS
+conflict returns the winner's value and matching revision, including deletion,
+without replaying the stale plaintext. Concurrent readers can attempt the same
+CAS, but only one changes that revision; later canonical reads do not re-seal.
+Authentication failure leaves the stored row untouched. A transport failure
+reports failure without replaying stale plaintext; the CAS may already have
+committed, and a later read can resume safely.
+
+Todos/internal Tasks, workspace tabs/handoff, and SCM reviewed marks share this
+owner. Opaque low-level KV APIs and unencrypted navigation metadata are unchanged.
+The explicit Account-mode transition inventories original bytes/revisions and
+uses its own atomic migration, without lazy writes during inventory. Typed,
+domain-separated Account ciphers and Session/Machine fallback encryption retain
+their own contracts. This is an owner-approved one-way 0.3 raw-KV transition;
+it does not promise that an older secretbox-only writer can read new AES rows.
+
 ### Usage accounting (0.3 development)
 
 Usage numbers, models, Agents and times remain server-queryable for both plain
@@ -2540,10 +2575,38 @@ resource admission path.
 
 ### Artifacts
 - E2EE Artifact `header` and `body` are encrypted bytes encoded as base64.
+- In 0.3 development, `Artifact.kind` is plaintext coarse metadata visible to
+  the Home (`skill`, `prompt`, `plugin_ui`, `work_board`, or `other`). The Protocol
+  `deriveArtifactCoarseKindV1` function derives it from the header at the writer.
+  It is an inventory search hint, not content or access authority. Names,
+  bodies, and other E2EE header fields remain encrypted. Plain Accounts retain
+  their existing explicit Plain envelopes.
+- Historical rows may have null kind. The client inventory writer backfills
+  only headers it already opened, through an authorized metadata-only update
+  fenced by the current header version; header/body bytes and their versions
+  stay unchanged. Filtered listings report unclassified rows and readers use
+  the full inventory until classification is complete. The inventory writer also
+  repairs a stored kind that no longer matches its header (for example a Board
+  stored as `other` before `work_board` existed). Board listing reads
+  `work_board` only, so it never scans unrelated Account headers. An opaque header edit
+  without a kind invalidates the previous hint, including edits from old clients.
 - Plain Artifact values are base64-encoded `{ t:'plain', v }` envelopes with the
   canonical plain data-key marker.
 - Stored as `Bytes` in the DB.
 - Emitted in `new-artifact` / `update-artifact` events as base64 strings.
+
+The 0.3 development UI keeps a header-only device inventory and its Account-change
+cursor through `warmCachePersistence`, written by `syncArtifacts.ts`. It uses the
+incumbent encrypted native MMKV store; web and Tauri retain the existing plaintext
+browser-cache policy, where credentials already live in local storage. Home,
+Account and a digest of the current credential identity and content material bind the cache;
+sign-out removes that Home's inventory. It contains opened headers and structural
+row metadata, never bodies, content keys, key envelopes or private revision provenance.
+Hydration publishes last-known rows without complete/current coverage. The writer
+captures the existing Account cursor as its read frontier and revalidates changed
+rows through authenticated Artifact reads before admitting the inventory as current.
+It does not wait for unrelated Account writes to stop. An unknown or expired cursor
+requires a full listing.
 
 Development Inbox notices use this same Account Artifact custody. The host stamps
 a plugin notice's source from its admitted plugin id and stable item id; the
@@ -2984,7 +3047,8 @@ context can carry an already admitted Workflow tuple without serializing it.
 - `UserKVStore.value` is intentionally opaque bytes encoded as base64 on the wire.
 - `kvMutate` expects base64 strings; `kvGet/list/bulk` return base64 strings.
 - Each domain using KV owns its content contract. For example, Todo owns its explicit
-  plain/encrypted envelope; KV must not guess by attempting decryption.
+  plain/encrypted envelope; KV must not guess by attempting decryption. Raw Account
+  JSON consumers share the [Account-KV cipher and re-seal owner](#raw-account-kv-cipher-and-lazy-re-seal-03-development).
 
 The development `todo.*` and `workspace:*` namespaces share one Account-json KV
 mode admission and Account-transition fence. Ordinary reads and CAS writes must
@@ -3219,11 +3283,12 @@ Socket KV changes pass through `sync/engine/socket/kvUpdateDispatcher.ts`, which
 routes todo changes and notifies prefix subscribers under their captured Account
 lifetime. This describes development source behavior, not release certification.
 
-The CLI's `api/account/accountKvJsonTransport.ts` supplies the same opaque JSON
-read/CAS boundary for Board Actions at their captured Home. It admits persisted
+The CLI's `api/client/accountKvJsonTransport.ts` supplies the same opaque JSON
+read/CAS boundary for internal Task and SCM reviewed-mark Actions at their captured Home. It admits persisted
 Account mode and the canonical content-key fingerprint before opening or writing
-KV bytes, uses the existing legacy/dataKey codecs, and preserves tombstone versions.
-Domain parsing and conflict rebase remain in the shared protocol Board port.
+KV bytes, delegates cipher selection and legacy re-sealing to the Protocol owner,
+and preserves tombstone versions. Domain parsing and conflict rebase remain in
+the shared Protocol domain ports.
 
 ## Client-side content types
 
