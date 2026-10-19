@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import { upsertVerifiedMailboxEvidenceInTx } from "./verifiedMailboxEvidence";
 import {
@@ -89,6 +90,7 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
             create: data,
         })
         : await tx.account.create({ data });
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
     if (prepared.contentKeyBinding) {
         const admission = await admitAccountContentKey(tx, {
             accountId: account.id,

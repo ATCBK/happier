@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { AccountEncryptionMigrateConnectedServicesDirectiveSchema, type AccountEncryptionMigrateConnectedServicesDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import type { Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
@@ -58,7 +59,7 @@ export type ConnectedServicesAccountEncryptionMigrationResult =
     | Readonly<{
         status: "applied";
         changed: boolean;
-        accountVersion: number | null;
+        accountVersion: import("@/app/changes/markAccountChanged").AccountChangePublication | null;
     }>
     | Readonly<{
         status:
@@ -431,6 +432,7 @@ export async function migrateConnectedServicesAccountEncryptionInTx(
         directive: unknown;
     }>,
 ): Promise<ConnectedServicesAccountEncryptionMigrationResult> {
+    await acquireAccountSessionOwnerMetadataFencesInTx(params.tx, [params.accountId], "exclusive");
     const parsed =
         AccountEncryptionMigrateConnectedServicesDirectiveSchema.safeParse(
             params.directive,

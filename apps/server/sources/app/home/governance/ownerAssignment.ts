@@ -1,10 +1,11 @@
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { inTx, type Tx } from "@/storage/inTx";
 
 import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdministrationEvents";
-import { publishHomeGovernanceChangedInTx } from "./governanceChanges";
+import { publishHomeGovernanceChangedInTx, readHomeGovernanceChangeAccountIdsInTx } from "./governanceChanges";
 import { countActiveHomeOwnersInTx, readHomeGovernanceAccountInTx } from "./homeCapabilities";
 import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';
 
@@ -42,6 +43,8 @@ export async function claimHomeOwnerInTx(
         via: "deployment_command" | "personal_home_bootstrap" | "claim_code";
     }>,
 ): Promise<HomeOwnerClaimResult> {
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx,
+        [input.targetAccountId, ...await readHomeGovernanceChangeAccountIdsInTx(tx)], "exclusive");
     const target = await readHomeGovernanceAccountInTx(tx, input.targetAccountId);
     if (!target) return { status: "target_not_found" };
     if (!isActiveHomeAccountStatus(target.status)) return { status: "target_inactive" };

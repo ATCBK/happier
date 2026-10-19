@@ -75,7 +75,7 @@ export async function loginWithNativePlainPassword(params: Readonly<{
     }
     try {
         return await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id, "content");
             const current = await findNativePasswordAccount(candidate.normalizedEmail, tx);
             if (!current || current.account.id !== candidate.account.id || current.parsed.mode !== "plain"
                 || current.nativeIdentityId !== candidate.nativeIdentityId || current.revision !== candidate.revision) {
@@ -135,7 +135,7 @@ export async function unlockNativeE2eePassword(params: Readonly<{
     if (!eligible.ok) return eligible;
     try {
         const result = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, candidate.account.id, "content");
             const current = await findNativePasswordAccount(candidate.normalizedEmail, tx);
             if (!current || current.account.id !== candidate.account.id || current.parsed.mode !== "e2ee"
                 || current.nativeIdentityId !== candidate.nativeIdentityId || current.revision !== candidate.revision) {

@@ -69,12 +69,12 @@ export const connectedAcknowledgementsRowDomain: ReservedAccountScopedKvRowDomai
     assertEnvelopeForMode: assertConnectedAcknowledgementsContentForModeV1,
 };
 
-export function markConnectedPresentationRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markConnectedPresentationRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: CONNECTED_PRESENTATION_ACCOUNT_KV_KEY_V1,
         hint: { connectedMetadata: true, domain: 'presentation', revision: input.revision } });
 }
 
-export function markConnectedAcknowledgementsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markConnectedAcknowledgementsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: CONNECTED_ACKNOWLEDGEMENTS_ACCOUNT_KV_KEY_V1,
         hint: { connectedMetadata: true, domain: 'acknowledgements', revision: input.revision } });
 }
@@ -95,7 +95,7 @@ async function admitConnectedMetadataMutationInTx<TEnvelope>(tx: Tx, input: Read
     accountId: string; expectedRevision: number | 'absent'; sourceSettingsVersion?: number;
     content: TEnvelope | null; domain: ReservedAccountScopedKvRowDomain<TEnvelope>;
 }>) {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
     if (input.content !== null) {

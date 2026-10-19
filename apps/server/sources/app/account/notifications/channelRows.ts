@@ -8,12 +8,13 @@ import {
 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
 import type { z } from 'zod/mini';
 
 export const notificationChannelCatalogRowDomain = {
@@ -44,7 +45,7 @@ export async function readNotificationChannelCatalogInTx(tx: Tx, input: Readonly
   return row.status === 'present' ? { status: 'present' as const, revision: row.revision, content: row.envelope } : row;
 }
 
-export function markNotificationChannelCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markNotificationChannelCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
   return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1,
     hint: { notificationChannels: true, revision: input.revision } });
 }
@@ -63,7 +64,7 @@ function sameReferenceInventory(left: readonly string[], right: readonly string[
 export async function validateNotificationChannelReferenceCensusInTx(tx: Tx, input: Readonly<{
   accountId: string; capture?: Readonly<{ revision: number | 'absent'; resourceRefs: readonly string[] }>;
 }>) {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   const row = await readReservedAccountScopedKvRowInTx(tx, { accountId: input.accountId,
@@ -90,16 +91,19 @@ type MutationInput = NotificationChannelCatalogMutationV1 & Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
 }>;
 type MutationResponse = z.infer<typeof NotificationChannelCatalogMutationResponseV1Schema>;
+type MutationSuccess = Extract<MutationResponse, { status: 'updated' }>;
+type MutationInTxResponse = Exclude<MutationResponse, { status: 'updated' }>
+  | (Omit<MutationSuccess, 'cursor'> & TransactionResult<MutationSuccess>);
 class NotificationChannelCatalogPairedMutationRejected extends Error {
   constructor(readonly result: MutationResponse) { super('Notification channel paired Settings mutation rejected'); }
 }
 
-export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: MutationInput): Promise<MutationResponse> {
+export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: MutationInput): Promise<MutationInTxResponse> {
   const mutation = NotificationChannelCatalogMutationV1Schema.parse({ expectedRevision: input.expectedRevision, content: input.content,
     ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }),
     ...(input.settingsMutation === undefined ? {} : { settingsMutation: input.settingsMutation }),
     savedSecretRevisions: input.savedSecretRevisions });
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   if (mutation.expectedRevision === 'absent' && fence.account.settingsVersion !== mutation.sourceSettingsVersion)
@@ -114,7 +118,6 @@ export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: Mutati
     ? listNotificationChannelSavedSecretRefsV1(mutation.content.v) : references;
   if (!sameReferenceInventory(actualReferences, references)) return { status: 'references-conflict' as const };
   // The SavedSecret owner alone decides effective use grants and material readiness.
-  const { validateSavedSecretResourceReferencesInTx } = await import('@/app/account/savedSecrets/savedSecretResourceService');
   const savedSecretRevisions = mutation.savedSecretRevisions.map(capture => {
     const parsed = parseSavedSecretRefV1(capture.resourceRef);
     if (parsed.kind !== 'shared_resource') throw new Error('Non-resource notification reference');
@@ -134,7 +137,8 @@ export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: Mutati
     next: { kind: 'v2', content: mutation.settingsMutation.content, remoteAlertPolicy: mutation.settingsMutation.remoteAlertPolicy } });
   if (settings.status !== 'success') throw new NotificationChannelCatalogPairedMutationRejected(settings.status === 'version_mismatch'
     ? { status: 'settings-conflict', revision: settings.currentVersion } : { status: 'invalid-stored-content' });
-  return { ...result, settingsVersion: settings.version };
+  return Object.assign(transactionResult(() => ({ ...result.resolveResult(), settingsVersion: settings.version })),
+    { status: 'updated' as const, revision: result.revision, settingsVersion: settings.version });
 }
 
 export async function mutateNotificationChannelCatalog(input: MutationInput): Promise<MutationResponse> {

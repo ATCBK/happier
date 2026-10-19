@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { afterTx, type Tx } from "@/storage/inTx";
 import { buildAccountConnectedServicesProjection } from "../account/connectedServicesProjection";
@@ -10,7 +10,7 @@ import { publishAccountCredentialSourceTeamsChangedInTx } from "@/app/teams/team
 export async function recordConnectedServiceAccountProfileChange(params: Readonly<{
     tx: Tx;
     accountId: string;
-}>): Promise<number> {
+}>): Promise<AccountChangePublication> {
     const projection = await buildAccountConnectedServicesProjection({
         tx: params.tx,
         accountId: params.accountId,
@@ -27,7 +27,7 @@ export async function recordConnectedServiceAccountProfileChange(params: Readonl
         const payload = buildUpdateAccountUpdate(
             params.accountId,
             projection,
-            cursor,
+            cursor.resolveCursor(),
             randomUUID(),
         );
         eventRouter.emitUpdate({

@@ -34,7 +34,7 @@ export const providerConnectionsRowDomain: ReservedAccountScopedKvRowDomain<Stor
   assertEnvelopeForMode: assertProviderConnectionsContentForModeV1,
 };
 
-export function markProviderConnectionsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markProviderConnectionsRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
   return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
     hint: { providerConnections: true, revision: input.revision } });
 }
@@ -49,7 +49,7 @@ export async function readProviderConnectionsRowInTx(tx: Tx, input: Readonly<{ a
 export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderConnectionsRowMutationV1 & Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
 }>, options?: Readonly<{ ownSecretReferencesOnly?: boolean }>) {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   if (input.content !== null) {

@@ -823,7 +823,7 @@ class AuthModule {
             ? { isolationLevel: "Serializable" as const }
             : undefined;
         const row = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
             const admission = await tx.account.findUniqueOrThrow({ where: { id: accountId }, select: { status: true } });
             assertAccountActive(admission.status);
             if (child) {
@@ -967,7 +967,7 @@ class AuthModule {
         accountId: string; tokenId: string; label?: string; grant?: ApiTokenGrantV1; embedConfig?: EmbedConfigV1 | null;
     }>): Promise<Readonly<{ apiToken: ApiTokenSummary; revokedTokenIds: readonly string[]; grantChanged: boolean }>> {
         const result = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
             const row = await tx.accountApiToken.findFirst({ where: { id: params.tokenId, accountId: params.accountId, parentTokenId: null },
                 select: { accessGrant: true } });
             if (!row) throw new ApiTokenOperationError("invalid_token");
@@ -1012,7 +1012,7 @@ class AuthModule {
     /** Revocation is deletion: the next verification cannot find this selector. */
     async revokeApiToken(params: Readonly<{ accountId: string; tokenId: string; parentTokenId?: string }>): Promise<ApiTokenRevocation> {
         return inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
             const where = { id: params.tokenId, accountId: params.accountId.trim(),
                 ...(params.parentTokenId !== undefined ? { parentTokenId: params.parentTokenId } : {}) };
             const row = await tx.accountApiToken.findFirst({ where, select: { id: true, children: { select: { id: true } } } });
@@ -1034,7 +1034,7 @@ class AuthModule {
 
     /** Deletes complete PAT rows in the caller's Account transition. */
     async revokeAllApiTokensInTx(tx: Tx, accountId: string): Promise<ApiTokenRevokeAllResult> {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
         const rows = await tx.accountApiToken.findMany({ where: { accountId: accountId.trim() }, select: { id: true } });
         const result = await tx.accountApiToken.deleteMany({
             where: { accountId: accountId.trim() },
@@ -1287,6 +1287,7 @@ class AuthModule {
     }
 
     async signOutEverywhereInTx(tx: Tx, userId: string): Promise<number> {
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, userId, "exclusive");
         // This owner invalidates signed sessions only. API tokens are explicit
         // long-lived automation credentials and retain their separate
         // revoke-one/revoke-all lifecycle.

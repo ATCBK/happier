@@ -39,12 +39,13 @@ import {
     type VerifiedAccountContentKeyBinding,
 } from "@/app/encryption/accountContentKeyAdmission";
 import { inTx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import {
     HomeGovernanceInvariantError,
     replaceAccountForProviderResetInTx,
     type ProviderResetAccountReplacementResult,
 } from "@/app/home/governance/accountReplacement";
-import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
+import { acquireAccountLifecycleAdmissionInTx, setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { provisionFreshAccountInTx } from "@/app/auth/provisionFreshAccountInTx";
 import { isCurrentAccountDirectoryOAuthTarget } from "./accountDirectoryOAuthTarget";
 import {
@@ -481,6 +482,8 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     transferFromAccountId: oldAccountId,
                 });
                 replacementOutcome = await inTx(async (tx) => {
+                    await acquireAccountLifecycleAdmissionInTx(tx,
+                        { accountId: oldAccountId, additionalAccountIds: [replacementAccountId] });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                     if (!isTeamAdmission && !await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                         env: requestHomeEnv,
@@ -776,6 +779,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 }>;
             try {
                 existingAccountWrite = await inTx(async (tx) => {
+                    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [existingAccount.id], "exclusive");
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                     if (
                         isAccountDirectory

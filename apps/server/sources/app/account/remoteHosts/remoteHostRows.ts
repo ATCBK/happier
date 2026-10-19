@@ -7,6 +7,7 @@ import {
 import { formatSharedSavedSecretRefV1, parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
@@ -34,7 +35,7 @@ export const remoteHostRowDomain: ReservedAccountScopedKvRowDomain<StoredRemoteH
   assertEnvelopeForMode: assertRemoteHostCatalogContentForModeV1,
 };
 
-export function markRemoteHostCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markRemoteHostCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
   return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: REMOTE_HOST_ACCOUNT_KV_KEY_V1,
     hint: { remoteHosts: true, revision: input.revision } });
 }
@@ -59,7 +60,7 @@ function sameReferences(left: readonly string[], right: readonly string[]): bool
 export async function validateRemoteHostReferenceCensusInTx(tx: Tx, input: Readonly<{
   accountId: string; capture?: Readonly<{ revision: number | 'absent'; resourceRefs: readonly string[] }>;
 }>) {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   const row = await readRemoteHostCatalogRowInTx(tx, input);
@@ -88,7 +89,7 @@ export async function mutateRemoteHostCatalogRowInTx(tx: Tx, input: RemoteHostCa
   const mutation = RemoteHostCatalogRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision, content: input.content,
     ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }),
     referencedSavedSecretRevisions: input.referencedSavedSecretRevisions });
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
   try { assertRemoteHostCatalogContentForModeV1(mutation.content, fence.account.currentness.encryptionMode); }
@@ -136,7 +137,6 @@ export async function mutateRemoteHostCatalogRowInTx(tx: Tx, input: RemoteHostCa
   const actualReferences = mutation.content.t === 'plain' ? [...new Set(mutation.content.v.hosts.flatMap(host =>
     [host.ssh.passwordSecretRef, host.ssh.identityPrivateKeySecretRef].filter((ref): ref is string => typeof ref === 'string')))] : references;
   if (!sameReferences(actualReferences, references)) return { status: 'references-invalid' as const };
-  const { validateSavedSecretResourceReferencesInTx } = await import('@/app/account/savedSecrets/savedSecretResourceService');
   if (!await validateSavedSecretResourceReferencesInTx(tx, { accountId: input.accountId, authentication: input.authentication, references,
     savedSecretRevisions: mutation.referencedSavedSecretRevisions.map(capture => ({ resourceId: capture.resourceId, expectedRevision: capture.revision })) }))
     return { status: 'references-invalid' as const };

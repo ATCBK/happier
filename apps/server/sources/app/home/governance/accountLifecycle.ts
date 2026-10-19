@@ -8,7 +8,7 @@ import {
     captureSessionAccessAccountStatusImpactInTx,
     acquireSessionAccountStatusCursorLocksInTx,
 } from "@/app/session/access/sessionAccessAccountStatusImpact";
-import { publishAccountTeamMembershipsChangedInTx } from "@/app/teams/teamChanges";
+import { publishAccountTeamMembershipsChangedInTx, readAccountTeamMembershipsChangeAudienceInTx } from "@/app/teams/teamChanges";
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
@@ -19,7 +19,23 @@ import {
     readHomeGovernanceAccountInTx,
 } from "./homeCapabilities";
 import { recordHomeAdministrationEventInTx } from "@/app/home/audit/homeAdministrationEvents";
-import { publishHomeGovernanceChangedInTx } from "./governanceChanges";
+import { publishHomeGovernanceChangedInTx, readHomeGovernanceChangeAccountIdsInTx } from "./governanceChanges";
+
+/** Admit the complete lifecycle projection audience before its resource writes. */
+export async function acquireAccountLifecycleAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; additionalAccountIds?: readonly string[] }>,
+): Promise<void> {
+    const [homeAudience, teamAudience] = await Promise.all([
+        readHomeGovernanceChangeAccountIdsInTx(tx),
+        readAccountTeamMembershipsChangeAudienceInTx(tx, { accountId: input.accountId }),
+    ]);
+    await acquireSessionAccountStatusCursorLocksInTx(tx, {
+        accountId: input.accountId,
+        additionalAccountIds: [input.accountId, ...(input.additionalAccountIds ?? []), ...homeAudience, ...teamAudience],
+        intent: "exclusive",
+    });
+}
 
 export type AccountLifecycleInput = Readonly<{
     actorAccountId: string;
@@ -45,13 +61,13 @@ export type AccountLifecycleResult =
  */
 export async function setAccountStatusInTx(tx: Tx, input: AccountLifecycleInput): Promise<AccountLifecycleResult> {
     const accountIds = [...new Set([input.actorAccountId, input.targetAccountId])].sort();
-    await acquireSessionAccountStatusCursorLocksInTx(tx, {
+    await acquireAccountLifecycleAdmissionInTx(tx, {
         accountId: input.targetAccountId,
         additionalAccountIds: accountIds,
     });
     for (const accountId of accountIds) {
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
         } catch (error) {
             if (!(error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError)) throw error;
             return { status: "rejected", code: accountId === input.actorAccountId

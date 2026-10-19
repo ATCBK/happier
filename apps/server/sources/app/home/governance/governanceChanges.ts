@@ -2,6 +2,28 @@ import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@
 import type { Tx } from "@/storage/inTx";
 import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
 
+export async function readHomeGovernanceChangeAccountIdsInTx(
+    tx: Tx,
+    options?: Readonly<{
+        excludeAccountIds?: readonly string[];
+        audience?: "administrators" | "all_active_accounts";
+        accountIds?: readonly string[];
+    }>,
+): Promise<readonly string[]> {
+    const excluded = new Set(options?.excludeAccountIds ?? []);
+    const viewers = await tx.account.findMany({
+        where: {
+            status: "active",
+            ...(options?.audience === "all_active_accounts"
+                ? {}
+                : { homeRole: { in: ["owner", "admin"] } }),
+            ...(options?.accountIds ? { id: { in: [...options.accountIds] } } : {}),
+        },
+        select: { id: true },
+    });
+    return viewers.map(viewer => viewer.id).filter(accountId => !excluded.has(accountId));
+}
+
 /**
  * The stable coalescing identity for Home-governance invalidation. New clients
  * branch on this entity ID and refresh the exact Home's governance snapshot;
@@ -34,28 +56,16 @@ export async function publishHomeGovernanceChangedInTx(
         audience?: "administrators" | "all_active_accounts";
     }>,
 ): Promise<number> {
-    const excluded = new Set(options?.excludeAccountIds ?? []);
-    const readViewers = (accountIds?: readonly string[]) => tx.account.findMany({
-        where: {
-            status: "active",
-            ...(options?.audience === "all_active_accounts"
-                ? {}
-                : { homeRole: { in: ["owner", "admin"] } }),
-            ...(accountIds ? { id: { in: [...accountIds] } } : {}),
-        },
-        select: { id: true },
-    });
-    const capturedAccountIds = (await readViewers())
-        .map(viewer => viewer.id).filter(accountId => !excluded.has(accountId));
+    const capturedAccountIds = await readHomeGovernanceChangeAccountIdsInTx(tx, options);
     if (capturedAccountIds.length === 0) return 0;
     // ReadCommitted callers may capture a viewer just before that Account is
     // retired, demoted or erased. Fence the captured audience and recheck its
     // current eligibility before the strict cursor allocator sees these IDs.
     await acquireAccountChangePublicationLocksInTx(tx, capturedAccountIds, { includeSingleAccount: true });
-    const viewers = await readViewers(capturedAccountIds);
+    const viewers = await readHomeGovernanceChangeAccountIdsInTx(tx, { ...options, accountIds: capturedAccountIds });
 
     return (await markAccountsChanged(tx, {
-        accountIds: viewers.map((viewer) => viewer.id),
+        accountIds: viewers,
         entityId: HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     })).length;
 }

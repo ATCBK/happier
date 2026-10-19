@@ -23,7 +23,7 @@ import { readRemoteHostCatalogRowInTx, mutateRemoteHostCatalogRowInTx } from './
 
 async function resourcePacketFailureInTx(tx: Tx, accountId: string, mutation: RemoteHostCatalogRowMutationV1,
   error: SavedSecretResourceServiceError): Promise<RemoteHostCatalogRowMutationResponseV1> {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
   if (error === 'settings_conflict') return { status: 'settings-conflict', revision: fence.account.settingsVersion };
@@ -42,7 +42,7 @@ async function promoteRemoteHostPacketInTx(tx: Tx, input: Readonly<{
   mutation: RemoteHostCatalogRowMutationV1; resources: readonly SharedSavedSecretCreateInputV1[];
   referenceCensus?: SavedSecretCatalogReferenceCensusV1;
 }>): Promise<RemoteHostCatalogRowMutationResponseV1> {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
   const accountMode = fence.account.currentness.encryptionMode;

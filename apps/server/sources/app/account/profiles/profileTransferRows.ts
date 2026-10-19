@@ -12,7 +12,7 @@ import { hasProfileTransferSourceV1, readEffectiveProfileSecretBindingsV1 } from
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 import type { Tx } from '@/storage/inTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inTx, type TransactionResult } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import { PROFILE_ACCOUNT_KV_PREFIX, PROFILE_TRANSFER_ACCOUNT_KV_KEY, parseProfilePhysicalKey } from '@/app/kv/accountScopedKv';
@@ -112,9 +112,11 @@ export class ProfileTransferTransactionAbort extends Error {
 /** Preparation imports and its proof commit together; activation only changes the fenced proof. */
 export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
     accountId: string; mutation: ProfileTransferMutationV1; authentication?: TeamOperationAuthenticationContext;
-}>): Promise<ProfileTransferMutationResponseV1> {
+}>): Promise<Exclude<ProfileTransferMutationResponseV1, { status: 'updated' }>
+    | (Omit<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>, 'cursor'>
+        & TransactionResult<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>>)> {
     const mutation = ProfileTransferMutationV1Schema.parse(input.mutation);
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     const current = await readProfileTransferControlInTx(tx, input);

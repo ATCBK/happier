@@ -8,10 +8,12 @@ import {
     type StoredConnectedAccountCatalogContentV1,
 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { listSavedSecretVoiceCredentialMutationReferencesV1, AccountSettingsSavedSecretMutationError } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue } from '@/app/encryption/accountSettingsStorage';
 import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
     type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
@@ -49,7 +51,7 @@ function connectedAccountCatalogRowReadDomain(key: ConnectedAccountCatalogKeyV1)
     };
 }
 export function markConnectedAccountCatalogRowChangedInTx(tx: Tx,
-    input: Readonly<{ accountId: string; key: ConnectedAccountCatalogKeyV1; revision: number }>): Promise<number> {
+    input: Readonly<{ accountId: string; key: ConnectedAccountCatalogKeyV1; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: buildConnectedAccountCatalogPhysicalKeyV1(input.key),
         hint: { connectedAccountCatalog: true, key: input.key, revision: input.revision } });
 }
@@ -64,13 +66,16 @@ class ConnectedAccountCatalogPairedMutationRejected extends Error {
 }
 type MutationInput = Readonly<{ accountId: string; key: ConnectedAccountCatalogKeyV1;
     authentication?: TeamOperationAuthenticationContext }> & ConnectedAccountCatalogRowMutationV1;
+type MutationSuccess = Extract<ConnectedAccountCatalogRowMutationResponseV1, { status: 'updated' }>;
+type MutationInTxResponse = Exclude<ConnectedAccountCatalogRowMutationResponseV1, { status: 'updated' }>
+    | (Omit<MutationSuccess, 'cursor'> & TransactionResult<MutationSuccess>);
 
 /** One catalog revision admits membership and references; the existing secret owner validates resource currentness. */
-export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: MutationInput): Promise<ConnectedAccountCatalogRowMutationResponseV1> {
+export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: MutationInput): Promise<MutationInTxResponse> {
     const { accountId, key, authentication, ...candidate } = input;
     const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(candidate);
     if (mutation.content?.t === 'plain' && mutation.content.v.key !== key) return { status: 'invalid-stored-content' };
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     if (mutation.sourceSettingsVersion !== undefined && fence.account.settingsVersion !== mutation.sourceSettingsVersion) {
@@ -87,8 +92,6 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
     const pairedReferences: string[] = [];
     if (fence.account.currentness.encryptionMode === 'plain' && mutation.settingsMutation?.content?.t === 'plain') {
         const current = openPlainAccountSettingsDbValue({ accountId, dbValue: fence.account.settings });
-        const { listSavedSecretVoiceCredentialMutationReferencesV1, AccountSettingsSavedSecretMutationError } =
-            await import('@happier-dev/protocol/account/settings/savedSecretMutationOwner');
         try {
             pairedReferences.push(...listSavedSecretVoiceCredentialMutationReferencesV1(
                 current?.t === 'plain' ? current.v : {}, mutation.settingsMutation.content.v,
@@ -102,7 +105,6 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
         ? [...new Set([...rowReferences, ...pairedReferences])] : mutation.referencedSavedSecretIds;
     if (fence.account.currentness.encryptionMode === 'plain' && (references.length !== mutation.referencedSavedSecretIds.length
         || references.some(reference => !mutation.referencedSavedSecretIds.includes(reference)))) return { status: 'invalid-reference' };
-    const { validateSavedSecretResourceReferencesInTx } = await import('@/app/account/savedSecrets/savedSecretResourceService');
     if (!await validateSavedSecretResourceReferencesInTx(tx, { accountId, authentication, references,
         savedSecretRevisions: mutation.savedSecretRevisions ?? [] })) return { status: 'invalid-reference' };
     const result = await mutateReservedAccountScopedKvRowInTx(tx, { accountId, physicalKey: buildConnectedAccountCatalogPhysicalKeyV1(key),
@@ -113,7 +115,8 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
         next: { kind: 'v2', content: mutation.settingsMutation.content, remoteAlertPolicy: mutation.settingsMutation.remoteAlertPolicy } });
     if (settings.status !== 'success') throw new ConnectedAccountCatalogPairedMutationRejected(settings.status === 'version_mismatch'
         ? { status: 'settings-conflict', revision: settings.currentVersion } : { status: 'invalid-stored-content' });
-    return { ...result, settingsVersion: settings.version };
+    return Object.assign(transactionResult(() => ({ ...result.resolveResult(), settingsVersion: settings.version })),
+        { status: 'updated' as const, revision: result.revision, settingsVersion: settings.version });
 }
 
 /** Paired Settings and row CAS share the Account fence and roll back on either refusal. */

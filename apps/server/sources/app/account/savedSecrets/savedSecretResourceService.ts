@@ -45,6 +45,12 @@ import { advanceProfileReferenceGuardInTx, mutateProfileRowsInTx, validateProfil
 import { readProfileTransferControlInTx } from '@/app/account/profiles/profileTransferControl';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
+import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
+import { readMcpServerCatalogRowInTx, mutateMcpServerCatalogRowInTx } from '@/app/account/mcp/serverRows';
+import { readConfiguredAgentCatalogRowInTx, mutateConfiguredAgentCatalogRowInTx, transferConfiguredAgentCatalogSourceInTx } from '@/app/account/agents/configuredAgentRows';
+import { readProviderConnectionsRowInTx, mutateProviderConnectionsRowInTx } from '@/app/account/providers/connectionRows';
+import { readConnectedAccountCatalogRowInTx, mutateConnectedAccountCatalogRowInTx } from '@/app/account/connectedAccounts/configurationRows';
+import { readPromptLibraryRowInTx, mutatePromptLibraryRowInTx } from '@/app/account/prompts/promptLibraryRows';
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
@@ -281,7 +287,6 @@ async function qualifiedSavedSecretTeamIdsInTx(
 ): Promise<ReadonlySet<string>> {
     const teamIds = [...new Set(input.teamIds)];
     if (teamIds.length === 0) return new Set();
-    const { isServerFeatureEnabledForHome } = await import("@/app/features/catalog/serverFeatureGate");
     if (!await isServerFeatureEnabledForHome('teams', { tx })) return new Set();
     const contexts = await resolveTeamActorContextsInTx(tx, {
         teamIds,
@@ -1547,7 +1552,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
     const catalogs: { -readonly [K in keyof SavedSecretCatalogReferenceFacets]: SavedSecretCatalogReferenceFacets[K] } = {};
     const contents: SavedSecretCatalogCapturedContents = {};
     if (!input.destinationOnly || input.captures?.mcp !== undefined) {
-        const { readMcpServerCatalogRowInTx } = await import('@/app/account/mcp/serverRows');
         const row = await readMcpServerCatalogRowInTx(tx, input);
         const error = savedSecretCatalogCaptureError(row, input.captures?.mcp);
         if (error) return { ok: false, error };
@@ -1563,7 +1567,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
         else contents.mcp = { revision: 'absent', content: null };
     }
     if (!input.destinationOnly || input.captures?.acp !== undefined) {
-        const { readConfiguredAgentCatalogRowInTx } = await import('@/app/account/agents/configuredAgentRows');
         const row = await readConfiguredAgentCatalogRowInTx(tx, input);
         const error = savedSecretCatalogCaptureError(row, input.captures?.acp);
         if (error) return { ok: false, error };
@@ -1579,7 +1582,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
         else contents.acp = { revision: 'absent', content: null };
     }
     if (!input.destinationOnly || input.captures?.providerConnections !== undefined) {
-        const { readProviderConnectionsRowInTx } = await import('@/app/account/providers/connectionRows');
         const row = await readProviderConnectionsRowInTx(tx, input);
         const error = savedSecretCatalogCaptureError(row, input.captures?.providerConnections);
         if (error) return { ok: false, error };
@@ -1595,7 +1597,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
         else contents.providerConnections = { revision: 'absent', content: null };
     }
     if (!input.destinationOnly || input.captures?.connectedConfigurations !== undefined) {
-        const { readConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
         const row = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'configurations' });
         const error = savedSecretCatalogCaptureError(row, input.captures?.connectedConfigurations);
         if (error) return { ok: false, error };
@@ -1611,7 +1612,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
         else contents.connectedConfigurations = { revision: 'absent', content: null };
     }
     if (!input.destinationOnly || input.captures?.connectedPurposes !== undefined) {
-        const { readConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
         const row = await readConnectedAccountCatalogRowInTx(tx, { accountId: input.accountId, key: 'purposes' });
         const error = savedSecretCatalogCaptureError(row, input.captures?.connectedPurposes);
         if (error) return { ok: false, error };
@@ -1627,7 +1627,6 @@ async function readSavedSecretCatalogCensusInTx(tx: Tx, input: Readonly<{
         else contents.connectedPurposes = { revision: 'absent', content: null };
     }
     if (!input.destinationOnly || input.captures?.registrySources !== undefined) {
-        const { readPromptLibraryRowInTx } = await import('@/app/account/prompts/promptLibraryRows');
         const row = await readPromptLibraryRowInTx(tx, { accountId: input.accountId, key: 'registry-sources' });
         const error = savedSecretCatalogCaptureError(row, input.captures?.registrySources);
         if (error) return { ok: false, error };
@@ -1658,7 +1657,7 @@ export async function readSavedSecretReferenceCensusInTx(tx: Tx, input: Readonly
 }>> {
     const parsed = SavedSecretReferenceCensusV1Schema.safeParse(input.referenceCensus);
     if (!parsed.success) return { ok: false, error: 'references_invalid' };
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status !== 'ready') return { ok: false, error: 'settings_invalid' };
     if (fence.account.currentness.encryptionMode !== parsed.data.accountMode) return { ok: false, error: 'references_conflict' };
     if (fence.account.settingsVersion !== input.expectedSettingsVersion) return { ok: false, error: 'settings_conflict' };
@@ -1879,11 +1878,9 @@ async function mutateSavedSecretCatalogsInTx(tx: Tx, input: Readonly<{
         revisions[key] = result.revision;
     };
     if (input.mutations.mcp) {
-        const { mutateMcpServerCatalogRowInTx } = await import('@/app/account/mcp/serverRows');
         capture('mcp', await mutateMcpServerCatalogRowInTx(tx, { ...actor, ...input.mutations.mcp }));
     }
     if (input.mutations.acp) {
-        const { mutateConfiguredAgentCatalogRowInTx, transferConfiguredAgentCatalogSourceInTx } = await import('@/app/account/agents/configuredAgentRows');
         const mutation = input.mutations.acp;
         if (mutation.expectedRevision === 'absent' && mutation.source && mutation.sourceSettingsVersion !== undefined) {
             capture('acp', await transferConfiguredAgentCatalogSourceInTx(tx, { ...actor,
@@ -1892,22 +1889,18 @@ async function mutateSavedSecretCatalogsInTx(tx: Tx, input: Readonly<{
         } else capture('acp', await mutateConfiguredAgentCatalogRowInTx(tx, { ...actor, ...mutation }));
     }
     if (input.mutations.providerConnections) {
-        const { mutateProviderConnectionsRowInTx } = await import('@/app/account/providers/connectionRows');
         capture('providerConnections', await mutateProviderConnectionsRowInTx(tx, { ...actor, ...input.mutations.providerConnections }));
     }
     if (input.mutations.connectedConfigurations) {
-        const { mutateConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
         capture('connectedConfigurations', await mutateConnectedAccountCatalogRowInTx(tx,
             { ...actor, key: 'configurations', ...input.mutations.connectedConfigurations }));
     }
     if (input.mutations.connectedPurposes) {
-        const { mutateConnectedAccountCatalogRowInTx } = await import('@/app/account/connectedAccounts/configurationRows');
         capture('connectedPurposes', await mutateConnectedAccountCatalogRowInTx(tx,
             { ...actor, key: 'purposes', ...input.mutations.connectedPurposes }));
     }
     if (input.mutations.registrySources) {
         const mutation = input.mutations.registrySources;
-        const { mutatePromptLibraryRowInTx } = await import('@/app/account/prompts/promptLibraryRows');
         capture('registrySources', await mutatePromptLibraryRowInTx(tx, { ...actor, key: 'registry-sources', ...mutation }));
     }
     return revisions;
@@ -1932,7 +1925,7 @@ async function validateNotificationPromotionReferencesInTx(tx: Tx, input: Promot
 async function validatePersonalPromotionSourcesInTx(tx: Tx, input: PromoteSavedSecretResourceInput, removesSettingsSources = false,
     catalogs?: SavedSecretCatalogReferenceFacets, savedSecretRefs?: ReadonlyMap<string, string>): Promise<boolean> {
     if (!input.personalSecretPromotions?.length && !removesSettingsSources) return true;
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status !== 'ready') return false;
     // Encrypted Settings remain the admitted client's captured source declaration.
     const settings = fence.account.currentness.encryptionMode === 'plain'
@@ -2046,7 +2039,7 @@ async function promoteCatalogOnlySavedSecretResourcesInTx(tx: Tx, input: Promote
     let resourcesBound: boolean;
     try { resourcesBound = resources.every(resource => declaredReferences.has(formatSharedSavedSecretRefV1(resource.resourceId))); }
     catch { return { ok: false, error: 'invalid_resource' }; }
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status !== 'ready') return { ok: false, error: 'settings_invalid' };
     if (fence.account.currentness.encryptionMode !== census.accountMode) return { ok: false, error: 'references_conflict' };
     let current = await readSavedSecretCatalogCensusInTx(tx, { accountId: input.accountId, accountMode: census.accountMode,
@@ -2235,7 +2228,7 @@ export async function promoteSavedSecretResourceInTx(
             || row.content === null || row.settingsCleanup !== undefined || capturedRows.get(row.id) !== row.expectedRevision)) {
         return { ok: false, error: 'references_invalid' };
     }
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status !== 'ready') return { ok: false, error: 'settings_invalid' };
     if (fence.account.currentness.encryptionMode !== parsedCensus.data.accountMode) return { ok: false, error: 'references_conflict' };
     const unchangedSettings = input.nextSettings === null;

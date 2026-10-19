@@ -207,7 +207,7 @@ export function registerHomeLoginApprovalRoutes(app: Fastify): void {
         const status = request.body.decision === "approve" ? "approved" : "rejected";
         const outcome = await inTx(async (tx) => {
             try {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "content");
             } catch (error) {
                 if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) throw new InactiveAccountError();
                 throw error;

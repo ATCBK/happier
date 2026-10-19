@@ -19,7 +19,7 @@ import { tryParseEncryptedDataKeyV0Bytes } from "./encryptedDataKeyValidation";
 import { buildShareableSessionMessagePublicationWhere, isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createPublicShareMessagesAccessToken, validatePublicShareMessagesAccessToken, requirePublicShareAccessGrantSecret, PUBLIC_SHARE_MESSAGES_ACCESS_TOKEN_HEADER } from "./publicShareMessageAccessGrant";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readArtifactBlob } from '@/app/artifacts/artifactBlobService';
 import { SessionTranscriptSurfaceItemReferenceInputV1Schema, readSessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { readPublishedSessionSurfaceItemInTx } from '@/app/session/systemRecords/sessionSystemRecordService';
@@ -125,6 +125,7 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
             return result.type === "ok" ? reply.send({ success: true }) : reply.code(result.type === "forbidden" ? 403 : 404).send({ error: "public_share_unavailable" });
         }
         const removed = await inTx(async tx => {
+            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true });
             if (!share.artifactId || !await canManageSubject(tx, { kind: "artifact", id: share.artifactId }, request.userId, authentication)) return false;
             const result = await tx.publicSessionShare.deleteMany({ where: { id: share.id, artifactId: share.artifactId } });
             if (result.count) await markAccountChanged(tx, { accountId: request.userId, kind: "artifact", entityId: share.artifactId });

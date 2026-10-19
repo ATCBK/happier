@@ -9,7 +9,7 @@ import { buildLinkedIdentityManagementProjectionInTx } from "@/app/auth/provider
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { AccountNameUpdateRequestV1Schema, AccountNameUpdateResponseV1Schema } from "@happier-dev/protocol/account/profile";
 import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 
@@ -23,6 +23,7 @@ export function registerAccountProfileRoute(app: Fastify): void {
         },
     }, async (request, reply) => {
         const name = await inTx(async (tx) => {
+            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true, intent: 'exclusive' });
             const account = await tx.account.update({
                 where: { id: request.userId },
                 data: { name: request.body.name },
@@ -33,7 +34,7 @@ export function registerAccountProfileRoute(app: Fastify): void {
             });
             afterTx(tx, () => eventRouter.emitUpdate({
                 userId: request.userId,
-                payload: buildUpdateAccountUpdate(request.userId, { name: account.name }, cursor, randomKeyNaked(12)),
+                payload: buildUpdateAccountUpdate(request.userId, { name: account.name }, cursor.resolveCursor(), randomKeyNaked(12)),
                 recipientFilter: { type: 'user-scoped-only' },
             }));
             return account.name;

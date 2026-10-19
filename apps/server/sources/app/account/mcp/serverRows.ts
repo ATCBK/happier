@@ -7,10 +7,12 @@ import {
 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { isDeepStrictEqual } from 'node:util';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import type { Tx } from '@/storage/inTx';
-import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx, type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
+import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx, type ReservedAccountScopedKvRowDomain,
+    type ReservedAccountScopedKvRowMutationInTxResult } from '@/app/kv/reservedAccountScopedKvRow';
 
 export const mcpServerCatalogRowDomain: ReservedAccountScopedKvRowDomain<StoredMcpServerCatalogContentV1> = {
     label: 'MCP server catalog',
@@ -25,7 +27,7 @@ export const mcpServerCatalogRowDomain: ReservedAccountScopedKvRowDomain<StoredM
     assertEnvelopeForMode: assertMcpServerCatalogContentForModeV1,
 };
 
-export function markMcpServerCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markMcpServerCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: MCP_SERVER_CATALOG_ACCOUNT_KEY_V1,
         hint: { mcpServerCatalog: true, revision: input.revision } });
 }
@@ -45,14 +47,15 @@ export async function mutateMcpServerCatalogRowInTx(tx: Tx, input: Readonly<{
     sourceSettingsVersion?: number; referencedSavedSecretIds?: readonly string[];
     savedSecretRevisions?: readonly Readonly<{ resourceId: string; expectedRevision: number }>[];
     authentication?: TeamOperationAuthenticationContext;
-}>): Promise<McpServerCatalogRowMutationResponseV1> {
+}>): Promise<Exclude<McpServerCatalogRowMutationResponseV1, { status: 'updated' }>
+    | Extract<ReservedAccountScopedKvRowMutationInTxResult, { status: 'updated' }>> {
     const mutation = McpServerCatalogRowMutationV1Schema.parse({
         expectedRevision: input.expectedRevision, content: input.content,
         sourceSettingsVersion: input.sourceSettingsVersion,
         referencedSavedSecretIds: input.referencedSavedSecretIds,
         savedSecretRevisions: input.savedSecretRevisions,
     });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     if (mutation.content !== null) {
@@ -73,7 +76,7 @@ export async function mutateMcpServerCatalogRowInTx(tx: Tx, input: Readonly<{
     if (mutation.content?.t === 'plain' && !isDeepStrictEqual([...references].sort(), [...new Set(mutation.referencedSavedSecretIds)].sort())) {
         return { status: 'invalid-reference' };
     }
-    if (!(await (await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferencesInTx(tx, {
+    if (!(await validateSavedSecretResourceReferencesInTx(tx, {
         accountId: input.accountId, authentication: input.authentication, references,
         allowPersonal: true,
         savedSecretRevisions: mutation.savedSecretRevisions,

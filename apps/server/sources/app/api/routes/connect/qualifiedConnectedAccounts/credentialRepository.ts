@@ -1250,7 +1250,7 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
 ): Promise<QualifiedConnectedServiceCredentialMutationResult> {
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [prepared.params.accountId], { includeSingleAccount: true });
+            await acquireAccountChangePublicationLocksInTx(tx, [prepared.params.accountId], { includeSingleAccount: true, intent: "exclusive" });
             const result =
                 await mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                     tx,
@@ -1323,7 +1323,7 @@ export async function mutateQualifiedConnectedServiceCredential(
     const canonicalParams =
         canonicalizeQualifiedCredentialMutation(params);
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [canonicalParams.accountId], { includeSingleAccount: true });
+        await acquireAccountChangePublicationLocksInTx(tx, [canonicalParams.accountId], { includeSingleAccount: true, intent: "exclusive" });
         const result =
             await mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                 tx,
@@ -2546,7 +2546,7 @@ export async function deleteQualifiedConnectedServiceCredential(
             // Fence before the first credential/dependency read. This shares
             // the Account-mode and managed-resource publication boundary;
             // ordinary Account cursor traffic must not invalidate deletion.
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "exclusive");
             if (fence.status === "account_not_found") return { status: "not_found" };
             if (fence.status === "account_inconsistent") return { status: "storage_mode_mismatch" };
             const accountMode = fence.account.currentness.encryptionMode;

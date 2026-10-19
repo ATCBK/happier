@@ -56,7 +56,7 @@ export async function mutateAccountSettingsHistorySnapshotInTx(input: Readonly<{
     const parsed = AccountSettingsV2HistoryMutationRequestSchema.safeParse(input.mutation);
     if (!parsed.success) return { status: "invalid_content" };
     const mutation = parsed.data;
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "content");
     if (fence.status !== "ready") return { status: "storage_unavailable" };
     const expected = mutation.expectedEncryptionCurrentness;
     if (fence.account.settingsVersion !== mutation.expectedSettingsVersion
