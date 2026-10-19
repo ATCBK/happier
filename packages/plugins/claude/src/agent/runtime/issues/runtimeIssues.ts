@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ClaudeSessionRuntimeUsageLimitDetailsSchema, ClaudeSessionRuntimeTemporaryThrottleDetailsSchema } from './providerFailureDetails.js';
 import { mapClaudeProviderFailureToUsageDetails as mapProviderFailure } from '../../auth/services/runtime/usage.js';
 
@@ -16,32 +16,29 @@ const ClaudeSessionRuntimeIssueSourceSchema = z.enum([
 ]);
 
 
-export const ClaudeSessionRuntimeIssueSchema = z.object({
+export const ClaudeSessionRuntimeIssueSchema = z.readonly(z.object({
   v: z.literal(1),
   scope: z.literal('primary_session'),
   status: z.literal('failed'),
-  code: z.string().trim().min(1).max(256),
+  code: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
   source: ClaudeSessionRuntimeIssueSourceSchema,
-  occurredAt: z.number().int().nonnegative(),
-  sessionSeq: z.number().int().nonnegative().optional(),
-  agentId: z.string().trim().min(1).max(128).optional(),
-  agentTurnId: z.string().trim().min(1).max(256).optional(),
-  sanitizedPreview: z.string().trim().min(1).max(2_000).optional(),
-  usageLimit: ClaudeSessionRuntimeUsageLimitDetailsSchema.optional(),
-  temporaryThrottle: ClaudeSessionRuntimeTemporaryThrottleDetailsSchema.optional(),
-  agentProcessExitAfterSwitch: z.object({
-    exitCode: z.number().int().nullable(),
-    signal: z.string().trim().min(1).max(128).nullable(),
-    lastStderrLine: z.string().trim().min(1).max(2_000).nullable(),
+  occurredAt: z.number().check(z.int(), z.nonnegative()),
+  sessionSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+  agentTurnId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  sanitizedPreview: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+  usageLimit: z.optional(ClaudeSessionRuntimeUsageLimitDetailsSchema),
+  temporaryThrottle: z.optional(ClaudeSessionRuntimeTemporaryThrottleDetailsSchema),
+  agentProcessExitAfterSwitch: z.optional(z.strictObject({
+    exitCode: z.nullable(z.number().check(z.int())),
+    signal: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+    lastStderrLine: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
     // Claude minted this id: presence-validated, never renormalized.
-    vendorResumeId: z.string()
-      .refine((value) => value.trim().length > 0, 'Opaque identifiers must contain a non-whitespace character')
-      .max(512)
-      .nullable(),
-    materializationRoot: z.string().trim().min(1).max(2_000).nullable(),
-    effectiveStateMode: z.enum(['shared', 'isolated']).nullable(),
-  }).strict().optional(),
-}).readonly();
+    vendorResumeId: z.nullable(z.string().check(z.refine((value) => value.trim().length > 0, 'Opaque identifiers must contain a non-whitespace character'), z.maxLength(512))),
+    materializationRoot: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+    effectiveStateMode: z.nullable(z.enum(['shared', 'isolated'])),
+  })),
+}));
 
 export type ClaudeSessionRuntimeIssue = z.infer<typeof ClaudeSessionRuntimeIssueSchema>;
 export type ClaudeSessionRuntimeIssueSource = ClaudeSessionRuntimeIssue['source'];

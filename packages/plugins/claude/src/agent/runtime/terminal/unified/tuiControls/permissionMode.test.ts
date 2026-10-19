@@ -38,9 +38,9 @@ describe('resolveTargetModeMarker', () => {
     expect(resolveTargetModeMarker({ agentModeId: null, permissionMode: 'safe-yolo' })).toEqual({ kind: 'cyclable', marker: 'auto' });
   });
 
-  it('marks dontAsk / read-only as launch-only (not cycle reachable)', () => {
+  it('keeps native dontAsk launch-only and maps read-only through the canonical plan policy', () => {
     expect(resolveTargetModeMarker({ permissionMode: 'dontAsk' }).kind).toBe('launch_only');
-    expect(resolveTargetModeMarker({ permissionMode: 'read-only' }).kind).toBe('launch_only');
+    expect(resolveTargetModeMarker({ permissionMode: 'read-only' })).toEqual({ kind: 'cyclable', marker: 'plan' });
   });
 });
 
@@ -88,13 +88,17 @@ describe('applyPermissionModeControl — verified ShiftTab cycling (B11)', () =>
     expect(port.sentKeys).toHaveLength(0);
   });
 
-  it('returns requires_interactive_control (never loops) when a mode is unreachable (B5)', async () => {
-    // auto is model/account-gated; the cycle returns to default without ever showing it.
+  it.each([
+    { permissionMode: 'auto', reason: 'auto_not_reachable' },
+    { permissionMode: 'yolo', reason: 'bypassPermissions_not_reachable' },
+  ])('leaves $permissionMode unapplied when it is absent from the native cycle (B5)', async ({ permissionMode, reason }) => {
+    // Auto can be model/account-gated; bypass is absent unless enabled at launch.
+    // Neither case may report a successful change after cycling back to default.
     const port = createFakeControlPort({ captures: [DEFAULT, ACCEPT, PLAN, DEFAULT] });
 
-    const result = await applyPermissionModeControl(ctxFor(port), { permissionMode: 'auto' });
+    const result = await applyPermissionModeControl(ctxFor(port), { permissionMode });
 
-    expect(result.kind).toBe('unreachable');
+    expect(result).toEqual({ kind: 'unreachable', reason });
     expect(port.sentLiteral).toHaveLength(0);
     // Bounded: it stops once it cycles back to a previously seen marker.
     expect(port.sentKeys.length).toBeLessThanOrEqual(6);

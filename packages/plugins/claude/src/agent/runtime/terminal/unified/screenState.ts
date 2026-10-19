@@ -125,7 +125,7 @@ const ESC_TO_INTERRUPT = /esc to interrupt/i;
 // `✽ Billowing… (10m 24s · ↓ 20.4k tokens)`). Detect the spinner-line shape: an
 // animation glyph, a status word, an ellipsis, then a parenthesized status group. Completion lines
 // (`✳ Crunched for 6s`) have no parenthesized group and must NOT match.
-const GENERATING_SPINNER_LINE = /(?:^|\n)[^\S\n]*[✶✻✽✳·∗*][^\S\n]+\S+…[^\S\n]*\(/u;
+const GENERATING_SPINNER_LINE = /(?:^|\n)[^\S\n]*[\u2736\u273b\u273d\u2733·\u2217*][^\S\n]+\S+\u2026[^\S\n]*\(/u;
 const QUEUED_MESSAGE_BANNER = /press up to edit queued messages/i;
 const SWITCH_MODEL_DIALOG = /switch model\?/i;
 // Claude renders the focused-row cursor according to terminal capabilities. Real captures include
@@ -149,8 +149,8 @@ const SAFEGUARD_PAUSE_RETRY_OPTION = /\bedit prompt and retry(?:\s+with\s+(.+?))
 // The provider changes the paid alternatives across plans and releases. Recognize the stable
 // failure + chooser + wait semantics, then require the shared strict numbered-dialog parser below.
 // This stays tolerant of labels and option count without matching arbitrary numbered dialogs.
-const USAGE_LIMIT_DIALOG = /(?:\byou(?:['’]ve| have)\s+(?:hit|reached)\s+your\s+(?:session|usage)\s+limit\b|\/rate-limit-options)[\s\S]{0,1200}\bwhat do you want to do\?[\s\S]{0,700}\bwait\b[^\n]{0,120}\blimit\b[^\n]{0,120}\breset(?:s)?\b/iu;
-const CROPPED_USAGE_LIMIT_DIALOG = /\bwhat do you want to do\?[\s\S]{0,400}(?:❯|>)\s*1\.\s*[^\n]{0,120}\bwait\b[^\n]{0,120}\blimit\b[^\n]{0,120}\breset(?:s)?\b/iu;
+const USAGE_LIMIT_DIALOG = /(?:\byou(?:['\u2019]ve| have)\s+(?:hit|reached)\s+your\s+(?:session|usage)\s+limit\b|\/rate-limit-options)[\s\S]{0,1200}\bwhat do you want to do\?[\s\S]{0,700}\bwait\b[^\n]{0,120}\blimit\b[^\n]{0,120}\breset(?:s)?\b/iu;
+const CROPPED_USAGE_LIMIT_DIALOG = /\bwhat do you want to do\?[\s\S]{0,400}(?:\u276f|>)\s*1\.\s*[^\n]{0,120}\bwait\b[^\n]{0,120}\blimit\b[^\n]{0,120}\breset(?:s)?\b/iu;
 // Live probe 2026-06-11 (Claude Code 2.1.173, tmux): `/effort <level>` on a conversation cached at a
 // different effort opens "Change effort level? … ❯ 1. Yes, switch to <level>  2. No, go back".
 // Escape / "No, go back" prints `Kept effort level as <current>` (incident cmq8y3nlx, L6).
@@ -179,7 +179,7 @@ const SELECTION_CONFIRM_HINT = /enter to confirm[^\n]*esc to cancel/i;
 // Claude Code 2.1.280 live capture: the automatic wait is a footer, not a numbered chooser.
 const USAGE_LIMIT_WAIT_FOOTER = /(?:^|\n)[^\S\n]*continuing automatically[^\n]*\besc to cancel\b/i;
 // Rewind is a sparse message selector: `(current)` can be the only visible focused row.
-const REWIND_SELECTION = /(?:^|\n)[^\S\n]*rewind[^\S\n]*\n[\s\S]*\brestore the code and\/or conversation to the point before[\s\S]*(?:^|\n)[^\S\n]*[>›❯][^\S\n]+[^\n]+[\s\S]*\benter to continue[^\n]*\besc to cancel[^\n]*\s*$/iu;
+const REWIND_SELECTION = /(?:^|\n)[^\S\n]*rewind[^\S\n]*\n[\s\S]*\brestore the code and\/or conversation to the point before[\s\S]*(?:^|\n)[^\S\n]*[>\u203a\u276f][^\S\n]+[^\n]+[\s\S]*\benter to continue[^\n]*\besc to cancel[^\n]*\s*$/iu;
 const EFFORT_CHANGE_DIALOG_TARGET = /switching to\s+([a-z]+)\s+means the full history/i;
 const PERMISSION_PROMPT = /do you want to proceed\?/i;
 // Legacy wording plus the real 2.1.170 `/permissions` editor tab row
@@ -215,14 +215,14 @@ const EFFORT_STATUS_LINE = /\beffort:\s*([a-z]+)\b/im;
 // Shell recognition needs its following footer so the hint cannot match itself. Both prompt kinds
 // participate in the SAME last-input selection: an old shell capture cannot outrank a newer normal
 // draft, and an old normal composer cannot make the active shell prompt ready for ordinary input.
-const COMPOSER_LINE = /(?:^|\n)[^\S\n]*(?:[│|][^\S\n]*)?((?:>|›|❯)(?![^\S\n]*(?:\d+\.|[◯◉○●◐◑]))|!(?=[\s\S]*\n[^\S\n]*! for shell mode(?:\s|$)))[^\S\n]*(.*?)[^\S\n]*(?:[│|][^\S\n]*)?(?:\n|$)/;
+const COMPOSER_LINE = /(?:^|\n)[^\S\n]*(?:[\u2502|][^\S\n]*)?((?:>|\u203a|\u276f)(?![^\S\n]*(?:\d+\.|[\u25ef\u25c9\u25cb\u25cf\u25d0\u25d1]))|!(?=[\s\S]*\n[^\S\n]*! for shell mode(?:\s|$)))[^\S\n]*(.*?)[^\S\n]*(?:[\u2502|][^\S\n]*)?(?:\n|$)/;
 const SLASH_SUGGESTION_LINE = /(?:^|\n)[^\S\n]*\/[a-z][a-z0-9-]*\b/i;
 // Agents/selection panel (remote-dev live capture 2026-06-12): the selector header renders
 // `↑/↓ to select` and the focus cursor renders as `❯ ◯ <agent-type> <title>` rows. The cursor
 // row must never read as a composer draft (false `user_draft` steer veto with a misleading
 // "clear the draft" notice), and typing/Enter on a focused selector drives the SELECTOR, so it
 // is a blocking overlay for controls and steering.
-const SELECTION_LIST_HINT = /↑\/↓ to select/;
+const SELECTION_LIST_HINT = /\u2191\/\u2193 to select/;
 const SELECTION_CURSOR_ROW = new RegExp(
   `(?:^|\\n)[^\\S\\n]*${SELECTION_FOCUS_GLYPH_SOURCE}[^\\S\\n]*[◯◉○●◐◑]`,
   'u',
@@ -253,9 +253,9 @@ function lastMatch(pattern: RegExp, text: string): RegExpExecArray | null {
 
 // Composer-box bottom border / horizontal rule. Require a horizontal/corner glyph: whitespace-only
 // rows and vertical-only box rows can be intentional blank paragraphs inside the composer.
-const COMPOSER_BORDER_LINE = /^[\s─━—╰╯╭╮│|]*[─━—╰╯╭╮][\s─━—╰╯╭╮│|]*$/;
+const COMPOSER_BORDER_LINE = /^[\s\u2500\u2501\u2014\u2570\u256f\u256d\u256e\u2502|]*[\u2500\u2501\u2014\u2570\u256f\u256d\u256e][\s\u2500\u2501\u2014\u2570\u256f\u256d\u256e\u2502|]*$/;
 // Status glyphs that can follow the composer when no border is rendered (fail-closed stop set).
-const COMPOSER_CONTINUATION_STOP = /^[\s]*(?:[⏵←⏺✻✶·]|⚠)/;
+const COMPOSER_CONTINUATION_STOP = /^[\s]*(?:[\u23f5\u2190\u23fa\u273b\u2736·]|\u26a0)/;
 
 /**
  * Continuation lines of a soft-wrapped composer draft (remote-dev C11 live capture): a draft
@@ -270,7 +270,7 @@ function readComposerContinuationLines(text: string, afterIndex: number): string
   const continuation: string[] = [];
   for (const rawLine of lines) {
     // Strip box border verticals so `│   wrapped text   │` reads as an indented line.
-    const line = rawLine.replace(/^[^\S\n]*[│|]/, '').replace(/[│|][^\S\n]*$/, '');
+    const line = rawLine.replace(/^[^\S\n]*[\u2502|]/, '').replace(/[\u2502|][^\S\n]*$/, '');
     if (COMPOSER_BORDER_LINE.test(line)) break;
     if (COMPOSER_CONTINUATION_STOP.test(line)) break;
     const trimmed = line.trim();
@@ -355,7 +355,7 @@ function composerContentIsDimPlaceholder(
     if (!stripped.includes(content)) continue;
     // Only composer-shaped lines qualify; transcript echoes are handled identically (bottom-most
     // matching line wins, mirroring lastMatch over the normalized text).
-    if (!/[>›❯]/.test(stripped)) continue;
+    if (!/[>\u203a\u276f]/.test(stripped)) continue;
     const runs = readStyledLineRuns(rawLine);
     const visible = runs.map((run) => run.char).join('');
     const start = visible.lastIndexOf(content);
@@ -388,10 +388,10 @@ function lineIndexAt(text: string, index: number): number {
 }
 
 function readComposerContentStartColumn(line: string): number | null {
-  const promptIndex = line.search(/[>›❯]/u);
+  const promptIndex = line.search(/[>\u203a\u276f]/u);
   if (promptIndex === -1) return null;
   const rest = line.slice(promptIndex + 1);
-  const firstContentOffset = rest.search(/[^\s\u00a0│|]/u);
+  const firstContentOffset = rest.search(/[^\s\u00a0\u2502|]/u);
   return firstContentOffset === -1 ? promptIndex + 1 : promptIndex + 1 + firstContentOffset;
 }
 
@@ -417,7 +417,7 @@ function readCursorComposerRelation(params: Readonly<{
 }>): ClaudeScreenState['composerCursorRelation'] {
   const cursor = params.context?.cursor;
   if (cursor === undefined) return null;
-  const promptOffset = params.match[0].search(/[>›❯]/u);
+  const promptOffset = params.match[0].search(/[>\u203a\u276f]/u);
   if (promptOffset === -1) return null;
   const promptIndex = params.match.index + promptOffset;
   const lineIndex = lineIndexAt(params.text, promptIndex);
@@ -482,11 +482,11 @@ function readComposerState(
 function resolveModeMarker(footer: string): ClaudeTuiModeMarker | null {
   // Only the current footer proves the active mode. Transcript echoes and clipped
   // footers must not turn an unknown mode into default (2.1.289, short tmux panes).
-  if (ACCEPT_EDITS_MARKER.test(footer) || /(?:^|\n)\s*⏵⏵\s+accept edits\b/i.test(footer)) return 'acceptEdits';
-  if (PLAN_MODE_MARKER.test(footer) || /(?:^|\n)\s*⏸\s+plan\b/i.test(footer)) return 'plan';
-  if (BYPASS_MARKER.test(footer) || /(?:^|\n)\s*⏵⏵\s+bypass permissions\b/i.test(footer)) return 'bypassPermissions';
-  if (AUTO_MODE_MARKER.test(footer) || /(?:^|\n)\s*⏵⏵\s+auto\b/i.test(footer)) return 'auto';
-  if (/(?:^|\n)\s*⏸\s+manual\b/i.test(footer) || /\? for shortcuts\b/i.test(footer)) return 'default';
+  if (ACCEPT_EDITS_MARKER.test(footer) || /(?:^|\n)\s*\u23f5\u23f5\s+accept edits\b/i.test(footer)) return 'acceptEdits';
+  if (PLAN_MODE_MARKER.test(footer) || /(?:^|\n)\s*\u23f8\s+plan\b/i.test(footer)) return 'plan';
+  if (BYPASS_MARKER.test(footer) || /(?:^|\n)\s*\u23f5\u23f5\s+bypass permissions\b/i.test(footer)) return 'bypassPermissions';
+  if (AUTO_MODE_MARKER.test(footer) || /(?:^|\n)\s*\u23f5\u23f5\s+auto\b/i.test(footer)) return 'auto';
+  if (/(?:^|\n)\s*\u23f8\s+manual\b/i.test(footer) || /\? for shortcuts\b/i.test(footer)) return 'default';
   return null;
 }
 
@@ -644,7 +644,7 @@ function isFooterlessChooserBlock(lines: readonly string[], start: number, end: 
   if (end === focusedIndex) return false;
   for (let index = start; index <= end; index += 1) {
     const line = lines[index] ?? '';
-    if (COMPOSER_BORDER_LINE.test(line) || /[│|]/u.test(line)) return false;
+    if (COMPOSER_BORDER_LINE.test(line) || /[\u2502|]/u.test(line)) return false;
     if (index > focusedIndex && line.search(/\S/u) <= glyphColumn) return false;
   }
   return !lines.slice(end + 1).some((line) => FOCUSED_SELECTION_LINE.test(line) || COMPOSER_LINE.test(line));
@@ -736,7 +736,7 @@ function resolveSecurityNotesContinuation(text: string): ClaudeUnifiedGenericNum
   // Match the active page's terminal continuation so historical notes above a composer cannot
   // acquire an Enter recipe. The existing dialog owner still waits for a user's decision.
   const heading = /(?:^|\n)[^\S\n]*Security notes:[^\S\n]*\n/iu.exec(text);
-  const continuation = /(?:^|\n)[^\S\n]*Press Enter to continue(?:…|\.{3})[^\S\n]*(?:\n[^\S\n]*)*$/iu.exec(text);
+  const continuation = /(?:^|\n)[^\S\n]*Press Enter to continue(?:\u2026|\.{3})[^\S\n]*(?:\n[^\S\n]*)*$/iu.exec(text);
   if (!heading || !continuation || continuation.index <= heading.index) return null;
   const context = text.slice(heading.index, continuation.index).split('\n')
     .map(line => line.trim()).filter(Boolean);

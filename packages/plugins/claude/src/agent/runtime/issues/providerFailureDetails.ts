@@ -1,15 +1,15 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const ClaudeSessionRuntimeUsageLimitDetailsSchema = z.object({
+export const ClaudeSessionRuntimeUsageLimitDetailsSchema = z.strictObject({
   v: z.literal(1),
-  resetAtMs: z.number().int().nonnegative().nullable(),
-  retryAfterMs: z.number().int().nonnegative().nullable(),
+  resetAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  retryAfterMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
   quotaScope: z.enum(['account', 'workspace', 'organization', 'model', 'provider', 'unknown']),
   recoverability: z.enum(['wait', 'switch_account', 'manual', 'unknown']),
-  providerLimitId: z.string().trim().min(1).optional(),
-  planType: z.string().trim().min(1).nullable().optional(),
-  utilization: z.number().finite().min(0).max(100).nullable().optional(),
-  limitCategory: z.enum([
+  providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  planType: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  utilization: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+  limitCategory: z.optional(z.enum([
     'usage_limit',
     'rate_limit',
     'capacity',
@@ -19,52 +19,52 @@ export const ClaudeSessionRuntimeUsageLimitDetailsSchema = z.object({
     'validation_failed',
     'disabled',
     'unknown',
-  ]).optional(),
-  quotaSnapshotRef: z.object({
-    serviceId: z.string().trim().min(1),
-    profileId: z.string().trim().min(1).optional(),
-    groupId: z.string().trim().min(1).optional(),
-    fetchedAtMs: z.number().int().nonnegative().optional(),
-  }).strict().optional(),
-  effectiveMeterId: z.string().trim().min(1).optional(),
-  effectiveRemainingPct: z.number().finite().min(0).max(100).optional(),
-  allWindows: z.array(z.object({
-    meterId: z.string().trim().min(1),
-    scope: z.string().trim().min(1).optional(),
-    remainingPct: z.number().finite().min(0).max(100).optional(),
-    resetAtMs: z.number().int().nonnegative().optional(),
-    status: z.string().trim().min(1).optional(),
-  }).strict()).optional(),
-  recoveryDecision: z.enum([
+  ])),
+  quotaSnapshotRef: z.optional(z.strictObject({
+    serviceId: z.string().check(z.trim(), z.minLength(1)),
+    profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    groupId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    fetchedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  })),
+  effectiveMeterId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  effectiveRemainingPct: z.optional(z.number().check(z.minimum(0), z.maximum(100))),
+  allWindows: z.optional(z.array(z.strictObject({
+    meterId: z.string().check(z.trim(), z.minLength(1)),
+    scope: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    remainingPct: z.optional(z.number().check(z.minimum(0), z.maximum(100))),
+    resetAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    status: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }))),
+  recoveryDecision: z.optional(z.enum([
     'switching',
     'waiting_for_reset',
     'manual_intervention',
     'not_recoverable',
-  ]).optional(),
-  overage: z.object({
+  ])),
+  overage: z.optional(z.nullable(z.strictObject({
     status: z.enum(['allowed', 'allowed_warning', 'rejected', 'unknown']),
-    resetAtMs: z.number().int().nonnegative().nullable(),
-    disabledReason: z.string().trim().min(1).nullable().optional(),
-  }).strict().nullable().optional(),
-  action: z.discriminatedUnion('kind', [
-    z.object({
+    resetAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    disabledReason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  }))),
+  action: z.optional(z.nullable(z.discriminatedUnion('kind', [
+    z.strictObject({
       kind: z.literal('open_url'),
-      labelKey: z.string().trim().min(1).optional(),
-      url: z.string().url(),
-    }).strict(),
-    z.object({ kind: z.literal('settings') }).strict(),
-    z.object({ kind: z.literal('none') }).strict(),
-  ]).nullable().optional(),
-  connectedService: z.object({
-    serviceId: z.string().trim().min(1),
-    profileId: z.string().trim().min(1).nullable(),
-    groupId: z.string().trim().min(1).nullable(),
-    groupExhausted: z.boolean().optional(),
-  }).strict().nullable().optional(),
-}).strict();
+      labelKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+      url: z.string().check(z.url()),
+    }),
+    z.strictObject({ kind: z.literal('settings') }),
+    z.strictObject({ kind: z.literal('none') }),
+  ]))),
+  connectedService: z.optional(z.nullable(z.strictObject({
+    serviceId: z.string().check(z.trim(), z.minLength(1)),
+    profileId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+    groupId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+    groupExhausted: z.optional(z.boolean()),
+  }))),
+});
 
-export const ClaudeSessionRuntimeTemporaryThrottleDetailsSchema = z.object({
+export const ClaudeSessionRuntimeTemporaryThrottleDetailsSchema = z.strictObject({
   v: z.literal(1),
-  retryAfterMs: z.number().int().nonnegative().nullable(),
+  retryAfterMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
   recoverability: z.enum(['retry', 'manual', 'wait', 'unknown']),
-}).strict();
+});

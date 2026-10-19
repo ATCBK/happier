@@ -24,28 +24,29 @@ import {
  * into a published `SessionWorkStateItemV1 kind:'goal'`. It wraps the latest-wins
  * goal tracker and the fail-closed `/goal` capability gate so the goal source is
  * wired identically wherever raw rows are observed — instead of each launcher
- * re-implementing the routing inline. The publish callback is invoked only when
- * the resolved goal item changes (allocation-light; safe to call per row inside
-   * the shared file-follow row callback).
+ * re-implementing the routing inline. The publish callback runs when the goal
+ * changes or once for fresh evidence after an exact native command echo
+ * (allocation-light; safe to call per row inside the shared file-follow row callback).
  */
 
 export type ClaudeGoalWorkStateSource = Readonly<{
+  /** Correlate subsequent native Goal evidence with this existing SDK user-message UUID. */
+  beginGoalCommandObservation(nativeUserMessageId: string | null): void;
+  /** Replayed history must encounter the command echo again after a file reset. */
+  resetGoalCommandObservation(): void;
   /**
    * Observe one raw transcript row (a parsed `RawJSONLines` record or any
    * record-shaped message). Routes a `goal_status` attachment into the goal
    * work-state and reads the `/goal` capability from a system/init record's
    * `slash_commands` (fail-closed: unknown/missing commands leave it disabled).
-   * Non-goal rows and unknown attachment subtypes are ignored.
+   * Native user echoes can establish command admission; they never create Goal state.
+   * Unknown attachment subtypes are ignored.
    *
-   * This is the ONLY ingress in the ../dev runner topology: the unified-terminal
-   * follow loop replays the on-disk JSONL (incl. the system-init row carrying
-   * `slash_commands`) through `onObserveRow`. Unlike remote-dev — whose agent-SDK
-   * runner surfaces `slash_commands` out-of-band via an `onCapabilities` callback
-   * and so needs a separate `applySlashCommands` ingress — the ../dev SDK runner
-   * does not wire goal state, so no out-of-band capability path exists or is
-   * needed here.
+   * Both native transports use this ingress. The unified-terminal follow loop
+   * supplies raw JSONL rows. The SDK supplies live system-init capabilities and
+   * file-only Goal attachments from its authenticated current transcript.
    */
-  observeTranscriptMessage(message: unknown): void;
+  observeTranscriptMessage(message: unknown): void | Promise<void>;
   /**
    * Deterministically remove the published Claude goal work-state item (publishes an empty goal-owned
    * snapshot) AND record a goal-control CLEAR intent so the provider's continued ACTIVE re-evaluation
@@ -183,7 +184,7 @@ function isCompletedTurnBoundaryRow(message: unknown): boolean {
 export function createClaudeGoalWorkStateSource(params: Readonly<{
   backendId: string;
   agentId?: string;
-  publishWorkStateSnapshot: (snapshot: SessionWorkStateV1) => void;
+  publishWorkStateSnapshot: (snapshot: SessionWorkStateV1, afterGoalCommandAdmission?: boolean) => void | Promise<void>;
   /**
    * Optional seed for the active CLAUDE transcript session id used by the cross-session guard
    * (mirrors happy's `metadata.claudeSessionId`). This MUST be the Claude session id (the transcript
@@ -191,6 +192,8 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
    * `sessionId` and would drop every goal. The source also self-learns this id from the transcript
    * records it observes, so a `null` seed is fine (the guard is then a no-op until the channel's id
    * is established, exactly like happy when `claudeSessionId` is still unknown).
+   * A change to this authenticated runtime identity invalidates the previous
+   * transcript's learned id before observing the next row.
    */
   getCurrentClaudeSessionId: () => string | null;
   logError?: (message: string, error: unknown) => void;
@@ -206,11 +209,26 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
   });
 
   // The Claude session id this source guards against. Self-learned (latest-wins) from the channel's
-  // establishing records; the injected seed is consulted only before any has been observed. Null =>
+  // establishing records; a changed injected identity starts a new channel. Null =>
   // guard is a no-op (accept), matching happy's behavior when the claude session id is still unknown.
   let observedClaudeSessionId: string | null = null;
-  const resolveCurrentClaudeSessionId = (): string | null =>
-    observedClaudeSessionId ?? params.getCurrentClaudeSessionId();
+  let goalCommandUserMessageId: string | null = null;
+  let goalCommandObserved = false;
+  let goalCommandEvidencePublished = false;
+  let preEchoGoal: Readonly<{ uuid: string; snapshot: SessionWorkStateV1 }> | null = null;
+  let lastInjectedClaudeSessionId = params.getCurrentClaudeSessionId();
+  const resolveCurrentClaudeSessionId = (): string | null => {
+    const current = params.getCurrentClaudeSessionId();
+    // A fresh SDK query can rekey at authenticated SessionStart before its
+    // first transcript row. The previous file's learned id cannot reject the
+    // new file's sentinel, which precedes its establishing command echo.
+    if (current !== lastInjectedClaudeSessionId) {
+      observedClaudeSessionId = null;
+      preEchoGoal = null;
+      lastInjectedClaudeSessionId = current;
+    }
+    return observedClaudeSessionId ?? current;
+  };
 
   // G-3/E live-usage state. `goalSetAtMs` is the wall-clock time the current active goal was first
   // observed (basis for elapsed); `pendingTurnTokens` accrues the current in-flight turn's new tokens
@@ -230,7 +248,7 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
     return item.status === 'active' ? 'active' : 'other';
   };
 
-  const publish = (snapshot: SessionWorkStateV1 | null): void => {
+  const publish = (snapshot: SessionWorkStateV1 | null, afterGoalCommandAdmission = false): void => {
     if (!snapshot) return;
     // Track the active-goal lifecycle so live usage folds only during an active goal and elapsed is
     // measured from when THIS goal was set. A published active goal (re)starts the wall-time basis on
@@ -246,7 +264,9 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
       reseedBasisMs = null;
     }
     try {
-      params.publishWorkStateSnapshot(snapshot);
+      void params.publishWorkStateSnapshot(snapshot, afterGoalCommandAdmission)?.catch((error) => {
+        params.logError?.('failed to publish Claude goal work-state snapshot (non-fatal)', error);
+      });
     } catch (error) {
       params.logError?.('failed to publish Claude goal work-state snapshot (non-fatal)', error);
     }
@@ -281,7 +301,9 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
     // wall-time basis untouched.
     if (snapshot) {
       try {
-        params.publishWorkStateSnapshot(snapshot);
+        void params.publishWorkStateSnapshot(snapshot)?.catch((error) => {
+          params.logError?.('failed to publish Claude goal usage snapshot (non-fatal)', error);
+        });
       } catch (error) {
         params.logError?.('failed to publish Claude goal usage snapshot (non-fatal)', error);
       }
@@ -299,20 +321,56 @@ export function createClaudeGoalWorkStateSource(params: Readonly<{
   };
 
   return {
+    beginGoalCommandObservation(nativeUserMessageId) {
+      goalCommandUserMessageId = nativeUserMessageId;
+      goalCommandObserved = false;
+      goalCommandEvidencePublished = false;
+      preEchoGoal = null;
+    },
+    resetGoalCommandObservation() {
+      goalCommandObserved = false;
+      goalCommandEvidencePublished = false;
+      preEchoGoal = null;
+    },
     observeTranscriptMessage(message) {
+      resolveCurrentClaudeSessionId();
       // Learn (and adopt, latest-wins) the Claude session id from this channel's ESTABLISHING
       // records (system/assistant/user — never the goal_status attachment itself) BEFORE the guard,
       // so the session's own `goal_status` attachments are never dropped while genuinely foreign
       // session ids (resume tail-bleed) are still rejected.
       const recordSessionId = readEstablishingClaudeSessionIdFromMessage(message);
       if (recordSessionId) observedClaudeSessionId = recordSessionId;
+      const record = asRecord(message);
+      if (goalCommandUserMessageId && record?.type === 'user' && record.isSidechain !== true
+        && record.uuid === goalCommandUserMessageId && recordSessionId === params.getCurrentClaudeSessionId()) {
+        // The transcript can start replaying after transport admission. The
+        // exact native echo, rather than publication timing or objective text,
+        // separates pre-command history from this command's evidence.
+        goalCommandObserved = true;
+        // Claude persists the Set sentinel before the supplied SDK UUID echo.
+        // Its parent link proves this is the command's evidence, even when no
+        // further active attachment arrives before native completion (R58).
+        if (preEchoGoal && record.parentUuid === preEchoGoal.uuid) {
+          goalCommandEvidencePublished = true;
+          publish(preEchoGoal.snapshot, true);
+        }
+        preEchoGoal = null;
+      }
 
       const event = parseClaudeGoalStatusAttachment(message);
       if (event) {
-        publish(tracker.applyAttachment(event, {
+        const snapshot = tracker.applyAttachment(event, {
           updatedAt: Date.now(),
           currentClaudeSessionId: resolveCurrentClaudeSessionId(),
-        }));
+          republishUnchanged: goalCommandObserved && !goalCommandEvidencePublished,
+        });
+        preEchoGoal = goalCommandUserMessageId && !goalCommandObserved
+          && record?.isSidechain !== true && event.attachment.sentinel === true
+          && !event.attachment.met && event.sourceSessionId === params.getCurrentClaudeSessionId()
+          && snapshot?.items.some(item => item.kind === 'goal' && item.status === 'active')
+          ? { uuid: event.uuid, snapshot } : null;
+        if (snapshot && goalCommandObserved) goalCommandEvidencePublished = true;
+        publish(snapshot, goalCommandObserved);
       }
       // The system/init record carries the `slash_commands` list on the same
       // transcript stream; gate `/goal` capability (fail-closed) from it.

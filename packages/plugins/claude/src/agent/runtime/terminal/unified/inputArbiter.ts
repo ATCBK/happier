@@ -420,6 +420,24 @@ export function createClaudeUnifiedInputArbiter(
     }
   }
 
+  async function terminalizeUnwrittenInput(
+    input: TerminalPromptInput,
+    result: Extract<TerminalInputInjectionResult, { status: 'failed' }>,
+    rejection?: ClaudeUnifiedPromptTerminalRejection,
+  ): Promise<void> {
+    queue.shift();
+    retryAttempt = 0;
+    lastDeferredReason = null;
+    headInputState = queue.length > 0 ? 'queued' : 'failed_terminal';
+    if (!turnNeutralControlInputs.has(input)) {
+      await options.onPromptTerminallyRejectedBeforeProvider?.(input, result, rejection);
+    }
+    settleTurnNeutralControl(input, turnNeutralControlFailure(result));
+    if (!turnNeutralControlInputs.has(input)) {
+      options.onInjectionFailure?.({ input, result, failureState: 'failed_terminal' });
+    }
+  }
+
   function resolvePromptTerminalRejection(
     input: TerminalPromptInput,
     result: Extract<TerminalInputInjectionResult, { status: 'failed' }>,
@@ -832,8 +850,23 @@ export function createClaudeUnifiedInputArbiter(
         return;
       }
       if (currentReadiness.status === 'failed_terminal') {
-        headInputState = 'failed_terminal';
         lastFailureReason = currentReadiness.reason ?? currentReadiness.status;
+        const rejection = {
+          deliveryBlockedReason: currentReadiness.reason === 'resume_identity_mismatch'
+            ? 'resume_identity_mismatch'
+            : currentReadiness.reason?.startsWith('provider_refused_start:')
+              ? 'provider_rejected_before_acceptance'
+              : 'terminal_host_unreachable',
+        } satisfies Required<ClaudeUnifiedPromptTerminalRejection>;
+        // No terminal write has begun. Reuse the same rejection/settlement owner as
+        // deterministic pre-write injection failure, including turn-neutral controls.
+        await terminalizeUnwrittenInput(queue[0], {
+          ...buildTerminalRejectedBeforeProviderResult(currentReadiness, rejection),
+          reason: currentReadiness.reason === 'pane_dead' ? 'pane_dead' : 'unsupported',
+          observedAt: currentReadiness.observedAt,
+          diagnostic: lastFailureReason,
+        }, rejection);
+        if (queue.length > 0) continue;
         return;
       }
       if (currentReadiness.status === 'failed_retryable') {
@@ -966,22 +999,8 @@ export function createClaudeUnifiedInputArbiter(
       }
 
       if (result.reason === 'invalid_prompt_text') {
-        queue.shift();
-        retryAttempt = 0;
-        lastDeferredReason = null;
         lastFailureReason = null;
-        headInputState = queue.length > 0 ? 'queued' : 'failed_terminal';
-        if (!turnNeutralControlInputs.has(input)) {
-          await options.onPromptTerminallyRejectedBeforeProvider?.(input, result);
-        }
-        settleTurnNeutralControl(input, turnNeutralControlFailure(result));
-        if (!turnNeutralControlInputs.has(input)) {
-          options.onInjectionFailure?.({
-            input,
-            result,
-            failureState: 'failed_terminal',
-          });
-        }
+        await terminalizeUnwrittenInput(input, result);
         if (queue.length > 0) {
           headInputState = 'queued';
           continue;

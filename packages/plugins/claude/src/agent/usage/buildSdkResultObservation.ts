@@ -1,4 +1,4 @@
-import { estimateUsageModelCost } from '@happier-dev/protocol';
+import { estimateUsageModelCost } from '@happier-dev/protocol/usage/usageCost';
 import type { ClaudeUsageModelSource, ClaudeUsageObservation } from './types.js';
 
 export const CLAUDE_SDK_RESULT_USAGE_SOURCE = 'claude-sdk-result';

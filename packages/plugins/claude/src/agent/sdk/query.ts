@@ -170,8 +170,10 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
             throw new Error('canCallTool callback requires stream-json input.');
         }
     }
-    if (options.canCallTool || options.permissionPromptToolName) {
-        args.push('--permission-prompt-tool', options.permissionPromptToolName ?? 'stdio');
+    // A host callback owns approval; advanced native options cannot route around it.
+    const permissionPromptToolName = options.canCallTool ? 'stdio' : options.permissionPromptToolName;
+    if (permissionPromptToolName) {
+        args.push('--permission-prompt-tool', permissionPromptToolName);
     }
     if (options.continue) args.push('--continue');
     if (options.resume) args.push('--resume', options.resume);
@@ -208,11 +210,10 @@ function buildClaudeArgs(prompt: QueryPrompt, options: QueryOptions = {}): strin
         args.push('--fallback-model', options.fallbackModel);
     }
     args.push(...buildClaudePluginDirArgs({ pluginDirs: options.plugins?.map(plugin => plugin.path), skills: options.skills }));
-    if (options.betas && options.betas.length > 0) args.push('--betas', ...options.betas);
+    // Attach each variadic value so option-looking data cannot become native authority flags.
+    for (const beta of options.betas ?? []) args.push(`--betas=${beta}`);
     if (options.maxBudgetUsd !== undefined) args.push('--max-budget-usd', String(options.maxBudgetUsd));
-    if (options.additionalDirectories && options.additionalDirectories.length > 0) {
-        args.push('--add-dir', ...options.additionalDirectories);
-    }
+    for (const directory of options.additionalDirectories ?? []) args.push(`--add-dir=${directory}`);
     if (Array.isArray(options.tools)) args.push('--tools', options.tools.join(','));
     if (options.debug === true) args.push('--debug');
     if (options.debugFile) args.push('--debug-file', options.debugFile);
@@ -424,7 +425,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
         });
     }
 
-    async sendUserMessage(text: SDKUserMessage['message']['content']): Promise<ClaudeSdkPromptTransportOutcome> {
+    async sendUserMessage(text: SDKUserMessage['message']['content'], uuid?: string): Promise<ClaudeSdkPromptTransportOutcome> {
         let handle: ClaudeSdkExecClientHandle;
         try {
             handle = await this.handlePromise;
@@ -437,6 +438,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
         try {
             const outcome = await handle.client.writeRecord({
                 type: 'user',
+                ...(uuid ? { uuid } : {}),
                 message: {
                     role: 'user',
                     content: text,

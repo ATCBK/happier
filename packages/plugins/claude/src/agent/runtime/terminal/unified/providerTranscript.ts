@@ -66,6 +66,7 @@ export type ClaudeUnifiedProviderTranscriptPublisherParams = Readonly<{
       transcriptPath: string;
       historicalReplay: boolean;
       phase?: 'initial_replay';
+      orderedSource?: true;
       projectedTaskResult?: RawJSONLines;
     }>,
   ) => void | Promise<void>;
@@ -566,6 +567,7 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     await params.onObserveRow?.(row, {
       providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
       historicalReplay: false,
+      orderedSource: true,
       ...(projectedTaskResult ? { projectedTaskResult } : {}),
     });
     if (fact) {

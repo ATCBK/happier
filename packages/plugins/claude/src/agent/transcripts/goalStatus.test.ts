@@ -94,6 +94,37 @@ describe('mapClaudeGoalStatusEventToWorkStateItem', () => {
 });
 
 describe('createClaudeGoalStatusWorkStateTracker', () => {
+  it('keeps active Goal usage across unchanged native re-evaluations with new observation ids', () => {
+    const tracker = createClaudeGoalStatusWorkStateTracker({ backendId: 'claude', goalCommandSupported: true });
+    const observe = (uuid: string) => tracker.applyAttachment(
+      parseClaudeGoalStatusAttachment(goalStatusRow({ uuid, sessionId: 's1', met: false, condition: 'Wait for TOKEN' }))!,
+      { updatedAt: 100, currentClaudeSessionId: 's1' },
+    );
+    expect(observe('first')?.items[0]).toMatchObject({ status: 'active', vendorRef: 'first' });
+    tracker.foldActiveGoalUsage({ updatedAt: 101, currentClaudeSessionId: 's1', addTokens: 13, timeUsedSeconds: 1 });
+    expect(observe('re-evaluation')).toBeNull();
+    expect(tracker.foldActiveGoalUsage({ updatedAt: 102, currentClaudeSessionId: 's1', addTokens: 7, timeUsedSeconds: 2 })?.items[0])
+      .toMatchObject({ tokensUsed: 20, timeUsedSeconds: 2 });
+    tracker.recordGoalControlIntent({ kind: 'set' });
+    expect(observe('explicit-repeat')?.items[0]).toMatchObject({ status: 'active', vendorRef: 'explicit-repeat' });
+  });
+
+  it('preserves a native Set sentinel and changed terminal totals for the same objective', () => {
+    const tracker = createClaudeGoalStatusWorkStateTracker({ backendId: 'claude', goalCommandSupported: true });
+    const observe = (uuid: string, met: boolean, extra: { sentinel?: boolean; tokens?: number } = {}) => tracker.applyAttachment(
+      parseClaudeGoalStatusAttachment(goalStatusRow({ uuid, sessionId: 's1', met, condition: 'Same objective', ...extra }))!,
+      { updatedAt: 100, currentClaudeSessionId: 's1' },
+    );
+    observe('first', false, { sentinel: true });
+    tracker.foldActiveGoalUsage({ updatedAt: 101, currentClaudeSessionId: 's1', addTokens: 13, timeUsedSeconds: 1 });
+    expect(observe('native-repeat', false, { sentinel: true })?.items[0])
+      .toMatchObject({ status: 'active', vendorRef: 'native-repeat' });
+    expect(tracker.foldActiveGoalUsage({ updatedAt: 102, currentClaudeSessionId: 's1', addTokens: 7, timeUsedSeconds: 2 })?.items[0])
+      .toMatchObject({ tokensUsed: 7 });
+    expect(observe('completion', true, { tokens: 20 })?.items[0]).toMatchObject({ status: 'complete', tokensUsed: 20 });
+    expect(observe('corrected-totals', true, { tokens: 23 })?.items[0]).toMatchObject({ status: 'complete', tokensUsed: 23 });
+  });
+
   it('publishes latest-wins, dedupes by uuid, and republishes when /goal support flips', () => {
     const tracker = createClaudeGoalStatusWorkStateTracker({ backendId: 'claude', agentId: 'claude' });
 

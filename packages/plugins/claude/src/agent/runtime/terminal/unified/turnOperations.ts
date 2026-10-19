@@ -104,6 +104,7 @@ import {
 import { createClaudePermissionHookHandler } from '../../shared/permissionHookHandler.js';
 import { createClaudeUnifiedPromptEchoSuppressor } from './promptEchoSuppression.js';
 import { readClaudeJsonlRowTimestampMs } from '../../../transcripts/jsonlReplaySuppression.js';
+import { classifyClaudeNativeTranscriptRow } from '../../../transcripts/nativeSemanticProjection.js';
 import { readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
 import { createClaudeUnifiedTerminalOriginLocalIdAllocator } from './terminalOriginLocalIds.js';
 import { buildClaudeJsonlProviderFactLocalIdFromParts } from '../../../transcripts/providerFactIdentity.js';
@@ -731,6 +732,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
   const usageObservationListeners = new Set<(observation: ClaudeUsageObservation) => void>();
   let currentProviderModel = params.providerModel;
   const completionWaiters = new Set<TurnCompletionWaiter>();
+  let publishedAssistantReply: Readonly<{ turnId: string; text: string }> | null = null;
+  let pendingStopReply: Readonly<{ turnId: string; text: string }> | null = null;
   const publishedFailureTurnIds = new Set<string>();
   const observedCompactionCompletedEventIds = new Set<string>();
   const providerActivityLedger = createClaudeProviderActivityLedger();
@@ -876,6 +879,21 @@ export function createClaudeUnifiedTerminalTurnOperations(
         workflowRuntime.observeTranscriptMessage(row, { historicalReplay: true });
         return;
       }
+      if (observation.orderedSource && state.activeTurnId
+        && isClaudeUnifiedPrimaryTranscriptRow(row, observation.providerSessionId) && row.type === 'assistant') {
+        const classification = classifyClaudeNativeTranscriptRow(row);
+        const text = classification.content.kind === 'message' ? classification.content.text : null;
+        const localId = buildClaudeJsonlProviderFactLocalIdFromParts({ type: row.type, id: row.uuid });
+        if (text && localId && classification.visibility === 'visible') {
+          publishClaudeUnifiedRuntimeEvent({
+            handlers, logger: params.ctx.logger,
+            event: { kind: 'transcript-agent-message-committed', sessionId: params.happierSessionId,
+              emittedAtMs: readClaudeJsonlRowTimestampMs(row) ?? Date.now(), turnId: state.activeTurnId,
+              agentId: CLAUDE_UNIFIED_TERMINAL_PROVIDER_ID, localId, body: { type: 'message', message: text } },
+          });
+          publishedAssistantReply = { turnId: state.activeTurnId, text: text.trim() };
+        }
+      }
       const commands = readClaudeNativeCommands(row);
       if (commands !== null) {
         publishClaudeUnifiedRuntimeEvent({
@@ -941,7 +959,11 @@ export function createClaudeUnifiedTerminalTurnOperations(
       }
       goalRuntime.source.observeTranscriptMessage(row);
       const workflowObservation = workflowRuntime.observeTranscriptMessage(row, { historicalReplay: observation.historicalReplay });
-      if (workflowObservation.terminalRunIds.length > 0) {
+      if (workflowObservation.terminalRunIds.length > 0
+        || (pendingStopReply?.turnId === state.activeTurnId
+          && publishedAssistantReply?.turnId === state.activeTurnId
+          && pendingStopReply?.text === publishedAssistantReply?.text)) {
+        pendingStopReply = null;
         observeProviderTaskTerminalCompletionWhenReady();
       }
     },
@@ -1980,15 +2002,24 @@ export function createClaudeUnifiedTerminalTurnOperations(
           // SubagentStart may refresh only an admitted ID; SubagentStop may clear only its exact ID.
           if (!bufferedNativeStart) observeProviderTaskActivity(payload, providerSessionId);
           const lifecycleObservation = mapClaudeUnifiedHookLifecyclePayload(payload, params.happierSessionId);
-          if (lifecycleObservation) {
+          const hookEventName = readNonEmptyString(payload.hook_event_name)
+            ?? readNonEmptyString(payload.hookEventName)
+            ?? readNonEmptyString(payload.eventName);
+          const stopReplyText = hookEventName === 'Stop'
+            ? readNonEmptyString(payload.last_assistant_message) ?? readNonEmptyString(payload.lastAssistantMessage)
+            : null;
+          // Stop can arrive before the ordered transcript follower. Retain its
+          // native completion evidence until that exact reply reaches the same
+          // text/turn channel as SDK output, before the host settles the Run.
+          if (lifecycleObservation?.type === 'completion_candidate' && state.activeTurnId && stopReplyText
+            && (publishedAssistantReply?.turnId !== state.activeTurnId || publishedAssistantReply.text !== stopReplyText)) {
+            pendingStopReply = { turnId: state.activeTurnId, text: stopReplyText };
+          } else if (lifecycleObservation) {
             await nativeRuntime.observeTerminalLifecycle(lifecycleObservation);
           }
           // Sidechain (subagent) session hooks must never rebind the PRIMARY provider session
           // identity or transcript path (ported R-11 / HF-7).
           if (isSidechainSessionHook(payload)) return;
-          const hookEventName = readNonEmptyString(payload.hook_event_name)
-            ?? readNonEmptyString(payload.hookEventName)
-            ?? readNonEmptyString(payload.eventName);
           let establishedExplicitResumeIdentityNow = false;
           if (hookEventName) {
             establishedExplicitResumeIdentityNow = await observeRetainedProviderIdentity(
@@ -3459,6 +3490,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
       return () => usageObservationListeners.delete(listener);
     },
     beginProviderTurn(turnId) {
+      publishedAssistantReply = null;
+      pendingStopReply = null;
       publishProviderTaskInventory('new-turn');
       state.promptNonce += 1;
       state.activeTurnId = readPromptText(turnId);
@@ -3801,7 +3834,10 @@ export function createClaudeUnifiedTerminalTurnOperations(
         // session-event contract.
         const controller = await ensureTuiController();
         if (controller) {
-          const resolution = mapRuntimeConfigUpdateToDesired(update, {
+          // This owner admitted the workspace ceiling above. It is enforced by
+          // native launch settings, not a directive the live TUI can apply.
+          const { workspaceWrites: _workspaceWrites, ...tuiUpdate } = update;
+          const resolution = mapRuntimeConfigUpdateToDesired(tuiUpdate, {
             launchPermissionMode,
             effectiveModelId: verifiedModelId ?? launchModelId,
             ...(effectiveProviderModel ? { providerModel: effectiveProviderModel } : {}),
@@ -4014,6 +4050,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
           state.turnInFlight = false;
           state.terminalOriginTurnInFlight = false;
           state.lastTurnFailure = null;
+          publishedAssistantReply = null;
+          pendingStopReply = null;
           publishProviderTaskInventory('runtime-dispose');
           lastTurnProgressPublishedAtMs = null;
           recentPrimaryProviderUnavailableForPromptDelivery = null;

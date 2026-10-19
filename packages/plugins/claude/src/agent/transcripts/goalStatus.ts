@@ -226,6 +226,11 @@ function buildSnapshot(params: Readonly<{
   } as SessionWorkStateV1 & Readonly<{ ownedSourceFamilies: readonly string[] }>;
 }
 
+function goalStateSignature(item: SessionWorkStateItemV1, sourceSessionId: string): string {
+  const { vendorRef: _observationId, updatedAt: _observedAt, ...state } = item;
+  return JSON.stringify([sourceSessionId, state]);
+}
+
 /**
  * An empty goal-owned work-state snapshot: removes the Claude goal item from metadata at the merge
  * chokepoint (the merge replaces the `goal:derived:claude.goal` family with no items). Used by the
@@ -251,11 +256,13 @@ export type ClaudeGoalStatusWorkStateTracker = Readonly<{
   /**
    * Apply a parsed goal_status event. Returns a publishable work-state snapshot
    * when the resolved goal changes, otherwise null (duplicate uuid, foreign
-   * session, or unchanged state). Allocation-light + O(1) per event.
+   * session, or unchanged state). An exact native command receipt may request
+   * one unchanged publication; UUID/session validation still applies.
+   * Allocation-light + O(1) per event.
    */
   applyAttachment(
     event: ClaudeGoalStatusTranscriptEvent,
-    opts: Readonly<{ updatedAt: number; currentClaudeSessionId?: string | null }>,
+    opts: Readonly<{ updatedAt: number; currentClaudeSessionId?: string | null; republishUnchanged?: boolean }>,
   ): SessionWorkStateV1 | null;
   /**
    * Update whether the runtime supports the `/goal` command (derived FACTUALLY
@@ -400,20 +407,28 @@ export function createClaudeGoalStatusWorkStateTracker(params: Readonly<{
       });
       if (!item) return null;
 
-      // Identity excludes updatedAt so a redundant re-derivation of the same goal
-      // state does not churn metadata writes.
+      // A native re-evaluation has a fresh observation UUID without changing
+      // the Goal. Keep observation identity out of the projection comparison;
+      // otherwise replay queues one metadata transaction per historical check
+      // and resets live usage. A Set sentinel still starts a new lifecycle.
       // (A new goal state supersedes any live-usage accumulation: a terminal goal_status carries the
       // provider's authoritative totals — which WIN, already mapped onto the item — and a genuinely
       // new/changed active goal starts its own run. resetUsageAccumulator() below runs after the
       // no-change early return so unchanged re-derivations do not drop an in-progress accumulator.)
-      const signature = `${item.status} ${item.title} ${item.vendorRef ?? ''}`;
-      if (signature === latestItemSignature) return null;
-      latestItemSignature = signature;
-      // The per-run accumulator restarts on any goal-state change. A terminal goal_status ends the
-      // usage lifecycle entirely (provider totals WIN), so its floors clear too; an active (re-)publish
-      // keeps the restart floors so the item carries the prior run's usage immediately.
-      resetUsageAccumulator();
-      if (item.status !== 'active') clearUsageFloors();
+      const signature = goalStateSignature(item, event.sourceSessionId);
+      if (signature === latestItemSignature && !(item.status === 'active' && event.attachment.sentinel)) {
+        // An exact command echo can follow its native Set sentinel. Its next
+        // fresh attachment must still confirm canonical publication, preserving
+        // accumulated usage because the Goal lifecycle has not changed.
+        if (!opts.republishUnchanged) return null;
+      } else {
+        latestItemSignature = signature;
+        // The per-run accumulator restarts on any goal-state change. A terminal goal_status ends the
+        // usage lifecycle entirely (provider totals WIN), so its floors clear too; an active (re-)publish
+        // keeps the restart floors so the item carries the prior run's usage immediately.
+        resetUsageAccumulator();
+        if (item.status !== 'active') clearUsageFloors();
+      }
 
       return buildSnapshot({
         backendId: params.backendId,
@@ -437,9 +452,7 @@ export function createClaudeGoalStatusWorkStateTracker(params: Readonly<{
         goalCommandSupported,
       });
       if (!item) return null;
-      const caps = item.goalCapabilities;
-      const capsSig = caps ? `${caps.canEdit ? 1 : 0}${caps.canStop ? 1 : 0}${caps.canClear ? 1 : 0}` : '-';
-      const signature = `${item.status} ${item.title} ${item.vendorRef ?? ''} ${capsSig}`;
+      const signature = goalStateSignature(item, latestEvent.sourceSessionId);
       if (signature === latestItemSignature) return null;
       latestItemSignature = signature;
       return buildSnapshot({

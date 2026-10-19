@@ -21,7 +21,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { AgentRuntimeJsonValueSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError, type PluginDiagnosticData } from '@happier-dev/plugin-sdk';
-import type { AgentModelDescriptor } from '@happier-dev/plugin-sdk/agents';
+import { resolveModelDisplayName, type AgentModelDescriptor } from '@happier-dev/plugin-sdk/agents';
 import {
   createAgentSessionPreAdmissionBuffer,
   type AgentSessionPreAdmissionBuffer,
@@ -349,6 +349,7 @@ function mapEvent(event: ClaudeProviderEvent, runtimeAuthServiceId: string | nul
       };
     case 'mcp-tool-usage':
       return { kind: event.kind, turnId: event.turnId, window: event.window,
+        ...(event.queuedTurnCount === undefined ? {} : { queuedTurnCount: event.queuedTurnCount }),
         coverage: event.coverage, servers: event.servers };
     case 'skill-usage':
       return { kind: event.kind, turnId: event.turnId, skills: event.skills,
@@ -632,7 +633,9 @@ export function createClaudeNativeSessionRuntimeFromOperations(
       ...(previous ?? {}),
       ...(!previous && variant?.modelOptions ? { modelOptions: variant.modelOptions } : {}),
       id: modelId,
-      name: evidence.displayName?.trim() || previous?.name || modelId,
+      name: resolveModelDisplayName({
+        id: modelId, name: evidence.displayName?.trim() || previous?.name,
+      }, CLAUDE_STATIC_MODELS),
       ...(evidence.contextWindowTokens !== null && evidence.contextWindowTokens !== undefined
         ? { contextWindowTokens: evidence.contextWindowTokens }
         : {}),
@@ -667,6 +670,14 @@ export function createClaudeNativeSessionRuntimeFromOperations(
   ) ?? (() => undefined);
   const activeInputBinding = context.session.services.activeInput.bind({
     isTurnInFlight: () => operations.isTurnInFlight?.() === true,
+    waitForInputReady: async () => {
+      try {
+        await operations.waitForProviderTurnCompletion({ timeoutMs: null });
+      } catch {
+        // A failed native turn still releases its transport. Host lifecycle
+        // and custody checks decide whether another input remains admissible.
+      }
+    },
     canSteer: () => operations.canSteerPrompt?.() === true,
     canInterruptForPendingInput: () => operations.canInterruptForPendingInput?.() !== false,
     onPromptQueued: () => { operations.notifyPromptQueuedDuringTurn?.(); },
@@ -1118,8 +1129,21 @@ function createClaudeExecutionRunConversationFromOperations(
     for (const listener of listeners) listener(event);
   });
   return {
-    async send(request) {
+    async send(request, options) {
       if (disposed) return sendFailure('unavailable', 'Claude execution runtime is disposed.');
+      if (options?.permissionIntent !== undefined) {
+        try {
+          const update = await operations.updateProviderConfiguration({ permissionMode: options.permissionIntent });
+          if (!isRuntimeConfigUpdateOutcomeApplied(update)) {
+            return sendFailure(update?.status === 'unsupported' ? 'unsupported' : 'rejected',
+              'Claude could not apply the admitted input permission policy.', false,
+              'execution_run_permission_intent_rejected');
+          }
+        } catch {
+          return sendFailure('rejected', 'Claude could not apply the admitted input permission policy.', false,
+            'execution_run_permission_intent_rejected');
+        }
+      }
       try {
         const outcome = await submitClaudeProviderInput(operations, request);
         if (outcome.kind === 'accepted' || outcome.kind === 'custody_observed') {
@@ -1254,6 +1278,24 @@ export function createClaudeNativeRuntime(
       throw error;
     }
   };
+  const openExecutionRunConversation = async (
+    request: AgentExecutionRunOpenRequest,
+    context: AgentExecutionRunRuntimeContextV1,
+  ): Promise<AgentExecutionRunConversationRuntimeV1> => {
+    if (request.kind === 'fork') {
+      throw new Error('Claude does not support native execution-run fork');
+    }
+    if (options.openExecutionRunConversation) {
+      return await options.openExecutionRunConversation({ request, context });
+    }
+    const [supportsEffort, supportsSystemPromptSnapshotOff] = await Promise.all([
+      (options.resolveSupportsEffort ?? resolveClaudeInstalledEffortSupport)({ request, context }),
+      (options.resolveSupportsSystemPromptSnapshotOff ?? resolveClaudeInstalledSystemPromptSnapshotOffSupport)({ request, context }),
+    ]);
+    return await openClaudeNativeAgentSdkExecutionRunConversation({
+      request, context, supportsEffort, supportsSystemPromptSnapshotOff,
+    });
+  };
   const runtime: AgentRuntime = {
     toolExecution: { capability: 'interceptable' },
     sessions: {
@@ -1285,25 +1327,14 @@ export function createClaudeNativeRuntime(
         return await openSession(request, context);
       },
       executionRunContextV1: {
+        openConversation: openExecutionRunConversation,
         async open(request, context) {
           if (request.kind === 'fork') {
             throw new Error('Claude does not support native execution-run fork');
           }
-          const openConversation = options.openExecutionRunConversation
-            ?? (async (input) => {
-              const [supportsEffort, supportsSystemPromptSnapshotOff] = await Promise.all([
-                (options.resolveSupportsEffort ?? resolveClaudeInstalledEffortSupport)({ request: input.request, context: input.context }),
-                (options.resolveSupportsSystemPromptSnapshotOff ?? resolveClaudeInstalledSystemPromptSnapshotOffSupport)({ request: input.request, context: input.context }),
-              ]);
-              return await openClaudeNativeAgentSdkExecutionRunConversation({
-                ...input,
-                supportsEffort,
-                supportsSystemPromptSnapshotOff,
-              });
-            });
           return await createExecutionRunHostBackendFromConversationRuntime({
             request,
-            openConversation: async () => await openConversation({ request, context }),
+            openConversation: async () => await openExecutionRunConversation(request, context),
             readCheckpointId: (event) => event.kind === 'provider-session-id'
               ? event.providerSessionId
               : null,

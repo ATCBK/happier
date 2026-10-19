@@ -83,6 +83,7 @@ it.runIf(Boolean(process.env.HAPPIER_TEST_NATIVE_CLAUDE_PATH))('initializes nati
         }
 
         const interactive = await run(['--print', '--input-format', 'stream-json', '--output-format', 'stream-json',
+            '--permission-prompt-tool', 'stdio',
             '--verbose', '--setting-sources', '', '--model', 'claude-sonnet-4-6'], command.stdin + JSON.stringify({
                 type: 'user', message: { role: 'user', content: 'interactive persistence control' },
             }) + '\n', 'happier');
@@ -91,7 +92,7 @@ it.runIf(Boolean(process.env.HAPPIER_TEST_NATIVE_CLAUDE_PATH))('initializes nati
         const result = frames.find(frame => frame.type === 'result');
         expect(result).toMatchObject({ subtype: 'success' });
         const init = frames.find(frame => frame.type === 'system' && frame.subtype === 'init');
-        expect(init?.tools).toEqual(expect.arrayContaining(['Read']));
+        expect(init?.tools).toEqual(expect.arrayContaining(['Read', 'AskUserQuestion']));
         const files = await readdir(join(configDir, 'projects'), { recursive: true });
         const transcripts = files.filter(path => path.endsWith('.jsonl'));
         expect(transcripts.map(path => path.split(/[\\/]/).at(-1))).toEqual([`${init?.session_id}.jsonl`]);

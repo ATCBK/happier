@@ -183,7 +183,8 @@ describe('createClaudeUnifiedInputArbiter', () => {
     arbiter.dispose();
   });
 
-  it('rejects a failed turn-neutral control without invoking provider-prompt lifecycle callbacks', async () => {
+  it.each(['injection', 'readiness'] as const)(
+    'rejects a failed turn-neutral control without invoking provider-prompt lifecycle callbacks (%s)', async (phase) => {
     const goalControl = promptInput('goal-clear-failed', { kind: 'rpc' });
     const onPromptInjected = vi.fn();
     const onPromptAccepted = vi.fn();
@@ -206,10 +207,19 @@ describe('createClaudeUnifiedInputArbiter', () => {
       onUndeliverableInputs,
     });
 
-    arbiter.observeReadiness(readiness());
-    await expect(arbiter.enqueueTurnNeutralControl(goalControl)).rejects.toThrow(
-      'claude_unified_terminal_control_injection_failed: invalid_prompt_text',
+    arbiter.observeReadiness(readiness(phase === 'readiness'
+      ? { status: 'failed_terminal', reason: 'pane_dead' } : {}));
+    let outcome: unknown = 'pending';
+    const completion = arbiter.enqueueTurnNeutralControl(goalControl).then(
+      () => { outcome = 'resolved'; },
+      error => { outcome = error; },
     );
+    await arbiter.drain();
+    await Promise.resolve();
+    expect(outcome).toMatchObject({
+      message: `claude_unified_terminal_control_injection_failed: ${phase === 'readiness' ? 'pane_dead' : 'invalid_prompt_text'}`,
+    });
+    await completion;
 
     expect(onPromptInjected).not.toHaveBeenCalled();
     expect(onPromptAccepted).not.toHaveBeenCalled();
@@ -618,9 +628,9 @@ describe('createClaudeUnifiedInputArbiter', () => {
     arbiter.observeReadiness(readiness());
     await arbiter.drain();
 
-    expect(terminallyRejected).toHaveBeenCalledWith(invalidInput, expect.objectContaining({
-      reason: 'invalid_prompt_text',
-    }));
+    expect(terminallyRejected.mock.calls.map(([input, result]) => ({ input, reason: result.reason }))).toEqual([
+      { input: invalidInput, reason: 'invalid_prompt_text' },
+    ]);
     expect(arbiter.snapshot()).toMatchObject({
       queuedCount: 1,
       headInputState: 'awaiting_provider_acceptance',

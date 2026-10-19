@@ -57,6 +57,27 @@ describe('createClaudeUnifiedGoalRuntime setGoal (G-1/G-2 unsupported options)',
     expect(result).toBeUndefined();
     expect(harness.injected).toEqual(['/goal Ship it']);
   });
+
+  it('accepts same-objective native evidence that precedes the Set delivery acknowledgement after Clear', async () => {
+    const snapshots: SessionWorkStateV1[] = [];
+    let observed: void | Promise<void> = undefined;
+    const row = (uuid: string) => ({ type: 'attachment', uuid, sessionId: 'claude-1',
+      attachment: { type: 'goal_status', met: false, condition: 'Ship it' } });
+    const runtime = createClaudeUnifiedGoalRuntime({
+      backendId: 'claude', getCurrentClaudeSessionId: () => 'claude-1',
+      publishWorkStateSnapshot: snapshot => { snapshots.push(snapshot); },
+      // Native transcript observation is independent of terminal/SDK delivery ACK.
+      injectGoalCommand: async message => {
+        if (message === '/goal Ship it') observed = runtime.source.observeTranscriptMessage(row('reset-native-goal'));
+      },
+    });
+    runtime.source.observeTranscriptMessage(row('initial-native-goal'));
+    await runtime.clearGoal();
+    expect(snapshots.at(-1)?.items).toEqual([]);
+    await runtime.setGoal('Ship it');
+    await observed;
+    expect(snapshots.at(-1)?.items).toEqual([expect.objectContaining({ kind: 'goal', title: 'Ship it' })]);
+  });
 });
 
 describe('createClaudeUnifiedGoalRuntime clearGoal', () => {

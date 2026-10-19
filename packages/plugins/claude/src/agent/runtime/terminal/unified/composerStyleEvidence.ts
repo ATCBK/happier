@@ -14,7 +14,7 @@ function readRawComposerLinesForContent(rawText: string, content: string): strin
   const matches: string[] = [];
   for (const rawLine of lines) {
     const stripped = stripTerminalControlSequences(rawLine);
-    if (!/[>›❯]/u.test(stripped)) continue;
+    if (!/[>\u203a\u276f]/u.test(stripped)) continue;
     if (!stripped.includes(content)) continue;
     matches.push(rawLine);
   }

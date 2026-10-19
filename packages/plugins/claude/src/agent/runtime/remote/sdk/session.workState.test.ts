@@ -48,6 +48,33 @@ const TWO_AGENT_PROGRESS: unknown[] = [
 ];
 
 describe('Claude agent-SDK session work-state ingress', () => {
+  it('refuses a native Goal command while the person turn still owns the SDK transport', async () => {
+    const terminalHost = createTerminalHostFixture();
+    const events = createEventsFixture();
+    const exec = createSdkExecFixture();
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx: createPluginContextFixture(terminalHost.service, events.service, { exec: exec.service }),
+      directory: '/tmp/claude-goal-busy',
+      launchEnv: {},
+      permissionMode: 'default',
+      happierSessionId: 'claude-goal-busy',
+      enableSessionWorkState: true,
+    });
+    try {
+      operations.beginProviderTurn('person-turn');
+      await expect(operations.sendProviderTurnPrompt('Person owns this turn')).resolves.toEqual({ kind: 'accepted' });
+      if (!('setGoal' in operations) || typeof operations.setGoal !== 'function') {
+        throw new Error('Running Claude SDK has no native Goal control');
+      }
+      await expect(operations.setGoal('Do not acknowledge a rejected native command')).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'session_goal_control_inject_failed',
+      });
+    } finally {
+      await operations.disposeProviderSession();
+    }
+  });
+
   it('publishes a Dynamic Workflow run (phases/agents) from the SDK stream and binds the host writers', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
@@ -362,16 +389,27 @@ describe('Claude agent-SDK session work-state ingress', () => {
 
 
 describe('SDK workflow hook resumption', () => {
-  it('publishes unknown when required ordered history fails and preserves the admission error', async () => {
+  it.each([
+    { outcome: 'unavailable', recover: false, nativeLoss: false },
+    { outcome: 'recovered', recover: true, nativeLoss: false },
+    { outcome: 'recovered with native observation loss', recover: true, nativeLoss: true },
+    { outcome: 'recovered then source follow lost', recover: true, nativeLoss: false, sourceLoss: true },
+  ])('keeps ordered baseline failure scoped when $outcome', async ({ recover, nativeLoss, sourceLoss = false }) => {
     const terminalHost = createTerminalHostFixture();
     const exec = createSdkExecFixture();
     const sessionHooks = createSessionHooksFixture();
-    const baselineFailure = new Error('required history unavailable');
+    const baselineFailure = new Error('plugin_external_sources_reconfiguring');
+    let sourceAvailable = false;
+    let failSource!: (error: Error) => void;
+    const failure = new Promise<Error>(resolve => { failSource = resolve; });
     const baseCtx = createPluginContextFixture(terminalHost.service, createEventsFixture().service);
     const ctx = createPluginContextFixture(terminalHost.service, createEventsFixture().service, {
       exec: exec.service, sessionHooks: sessionHooks.service,
       transcripts: { ...baseCtx.agentRuntime.transcripts,
-        followSource: vi.fn(async () => { throw baselineFailure; }) },
+        followSource: vi.fn(async () => {
+          if (!sourceAvailable) throw baselineFailure;
+          return { failure, dispose: async () => {} };
+        }) },
     });
     const runtime = createClaudeAgentSdkProviderOperations({
       ctx, directory: '/tmp/claude-project', happierSessionId: 'happy-sdk-history-failed',
@@ -400,19 +438,49 @@ describe('SDK workflow hook resumption', () => {
       await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({
         kind: 'runtime-activity-snapshot', state: 'unknown', activeCount: 0,
       }));
+      if (nativeLoss) await exec.emit({ type: 'system', subtype: 'hook_response',
+        hook_event: 'SubagentStop', outcome: 'error', session_id: 'claude-provider-session-1' });
+      if (recover) {
+        sourceAvailable = true;
+        // The same authenticated source binding retries; no replacement identity or loss reset.
+        await hookRequest.onSessionHook('claude-provider-session-1', {
+          hook_event_name: 'SessionStart', session_id: 'claude-provider-session-1', source: 'resume',
+          transcript_path: '/tmp/claude-provider-session-1.jsonl',
+        });
+      }
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done',
+        session_id: 'claude-provider-session-1', queued_turn_count: 0,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await runtime.waitForProviderTurnCompletion();
+      expect(activityEvents.filter(event => event.kind === 'runtime-activity-snapshot').at(-1)).toMatchObject({ kind: 'runtime-activity-snapshot',
+        state: recover && !nativeLoss ? 'idle' : 'unknown', activeCount: 0 });
+      if (sourceLoss) {
+        failSource(new Error('source channel lost after admission'));
+        await vi.waitFor(() => expect(activityEvents.filter(event => event.kind === 'runtime-activity-snapshot').at(-1))
+          .toMatchObject({ state: 'unknown', activeCount: 0 }));
+        expect(activityEvents.some(event => event.kind === 'runtime-ended')).toBe(false);
+      }
     } finally { subscription.dispose(); await session.dispose(); }
   });
 
-  it('reconciles a native restart received before ordered SDK resume history', async () => {
+  it('reconciles a native restart across failed admission before ordered SDK resume history', async () => {
     const terminalHost = createTerminalHostFixture();
     const exec = createSdkExecFixture();
     const sessionHooks = createSessionHooksFixture();
     const records: unknown[] = [];
     let replayHistory: (() => Promise<void>) | undefined;
+    let receiveNativeRestart: (() => Promise<void>) | undefined;
+    let rejectFirstAdmission = true;
+    const baselineFailure = new Error('plugin_external_sources_reconfiguring');
     const baseCtx = createPluginContextFixture(terminalHost.service, createEventsFixture().service);
     const ctx = createPluginContextFixture(terminalHost.service, createEventsFixture().service, {
       exec: exec.service, sessionHooks: sessionHooks.service,
       transcripts: { ...baseCtx.agentRuntime.transcripts, followSource: vi.fn(async () => {
+        if (rejectFirstAdmission) {
+          rejectFirstAdmission = false;
+          await receiveNativeRestart?.();
+          throw baselineFailure;
+        }
         await replayHistory?.();
         return { dispose: vi.fn(async () => undefined) };
       }) },
@@ -453,20 +521,24 @@ describe('SDK workflow hook resumption', () => {
         origin: { kind: 'task-notification' },
         message: { content: `<task-notification><task-id>native-${id}</task-id><status>completed</status></task-notification>` },
       });
-      replayHistory = async () => {
+      receiveNativeRestart = async () => {
         await hookRequest.onSessionHook?.('claude-provider-session-1', {
           hook_event_name: 'SubagentStart', session_id: 'claude-provider-session-1', agent_id: 'native-a',
         });
+      };
+      replayHistory = async () => {
         for (const [index, row] of rows.entries()) await session.observeSourceTranscript?.({
           providerSessionId: 'claude-provider-session-1', sourceId: `sdk-history:${index}`, row, phase: 'initial_replay',
         });
         expect(activityEvents.some(event => event.kind === 'runtime-activity-snapshot' && event.state === 'active')).toBe(false);
         expect(records).toHaveLength(0);
       };
-      await hookRequest.onSessionHook('claude-provider-session-1', {
+      const sessionStart = {
         hook_event_name: 'SessionStart', session_id: 'claude-provider-session-1', source: 'resume',
         transcript_path: '/tmp/claude-provider-session-1.jsonl',
-      });
+      };
+      await expect(hookRequest.onSessionHook('claude-provider-session-1', sessionStart)).rejects.toBe(baselineFailure);
+      await hookRequest.onSessionHook('claude-provider-session-1', sessionStart);
       await vi.waitFor(() => expect(activityEvents.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
       await vi.waitFor(() => expect(records.at(-1)).toMatchObject({
         status: 'active', agents: [{ id: 'a', status: 'active' }, { id: 'b', status: 'complete' }],

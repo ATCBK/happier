@@ -340,7 +340,7 @@ describe('Claude Unified TUI runtime control integration (updateSessionRuntimeCo
     }
   });
 
-  it('applies a metadata-only permission-mode override through verified TUI mode cycling', async () => {
+  it.each([undefined, 'allow', 'deny'] as const)('applies a permission-mode override while preserving the admitted workspace policy (%s)', async (workspaceWrites) => {
     const configDir = await makeConfigDir();
     const publishSessionEvent = vi.fn(async () => ({ status: 'custodied' as const }));
     const { runtime, fakePort } = buildRuntime({
@@ -348,11 +348,13 @@ describe('Claude Unified TUI runtime control integration (updateSessionRuntimeCo
       controlPortCaptures: [IDLE, ACCEPT_EDITS_IDLE],
       configDir,
       publishSessionEvent,
+      workspaceWrites,
     });
     try {
       await runtime.startProviderSession();
       const outcome = await runtime.updateSessionRuntimeConfig({
         permissionMode: 'acceptEdits',
+        ...(workspaceWrites ? { workspaceWrites } : {}),
       });
 
       expect(outcome).toMatchObject({ status: 'applied' });

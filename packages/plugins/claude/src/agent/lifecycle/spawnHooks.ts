@@ -86,8 +86,15 @@ export async function resolveClaudeDaemonSpawnPrerequisites(
 }
 
 export function augmentClaudeDaemonSpawnEnv(event: unknown): Record<string, string> {
+    const payload = readHookPayload(event);
     const env = readEnvFromEvent(event);
-    const claudeConfigDir = resolveClaudeConfigDirOverride(env);
+    const descriptor = readRecord(payload.runtimeDescriptorV1);
+    const agent = descriptor?.v === 1 && descriptor.agentId === 'claude' ? readRecord(descriptor.agent) : null;
+    const savedConfigDir = typeof agent?.configDir === 'string' && agent.configDir.trim() ? agent.configDir.trim() : null;
+    // The host sends only explicit profile/materialized values in payload.env.
+    // Its ambient daemon account must not replace the saved native account.
+    const explicitConfigDir = readRecord(payload.env) ? resolveClaudeConfigDirOverride(env) : null;
+    const claudeConfigDir = explicitConfigDir ?? savedConfigDir ?? resolveClaudeConfigDirOverride(env);
 
     return {
         ...(claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : {}),

@@ -22,6 +22,7 @@ import {
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { SessionWorkStateV1 } from '@happier-dev/plugin-sdk/sessions/work-state';
+import type { SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { createClaudeRuntimeActivityPublisher } from '../../shared/runtimeActivityPublisher.js';
 import {
     readClaudePendingLocalId,
@@ -948,6 +949,14 @@ export function createClaudeAgentSdkTurnOperations(
         let observed = false;
         let confirm!: () => void;
         let refuse!: (error: unknown) => void;
+        class SettlementError extends Error {
+            constructor(readonly phase: SessionGoalControlFailureV1['phase'], cause: unknown) {
+                super('session_goal_control_work_state_unavailable', { cause });
+            }
+        }
+        const inPhase = async <T>(phase: SessionGoalControlFailureV1['phase'], run: () => Promise<T>): Promise<T> => {
+            try { return await run(); } catch (cause) { throw new SettlementError(phase, cause); }
+        };
         const acknowledgement = new Promise<void>((resolve, reject) => { confirm = resolve; refuse = reject; });
         // Native file evidence may arrive while the transport is still admitting
         // the command; retain its exact host publication receipt for this caller.
@@ -955,23 +964,25 @@ export function createClaudeAgentSdkTurnOperations(
         const observe = (snapshot: SessionWorkStateV1, publication: Promise<void>, afterGoalCommandAdmission: boolean) => {
             if (observed || (!waitForNativeCompletion && !afterGoalCommandAdmission) || !matches(snapshot)) return;
             observed = true;
-            void publication.then(confirm, refuse);
+            void publication.then(confirm, cause => refuse(new SettlementError('host_publication_rejected', cause)));
         };
         goalControlObservations.add(observe);
         // Confirm the native Goal publication, even while Claude continues its
         // resulting work. Native completion is only a failure/drain boundary.
         try {
-            const result = await effect();
-            if (isRecord(result) && result.ok === false) return result;
-            const completion = operations.waitForProviderTurnCompletion().then(async () => {
-                if (!observed) await goalStatusTail?.drainNow();
-                if (!observed) throw new Error('Native Goal state was not published');
+            const result = await inPhase('native_effect', effect);
+            if (isRecord(result) && result.ok === false) return { ...result,
+                goalControlFailure: { phase: 'native_effect' } satisfies SessionGoalControlFailureV1 };
+            const completion = inPhase('provider_completion', () => operations.waitForProviderTurnCompletion()).then(async () => {
+                if (!observed) await inPhase('tail_drain', async () => { await goalStatusTail?.drainNow(); });
+                if (!observed) throw new SettlementError('missing_matching_publication', new Error('Native Goal state was not published'));
                 await acknowledgement;
             });
             await (waitForNativeCompletion ? completion : Promise.race([acknowledgement, completion]));
             return result;
-        } catch {
-            return { ok: false, errorCode: 'session_goal_control_work_state_unavailable', error: 'session_goal_control_work_state_unavailable' };
+        } catch (cause) {
+            return { ok: false, errorCode: 'session_goal_control_work_state_unavailable', error: 'session_goal_control_work_state_unavailable',
+                goalControlFailure: { phase: cause instanceof SettlementError ? cause.phase : 'native_effect' } satisfies SessionGoalControlFailureV1 };
         } finally {
             goalControlObservations.delete(observe);
             goalRuntime?.source.beginGoalCommandObservation(null);
@@ -2667,7 +2678,7 @@ export function createClaudeAgentSdkTurnOperations(
                 : update.providerBinding.model;
             const permissionMode = readString(update.permissionMode);
             if (permissionMode) {
-                const updatePermissionMode = permissionModeUpdate.then(async () => {
+                const updatePermissionMode = permissionModeUpdate.then(async (): ReturnType<ClaudeRuntimeTurnOperations['updateProviderConfiguration']> => {
                     if (toolPermissionPolicy === null) {
                         const liveQueries = new Set([
                             activeQuery,
