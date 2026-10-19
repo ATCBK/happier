@@ -2,7 +2,8 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, reviewCommentLabelsFixture } from '@/dev/testkit';
+import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
 
 import { ReviewCommentsList } from './ReviewCommentsList';
 
@@ -43,43 +44,7 @@ function comment(overrides: Partial<ReviewCommentV1> = {}): ReviewCommentV1 {
     };
 }
 
-const labels = {
-    empty: 'No comments',
-    engine: 'Engine',
-    stale: 'Stale',
-    outdated: 'Outdated',
-    binarySnapshot: 'Binary snapshot',
-    minified: 'Likely minified',
-    submoduleSnapshot: 'Submodule snapshot',
-    symlinkSnapshot: 'Symlink snapshot',
-    tooLargeSnapshot: 'Snapshot too large',
-    encryptedSnapshot: 'Encrypted snapshot',
-    truncated: 'Truncated',
-    bidiControls: 'Bidi controls',
-    textSnapshot: 'Text snapshot',
-    redacted: 'Redacted',
-    contentUnavailable: 'Content unavailable',
-    edit: 'Edit',
-    resolve: 'Resolve',
-    dismiss: 'Dismiss',
-    reopen: 'Reopen',
-    redact: 'Redact',
-    reply: 'Reply',
-    replyUnavailable: 'Reply unavailable',
-    bulkResolve: 'Resolve visible',
-    bulkDismiss: 'Dismiss visible',
-    bulkPartialFailure: 'Some comments were not updated',
-    bulkFailure: ({ commentId, errorCode }: Readonly<{ commentId: string; errorCode: string }>) =>
-        `${commentId}:${errorCode}`,
-    states: {
-        proposed: 'Proposed',
-        open: 'Open',
-        delegated: 'Delegated',
-        pending_review: 'Pending review',
-        resolved: 'Resolved',
-        dismissed: 'Dismissed',
-    },
-};
+const labels = reviewCommentLabelsFixture;
 
 describe('ReviewCommentsList', () => {
     it('renders durable comments and redacted history state', async () => {
@@ -95,7 +60,7 @@ describe('ReviewCommentsList', () => {
 
         expect(screen.getTextContent()).toContain('Fix this.');
         expect(screen.getTextContent()).toContain('Open');
-        expect(screen.getTextContent()).toContain('review-deepsec');
+        expect(screen.getTextContent()).toContain(resolveAgentCatalogTitle('review-deepsec'));
         expect(screen.getTextContent()).toContain('Stale');
         expect(screen.getTextContent()).toContain('Redacted');
         expect(screen.getTextContent()).not.toContain('Proposals only');

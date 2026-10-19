@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
 
-import { Text } from '@/components/ui/text/Text';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 
 import { ReviewCommentThread } from './ReviewCommentThread';
 import type { ReviewCommentCardActions } from './ReviewCommentCard';
@@ -42,7 +42,7 @@ export function ReviewCommentsList(props: ReviewCommentsListProps) {
     if (props.comments.length === 0) {
         return (
             <View testID={props.testID}>
-                <Text>{props.labels.empty}</Text>
+                <SurfaceStateCard size="line" kind="empty" title={props.labels.empty} />
             </View>
         );
     }

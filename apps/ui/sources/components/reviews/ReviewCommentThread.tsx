@@ -1,9 +1,8 @@
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
-
-import { Text } from '@/components/ui/text/Text';
 
 import type { ReviewCommentLabels } from './labels';
 import { ReviewCommentCard, type ReviewCommentCardActions } from './ReviewCommentCard';
@@ -17,51 +16,39 @@ export type ReviewCommentThreadProps = Readonly<{
     testID?: string;
 }>;
 
-function isReplyDisabled(comment: ReviewCommentV1): boolean {
-    return comment.state === 'resolved'
-        || comment.state === 'dismissed'
-        || comment.flags.redacted === true
-        || Boolean(comment.tombstone);
-}
-
 export function ReviewCommentThread(props: ReviewCommentThreadProps) {
     const replies = [...props.replies].sort((left, right) => left.createdAt - right.createdAt);
-    const replyDisabled = isReplyDisabled(props.root);
+    // One Reply for the whole thread, on its root's action row.
+    const { onReply } = props;
+    const rootActions = React.useMemo(() => (onReply
+        ? { ...props.cardActions, onReply: (comment: ReviewCommentV1) => onReply({ parentCommentId: comment.id }) }
+        : props.cardActions), [onReply, props.cardActions]);
     return (
-        <View testID={props.testID}>
+        <View testID={props.testID} style={styles.thread}>
             <ReviewCommentCard
                 comment={props.root}
                 labels={props.labels}
-                actions={props.cardActions}
+                actions={rootActions}
                 testID={`review-comment-${props.root.id}`}
             />
-            {replies.map((reply) => (
-                <ReviewCommentCard
-                    key={reply.id}
-                    comment={reply}
-                    labels={props.labels}
-                    actions={props.cardActions}
-                    testID={`review-comment-${reply.id}`}
-                />
-            ))}
-            {props.onReply && replyDisabled ? (
-                <View
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled: true }}
-                    testID={props.testID ? `${props.testID}-reply` : `review-comment-${props.root.id}-reply`}
-                >
-                    <Text>{props.labels.replyUnavailable}</Text>
+            {replies.length > 0 ? (
+                <View style={styles.replies}>
+                    {replies.map((reply) => (
+                        <ReviewCommentCard
+                            key={reply.id}
+                            comment={reply}
+                            labels={props.labels}
+                            actions={props.cardActions}
+                            testID={`review-comment-${reply.id}`}
+                        />
+                    ))}
                 </View>
-            ) : props.onReply ? (
-                <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled: false }}
-                    onPress={() => props.onReply?.({ parentCommentId: props.root.id })}
-                    testID={props.testID ? `${props.testID}-reply` : `review-comment-${props.root.id}-reply`}
-                >
-                    <Text>{props.labels.reply}</Text>
-                </Pressable>
             ) : null}
         </View>
     );
 }
+
+const styles = StyleSheet.create((theme) => ({
+    thread: { borderBottomWidth: 1, borderBottomColor: theme.colors.border.default },
+    replies: { marginLeft: theme.space.s16, borderLeftWidth: 1, borderLeftColor: theme.colors.border.default, paddingLeft: theme.space.s12 },
+}));

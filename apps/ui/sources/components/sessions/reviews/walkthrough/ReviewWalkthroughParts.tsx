@@ -165,8 +165,11 @@ export function WalkthroughReviewFact(props: Readonly<{
                 : s.elsewhere > 0
                     ? t('reviewWalkthrough.inStoryElsewhere', { inStory: s.inStory, elsewhere: s.elsewhere })
                     : t('reviewWalkthrough.allInStory');
+        // At zero there is no story placement to report: a finished clean review says so in one phrase.
         body = s.state === 'running' && s.total === 0
             ? <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(detail)}</>
+            : s.total === 0
+                ? <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('reviewWalkthrough.noFindings'))}</>
             : <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('runPage.review.findingTotal', { count: s.total }))}{` · ${detail}`}</>;
     }
     return (

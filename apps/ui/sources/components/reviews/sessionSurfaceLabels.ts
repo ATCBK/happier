@@ -28,6 +28,8 @@ export function buildReviewCommentLabels(): ReviewCommentsPanelLabels {
         reopen: t('files.reviewComments.durable.reopen'),
         redact: t('files.reviewComments.durable.redact'),
         reply: t('files.reviewComments.durable.reply'),
+        showMore: t('files.reviewComments.durable.showMore'),
+        showLess: t('files.reviewComments.durable.showLess'),
         replyUnavailable: t('files.reviewComments.durable.replyUnavailable'),
         bulkResolve: t('files.reviewComments.durable.bulkResolve'),
         bulkDismiss: t('files.reviewComments.durable.bulkDismiss'),
