@@ -9,6 +9,7 @@ import { Text } from '@/components/ui/text/Text';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { t } from '@/text';
 import { ShareGrantRow, ShareLevelControl, ShareRowAction } from './ShareGrantRow';
+import { ShareConnectedPeoplePrompt } from './ShareConnectedPeoplePrompt';
 import { useSharePresentationHost } from './sharePresentationHost';
 import {
     SHARE_ACCESS_LEVEL_ORDER,
@@ -216,6 +217,12 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
     }
     if (collapsedControls.length) sections.push({ kind: 'static', id: 'directory-controls', options: collapsedControls });
     if (input.directoryKind) {
+        // A settled people directory with no one to add says who appears there and where to connect with someone.
+        const directory = model.directory.sections.find(section => section.kind === input.directoryKind);
+        if (directory && input.directoryKind === 'account' && model.directory.query.trim() === '' && directory.status === 'idle'
+            && !directory.hasMore && candidateOptions(directory.candidates).length === 0) sections.push({ kind: 'static',
+            id: 'directory-empty', options: [{ id: 'directory-empty', label: t('shareSheet.noConnectedPeople'), disabled: true,
+                content: <ShareConnectedPeoplePrompt testID={`${idPrefix}${ns}-directory-empty`} /> }] });
         return { id: shareSheetStepId(ns, input.directoryKind), inputPlaceholder: t('shareSheet.addPlaceholder'),
             disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };
     }

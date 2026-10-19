@@ -162,6 +162,21 @@ describe('ShareSheet full presentation', () => {
         expect(screen.findByTestId('document-share-browse:team')).not.toBeNull();
     });
 
+    it('says who the people directory lists and where to connect with someone when it has no one to offer', () => {
+        const people = (partial: Partial<ShareSheetModel['directory']['sections'][number]>, query = ''): ShareSheetModel => ({ ...model,
+            directory: { query, sections: [{ kind: 'account', title: 'People', status: 'idle', cursor: null, hasMore: false,
+                loadingMore: false, candidates: [], ...partial }] } });
+        const sectionIds = (value: ShareSheetModel) => buildShareSheetSelectionStep({ model: value, actions, adapter, presentation: 'full',
+            onExpand: noop, idPrefix: '', directoryKind: 'account' }).sections.map(section => section.id);
+        expect(sectionIds(people({}))).toContain('directory-empty');
+        // Still loading, another page to come, a typed search and a directory with someone in it are not this state.
+        expect(sectionIds(people({ status: 'loading' }))).not.toContain('directory-empty');
+        expect(sectionIds(people({ hasMore: true }))).not.toContain('directory-empty');
+        expect(sectionIds(people({}, 'ma'))).not.toContain('directory-empty');
+        expect(sectionIds(people({ candidates: [{ principal: { ref: { kind: 'account', accountId: 'maya' }, key: 'account:maya',
+            displayName: 'Maya', accessibilityLabel: 'Maya' }, addition: { kind: 'allowed' }, operation: { kind: 'idle' } }] })))
+            .not.toContain('directory-empty');
+    });
     it('names why a candidate cannot be added instead of offering Add, and explains it on press', async () => {
         vi.useFakeTimers();
         const explain = vi.fn();
