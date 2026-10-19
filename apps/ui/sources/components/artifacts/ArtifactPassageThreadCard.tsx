@@ -15,7 +15,7 @@ import { t } from '@/text';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 import type { ArtifactActionsClient } from './artifactActionsClient';
-import { ArtifactEditProposal } from './ArtifactEditProposal';
+import { ArtifactEditProposal, type AdmittedDocRead } from './ArtifactEditProposal';
 import { readDocPassageThreadQuote, type DocPassageMarginThread } from './docPassageMargin';
 
 const NO_SESSION_LABEL = () => null;
@@ -31,6 +31,8 @@ export function ArtifactPassageThreadCard(
     thread: DocPassageMarginThread<DiscussionOpenedMessageV1>;
     focused: boolean;
     client: ArtifactActionsClient;
+    docRead: AdmittedDocRead;
+    mountThread: (discussionId: string) => () => void;
     viewerAccountId: string;
     onFocus: () => void;
     onOpen: () => void;
@@ -39,6 +41,7 @@ export function ArtifactPassageThreadCard(
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const { thread } = props;
+  React.useEffect(() => props.mountThread(thread.discussionId), [props.mountThread, thread.discussionId]);
   const labels = React.useMemo(
     () =>
       new Map(
@@ -222,6 +225,7 @@ export function ArtifactPassageThreadCard(
         <ArtifactEditProposal
           testID={`${testID}.proposal`}
           client={props.client}
+          docRead={props.docRead}
           proposalRef={thread.proposal.messageRef ?? null}
           proposal={proposalContent}
           disposition={thread.proposal.docEditProposalDispositionV1}

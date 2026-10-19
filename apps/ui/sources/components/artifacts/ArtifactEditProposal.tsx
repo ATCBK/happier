@@ -13,6 +13,7 @@ import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import { Text } from '@/components/ui/text/Text';
 import { getStorage } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -23,6 +24,9 @@ import { artifactViewRoute } from './artifactBrowserModel';
 type Revision = Readonly<{ headerVersion: number; bodyVersion: number }>;
 type Currency = 'unknown' | 'current' | 'movedOn';
 type Busy = 'accept' | 'decline' | 'undo' | null;
+type DocReadValue = Extract<Awaited<ReturnType<ArtifactActionsClient['readDoc']>>, { ok: true }>['value'];
+export type AdmittedDocRead = Readonly<{ status: 'loading' | 'unavailable' }>
+  | Readonly<{ status: 'ready'; value: DocReadValue }>;
 
 /** The Action's typed refusal when the Doc is no longer at the revision the person reviewed. */
 const VERSION_MISMATCH = 'version_mismatch';
@@ -41,6 +45,8 @@ export function ArtifactEditProposal(
   props: Readonly<{
     testID?: string;
     client: ArtifactActionsClient;
+    /** Present on a Doc view even while loading/unavailable; absent only for a standalone thread. */
+    docRead?: AdmittedDocRead;
     /** The committed proposal message; `null` while the post is still local. */
     proposalRef: DiscussionMessageRefV1 | null;
     proposal: DocEditProposalV1;
@@ -70,7 +76,13 @@ export function ArtifactEditProposal(
     const stored = state.artifacts[artifactId];
     return stored ? `${stored.headerVersion}.${stored.bodyVersion ?? ''}` : '';
   });
-  const [currency, setCurrency] = React.useState<Currency>('unknown');
+  const [standaloneCurrency, setCurrency] = React.useState<Currency>('unknown');
+  const admitted = props.docRead?.status === 'ready'
+    && props.docRead.value.ref.artifactId === artifactId
+    && areServerProfileIdentifiersEquivalent(props.docRead.value.ref.serverId, proposalRef?.discussion.serverId)
+      ? props.docRead.value.artifact : null;
+  const currency: Currency = props.docRead === undefined ? standaloneCurrency
+    : admitted ? sameRevision(admitted.revision, base) ? 'current' : 'movedOn' : 'unknown';
   const [refusal, setRefusal] = React.useState<
     'movedOn' | 'cantEdit' | 'failed' | null
   >(null);
@@ -82,8 +94,9 @@ export function ArtifactEditProposal(
   >(null);
 
   React.useEffect(() => {
-    if (disposition.state !== 'open') return;
+    if (props.docRead !== undefined || disposition.state !== 'open') return;
     let live = true;
+    setCurrency('unknown');
     // The Doc lives in this thread's Home (C5 §4), which the client is already bound to; its stored
     // label may be another device's name for that Home, so the read names only the document.
     void client.readDoc({ ref: { kind: 'doc', artifactId } }).then((read) => {
@@ -101,7 +114,7 @@ export function ArtifactEditProposal(
     return () => {
       live = false;
     };
-  }, [client, artifactId, base, disposition.state, docRevisionKey]);
+  }, [client, artifactId, base, disposition.state, docRevisionKey, props.docRead]);
 
   const decide = React.useCallback(
     async (kind: 'accept' | 'decline') => {
@@ -311,7 +324,7 @@ export function ArtifactEditProposal(
               : undefined
           }
         />
-      ) : refusal === 'cantEdit' ? (
+      ) : refusal === 'cantEdit' || admitted?.access === 'view' ? (
         <Line
           testID={`${testID}.cantEdit`}
           icon="lock"

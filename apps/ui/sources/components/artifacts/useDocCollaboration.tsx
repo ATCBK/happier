@@ -14,6 +14,8 @@ import { createArtifactActionsClient } from './artifactActionsClient';
 import { readArtifactCodeLanguage } from './artifactBrowserModel';
 import type { ArtifactPassageMargin } from './ArtifactPassageSelection';
 import { ArtifactPassageThreadCard } from './ArtifactPassageThreadCard';
+import type { AdmittedDocRead } from './ArtifactEditProposal';
+import type { DiscussionOpenedSummaryV1 } from '@happier-dev/protocol/discussions/actions';
 import { buildDocPassageMargin, readDocPassageThreadQuote } from './docPassageMargin';
 import { showArtifactHistorySheet } from './ArtifactHistorySheet';
 import { useDocPassageThreads } from './useDocPassageThreads';
@@ -77,8 +79,8 @@ export function useDocCollaboration(
   const router = useRouter();
   const [count, setCount] = React.useState<Readonly<{
     key: string;
-    value: number | null;
-    version: number | null;
+    membership: readonly DiscussionOpenedSummaryV1[];
+    read: AdmittedDocRead;
   }> | null>(null);
   const [audience, setAudience] = React.useState<Readonly<{
     key: string;
@@ -92,23 +94,30 @@ export function useDocCollaboration(
   const artifactId = prose?.id ?? null;
 
   React.useEffect(() => {
-    if (!client || !artifactId) return;
+    if (!client || !artifactId || read.status !== 'ready' || !read.membership) return;
     let current = true;
-    const key = `${artifactId}:${revisionKey}`;
+    const key = JSON.stringify([scope?.serverId, scope?.accountId, artifactId, revisionKey]);
+    const membership = read.membership;
     void client
       .readDoc({ ref: { kind: 'doc', artifactId } })
       .then((outcome) => {
         if (current)
           setCount({
             key,
-            value: outcome.ok ? outcome.value.openCommentCount : null,
-            version: outcome.ok ? outcome.value.artifact.revision.bodyVersion : null,
+            membership,
+            read: outcome.ok ? { status: 'ready', value: outcome.value } : { status: 'unavailable' },
           });
       });
     return () => {
       current = false;
     };
-  }, [artifactId, client, revisionKey]);
+  }, [artifactId, client, revisionKey, read.status, read.membership, scope]);
+
+  const docRead: AdmittedDocRead = React.useMemo(() => {
+    if (read.status !== 'ready') return { status: read.status === 'loading' ? 'loading' : 'unavailable' };
+    const key = JSON.stringify([scope?.serverId, scope?.accountId, artifactId, revisionKey]);
+    return count?.key === key && count.membership === read.membership ? count.read : { status: 'loading' };
+  }, [artifactId, count, read.membership, read.status, revisionKey, scope]);
 
   const ownerAccountId = prose?.ownerAccountId;
   const access = prose?.access;
@@ -195,6 +204,8 @@ export function useDocCollaboration(
           thread={thread}
           focused={focusedId === id}
           client={client}
+          docRead={docRead}
+          mountThread={read.mountThread}
           viewerAccountId={scope.accountId}
           onFocus={() => setFocusedId(id)}
           onOpen={() => open(id)}
@@ -202,7 +213,7 @@ export function useDocCollaboration(
         />
       );
     },
-    [client, focusedId, open, openHistory, scope, threads],
+    [client, docRead, focusedId, open, openHistory, read.mountThread, scope, threads],
   );
 
   const accepted = React.useMemo(() => {
@@ -261,10 +272,8 @@ export function useDocCollaboration(
   );
   if (!prose || !scope) return null;
   return {
-    openCommentCount:
-      count && count.key === `${prose.id}:${revisionKey}` ? count.value : null,
-    version:
-      count && count.key === `${prose.id}:${revisionKey}` ? count.version : null,
+    openCommentCount: docRead.status === 'ready' ? docRead.value.openCommentCount : null,
+    version: docRead.status === 'ready' ? docRead.value.artifact.revision.bodyVersion : null,
     audience: audience && audience.key === prose.id ? audience.value : null,
     threads: list,
     selectThread,
