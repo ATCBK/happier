@@ -10,7 +10,7 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { deriveManagedDevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { readSessionCreationInitialTriggerError } from './session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { postSessionCreationRequest } from '@/session/transport/http/sessionsHttp';
 import { PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_READINESS_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1, ProviderBrokerModelCatalogAuthorizationV1Schema, ProviderBrokerModelCatalogAuthorizationResponseV1Schema, ProviderBrokerRequestAdmissionV1Schema, ProviderBrokerRequestAdmissionResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { ProviderBrokerOpenRequestV1, ProviderBrokerOpenResponseV1, ProviderBrokerModelCatalogAuthorizationV1, ProviderBrokerModelCatalogAuthorizationResponseV1, ProviderBrokerRequestAdmissionV1, ProviderBrokerRequestAdmissionResponseV1 } from '@happier-dev/protocol';
 import { RunnerBrokerReadinessResponseV1Schema } from '@happier-dev/protocol/teams/credentials/readinessV1';
@@ -560,6 +560,7 @@ export class ApiClient {
     const encryptionModeResolution = await resolveSessionCreateEncryptionMode({
       token: this.credential.token,
       serverBaseUrl,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     if (encryptionModeResolution.status === 'currentness_unavailable') {
       // The read failed before any Session request; classify the transport
@@ -657,9 +658,10 @@ export class ApiClient {
               });
             })();
 
-        const response = await axios.post<CreateSessionResponse>(
-          sessionsUrl,
-          {
+        const response = await postSessionCreationRequest<CreateSessionResponse>({
+          serverUrl: serverBaseUrl,
+          token: this.credential.token,
+          body: {
             tag: opts.tag,
             ...pickSessionCreateOriginFields(opts),
             ...(opts.manager !== undefined ? { manager: opts.manager } : {}),
@@ -676,17 +678,9 @@ export class ApiClient {
             ...(opts.organizationPlacement ? { organizationPlacement: opts.organizationPlacement } : {}),
             ...(opts.teamCredentialBindings !== undefined ? { teamCredentialBindings: opts.teamCredentialBindings } : {}),
           },
-          {
-            headers: {
-              ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-              ...(opts.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: opts.creationAuthorizationToken } : {}),
-              'Authorization': `Bearer ${this.credential.token}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 60000, // 1 minute timeout for very bad network connections
-            ...(opts.signal ? { signal: opts.signal } : {}),
-          }
-        )
+          ...(opts.creationAuthorizationToken ? { creationAuthorizationToken: opts.creationAuthorizationToken } : {}),
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        });
 
         logger.debug(`Session created/loaded: ${response.data.session.id} (tag: ${opts.tag})`)
         let raw = response.data.session;
@@ -770,6 +764,7 @@ export class ApiClient {
             ownerMetadata,
           );
           await ensureLocalMachineAccess();
+          opts.signal?.throwIfAborted();
           return {
             id: raw.id,
             seq: raw.seq,
@@ -830,6 +825,7 @@ export class ApiClient {
           ...(opts.signal ? { signal: opts.signal } : {}),
         });
         await ensureLocalMachineAccess();
+        opts.signal?.throwIfAborted();
         const agentState = raw.agentState
           ? decrypt(
               sessionEncryptionKey,

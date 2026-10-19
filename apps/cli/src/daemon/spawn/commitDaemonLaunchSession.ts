@@ -99,6 +99,7 @@ export async function commitDaemonLaunchSession(input: Readonly<{
   try {
     created = await input.api.getOrCreateSession({
       ...pickSessionCreateOriginFields(options),
+      ...(options.projectSetupOperation ? { signal: options.projectSetupOperation.signal } : {}),
       tag,
       ...(options.creationAuthorization ? { creationAuthorizationToken: options.creationAuthorization.token } : {}),
       metadata: buildCommittedLaunchMetadata({

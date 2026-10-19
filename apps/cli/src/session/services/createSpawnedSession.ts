@@ -707,6 +707,7 @@ async function createSeededSpawnedSession(args: Readonly<{
   // Workers use their own Profile, including an explicit or implicit no-Profile choice.
   if (isWorker) delete replayMetadata.profileId;
   const created = await getOrCreateSessionByTag({
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.creationAuthorization ? { creationAuthorizationToken: params.creationAuthorization.token,
       prepareCreationAuthorizationProof: params.creationAuthorization.prepareRequestProof } : {}),
     ...pickSessionCreateOriginFields(params),
@@ -1122,6 +1123,7 @@ export async function createSpawnedSession(
         // Discussion membership. Ordinary tag rejoin owns same-id restoration
         // and live-slot validation before input can attach.
         const current = await getOrCreateSessionByTag({
+          ...(params.signal ? { signal: params.signal } : {}),
           ...pickSessionCreateOriginFields(params),
           credentials: params.credentials,
           tag: params.sessionCreationTag,

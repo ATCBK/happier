@@ -20,6 +20,7 @@ import { readSessionCreationTerminalSpawnErrorDetail } from './session/sessionCr
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
 import { commitDaemonLaunchSession } from '@/daemon/spawn/commitDaemonLaunchSession';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 
 const initialAccess: SessionInitialAccessDraftV1 = {
   grants: [{ subject: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit', canApprovePermissions: false }],
@@ -91,6 +92,79 @@ for (const owner of ['api', 'http'] as const) {
       });
     });
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+    it.each([true, false])('respects caller lifetime and the legacy POST cutoff (callerLifetime=%s)', async (hasLifetime) => {
+      vi.useFakeTimers();
+      const lifetime = new AbortController();
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => await new Promise<Awaited<ReturnType<typeof post>>>((resolve, reject) => {
+        // Axios is the network boundary: enforce its configured timeout so a
+        // delayed server receipt cannot pass through a shorter transport cutoff.
+        const response = setTimeout(() => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          resolve(post(url, body, options));
+        }, 60_001);
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          clearTimeout(response);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+      }));
+      try {
+        const pending = create(hasLifetime ? { signal: lifetime.signal } : {});
+        const completed = hasLifetime ? expect(pending).resolves.toMatchObject(owner === 'api'
+          ? { id: 'created-session' } : { session: { id: 'created-session' } })
+          : owner === 'api' ? expect(pending).resolves.toBeNull()
+            : expect(pending).rejects.toMatchObject({ code: 'ECONNABORTED' });
+        void completed.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(60_001);
+        await completed;
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
+    });
+
+    if (owner === 'api') it('cancels daemon creation through the retained Action lifetime after the old POST cutoff', async () => {
+      vi.useFakeTimers();
+      const operations = createHostActionOperationRuntime({ machineId: 'machine-1', resolveAccountId: async () => 'owner-1',
+        generateOperationId: () => 'creation-operation', supportsCoreCancellation: () => true });
+      let postEntered!: () => void;
+      const entered = new Promise<void>(resolve => { postEntered = resolve; });
+      vi.mocked(axios.post).mockImplementation(async (_url, _body, options) => await new Promise<never>((_resolve, reject) => {
+        const onAbort = () => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          reject(new axios.CanceledError());
+        };
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          options?.signal?.removeEventListener?.('abort', onAbort);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+        options?.signal?.addEventListener?.('abort', onAbort, { once: true });
+        postEntered();
+      }));
+      const api = await ApiClient.create(credentials);
+      let settled = false;
+      const pending = operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'creation-key' },
+        execute: async operation => ({ ok: true, result: await commitDaemonLaunchSession({ api, credentials,
+          options: { directory: '/workspace', projectSetupOperation: operation }, directory: '/workspace', accountSettings: {} }) }),
+      });
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      try {
+        await entered;
+        await vi.advanceTimersByTimeAsync(60_001);
+        expect(settled).toBe(false);
+        expect(operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation'))
+          .toEqual({ kind: 'requested' });
+        await expect(pending).rejects.toThrow('Action operation cancellation requested');
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation');
+        await vi.advanceTimersByTimeAsync(60_001);
+        await pending.catch(() => undefined);
+        vi.useRealTimers();
+      }
+    });
 
     it('creates the Session when Account currentness arrives within its canonical HTTP budget', async () => {
       vi.useFakeTimers();
@@ -418,10 +492,24 @@ for (const owner of ['api', 'http'] as const) {
       expect(axios.post).not.toHaveBeenCalled();
     });
 
-    if (owner === 'http') it('creates Replay access once and removes it from the existing-row runner attachment', async () => {
+    if (owner === 'http') it('creates Replay access under its caller lifetime and removes it from the existing-row runner attachment', async () => {
+      vi.useFakeTimers();
       const transportFailure = new Error('transport unavailable');
+      const lifetime = new AbortController();
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => await new Promise<Awaited<ReturnType<typeof post>>>((resolve, reject) => {
+        const response = setTimeout(() => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          resolve(post(url, body, options));
+        }, 60_001);
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          clearTimeout(response);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+      }));
       let attached: unknown;
-      await expect(createSpawnedSession({
+      const pending = createSpawnedSession({
+        signal: lifetime.signal,
         credentials, directory: metadata.path, initialAccess, initialTriggers, primaryTeamId: 'team-1',
         replaySeededCreation: {
           tag: creation.tag, flavor: 'codex', metadata,
@@ -431,7 +519,16 @@ for (const owner of ['api', 'http'] as const) {
           spawn: async (request) => { attached = request; throw transportFailure; },
           resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }),
         },
-      })).rejects.toBe(transportFailure);
+      });
+      const completed = expect(pending).rejects.toBe(transportFailure);
+      void completed.catch(() => undefined);
+      try {
+        await vi.advanceTimersByTimeAsync(60_001);
+        await completed;
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess, initialTriggers, primaryTeamId: 'team-1' });
       expect(attached).toMatchObject({ existingSessionId: 'created-session' });
       expect(attached).not.toHaveProperty('initialAccess');
