@@ -318,7 +318,11 @@ if (wants('verify-expo-router-web-modal-patch')) {
         },
         {
             relativePath: ['build', 'modal', 'web', 'ModalStack.js'],
-            markers: ['preloadedRoutes: state.preloadedRoutes ?? []'],
+            markers: [
+                'preloadedRoutes: state.preloadedRoutes ?? []',
+                'function ModalStackNavigator({ initialRouteName, children, layout, screenOptions, UNSTABLE_router, })',
+                '        layout,\n        screenOptions,',
+            ],
         },
         {
             relativePath: ['build', 'modal', 'web', 'ModalStackRouteDrawer.js'],
