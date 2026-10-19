@@ -11,7 +11,7 @@ import { DIRECT_TRANSFER_SESSION_EXPIRES_AT_HEADER, isSafeDirectTransferEndpoint
 import { TransferChunkEnvelopeSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
 import { PreparedTransferRpcRequestV1Schema, type PreparedTransferRpcRequestV1, type PreparedTransferRpcResponseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
 import type { TransferEndpointCandidate } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   createEncryptedTransferChunkEnvelope,
   createTransferManifestHash,
@@ -635,77 +635,58 @@ export function createDirectPeerTransferRegistry(params: Readonly<{
   };
 }
 
-const DirectPeerTransferResponseSchema = z
-  .object({
-    transferId: z.string().min(1),
-    manifestHash: z.string().min(1),
-    totalChunks: z.number().int().positive(),
-    sizeBytes: z.number().int().nonnegative().optional(),
-    name: z.string().min(1).optional(),
-  })
-  .strict();
+const DirectPeerTransferResponseSchema = z.strictObject({
+    transferId: z.string().check(z.minLength(1)),
+    manifestHash: z.string().check(z.minLength(1)),
+    totalChunks: z.number().check(z.int(), z.positive()),
+    sizeBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    name: z.optional(z.string().check(z.minLength(1))),
+  });
 
-const DirectTransferImportOpenResponseSchema = z
-  .object({
-    uploadId: z.string().min(1),
-    destDisplayPath: z.string().min(1),
-    expectedSizeBytes: z.number().int().nonnegative(),
-    chunkSizeBytes: z.number().int().positive(),
-    recipientPublicKeyBase64: z.string().min(1),
-    expiresAt: z.number().int().positive(),
-  })
-  .strict();
+const DirectTransferImportOpenResponseSchema = z.strictObject({
+    uploadId: z.string().check(z.minLength(1)),
+    destDisplayPath: z.string().check(z.minLength(1)),
+    expectedSizeBytes: z.number().check(z.int(), z.nonnegative()),
+    chunkSizeBytes: z.number().check(z.int(), z.positive()),
+    recipientPublicKeyBase64: z.string().check(z.minLength(1)),
+    expiresAt: z.number().check(z.int(), z.positive()),
+  });
 
-const DirectTransferImportChunkRequestSchema = z
-  .object({
-    contentBase64: z.string().min(1).optional(),
-    payloadBase64: z.string().min(1).optional(),
-    encryptedDataKeyEnvelopeBase64: z.string().min(1).optional(),
-  })
-  .strict();
+const DirectTransferImportChunkRequestSchema = z.strictObject({
+    contentBase64: z.optional(z.string().check(z.minLength(1))),
+    payloadBase64: z.optional(z.string().check(z.minLength(1))),
+    encryptedDataKeyEnvelopeBase64: z.optional(z.string().check(z.minLength(1))),
+  });
 
-const DirectTransferImportChunkResponseSchema = z
-  .object({
+const DirectTransferImportChunkResponseSchema = z.union([z.strictObject({
     success: z.literal(true),
-  })
-  .strict()
-  .or(z.object({ success: z.literal(false), error: z.string() }).strict());
+  }), z.strictObject({ success: z.literal(false), error: z.string() })]);
 
-const DirectTransferImportFinalizeOrdinaryFailureResponseSchema = z
-  .object({
+const DirectTransferImportFinalizeOrdinaryFailureResponseSchema = z.strictObject({
     success: z.literal(false),
     error: z.string(),
-    keepSession: z.boolean().optional(),
-  })
-  .strict();
+    keepSession: z.optional(z.boolean()),
+  });
 
-const DirectTransferImportFinalizeRecoveryFailureResponseSchema = z
-  .object({
+const DirectTransferImportFinalizeRecoveryFailureResponseSchema = z.strictObject({
     success: z.literal(false),
     error: z.string(),
     errorCode: z.literal(TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE),
     keepSession: z.literal(true),
-  })
-  .strict();
+  });
 
-const DirectTransferImportFinalizeResponseSchema = z
-  .object({
+const DirectTransferImportFinalizeResponseSchema = z.union([z.union([z.strictObject({
     success: z.literal(true),
-    finalized: z.object({
+    finalized: z.strictObject({
       success: z.literal(true),
-      path: z.string().min(1),
-      sizeBytes: z.number().int().nonnegative(),
-      result: z.unknown().optional(),
-    }).strict(),
-    sha256: z.string().min(1),
-  })
-  .strict()
-  .or(DirectTransferImportFinalizeOrdinaryFailureResponseSchema)
-  .or(DirectTransferImportFinalizeRecoveryFailureResponseSchema);
+      path: z.string().check(z.minLength(1)),
+      sizeBytes: z.number().check(z.int(), z.nonnegative()),
+      result: z.optional(z.unknown()),
+    }),
+    sha256: z.string().check(z.minLength(1)),
+  }), DirectTransferImportFinalizeOrdinaryFailureResponseSchema]), DirectTransferImportFinalizeRecoveryFailureResponseSchema]);
 
-const DirectTransferImportAbortResponseSchema = z
-  .object({ success: z.literal(true) }).strict()
-  .or(z.object({ success: z.literal(false), error: z.string() }).strict());
+const DirectTransferImportAbortResponseSchema = z.union([z.strictObject({ success: z.literal(true) }), z.strictObject({ success: z.literal(false), error: z.string() })]);
 
 function isDirectTransferRoutePath(url: string | undefined): boolean {
   const normalizedUrl = String(url ?? '').trim();
@@ -923,13 +904,13 @@ export function createDirectPeerTransferApp(params: Readonly<{
   typed.post('/machine-transfers/direct/imports/open', {
     schema: {
       body: DirectTransferImportOpenRequestSchema,
-      headers: z.object({
-        authorization: z.string().min(1).optional(),
-      }).passthrough(),
+      headers: z.looseObject({
+        authorization: z.optional(z.string().check(z.minLength(1))),
+      }),
       response: {
         200: DirectTransferImportOpenResponseSchema,
-        400: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        401: z.object({ ok: z.literal(false), error: z.string() }).strict(),
+        400: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        401: z.strictObject({ ok: z.literal(false), error: z.string() }),
       },
     },
   }, async (request, reply) => {
@@ -953,14 +934,14 @@ export function createDirectPeerTransferApp(params: Readonly<{
     bodyLimit: resolveEncryptedTransferChunkJsonBodyMaxBytes(),
     schema: {
       params: z.object({
-        uploadId: z.string().min(1),
-        sequence: z.coerce.number().int().nonnegative(),
+        uploadId: z.string().check(z.minLength(1)),
+        sequence: z.coerce.number().check(z.int(), z.nonnegative()),
       }),
       body: DirectTransferImportChunkRequestSchema,
       response: {
         200: DirectTransferImportChunkResponseSchema,
-        400: z.object({ success: z.literal(false), error: z.string() }).strict(),
-        404: z.object({ success: z.literal(false), error: z.string() }).strict(),
+        400: z.strictObject({ success: z.literal(false), error: z.string() }),
+        404: z.strictObject({ success: z.literal(false), error: z.string() }),
       },
     },
   }, async (request, reply) => {
@@ -980,7 +961,7 @@ export function createDirectPeerTransferApp(params: Readonly<{
 
   typed.post('/machine-transfers/direct/imports/:uploadId/finalize', {
     schema: {
-      params: z.object({ uploadId: z.string().min(1) }),
+      params: z.object({ uploadId: z.string().check(z.minLength(1)) }),
       response: {
         200: DirectTransferImportFinalizeResponseSchema,
         400: DirectTransferImportFinalizeOrdinaryFailureResponseSchema,
@@ -1016,10 +997,10 @@ export function createDirectPeerTransferApp(params: Readonly<{
 
   typed.post('/machine-transfers/direct/imports/:uploadId/abort', {
     schema: {
-      params: z.object({ uploadId: z.string().min(1) }),
+      params: z.object({ uploadId: z.string().check(z.minLength(1)) }),
       response: {
         200: DirectTransferImportAbortResponseSchema,
-        400: z.object({ success: z.literal(false), error: z.string() }).strict(),
+        400: z.strictObject({ success: z.literal(false), error: z.string() }),
       },
     },
   }, async (request, reply) => {
@@ -1036,19 +1017,19 @@ export function createDirectPeerTransferApp(params: Readonly<{
 
   typed.post('/machine-transfers/direct/:transferId/open', {
     schema: {
-      params: z.object({ transferId: z.string().min(1) }),
-      querystring: z.object({}).passthrough(),
-      headers: z.object({
-        authorization: z.string().min(1).optional(),
-        [DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER]: z.string().min(1),
-      }).passthrough(),
-      body: z.unknown().optional(),
+      params: z.object({ transferId: z.string().check(z.minLength(1)) }),
+      querystring: z.looseObject({}),
+      headers: z.looseObject({
+        authorization: z.optional(z.string().check(z.minLength(1))),
+        [DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER]: z.string().check(z.minLength(1)),
+      }),
+      body: z.optional(z.unknown()),
       response: {
         200: DirectPeerTransferResponseSchema,
-        400: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        401: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        503: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        404: z.object({ ok: z.literal(false), error: z.string() }).strict(),
+        400: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        401: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        503: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        404: z.strictObject({ ok: z.literal(false), error: z.string() }),
       },
     },
   }, async (request, reply) => {
@@ -1123,14 +1104,14 @@ export function createDirectPeerTransferApp(params: Readonly<{
 
   typed.post('/machine-transfers/direct/:transferId/complete', {
     schema: {
-      params: z.object({ transferId: z.string().min(1) }).strict(),
-      headers: z.object({ authorization: z.string().min(1) }).passthrough(),
+      params: z.strictObject({ transferId: z.string().check(z.minLength(1)) }),
+      headers: z.looseObject({ authorization: z.string().check(z.minLength(1)) }),
       body: z.union([
-        z.object({ destinationId: z.string().min(1), success: z.literal(true), sizeBytes: z.number().int().nonnegative(),
-          manifestHash: z.string().regex(/^sha256:[a-f0-9]{64}$/i) }).strict(),
-        z.object({ destinationId: z.string().min(1), success: z.literal(false), error: z.string(), errorCode: z.string().optional() }).strict(),
+        z.strictObject({ destinationId: z.string().check(z.minLength(1)), success: z.literal(true), sizeBytes: z.number().check(z.int(), z.nonnegative()),
+          manifestHash: z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/i)) }),
+        z.strictObject({ destinationId: z.string().check(z.minLength(1)), success: z.literal(false), error: z.string(), errorCode: z.optional(z.string()) }),
       ]),
-      response: { 200: DirectTransferImportAbortResponseSchema, 400: z.object({ success: z.literal(false), error: z.string() }).strict() },
+      response: { 200: DirectTransferImportAbortResponseSchema, 400: z.strictObject({ success: z.literal(false), error: z.string() }) },
     },
   }, async (request, reply) => {
     const transferId = decodeDirectPeerTransferPathKey(request.params.transferId);
@@ -1148,19 +1129,19 @@ export function createDirectPeerTransferApp(params: Readonly<{
   typed.get('/machine-transfers/direct/:transferId/chunks/:sequence', {
     schema: {
       params: z.object({
-        transferId: z.string().min(1),
-        sequence: z.coerce.number().int().nonnegative(),
+        transferId: z.string().check(z.minLength(1)),
+        sequence: z.coerce.number().check(z.int(), z.nonnegative()),
       }),
-      querystring: z.object({}).passthrough(),
-      headers: z.object({
-        authorization: z.string().min(1).optional(),
-        [DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER]: z.string().min(1),
-      }).passthrough(),
+      querystring: z.looseObject({}),
+      headers: z.looseObject({
+        authorization: z.optional(z.string().check(z.minLength(1))),
+        [DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER]: z.string().check(z.minLength(1)),
+      }),
       response: {
         200: TransferChunkEnvelopeSchema,
-        400: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        401: z.object({ ok: z.literal(false), error: z.string() }).strict(),
-        404: z.object({ ok: z.literal(false), error: z.string() }).strict(),
+        400: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        401: z.strictObject({ ok: z.literal(false), error: z.string() }),
+        404: z.strictObject({ ok: z.literal(false), error: z.string() }),
       },
     },
   }, async (request, reply) => {

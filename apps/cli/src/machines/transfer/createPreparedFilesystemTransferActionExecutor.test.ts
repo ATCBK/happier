@@ -15,6 +15,18 @@ import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { startDirectPeerTransferServer } from './directPeerTransport';
 
 describe('prepared filesystem Actions', () => {
+  it('refuses a download without host operation custody before publishing bytes', async () => {
+    const rootPath = await mkdtemp(join(tmpdir(), 'happier-unowned-download-'));
+    const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
+    try {
+      const execute = createPreparedFilesystemTransferActionExecutor({ lifecycle, workingDirectory: rootPath,
+        accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] } });
+      await expect(execute({ actionId: 'daemon.filesystem.download', input: { rootPath, path: 'annotation.png', asZip: false,
+        destination: { destinationId: 'reader' } }, context: { runtimeAccountId: 'requester' } }))
+        .resolves.toMatchObject({ success: false, status: 'failed', errorCode: 'FILESYSTEM_OPERATION_OWNER_REQUIRED' });
+      expect(lifecycle.getState()).toMatchObject({ status: 'stopped', publishedTransferCount: 0 });
+    } finally { await lifecycle.stop(); await rm(rootPath, { recursive: true, force: true }); }
+  });
   it('refuses a fresh filesystem Action at its first owner entry during the closed drain', async () => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-fresh-filesystem-drain-'));
     const admissionDrain = createDaemonAdmissionDrain();
@@ -43,7 +55,7 @@ describe('prepared filesystem Actions', () => {
   });
   it('does not label an unconfirmed transfer owner outcome as failed', async () => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-unknown-transfer-'));
-    const lifecycle = createDirectTransferServerLifecycle({ listenerClasses: ['loopback_http'],
+    const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'],
       startServer: async () => { throw Object.assign(new Error('Listening outcome is unconfirmed'), { errorCode: 'indeterminate' }); } });
     try {
       const owner = createPreparedFilesystemTransferActionExecutor({ lifecycle, workingDirectory: rootPath, accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] } });
@@ -63,7 +75,9 @@ describe('prepared filesystem Actions', () => {
     const manager = createDirectTransferImportSessionManager({ admissionDrain, accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] } });
     const lifecycle = createDirectTransferServerLifecycle({ admissionDrain, bindPort: 46001, listenerClasses: ['loopback_http'],
       startServer: async () => { notifyListenerStarted(); await listenerRelease; return { activity: manager.activity,
-        port: 46001, stop: () => manager.close(), issueImportOpenAuthorizationToken: manager.issueImportOpenAuthorizationToken,
+        port: 46001, stop: () => manager.close(),
+        requestPreparedTransfer: async () => { throw new Error('Prepared RPC is not exercised by this socket fixture'); },
+        issueImportOpenAuthorizationToken: manager.issueImportOpenAuthorizationToken,
         openTrustedImportSession: manager.openTrustedImportSession, abortImportTransferSession: manager.abortImportTransferSession,
         waitForImportTransferSettlement: manager.waitForImportTransferSettlement, cleanupExpiredImportSessions: manager.cleanupExpiredImportSessions,
         getNextImportSessionExpiryAt: manager.getNextImportSessionExpiryAt }; } });
@@ -126,6 +140,7 @@ describe('prepared filesystem Actions', () => {
     // The listening socket is the OS boundary; the real manager owns all import logic.
     const lifecycle = createDirectTransferServerLifecycle({ bindPort: 46001, listenerClasses: ['loopback_http'],
       startServer: async () => ({ port: 46001, stop: () => manager.close(),
+        requestPreparedTransfer: async () => { throw new Error('Prepared RPC is not exercised by this socket fixture'); },
         issueImportOpenAuthorizationToken: manager.issueImportOpenAuthorizationToken,
         openTrustedImportSession: manager.openTrustedImportSession,
         abortImportTransferSession: manager.abortImportTransferSession,

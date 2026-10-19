@@ -63,10 +63,14 @@ function isProductionTsFile(filePath: string): boolean {
 }
 
 describe('transfer rpc family (import-boundary)', () => {
-    it('confines canonical DAEMON_TRANSFER_* tokens to transfer rpc and handler wiring', async () => {
+    it('confines canonical DAEMON_TRANSFER_* tokens to transfer rpc, handler wiring, and transport admission', async () => {
         const cliRoot = fileURLToPath(new URL('../../..', import.meta.url)); // apps/cli/src
         const transfersRoot = fileURLToPath(new URL('..', import.meta.url)); // apps/cli/src/transfers
         const rpcHandlersRoot = fileURLToPath(new URL('../../rpc/handlers', import.meta.url)); // apps/cli/src/rpc/handlers
+        const transportOwners = new Set([
+            fileURLToPath(new URL('../../api/machine/rpcHandlers.preparedTransfers.ts', import.meta.url)),
+            fileURLToPath(new URL('../../api/rpc/RpcHandlerManager.ts', import.meta.url)),
+        ]);
 
         const files = (await listFilesRecursively(cliRoot)).filter(isProductionTsFile);
 
@@ -81,8 +85,8 @@ describe('transfer rpc family (import-boundary)', () => {
                 expect(content).not.toContain(token);
             }
 
-            // Canonical DAEMON_TRANSFER_* tokens are allowed only in canonical transfer registrar/handler code.
-            if (filePath.startsWith(transfersRoot) || filePath.startsWith(rpcHandlersRoot)) {
+            // The prepared-transfer carrier registers phases; RPC admission validates their authority.
+            if (filePath.startsWith(transfersRoot) || filePath.startsWith(rpcHandlersRoot) || transportOwners.has(filePath)) {
                 continue;
             }
             for (const token of CANONICAL_TRANSFER_RPC_TOKENS) {

@@ -79,6 +79,7 @@ describe('direct transfer import endpoints', () => {
     const destinationPath = join(tempDir, 'payload.bin');
 
     const importSessionManager = {
+      ...createDirectTransferImportSessionManager(),
       issueImportOpenAuthorizationToken: () => ({
         authorizationToken: 'scoped-import-open-token',
         expiresAt: 1_000,
@@ -457,7 +458,7 @@ describe('direct transfer import endpoints', () => {
         path: 'after-close.bin',
         sizeBytes: payload.length,
         overwrite: true,
-      })).rejects.toThrow('Transfer session store is disposed');
+      })).resolves.toMatchObject({ success: false });
     } finally {
       tempEnv.restore();
       await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
@@ -709,6 +710,7 @@ describe('direct transfer import endpoints', () => {
   it('maps keepSession finalize failures from the import session manager to a structured 400 response', async () => {
     const abortImportTransferSession = vi.fn(async () => {});
     const importSessionManager = {
+      ...createDirectTransferImportSessionManager(),
       issueImportOpenAuthorizationToken: () => ({
         authorizationToken: 'unused-token',
         expiresAt: 1_000,
@@ -781,6 +783,7 @@ describe('direct transfer import endpoints', () => {
 
   it('maps finalize recovery failures to an exact application/json 500 response', async () => {
     const importSessionManager = {
+      ...createDirectTransferImportSessionManager(),
       issueImportOpenAuthorizationToken: () => ({
         authorizationToken: 'unused-token',
         expiresAt: 1_000,
