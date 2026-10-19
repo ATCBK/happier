@@ -51,7 +51,7 @@ const outgoing: SocketRpcRequestPayload[] = [];
 // Native file APIs are an OS boundary, outside this HTTP/Action journey.
 vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 let daemonAnswer: (request: SocketRpcRequestPayload) => unknown = () => { throw new Error('Unexpected daemon request'); };
-installDisconnectedServerSocketBoundary((socket) => {
+const configureSessionSocket: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['configureSocket']> = (socket) => {
   vi.mocked(socket.connect).mockImplementation(() => {
     socket.connected = true;
     for (const listener of socket.listeners('connect')) listener();
@@ -67,7 +67,8 @@ installDisconnectedServerSocketBoundary((socket) => {
     outgoing.push(request);
     return { ok: true, result: await daemonAnswer(request) };
   });
-});
+};
+installDisconnectedServerSocketBoundary(configureSessionSocket);
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
@@ -1147,7 +1148,8 @@ describe('default Action executor mode and catalog contracts', () => {
     resetDynamicModelProbeCacheForTests();
     const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }) };
     serverId = await homes.addHome({ name: 'Mode Home', serverUrl: 'https://mode-actions.test', serverIdentityId: 'srv_mode_home', accountId: 'alice', credentials });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials, request: homes.request });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://mode-actions.test', accountId: 'alice', credentials,
+      request: homes.request, configureSocket: configureSessionSocket });
     storage.getState().activateProfileScope({ serverId: connection.serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId: connection.serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
