@@ -25,6 +25,12 @@ import type { MemoryCreationReceipt } from '@/sync/ops/promptLibrary/memoryDocum
 import { t } from '@/text';
 
 import { MemoryDuplicateChoice } from './MemoryDocumentBody';
+import { SaveMemoryDecisionSaved } from './SaveMemoryDecisionSaved';
+import {
+  memoryDecisionChosenLabel,
+  memoryDecisionTargetId,
+  SaveMemoryDecisionTargetChooser,
+} from './SaveMemoryDecisionTarget';
 import { useSaveMemoryDecision } from './useSaveMemoryDecision';
 
 /** What opens the sheet: the exact committed message, and what to prefill from it. */
@@ -69,8 +75,16 @@ export function seedMemoryDecisionFromMessage(
  * form leads with it and asks Update / Replace / Keep both, keeping everything typed.
  */
 export function SaveMemoryDecisionForm(props: FormProps) {
+  const model = useSaveMemoryDecision(props);
   const { text, setText, reason, setReason, expiry, setExpiry, nowMs, expiryDraft, setExpiryDraft,
-    review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, sessionSource } = useSaveMemoryDecision(props);
+    review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, sessionSource,
+    creationReceipt, selectedTarget, targets } = model;
+  // The decision is persisted but its Context did not take it: the sheet turns to that recovery.
+  const unattached = creationReceipt?.attachment === 'conflict' ? creationReceipt : null;
+  const chosen = selectedTarget
+    ? targets.find(row => memoryDecisionTargetId(row.target) === memoryDecisionTargetId(selectedTarget)) ?? null
+    : null;
+  const chosenLabel = memoryDecisionChosenLabel(model);
 
   const expiryOptions = React.useMemo(
     (): ReadonlyArray<SegmentedChoiceOption<Expiry>> => [
@@ -96,11 +110,13 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             {t('memoryContext.memory.sheetTitle')}
           </Text>
           <Text style={styles.meta}>
-            {t(
-              sessionSource
-                ? 'memoryContext.memory.sheetTarget'
-                : 'memoryContext.memory.sheetTargetPerson',
-            )}
+            {selectedTarget?.scope === 'project' && chosenLabel !== null
+              ? t('memoryContext.memory.projectScope', { project: chosenLabel })
+              : t(
+                  sessionSource && !selectedTarget
+                    ? 'memoryContext.memory.sheetTarget'
+                    : 'memoryContext.memory.sheetTargetPerson',
+                )}
           </Text>
         </View>
       </View>
@@ -138,6 +154,14 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             testID="save-memory-decision.refused"
             tone="warning"
             reason={t('memoryContext.memory.sheetRefused')}
+          />
+        ) : null}
+        {unattached ? (
+          <SaveMemoryDecisionSaved
+            receipt={unattached}
+            workspaceRef={chosen?.workspaceRef ?? null}
+            projectName={chosenLabel ?? ''}
+            onDone={props.onSaved}
           />
         ) : null}
         {review ? (
@@ -183,6 +207,7 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             )}
           </Text>
         </View>
+        <SaveMemoryDecisionTargetChooser model={model} />
         <SegmentedChoiceItem<Expiry>
           title={t('memoryContext.memory.sheetExpires')}
           options={expiryOptions}
@@ -211,21 +236,32 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         <Text style={[styles.meta, styles.approval]} numberOfLines={1}>
           {t('memoryContext.memory.sheetApprovedByYouNow')}
         </Text>
-        <RoundButton
-          testID="save-memory-decision.cancel"
-          size="small"
-          display="inverted"
-          title={notice === 'pending' ? t('common.close') : t('common.cancel')}
-          onPress={props.onClose}
-        />
-        <RoundButton
-          testID="save-memory-decision.save"
-          size="small"
-          title={saveLabel}
-          disabled={!canSave}
-          loading={busy}
-          action={save}
-        />
+        {unattached ? null : (
+          <RoundButton
+            testID="save-memory-decision.cancel"
+            size="small"
+            display="inverted"
+            title={notice === 'pending' ? t('common.close') : t('common.cancel')}
+            onPress={props.onClose}
+          />
+        )}
+        {unattached ? (
+          <RoundButton
+            testID="save-memory-decision.done"
+            size="small"
+            title={t('common.done')}
+            onPress={props.onSaved}
+          />
+        ) : (
+          <RoundButton
+            testID="save-memory-decision.save"
+            size="small"
+            title={saveLabel}
+            disabled={!canSave}
+            loading={busy}
+            action={save}
+          />
+        )}
       </View>
     </View>
   );

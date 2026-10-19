@@ -82,4 +82,59 @@ describe('Save as decision from a Discussion message', () => {
       } finally { await reopened.screen.unmount(); }
     } finally { await f.home.dispose(); }
   });
+
+  async function flush(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    return screen;
+  }
+  const projectChoice = (f: Awaited<ReturnType<typeof createMemoryDecisionHomeFixture>>) => `save-memory-decision.target:project:${f.serverId}:payments`;
+  async function choosePayments(screen: Awaited<ReturnType<typeof renderScreen>>, f: Awaited<ReturnType<typeof createMemoryDecisionHomeFixture>>) {
+    await flush(screen);
+    const choice = screen.find(node => node.props?.testID === projectChoice(f) && typeof node.props.onPress === 'function');
+    await act(async () => { choice.props.onPress(); });
+  }
+
+  it('offers Only me and the writable Project, defaults to the source’s own place and saves where it is told', async () => {
+    const f = await createMemoryDecisionHomeFixture();
+    f.recover();
+    const { screen, onSaved } = await mount(f);
+    try {
+      await flush(screen);
+      // A Discussion's natural place is the person's own memory; no memory exists yet, so only they can see it.
+      expect(screen.findByTestId('save-memory-decision.target')).toBeTruthy();
+      expect(screen.findByTestId('save-memory-decision.audience')).toBeTruthy();
+      await choosePayments(screen, f);
+      await save(screen);
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      expect(f.readSource().attachments?.length).toBe(1);
+      const attachment = f.readSource().attachments![0];
+      if (attachment?.purpose !== 'context') throw new Error('Expected a context attachment');
+      const attached = attachment.entry.ref;
+      const body = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(attached.artifactId)!));
+      expect(body.index[0]).toMatchObject({ text: 'Retry cap stays at 5' });
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
+
+  it('says Saved, not attached yet, links the saved fact and attaches that same document on demand', async () => {
+    const f = await createMemoryDecisionHomeFixture();
+    const { screen, onSaved } = await mount(f);
+    try {
+      await choosePayments(screen, f);
+      await save(screen);
+      expect(screen.findByTestId('save-memory-decision.saved')).toBeTruthy();
+      expect(screen.findByTestId('save-memory-decision.openSaved')).toBeTruthy();
+      // The sheet stays usable: Save gives way to Done, and nothing was reported saved-and-closed yet.
+      expect(screen.findAllByTestId('save-memory-decision.save')).toHaveLength(0);
+      expect(onSaved).not.toHaveBeenCalled();
+      const saved = f.home.boundary.list();
+      expect(saved).toHaveLength(1);
+      f.recover();
+      const attach = screen.find(node => node.props?.testID === 'save-memory-decision.attach' && typeof node.props.action === 'function');
+      await act(async () => { await attach.props.action(); });
+      const recovered = f.readSource().attachments?.[0];
+      expect(recovered?.purpose === 'context' && recovered.entry.ref.artifactId).toBe(saved[0]!.id);
+      expect(f.home.boundary.list()).toHaveLength(1);
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
 });

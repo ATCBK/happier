@@ -4,6 +4,8 @@ import {
 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { MEMORY_ARCHIVE_TOPIC_TITLE_V1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { selectMemoryTargetV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { SessionContextIntentV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
@@ -14,6 +16,8 @@ export type MemoryCreationReceipt = Readonly<{
   ref: PromptDocArtifactRefV1;
   attachment: 'attached' | 'conflict';
   attachmentFailure?: MemoryAttachmentFailureV1;
+  /** Exact persisted fact; recovery opens this fact rather than submitting the draft again. */
+  factId?: string;
 }>;
 
 /** Creation saves the fact before attachment CAS; retain its exact document even on conflict. */
@@ -21,7 +25,7 @@ export function readMemoryCreationReceipt(result: ActionExecuteResult): MemoryCr
   if (!result.ok) return null;
   const parsed = MemoryMutationResultV1Schema.safeParse(result.result);
   return parsed.success && parsed.data.ref && parsed.data.attachment
-    ? { ref: parsed.data.ref, attachment: parsed.data.attachment,
+    ? { ref: parsed.data.ref, attachment: parsed.data.attachment, factId: parsed.data.factId,
       ...(parsed.data.attachmentFailure ? { attachmentFailure: parsed.data.attachmentFailure } : {}) }
     : null;
 }
@@ -124,6 +128,45 @@ export type MemoryDecisionDraft = MemoryFactDraft & Readonly<{
   sourceMessageRef: CoordinationMessageRefV1;
 }>;
 export type MemoryScopedDecisionDraft = MemoryScopedFactDraft & MemoryDecisionDraft;
+
+export type MemoryDecisionTarget = Readonly<{
+  target: MemoryScopeTargetV1;
+  ref: PromptDocArtifactRefV1 | null;
+  /** Project naming stays at the existing workspace label owner; Account copy belongs to the sheet. */
+  workspaceRef: WorkspaceRefV1 | null;
+  label: string | null;
+}>;
+
+/** Finite chooser read through the existing Project catalog, scope admission and batched Artifact headers. */
+export async function readMemoryDecisionTargets(serverId: string, signal?: AbortSignal) {
+  const [{ captureLazyActionAccountContext }, { readUiMemoryDecisionTargetContexts }, { withUiPromptLibraryArtifactReader }] = await Promise.all([
+    import('@/sync/ops/actions/actionAccountContext'), import('@/sync/ops/actions/readUiMemoryInheritedContext'), import('./promptLibraryArtifactStore'),
+  ]);
+  const account = await captureLazyActionAccountContext(serverId, signal);
+  try {
+    const context = { serverId: account.serverId, surface: 'ui' as const, authority: 'present_user' as const, signal };
+    const scopes = await readUiMemoryDecisionTargetContexts(account, context);
+    let coverage = scopes.coverage;
+    const projected = await withUiPromptLibraryArtifactReader(async reader => Promise.all(scopes.targets.map(async row => {
+      const docs = row.context.entries.filter(entry => entry.ref.kind === 'doc');
+      const headers = await Promise.all(docs.map(entry => reader.readArtifactHeader(entry.ref).catch(() => {
+        account.assertCurrent(); signal?.throwIfAborted(); return null;
+      })));
+      const index = headers.findIndex(header => header?.header?.kind === 'memory_doc.v1');
+      if (index < 0 && headers.some(header => !header?.header)) { coverage = 'partial'; return null; }
+      if (index >= 0 && (headers[index]?.access === 'view' || !headers[index]?.access)) return null;
+      const ref: PromptDocArtifactRefV1 | null = index < 0 ? null : { kind: 'doc', artifactId: docs[index]!.ref.artifactId,
+        serverId: docs[index]!.ref.serverId ?? account.serverId };
+      const selection = selectMemoryTargetV1({ isBot: false, botRef: null,
+        project: { status: 'ready', ref: row.target.scope === 'project' ? ref : null },
+        account: { status: 'ready', ref: row.target.scope === 'account' ? ref : null } });
+      return { target: row.target, ref: selection.ref, workspaceRef: row.workspaceRef, label: row.label } satisfies MemoryDecisionTarget;
+    })), { serverId: account.serverId, signal, accountContext: account });
+    account.assertCurrent(); signal?.throwIfAborted();
+    return { targets: projected.filter((row): row is MemoryDecisionTarget => row !== null),
+      coverage };
+  } finally { account.dispose(); }
+}
 
 /**
  * The memory surfaces' only writers: the public `memory.*` and Session context Actions. Work, the
