@@ -197,7 +197,7 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
 /**
  * A follower row's one line. One relation says its level and what that wakes. A receiver that is both its manager
  * and an ordinary follower stays one row: who it is, that it also follows, and the union the Home delivers
- * (what the canonical resolver says can wake it, else its next turn), never just one relation's level.
+ * (wake, next turn, or no events selected), never just one relation's level.
  */
 export function describeSessionFollower(follower: Pick<SessionFollower, 'manager' | 'relations' | 'effective'>): string {
     const manager = follower.manager ? t('session.collaboration.pane.followersManager') : null;
@@ -205,11 +205,16 @@ export function describeSessionFollower(follower: Pick<SessionFollower, 'manager
     if (only && follower.relations.length === 1) {
         return joinHappierFacts(manager, describeSessionFollowLevel(projectFollowPolicyEditorV1(only.policy).preset as FollowPreset));
     }
-    const wakes = Object.values(follower.effective).some((event) => event.delivery === 'wake');
+    const deliveries = Object.values(follower.effective);
+    const meaning = deliveries.some((event) => event.delivery === 'wake')
+        ? t('session.collaboration.pane.followersEffectiveWake')
+        : deliveries.some((event) => event.delivery === 'next_turn')
+            ? t('session.collaboration.pane.followersEffectiveNextTurn')
+            : t('session.collaboration.pane.followersEffectiveOff');
     return joinHappierFacts(
         manager,
         t('session.collaboration.pane.followersAlsoFollows'),
-        wakes ? t('session.collaboration.pane.followersEffectiveWake') : t('session.collaboration.pane.followersEffectiveNextTurn'),
+        meaning,
     );
 }
 

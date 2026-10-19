@@ -9521,6 +9521,7 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersAlsoFollows: '也在關注它',
         followersEffectiveWake: '可以喚醒它',
         followersEffectiveNextTurn: '在它的下一輪',
+        followersEffectiveOff: '未選取任何事件',
         followersSessions: ({ count }: { count: number }) => `${count} 個工作階段`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? '在關注' : '在關注'}`,
         justYouBody: ({ home }) => `與 ${home} 上的人分享。他們可以關注進度、在這裡討論,並在你離開時接手。`,

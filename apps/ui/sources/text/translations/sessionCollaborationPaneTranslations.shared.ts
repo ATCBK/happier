@@ -73,6 +73,7 @@ export const en = {
     followersAlsoFollows: 'Also follows it',
     followersEffectiveWake: 'Can wake it',
     followersEffectiveNextTurn: 'At its next turn',
+    followersEffectiveOff: 'No events selected',
     followersSessions: ({ count }: { count: number }) => count === 1 ? '1 session' : `${count} sessions`,
     followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'follows it' : 'follow it'}`,
     justYouBody: ({ home }: { home: string }) => `Share it with people on ${home}. They can follow along, talk it through here, and take over while you’re away.`,

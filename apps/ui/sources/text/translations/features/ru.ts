@@ -9562,6 +9562,7 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersAlsoFollows: 'Также следит за ней',
         followersEffectiveWake: 'Может разбудить её',
         followersEffectiveNextTurn: 'На её следующем ходу',
+        followersEffectiveOff: 'События не выбраны',
         followersSessions: ({ count }: { count: number }) => count === 1 ? '1 сессия' : `${count} сесс.`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'следит за ней' : 'следят за ней'}`,
         justYouBody: ({ home }) => `Поделитесь ею с людьми в ${home}. Они смогут следить за ней, обсуждать её здесь и продолжить, пока вас нет.`,

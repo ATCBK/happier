@@ -9537,6 +9537,7 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersAlsoFollows: 'Também a segue',
         followersEffectiveWake: 'Pode acordá-la',
         followersEffectiveNextTurn: 'No próximo turno',
+        followersEffectiveOff: 'Nenhum evento selecionado',
         followersSessions: ({ count }: { count: number }) => count === 1 ? '1 sessão' : `${count} sessões`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'a segue' : 'a seguem'}`,
         justYouBody: ({ home }) => `Compartilhe com pessoas em ${home}. Elas podem acompanhar, conversar aqui e assumir enquanto você está fora.`,

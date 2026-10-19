@@ -34,4 +34,23 @@ describe('describeSessionFollower', () => {
         expect(line).toContain('At its next turn');
         expect(line).not.toContain('Can wake it');
     });
+
+    it('does not promise next-turn delivery when the merged Custom policies select no events', () => {
+        const off: SessionFollowSourceV1['policy'] = { preset: 'custom', events: {} };
+        const census = projectSessionFollowerCensus({
+            sources: [
+                { ...source('lead', 'manager', 'quiet'), policy: off },
+                { ...source('lead', 'follower', 'quiet'), policy: off },
+            ],
+            follows: [],
+            peopleCount: 0,
+        });
+        const follower = census.sessions?.[0];
+        if (!follower) throw new Error('expected one follower');
+        expect(Object.values(follower.effective).every((event) => event.delivery === 'off')).toBe(true);
+        const line = describeSessionFollower(follower);
+        expect(line).toContain('No events selected');
+        expect(line).not.toContain('At its next turn');
+        expect(line).not.toContain('Can wake it');
+    });
 });

@@ -9526,6 +9526,7 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersAlsoFollows: 'このセッションもフォロー中',
         followersEffectiveWake: '起こすことができます',
         followersEffectiveNextTurn: '次のターンで',
+        followersEffectiveOff: 'イベント未選択',
         followersSessions: ({ count }: { count: number }) => `${count} セッション`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'がフォロー中' : 'がフォロー中'}`,
         justYouBody: ({ home }) => `${home}のメンバーと共有しましょう。見守ったり、ここで話し合ったり、あなたが不在の間に引き継いだりできます。`,
