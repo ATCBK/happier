@@ -112,7 +112,7 @@ export function useUsageWork(
       if (counts.get(label)! < 2) return [row.sessionId, label] as const;
       const when = row.lastObservedAtMs > 0 ? formatUsageCalendarDate(row.lastObservedAtMs, query.timeZoneOffsetMinutes ?? 0,
         { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-      return [row.sessionId, [label, machineWords(row.machineIds), when].filter(Boolean).join(' · ')] as const;
+      return [row.sessionId, [label, when, machineWords(row.machineIds)].filter(Boolean).join(' · ')] as const;
     }));
   }, [summary, renderables, serverId, machineWords, query.timeZoneOffsetMinutes]);
   const sessionLabel = React.useCallback(

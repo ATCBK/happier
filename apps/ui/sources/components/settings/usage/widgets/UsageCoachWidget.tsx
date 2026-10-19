@@ -38,6 +38,8 @@ import {
   UsageBodyInsufficient,
   UsageBodyReading,
   UsageCoverageLine,
+  UsageShowAllRows,
+  leadingUsageRows,
   SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
   useSettledBodyHeightFloor,
@@ -137,7 +139,7 @@ function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; te
       <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
         series={[{ id: sample.metric, label: caption, color: theme.colors.text.secondary,
           points: sample.points.map(point => ({ id: point.evidenceId, x: point.observedAtMs, y: point.value })) }]} />
-      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={2}>{caption}</Text>
+      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]}>{caption}</Text>
     </View>
   );
 }
@@ -526,6 +528,9 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   const presentation = useWidgetPresentation();
   const wide = props.layout === 'row' && (presentation?.geometry?.width ?? 0) >= 560;
   const { finding, applied, controller, snapshot } = props;
+  // A finding can rest on hundreds of observations: Why leads with a few and folds the rest behind Show all.
+  const [evidenceExpanded, setEvidenceExpanded] = React.useState(false);
+  const ledEvidence = leadingUsageRows(finding.evidence, evidenceExpanded);
   const pending = snapshot.pending.some(
     (row) => row.evidenceKey === finding.evidenceKey,
   );
@@ -657,12 +662,15 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
               {formatMeasurement(measurement)}
             </Text>)}
           </View>
-          {finding.evidence.map(reference => <Text key={`${reference.kind}:${reference.id}`}
+          {ledEvidence.rows.map(reference => <Text key={`${reference.kind}:${reference.id}`}
             testID={`${props.testID}.evidence.${reference.id}`} selectable style={[styles.evidence, text('subtitle')]}>
             {`${t(`usage.board.coach.evidence_${reference.kind}`)} · ${formatWithCachedDateTimeFormatter(reference.observedAtMs, getPreferredLanguage(), {
               year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
             })}`}
           </Text>)}
+          <UsageShowAllRows label={t('usage.board.coach.observationsTitle')} testID={`${props.testID}.evidence.showAll`}
+            total={finding.evidence.length} hidden={ledEvidence.hidden} expanded={evidenceExpanded}
+            onToggle={() => setEvidenceExpanded((value) => !value)} />
           {finding.basis.citations.length ? <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.citationsTitle')}</Text> : null}
           {finding.basis.citations.map(citation => <HappierPressable key={citation.url} accessibilityRole="link"
             accessibilityLabel={`${citation.url}, ${t(`usage.board.coach.citation_${citation.sourceKind}`)}, ${citation.asOf}`} onPress={() => { void openExternalUrl(citation.url); }}>

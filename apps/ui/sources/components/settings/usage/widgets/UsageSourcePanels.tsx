@@ -7,7 +7,7 @@ import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFram
 import { t } from '@/text';
 import { formatTokenCount } from '@/utils/format/usageNumbers';
 import { UsageModelPricesLine } from './UsageModelPrices';
-import { UsageBodyInsufficient, UsageBodyNoUsage, UsageCoverageLine, readUsageCoverageGaps,
+import { UsageBodyInsufficient, UsageBodyNoUsage, UsageCoverageLine, UsageShowAllRows, leadingUsageRows, readUsageCoverageGaps,
   usageCoverageDescription, usagePeriodPhrase, usageSourceTitle, useUsagePluginTheme, type UsageBodyProps } from './usageBodyKit';
 
 const statusKeys = {
@@ -24,19 +24,39 @@ const captureKeys = {
 export function UsageSourceCoverageWidget(props: UsageBodyProps) {
   const theme = useUsagePluginTheme();
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
+  const [expanded, setExpanded] = React.useState(false);
+  const rows = React.useMemo(() => groupCoverageRows(props.slice.accounting?.coverage?.sources ?? []), [props.slice.accounting]);
+  const led = leadingUsageRows(rows, expanded);
   if (!props.slice.accounting) return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
-  const sources = props.slice.accounting.coverage?.sources ?? [];
   const gaps = readUsageCoverageGaps(props.slice, ['accounting']);
   const description = usageCoverageDescription(props.slice, ['accounting']);
   const failed = gaps.some(gap => gap.status === 'error');
   return <View testID={`${props.testID}.facts`}>
-    {sources.length ? <HappierDataRows theme={theme} testID={`${props.testID}.rows`} label={t('usage.widgets.usage_source_coverage')}
-      columns={[{ label: t('usage.widgets.usage_sources') }, { label: t('usage.widgets.usage_source_coverage') }]}
-      rows={sources.map(source => [usageSourceTitle(source.source), sourceCoverageLabel(source)])} />
+    {rows.length ? <>
+      <HappierDataRows theme={theme} testID={`${props.testID}.rows`} label={t('usage.widgets.usage_source_coverage')}
+        columns={[{ label: t('usage.widgets.usage_sources') }, { label: t('usage.widgets.usage_source_coverage') }]}
+        rows={led.rows.map(row => [row.count > 1 ? `${row.title} ×${row.count}` : row.title, row.label])} />
+      <UsageShowAllRows label={t('usage.widgets.usage_source_coverage')} testID={`${props.testID}.showAll`} total={rows.length}
+        hidden={led.hidden} expanded={expanded} onToggle={() => setExpanded(value => !value)} />
+    </>
       : <UsageBodyInsufficient testID={`${props.testID}.unknown`} replacesContent={false} title={t('usage.board.sources.coverageUnknown')} />}
     {description ? <SurfaceFreshnessLine testID={`${props.testID}.detail`} reason={description} tone={failed ? 'warning' : 'neutral'}
       {...(failed ? { action: { label: t('common.retry'), onPress: props.model.refresh } } : {})} /> : null}
   </View>;
+}
+
+/** One capture is read per machine, so a fleet repeats the same source and status: said once with its count. */
+function groupCoverageRows(sources: readonly UsageAnalyticsCoverage['sources'][number][]) {
+  const groups = new Map<string, { title: string; label: string; count: number }>();
+  for (const source of sources) {
+    const title = usageSourceTitle(source.source);
+    const label = sourceCoverageLabel(source);
+    const key = `${title}\u0000${label}`;
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { title, label, count: 1 });
+  }
+  return [...groups.values()];
 }
 
 function sourceCoverageLabel(source: UsageAnalyticsCoverage['sources'][number]): string {

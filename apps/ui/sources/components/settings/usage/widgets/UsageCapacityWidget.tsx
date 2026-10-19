@@ -595,7 +595,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   cellIdentity: { flexShrink: 1, minWidth: 0 },
   // The phone's list under the pooled bar: a row per account, its figure at the end in a column of its own.
-  pooledList: { gap: theme.space.s12 },
+  pooledList: { gap: theme.space.s16 },
   listedRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', columnGap: theme.space.s12 },
   listedIdentity: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   cellValue: {

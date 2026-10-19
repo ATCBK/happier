@@ -743,6 +743,22 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.getTextContent()).toContain(evidenceLine);
   });
 
+  it('lists a finding\'s many observations behind Why as a led list with Show all, not a wall of lines', async () => {
+    const first = coach.findings[0]!;
+    const observation = first.evidence[0]!;
+    const many = { ...coach, findings: [{ ...first,
+      evidence: Array.from({ length: 40 }, (_, index) => ({ ...observation, id: `obs-${index}`, observedAtMs: observation.observedAtMs + index * 60_000 })) },
+      ...coach.findings.slice(1)] };
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={{ ...slice, coach: many }} id="usage_coach" testID="coach" />);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
+    const listed = () => new Set(screen.findAll(node => String(node.props.testID ?? '').startsWith('coach.finding.compaction_storms.evidence.obs-'))
+      .map(node => node.props.testID)).size;
+    expect(listed()).toBeLessThan(10);
+    expect(listed()).toBeGreaterThan(0);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.evidence.showAll.toggle');
+    expect(listed()).toBe(40);
+  });
+
   it('coach shows the evidence-backed finding, hides a dismissed one and keeps insufficient checks visible', async () => {
     const screen = await renderScreen(
       <UsageCoachWidget {...props} id="usage_coach" testID="coach" />,
