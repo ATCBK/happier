@@ -1,0 +1,89 @@
+import {
+  defineProtocolArray, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject,
+  defineProtocolString, defineProtocolUnion,
+} from '@happier-dev/plugin-sdk/protocol';
+import {
+  TriageSourceFailureV1Schema,
+  TriageConfiguredSourceConnectedAccountInstanceV1Schema, TriageSourceEntryLocalRefV1Schema,
+  TriageEntryLocatorV1Schema,
+} from '@happier-dev/triage-protocol/v1';
+
+export const LINEAR_PLUGIN_ID = 'happier.linear';
+export const LINEAR_SOURCE_ID = 'linear-issues';
+export const LINEAR_SERVICE_ID = 'linear-account';
+export const LINEAR_PURPOSE = 'linear-api';
+export const LINEAR_PERSONAL_KEY = 'personal-api-key';
+export const LINEAR_ORIGIN = 'https://api.linear.app';
+export const LINEAR_ACTIONS = {
+  listInstances: 'linear/list-instances', scan: 'linear/scan', get: 'linear/get',
+  detail: 'linear/detail', create: 'linear/create', edit: 'linear/edit',
+  transition: 'linear/transition', comment: 'linear/comment',
+} as const;
+
+const text = defineProtocolString();
+const id = defineProtocolString({ minLength: 1 });
+const nullableText = defineProtocolUnion([text, defineProtocolLiteral(null)]);
+const named = defineProtocolObject({ id, name: text }, { policy: 'additive-open/drop' });
+const person = defineProtocolUnion([named, defineProtocolLiteral(null)]);
+export const LinearTeamSchema = defineProtocolObject({ id, name: text, key: text }, { policy: 'additive-open/drop' });
+export const LinearRelatedIssueSchema = defineProtocolObject({ id, identifier: text, title: text }, { policy: 'additive-open/drop' });
+const nullableRelated = defineProtocolUnion([LinearRelatedIssueSchema, defineProtocolLiteral(null)]);
+const nullableNumber = defineProtocolUnion([defineProtocolNumber(), defineProtocolLiteral(null)]);
+
+export const LinearIssueSchema = defineProtocolObject({
+  id, identifier: text, title: text, url: text, createdAt: text, updatedAt: text,
+  team: LinearTeamSchema,
+  state: defineProtocolObject({ id, name: text, type: text }, { policy: 'additive-open/drop' }),
+  priority: defineProtocolNumber(), priorityLabel: text, assignee: person, creator: person, project: person,
+  cycle: defineProtocolUnion([defineProtocolObject({ id, name: nullableText, number: defineProtocolNumber() }, { policy: 'additive-open/drop' }), defineProtocolLiteral(null)]),
+  dueDate: nullableText, estimate: nullableNumber, parent: nullableRelated,
+  description: nullableText.optional(),
+  subscribers: defineProtocolObject({ nodes: defineProtocolArray(defineProtocolObject({ id }, { policy: 'additive-open/drop' })) }, { policy: 'additive-open/drop' }),
+}, { policy: 'additive-open/drop' });
+export type LinearIssue = ReturnType<typeof LinearIssueSchema.parse>;
+export const LINEAR_CREATE_FIELDS = ['title', 'body', 'assigneeIds', 'labelIds', 'scopeId', 'projectId', 'priority', 'dueDate', 'estimate', 'parent'] as const;
+export const LINEAR_EDIT_FIELDS = LINEAR_CREATE_FIELDS.filter((field) => field !== 'scopeId');
+
+export const LinearConfigurationSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), teamId: id,
+  involvement: defineProtocolUnion([
+    defineProtocolLiteral('mine'), defineProtocolLiteral('assignee'), defineProtocolLiteral('author'),
+    defineProtocolLiteral('subscribed'), defineProtocolLiteral('everyone'),
+  ]),
+}, { policy: 'closed' });
+export type LinearConfiguration = ReturnType<typeof LinearConfigurationSchema.parse>;
+export const LinearContinuationSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), digest: id, after: id, viewerId: id,
+  limit: defineProtocolNumber({ integer: true, minimum: 1 }),
+}, { policy: 'closed' });
+
+export const LINEAR_DETAIL_SECTIONS = ['overview', 'labels', 'children', 'blocks', 'blockedBy', 'comments', 'transitions'] as const;
+export const LINEAR_DETAIL_TITLES = {
+  overview: 'Description', labels: 'Labels', children: 'Sub-issues', blocks: 'Blocks',
+  blockedBy: 'Blocked by', comments: 'Comments', transitions: 'Workflow states',
+} as const;
+export const LinearDetailInputSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+  localRef: TriageSourceEntryLocalRefV1Schema, lastKnownLocator: TriageEntryLocatorV1Schema.optional(),
+  section: defineProtocolUnion([
+    defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[0]), defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[1]),
+    defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[2]), defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[3]),
+    defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[4]), defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[5]),
+    defineProtocolLiteral(LINEAR_DETAIL_SECTIONS[6]),
+  ]), after: id.optional(),
+}, { policy: 'closed' });
+export type LinearDetailInput = ReturnType<typeof LinearDetailInputSchema.parse>;
+export const LinearDetailEntrySchema = defineProtocolObject({ id, title: text, body: text.optional() }, { policy: 'closed' });
+export const LinearDetailResultSchema = defineProtocolUnion([
+  defineProtocolObject({
+    kind: defineProtocolLiteral('ready'), entries: defineProtocolArray(LinearDetailEntrySchema),
+    description: nullableText.optional(), continuation: id.optional(), truncated: defineProtocolLiteral(true).optional(),
+  }, { policy: 'closed' }),
+  defineProtocolObject({ kind: defineProtocolLiteral('failed'), failure: TriageSourceFailureV1Schema }, { policy: 'closed' }),
+]);
+export type LinearDetailResult = ReturnType<typeof LinearDetailResultSchema.parse>;
+export const LinearCommentInputSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+  localRef: TriageSourceEntryLocalRefV1Schema, lastKnownLocator: TriageEntryLocatorV1Schema.optional(),
+  body: defineProtocolString({ minLength: 1 }),
+}, { policy: 'closed' });

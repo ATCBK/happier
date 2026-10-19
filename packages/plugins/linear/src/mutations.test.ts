@@ -1,0 +1,120 @@
+import { describe, expect, it } from 'vitest';
+import { createLinearIssue, editLinearIssue, transitionLinearIssue, commentLinearIssue } from './mutations.js';
+import { host, instance, issue, localRef, page } from './fixtures.test-support.js';
+
+describe('Linear native writes', () => {
+  it('creates once in the configured team and confirms the returned fields by rereading', async () => {
+    let created = false;
+    const h = host(({ operationName, variables }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearTeam') return { team: { id: 'team-1' } };
+      if (operationName === 'LinearCreate') {
+        expect(variables.input).toEqual({ teamId: 'team-1', title: 'New work', description: 'Native description', priority: 1 });
+        created = true;
+        return { issueCreate: { success: true, issue: { id: 'issue-1' } } };
+      }
+      return { issue: { ...issue, title: created ? 'New work' : issue.title, description: 'Native description', priority: 1 } };
+    });
+    expect(await createLinearIssue({ v: 1, instance, kindId: 'issue', fields: { title: 'New work', body: 'Native description', priority: 1 } }, h.context))
+      .toMatchObject({ kind: 'applied', observation: { localRef, snapshot: { title: 'New work' } } });
+    expect(h.request.mock.calls.filter(([request]) => new TextDecoder().decode(request.body).includes('mutation LinearCreate'))).toHaveLength(1);
+  });
+
+  it('edits through issueUpdate and refuses to claim applied if Linear ignores a requested field', async () => {
+    const h = host(({ operationName }) => operationName === 'LinearViewer' ? { viewer: { id: 'viewer-1' } }
+      : operationName === 'LinearUpdate' ? { issueUpdate: { success: true, issue: { id: issue.id } } }
+        : { issue: { ...issue, description: 'Existing description' } });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { title: 'Changed title' } }, h.context))
+      .toMatchObject({ kind: 'uncertain', observation: { snapshot: { title: issue.title } } });
+  });
+
+  it('does not confirm an empty description from a missing provider field', async () => {
+    const h = host(({ operationName }) => operationName === 'LinearViewer' ? { viewer: { id: 'viewer-1' } }
+      : operationName === 'LinearUpdate' ? { issueUpdate: { success: true, issue: { id: issue.id } } } : { issue });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { body: '' } }, h.context)).toMatchObject({ kind: 'uncertain' });
+  });
+
+  it('uses provider-native label deltas so a concurrent new label survives the edit', async () => {
+    let updated = false;
+    const h = host(({ operationName, query, variables }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearUpdate') {
+        expect(variables.input).toEqual({ addedLabelIds: ['new-label'], removedLabelIds: ['old-label'] });
+        updated = true;
+        return { issueUpdate: { success: true, issue: { id: issue.id } } };
+      }
+      if (query.includes('labels(')) return { issue: { id: issue.id, team: issue.team, labels: page(updated
+        ? [{ id: 'new-label', name: 'New' }, { id: 'concurrent-label', name: 'Concurrent' }]
+        : [{ id: 'old-label', name: 'Old' }]) } };
+      return { issue: { ...issue, description: null } };
+    });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { labelIds: ['new-label'] } }, h.context)).toMatchObject({ kind: 'applied' });
+  });
+
+  it('authorizes the native team workflow state and confirms the transition', async () => {
+    let transitioned = false;
+    const h = host(({ operationName, query, variables }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (query.includes('states(')) return { issue: { id: issue.id, team: { ...issue.team, states: page([{ id: 'done-state', name: 'Done', type: 'completed' }]) } } };
+      if (operationName === 'LinearUpdate') {
+        expect(variables.input).toEqual({ stateId: 'done-state' });
+        transitioned = true;
+        return { issueUpdate: { success: true, issue: { id: issue.id } } };
+      }
+      return { issue: { ...issue, description: null, state: transitioned ? { id: 'done-state', name: 'Done', type: 'completed' } : issue.state } };
+    });
+    expect(await transitionLinearIssue({ v: 1, instance, localRef, transitionId: 'done-state' }, h.context))
+      .toMatchObject({ kind: 'applied', observation: { snapshot: { state: { presentation: 'resolved', completionReason: 'completed' } } } });
+  });
+
+  it('does not replay an answer-lost create or comment', async () => {
+    let writes = 0;
+    const h = host(({ operationName }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearTeam') return { team: { id: 'team-1' } };
+      if (operationName === 'LinearCreate' || operationName === 'LinearComment') { writes += 1; throw new Error('answer lost'); }
+      return { issue: { ...issue, description: null } };
+    });
+    expect(await createLinearIssue({ v: 1, instance, kindId: 'issue', fields: { title: 'One issue' } }, h.context)).toMatchObject({ kind: 'uncertain' });
+    expect(await commentLinearIssue({ v: 1, instance, localRef, body: 'One comment' }, h.context)).toMatchObject({ kind: 'uncertain' });
+    expect(writes).toBe(2);
+  });
+
+  it('confirms the exact created comment and never substitutes an unrelated comment', async () => {
+    let wrongIssue = false;
+    const h = host(({ operationName }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearComment') return { commentCreate: { success: true, comment: { id: 'comment-1' } } };
+      if (operationName === 'LinearCommentRead') return { comment: { id: 'comment-1', body: 'Public update', issue: { id: wrongIssue ? 'other-issue' : issue.id } } };
+      return { issue };
+    });
+    const input = { v: 1, instance, localRef, body: 'Public update' };
+    expect(await commentLinearIssue(input, h.context)).toMatchObject({ kind: 'applied' });
+    wrongIssue = true;
+    expect(await commentLinearIssue(input, h.context)).toMatchObject({ kind: 'uncertain' });
+  });
+
+  it('settles an answer-lost edit from a fresh read and refuses a state outside the team workflow', async () => {
+    let changed = false;
+    const h = host(({ operationName, query }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearUpdate') { changed = true; throw new Error('response lost after apply'); }
+      if (query.includes('states(')) return { issue: { id: issue.id, team: { ...issue.team, states: page([{ id: 'allowed-state', name: 'Started', type: 'started' }]) } } };
+      return { issue: { ...issue, title: changed ? 'Confirmed edit' : issue.title } };
+    });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { title: 'Confirmed edit' } }, h.context)).toMatchObject({ kind: 'applied' });
+    expect(await transitionLinearIssue({ v: 1, instance, localRef, transitionId: 'foreign-state' }, h.context)).toEqual({ kind: 'refused', reason: 'linear/transitionUnavailable' });
+    expect(h.request.mock.calls.filter(([request]) => new TextDecoder().decode(request.body).includes('mutation LinearUpdate'))).toHaveLength(1);
+  });
+
+  it('refuses unsupported assignment cardinality or foreign parents before any write', async () => {
+    const h = host(({ operationName }) => operationName === 'LinearViewer' ? { viewer: { id: 'viewer-1' } } : { issue });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { assigneeIds: ['a', 'b'] } }, h.context)).toMatchObject({ kind: 'refused' });
+    expect(await createLinearIssue({ v: 1, instance, kindId: 'issue', fields: { title: 'No cross-source parent', parent: {
+      source: { pluginId: 'example.other', localId: 'issues' }, ...localRef,
+    } } }, h.context)).toMatchObject({ kind: 'refused' });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { blockedBy: [] } }, h.context)).toMatchObject({ kind: 'refused' });
+    expect(await editLinearIssue({ v: 1, instance, localRef, fields: { priority: 'opaque-provider-priority' } }, h.context)).toMatchObject({ kind: 'refused' });
+    expect(h.request).not.toHaveBeenCalled();
+  });
+});
