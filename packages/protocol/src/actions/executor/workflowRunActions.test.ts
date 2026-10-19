@@ -654,19 +654,30 @@ describe('shared Account workflow run owner', () => {
       try { return await owner.execute(args, { agentTarget, machineId: 'machine-a', directory: '/repo' }); }
       catch (error) { return normalizeWorkflowActionThrownError(error); }
     } });
+    const context = { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', defaultSessionId: 'origin-1',
+      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } },
+    } as const;
+    await expect(executor.execute('workflow.run.start', { runId,
+      source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
+      inputs: { request: 'Plan the change', machineId: 'Machine-other', directory: '/other' },
+    }, context)).resolves.toMatchObject({ ok: false, errorCode: 'invalid_input' });
+    expect(committed).toBeUndefined();
     const result = await executor.execute('workflow.run.start', { runId,
       source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
       inputs: { request: 'Plan the change', ...(withEngines ? { engines: ['agent:happier.agent.codex/codex'] } : {}) },
       roleOverrides: [{ roleId: 'planner', engine: { agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-6.1-sol', effort: 'low' } }],
       onComplete: { kind: 'originating_session' },
-    }, { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', defaultSessionId: 'origin-1',
-      externalActionTarget: { kind: 'machine', machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } },
-    });
+    }, context);
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
     expect(openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       envelope: parseWorkflowStoredContentEnvelopeV1(committed!.acceptedEnvelope),
       binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } }))
-      .toMatchObject({ kind: 'available', content: { materializedLeaves: expect.arrayContaining([
+      .toMatchObject({ kind: 'available', content: {
+        machineId: 'machine-a',
+        workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
+        origin: { kind: 'direct', originSessionId: 'origin-1' },
+        inputs: { request: 'Plan the change' },
+        materializedLeaves: expect.arrayContaining([
         expect.objectContaining({ blockId: 'synthesis', selection: expect.objectContaining({ agentTarget,
           modelSelection: expect.objectContaining({ ref: expect.objectContaining({ modelId: 'gpt-6.1-sol' }) }) }) }),
       ]) } });
