@@ -16,6 +16,7 @@ import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64'
 import { readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Ready?' }] };
@@ -103,8 +104,8 @@ describe('Discussion UI Action adapter', () => {
     it.each(['plain', 'e2ee'] as const)('preserves a canonical Task anchor and reply target through the %s resource codec', async mode => {
         const transport = http(mode);
         const execute = await adapter(mode, transport);
-        const entry = { source: { pluginId: 'tracker', localId: 'issues' }, kindId: 'issue',
-            collisionScope: 'project', entryId: 'task/42' };
+        const entry = TriageEntryRefV1Schema.parse({ source: { pluginId: 'acme.tasks', localId: 'issues' }, kindId: 'issue',
+            collisionScope: 'project', entryId: 'task/42' });
         const anchor = { kind: 'task', entry };
         const created = await execute({ actionId: 'discussion.create', input: { ...input, anchor }, context });
         expect(created).toMatchObject({ discussion: { anchor }, firstMessage: { content } });
