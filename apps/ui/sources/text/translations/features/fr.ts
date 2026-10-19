@@ -8443,6 +8443,7 @@ const fr: ReviewWalkthroughTranslations = {
     and: ' et ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} dans le parcours, ${elsewhere} ailleurs`,
     allInStory: 'tous dans le parcours',
+    noFindings: 'aucun constat',
     seeded: {
         title: 'Écrit après la revue, par une nouvelle exécution.',
         body: ({ reviewers, time }) => `Le narrateur n’a pas relu le code ; chaque constat cité ici vient de ${reviewers} à ${time}.`,

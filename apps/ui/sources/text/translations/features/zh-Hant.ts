@@ -8431,6 +8431,7 @@ const zhHant: ReviewWalkthroughTranslations = {
     and: '和',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} 條在導讀中，${elsewhere} 條在其他位置`,
     allInStory: '全部在導讀中',
+    noFindings: '沒有發現',
     seeded: {
         title: '在審查之後由新的執行寫成。',
         body: ({ reviewers, time }) => `講述者沒有審查程式碼；這裡引用的每條發現都來自 ${time} 的 ${reviewers}。`,

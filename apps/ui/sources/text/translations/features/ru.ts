@@ -8464,6 +8464,7 @@ const ru: ReviewWalkthroughTranslations = {
     and: ' и ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} в разборе, ${elsewhere} в других местах`,
     allInStory: 'все в разборе',
+    noFindings: 'замечаний нет',
     seeded: {
         title: 'Написано после ревью новым запуском.',
         body: ({ reviewers, time }) => `Рассказчик не проверял код; каждое замечание здесь получено от ${reviewers} в ${time}.`,

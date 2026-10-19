@@ -8446,6 +8446,7 @@ const es: ReviewWalkthroughTranslations = {
     and: ' y ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} en el recorrido, ${elsewhere} en otra parte`,
     allInStory: 'todos en el recorrido',
+    noFindings: 'ningún hallazgo',
     seeded: {
         title: 'Escrito después de la revisión, por una ejecución nueva.',
         body: ({ reviewers, time }) => `El narrador no revisó el código; cada hallazgo citado aquí viene de ${reviewers} a las ${time}.`,

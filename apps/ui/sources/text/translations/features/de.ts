@@ -8429,6 +8429,7 @@ const de: ReviewWalkthroughTranslations = {
     and: ' und ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} im Rundgang, ${elsewhere} anderswo`,
     allInStory: 'alle im Rundgang',
+    noFindings: 'keine Befunde',
     seeded: {
         title: 'Nach dem Review von einem neuen Lauf geschrieben.',
         body: ({ reviewers, time }) => `Der Erzähler hat den Code nicht geprüft; jeder hier zitierte Befund stammt von ${reviewers} um ${time}.`,

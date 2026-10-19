@@ -8431,6 +8431,7 @@ const zhHans: ReviewWalkthroughTranslations = {
     and: '和',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} 条在导读中，${elsewhere} 条在其他位置`,
     allInStory: '全部在导读中',
+    noFindings: '没有发现',
     seeded: {
         title: '在审查之后由新的运行写成。',
         body: ({ reviewers, time }) => `讲述者没有审查代码；这里引用的每条发现都来自 ${time} 的 ${reviewers}。`,

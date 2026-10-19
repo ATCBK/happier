@@ -8436,6 +8436,7 @@ const ja: ReviewWalkthroughTranslations = {
     and: '、',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory}件がウォークスルー内、${elsewhere}件がその他`,
     allInStory: 'すべてウォークスルー内',
+    noFindings: '指摘なし',
     seeded: {
         title: 'レビュー後に新しい実行で書かれました。',
         body: ({ reviewers, time }) => `ナレーターはコードをレビューしていません。ここで引用する指摘はすべて${time}の${reviewers}によるものです。`,

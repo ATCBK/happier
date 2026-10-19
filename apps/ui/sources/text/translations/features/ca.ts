@@ -8442,6 +8442,7 @@ const ca: ReviewWalkthroughTranslations = {
     and: ' i ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} al recorregut, ${elsewhere} en altres llocs`,
     allInStory: 'totes al recorregut',
+    noFindings: 'cap troballa',
     seeded: {
         title: 'Escrit després de la revisió, per una execució nova.',
         body: ({ reviewers, time }) => `El narrador no ha revisat el codi; cada troballa citada aquí ve de ${reviewers} a les ${time}.`,

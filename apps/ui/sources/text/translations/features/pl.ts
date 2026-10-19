@@ -8453,6 +8453,7 @@ const pl: ReviewWalkthroughTranslations = {
     and: ' i ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} w omówieniu, ${elsewhere} gdzie indziej`,
     allInStory: 'wszystkie w omówieniu',
+    noFindings: 'brak uwag',
     seeded: {
         title: 'Napisane po przeglądzie przez nowe uruchomienie.',
         body: ({ reviewers, time }) => `Narrator nie przeglądał kodu; każda cytowana tu uwaga pochodzi od ${reviewers} z ${time}.`,

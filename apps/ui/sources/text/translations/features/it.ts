@@ -8442,6 +8442,7 @@ const it: ReviewWalkthroughTranslations = {
     and: ' e ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} nel percorso, ${elsewhere} altrove`,
     allInStory: 'tutti nel percorso',
+    noFindings: 'nessun rilievo',
     seeded: {
         title: 'Scritto dopo la revisione, da una nuova esecuzione.',
         body: ({ reviewers, time }) => `Il narratore non ha rivisto il codice; ogni rilievo citato qui viene da ${reviewers} alle ${time}.`,

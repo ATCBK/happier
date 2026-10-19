@@ -22,6 +22,8 @@ export type ReviewWalkthroughTranslations = {
     and: string;
     inStoryElsewhere: (params: Readonly<{ inStory: number; elsewhere: number }>) => string;
     allInStory: string;
+    /** A finished review that found nothing: replaces the count and its story placement. */
+    noFindings: string;
     seeded: { title: string; body: (params: Readonly<{ reviewers: string; time: string }>) => string; changed: (params: Count) => string };
     findingsFrom: (params: Readonly<{ count: number; engine: string }>) => string;
     publishedBefore: (params: Readonly<{ time: string }>) => string;
@@ -110,6 +112,7 @@ export const en: ReviewWalkthroughTranslations = {
     and: ' and ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} in the story, ${elsewhere} elsewhere`,
     allInStory: 'all in the story',
+    noFindings: 'no findings',
     seeded: {
         title: 'Written after the review, by a new run.',
         body: ({ reviewers, time }) => `The narrator didn’t review the code; every finding cited here comes from ${reviewers} at ${time}.`,
