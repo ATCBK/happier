@@ -1,6 +1,7 @@
 import type { ToolCall } from "../../messages/messageTypes.js";
 import { SessionPermissionApprovalReviewerClaimV1Schema, SessionPermissionDecisionActorV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 import { ResolvedMcpToolIdentityV1Schema } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { SessionQuestionHandlerV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 
 export type ReducerStoredPermission = {
     tool: string;
@@ -20,6 +21,7 @@ export type ReducerStoredPermission = {
     mcpTool?: NonNullable<ToolCall['permission']>['mcpTool'];
     decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
     decisionActor?: NonNullable<ToolCall['permission']>['decisionActor'];
+    answeredBy?: NonNullable<ToolCall['permission']>['answeredBy'];
 };
 
 export function resolveStoredPermissionAllowedTools(permission: Pick<ReducerStoredPermission, 'allowedTools' | 'allowTools'>): string[] | undefined {
@@ -43,6 +45,7 @@ export function buildToolPermissionFromStored(
         suggestions: permission.suggestions,
         ...(permission.mcpTool ? { mcpTool: permission.mcpTool } : {}),
         ...(permission.decisionActor ? { decisionActor: permission.decisionActor } : {}),
+        ...(permission.answeredBy ? { answeredBy: permission.answeredBy } : {}),
     };
 }
 
@@ -99,9 +102,11 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
     decision?: ReducerStoredPermission['decision'] | null;
     permissionDecisionActorV1?: unknown;
     permissionDecisionClaimV1?: unknown;
+    answeredBy?: unknown;
     mcpTool?: unknown;
 }>): ReducerStoredPermission {
     const actor = SessionPermissionDecisionActorV1Schema.safeParse(completed.permissionDecisionActorV1);
+    const answeredBy = SessionQuestionHandlerV1Schema.safeParse(completed.answeredBy);
     const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(completed.mcpTool);
     const reviewerClaim = SessionPermissionApprovalReviewerClaimV1Schema.safeParse(completed.permissionDecisionClaimV1);
     const decisionActor = reviewerClaim.success && completed.status === 'approved'
@@ -122,6 +127,7 @@ export function buildReducerStoredPermissionFromCompletedRequest(completed: Read
         decision: completed.decision || undefined,
         ...(mcpTool.success ? { mcpTool: mcpTool.data } : {}),
         ...(decisionActor ? { decisionActor } : {}),
+        ...(answeredBy.success ? { answeredBy: answeredBy.data } : {}),
     };
 }
 

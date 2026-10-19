@@ -302,6 +302,18 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                 if (messageId != null) {
                     const message = state.messages.get(messageId);
                     if (message?.tool) {
+                        // A question disposition may arrive after its provider result. Keep
+                        // this actor independent of that result and of the input's cause.
+                        if (message.tool.permission && JSON.stringify(message.tool.permission.answeredBy) !== JSON.stringify(storedPermission.answeredBy)) {
+                            if (storedPermission.answeredBy) message.tool.permission.answeredBy = storedPermission.answeredBy;
+                            else delete message.tool.permission.answeredBy;
+                            const previous = state.permissions.get(permId);
+                            const next = { ...(previous ?? storedPermission) };
+                            if (storedPermission.answeredBy) next.answeredBy = storedPermission.answeredBy;
+                            else delete next.answeredBy;
+                            state.permissions.set(permId, next);
+                            changed.add(messageId);
+                        }
                         // Audit can arrive after a tool result or execution start; those skip
                         // permission-state rewriting, not the host's decision attribution.
                         if (storedPermission.decisionActor && message.tool.permission
@@ -351,6 +363,7 @@ export function runAgentStatePermissionsPhase(params: Readonly<{
                                 decision: completed.decision || undefined,
                                 reason: completed.reason || undefined,
                                 ...(storedPermission.decisionActor ? { decisionActor: storedPermission.decisionActor } : {}),
+                                ...(storedPermission.answeredBy ? { answeredBy: storedPermission.answeredBy } : {}),
                             };
                             hasChanged = true;
                         } else {
