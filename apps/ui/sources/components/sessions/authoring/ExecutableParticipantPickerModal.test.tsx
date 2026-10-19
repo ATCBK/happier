@@ -36,7 +36,7 @@ describe('host participant controller using the public picker', () => {
       directory: { kind: 'path', path: '/work' },
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
     } });
-    const screen = await renderScreen(<ModalProvider />);
+    const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
     let result!: ReturnType<typeof presentExecutableParticipantPicker>;
     await act(async () => { result = presentExecutableParticipantPicker({ accountLifetime, selected, multiple: true, signal: new AbortController().signal }); });
     expect(screen.findByTestId('executable-participant-picker-done')?.props.disabled).toBe(false);
@@ -48,7 +48,7 @@ describe('host participant controller using the public picker', () => {
   it('returns the selected captured-Home Session immediately without a separate confirmation', async () => {
     const accountLifetime = await captureHome();
     boundary.setRows(accountLifetime.scope.serverId, ['review-session']);
-    const screen = await renderScreen(<ModalProvider />);
+    const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
     let result!: ReturnType<typeof presentExecutableParticipantPicker>;
     await act(async () => { result = presentExecutableParticipantPicker({ accountLifetime, multiple: false, signal: new AbortController().signal }); });
     await vi.waitFor(() => expect(screen.findByTestId('discussion-invite-session-review-session')).not.toBeNull());

@@ -18,7 +18,7 @@ export type ExecutableParticipantPickerOption = Readonly<{
 export type ExecutableParticipantPickerSection = Readonly<{
   id: string;
   title?: string;
-  rightAccessory?: ReactNode;
+  rightAccessory?: ReactNode | (() => ReactNode);
   options: readonly ExecutableParticipantPickerOption[];
 }>;
 
