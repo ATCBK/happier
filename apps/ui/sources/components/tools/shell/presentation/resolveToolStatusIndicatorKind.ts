@@ -1,4 +1,5 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
+import { readHappierActionToolFailure } from '@happier-dev/protocol/actions/happierActionToolResult';
 
 export type ToolStatusIndicatorKind =
     | 'permission_blocked'
@@ -83,6 +84,7 @@ function hasToolResultFailure(tool: ToolCall): boolean {
             && toolUseResult.trim().toLowerCase().startsWith('error:');
     }
     if (!hasFailure) hasFailure = hasStructuredResultFailure(result);
+    if (!hasFailure) hasFailure = readHappierActionToolFailure(tool.name, tool.input, result) !== null;
 
     // Published tool results are immutable projections: updates replace the result root.
     // Keying that root avoids reparsing unchanged output while letting obsolete payloads be collected.

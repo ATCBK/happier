@@ -111,7 +111,6 @@ export type HappierActionToolFailure = Readonly<{
     code: string;
     /** The typed cause or reason the failure's `details` name, when it names one. */
     cause: string | null;
-    retryable: boolean;
 }>;
 
 function readFailureCause(details: unknown): string | null {
@@ -133,12 +132,12 @@ export function readHappierActionToolFailure(toolName: string, input: unknown, r
     for (const candidate of readHappierActionToolResultCandidates(result, input)) {
         if (!isRecord(candidate) || candidate.ok === true) continue;
         if (typeof candidate.errorCode === 'string' && candidate.errorCode.trim() && typeof candidate.error === 'string') {
-            return { code: candidate.errorCode.trim(), cause: readFailureCause(candidate.details), retryable: candidate.retryable === true };
+            return { code: candidate.errorCode.trim(), cause: readFailureCause(candidate.details) };
         }
         if (candidate.type === 'error' && typeof candidate.code === 'string' && candidate.code.trim()) {
             const launch = isRecord(candidate.launchError) && typeof candidate.launchError.code === 'string' && candidate.launchError.code.trim()
                 ? candidate.launchError.code.trim() : null;
-            return { code: launch ?? candidate.code.trim(), cause: null, retryable: candidate.retryable === true };
+            return { code: launch ?? candidate.code.trim(), cause: null };
         }
     }
     return null;

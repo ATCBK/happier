@@ -9337,6 +9337,17 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     output: "Результат",
     showFullContent: "Показать полностью",
     showLessContent: "Показать меньше",
+    actionOutcome: {
+      refused: "Отклонено",
+      failed: "Не удалось",
+      refusedCount: ({ count }: { count: number }) => `Отклонено: ${count}`,
+      failedCount: ({ count }: { count: number }) => `Не удалось: ${count}`,
+      cause: {
+        outsideAgentSessions: "Не сессия этого агента",
+        unverifiedAgentAccess: "Не удалось подтвердить доступ этого агента",
+        authorizationRefused: "Авторизация отклонена",
+      },
+    },
   },
 
   tools: {

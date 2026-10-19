@@ -9417,6 +9417,17 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         output: 'Ausgabe',
         showFullContent: 'Vollständigen Inhalt zeigen',
         showLessContent: 'Weniger zeigen',
+        actionOutcome: {
+          refused: "Abgelehnt",
+          failed: "Fehlgeschlagen",
+          refusedCount: ({ count }: { count: number }) => `${count} abgelehnt`,
+          failedCount: ({ count }: { count: number }) => `${count} fehlgeschlagen`,
+          cause: {
+            outsideAgentSessions: "Keine Sitzung dieses Agents",
+            unverifiedAgentAccess: "Zugriff dieses Agents nicht bestätigt",
+            authorizationRefused: "Die Autorisierung wurde abgelehnt",
+          },
+        },
     },
 
     tools: {

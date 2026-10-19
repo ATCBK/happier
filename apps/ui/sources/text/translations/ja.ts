@@ -9787,6 +9787,17 @@ localTailscale: {
     output: "出力",
     showFullContent: "全文を表示",
     showLessContent: "表示を減らす",
+    actionOutcome: {
+      refused: "拒否",
+      failed: "失敗",
+      refusedCount: ({ count }: { count: number }) => `${count} 件拒否`,
+      failedCount: ({ count }: { count: number }) => `${count} 件失敗`,
+      cause: {
+        outsideAgentSessions: "このエージェントのセッションではありません",
+        unverifiedAgentAccess: "このエージェントのアクセスを確認できませんでした",
+        authorizationRefused: "認可が拒否されました",
+      },
+    },
   },
 
   tools: {

@@ -20,22 +20,22 @@ describe('readHappierActionToolFailure', () => {
       errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' },
     });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'unsupported_action', cause: 'target_outside_led_subtree', retryable: false,
+      code: 'unsupported_action', cause: 'target_outside_led_subtree',
     });
   });
 
   it('reads the reason of a failure that names one instead of a cause', () => {
     const result = mcpTextResult({ errorCode: 'target_unavailable', error: 'target_unavailable', details: { reason: 'external_authorization_refused' } });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'target_unavailable', cause: 'external_authorization_refused', retryable: false,
+      code: 'target_unavailable', cause: 'external_authorization_refused',
     });
   });
 
-  it('reads a typed spawn error by its launch code and retryability', () => {
+  it('reads a typed spawn error by its launch code', () => {
     const result = mcpTextResult({ type: 'error', code: 'spawn_failed', retryable: true,
       launchError: { kind: 'launch_error', code: 'database_transaction_conflict_exhausted', message: 'Failed to get or create session' } });
     expect(readHappierActionToolFailure('mcp__happier__action_execute', input, result)).toEqual({
-      code: 'database_transaction_conflict_exhausted', cause: null, retryable: true,
+      code: 'database_transaction_conflict_exhausted', cause: null,
     });
   });
 

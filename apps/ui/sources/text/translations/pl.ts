@@ -9317,6 +9317,17 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     output: "Wyjście",
     showFullContent: "Pokaż całą treść",
     showLessContent: "Pokaż mniej",
+    actionOutcome: {
+      refused: "Odrzucone",
+      failed: "Nieudane",
+      refusedCount: ({ count }: { count: number }) => `Odrzucone: ${count}`,
+      failedCount: ({ count }: { count: number }) => `Nieudane: ${count}`,
+      cause: {
+        outsideAgentSessions: "To nie jest sesja tego agenta",
+        unverifiedAgentAccess: "Nie można potwierdzić dostępu tego agenta",
+        authorizationRefused: "Autoryzacja została odrzucona",
+      },
+    },
   },
 
   tools: {

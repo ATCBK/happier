@@ -11220,6 +11220,17 @@ const enToolView = {
   output: 'Output',
   showFullContent: 'Show full content',
   showLessContent: 'Show less',
+  actionOutcome: {
+    refused: 'Refused',
+    failed: 'Failed',
+    refusedCount: ({ count }: { count: number }) => `${count} refused`,
+    failedCount: ({ count }: { count: number }) => `${count} failed`,
+    cause: {
+      outsideAgentSessions: 'Not one of this Agent’s sessions',
+      unverifiedAgentAccess: 'Couldn’t confirm this Agent’s access',
+      authorizationRefused: 'Authorization was refused',
+    },
+  },
 };
 
 const enTools = {
