@@ -8,6 +8,7 @@ import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machin
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { MachineRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { readMachineFinitePolicyV1 } from '@happier-dev/protocol/machines/machineFinitePolicyV1';
 import { decodeBase64, decrypt, encodeBase64, encrypt, getRandomBytes } from './encryption';
 
@@ -244,15 +245,15 @@ describe('ApiMachineClient updates', () => {
       dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: key,
         recipientPublicKey: publicKey, randomBytes: getRandomBytes })),
       metadata: null, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
-    let failRead = false;
+    let readFailure: typeof failure | null = null;
     vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
       if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'fixture-owner' } };
       if (url.endsWith('/v1/machines/machine-1')) {
-        if (failRead && failure === 'http503') throw new axios.AxiosError('Snapshot busy', 'ERR_BAD_RESPONSE', undefined, undefined,
+        if (readFailure === 'http503') throw new axios.AxiosError('Snapshot busy', 'ERR_BAD_RESPONSE', undefined, undefined,
           { status: 503, statusText: 'Service Unavailable', data: {}, headers: {}, config: { headers: new axios.AxiosHeaders() } });
-        if (failRead && failure === 'network') throw new axios.AxiosError('Connection reset', 'ECONNRESET');
-        return { status: 200, data: { machine: failRead ? { ...row,
+        if (readFailure === 'network') throw new axios.AxiosError('Connection reset', 'ECONNRESET');
+        return { status: 200, data: { machine: readFailure === 'unopenable-key' ? { ...row,
           dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(29),
             recipientPublicKey: tweetnacl.box.keyPair().publicKey, randomBytes: getRandomBytes })),
           metadataVersion: 2 } : row } };
@@ -279,12 +280,17 @@ describe('ApiMachineClient updates', () => {
     const decode = async (result: unknown) => socketRpcCodec.decodeResult(content, { ok: true, result }, callId);
     try {
       expect(await decode(await request())).toEqual({ current: true });
-      failRead = true;
+      readFailure = failure;
       await Reflect.apply(refresh, client, []);
       const afterFailure = await request();
-      if (failure === 'unopenable-key') expect(afterFailure).toMatchObject({ errorCode: 'UPDATE_REQUIRED' });
-      else expect(await decode(afterFailure)).toEqual({ current: true });
-      failRead = false;
+      if (failure === 'unopenable-key') {
+        expect(afterFailure).toMatchObject({ errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+        // A failed read cannot restore authority that a proven key change retired.
+        readFailure = 'http503';
+        await Reflect.apply(refresh, client, []);
+        expect(await request()).toMatchObject({ errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+      } else expect(await decode(afterFailure)).toEqual({ current: true });
+      readFailure = null;
       await Reflect.apply(refresh, client, []);
       expect(await decode(await request())).toEqual({ current: true });
     } finally { await client.shutdown(); }

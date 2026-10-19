@@ -219,6 +219,7 @@ import {
     runWithServerHttpBaseUrl,
 } from './client/serverHttpBaseUrl';
 import { createAuthenticationHttpStatusError, isAuthenticationError, isAuthenticationStatus, readHttpStatus } from './client/httpStatusError';
+import { classifyServerEndpointError } from './client/classifyServerEndpointError';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { handleRequestAuthenticationFailure } from '@/api/connection/requestSupervision/reportRequestOutcomeToSupervisor';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
@@ -4682,7 +4683,11 @@ export class ApiMachineClient {
             this.rpcHandlerManager.adoptEncryptionContext(this.machine);
             this.notifyMachineMetadataChanged();
         } catch (error) {
-            if (previousContext === this.machineContentContext && transportGeneration === this.activeTransportGeneration) this.retireMachineContent();
+            // Transient reads provide no contrary key/owner evidence. Preserve
+            // the admitted context; an already retired context stays retired.
+            if (!classifyServerEndpointError(error).retryable
+                && previousContext === this.machineContentContext
+                && transportGeneration === this.activeTransportGeneration) this.retireMachineContent();
             logger.debug('[API MACHINE] Failed to refresh machine snapshot', {
                 error: serializeAxiosErrorForLog(error),
             });
