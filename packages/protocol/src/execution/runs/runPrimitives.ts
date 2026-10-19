@@ -23,6 +23,37 @@ export type ExecutionRunClass = z.infer<typeof ExecutionRunClassSchema>;
 export const ExecutionRunIoModeSchema = lazyZodSchema(() => z.enum(['request_response', 'streaming']));
 export type ExecutionRunIoMode = z.infer<typeof ExecutionRunIoModeSchema>;
 
+/** Session prompt identity preserves the Run and the controller occurrence that owns the answer. */
+export function buildRunScopedExecutionPermissionRequestId(params: Readonly<{
+  runId: string;
+  controllerOccurrenceId: string;
+  providerRequestId: string;
+}>): string {
+  const runId = String(params.runId ?? '').trim();
+  const controllerOccurrenceId = String(params.controllerOccurrenceId ?? '').trim();
+  if (!runId || !controllerOccurrenceId) {
+    throw new Error('Execution-run permission request identity requires run and controller occurrence ids');
+  }
+  return `execution-run:${encodeURIComponent(runId)}:${encodeURIComponent(controllerOccurrenceId)}:${encodeURIComponent(params.providerRequestId)}`;
+}
+
+export function readRunScopedExecutionPermissionRequestIdentity(requestId: string): Readonly<{
+  runId: string;
+  controllerOccurrenceId: string;
+  providerRequestId: string;
+}> | null {
+  const parts = requestId.split(':');
+  if (parts.length !== 4 || parts[0] !== 'execution-run') return null;
+  try {
+    const runId = decodeURIComponent(parts[1]!);
+    const controllerOccurrenceId = decodeURIComponent(parts[2]!);
+    if (!runId.trim() || !controllerOccurrenceId.trim()) return null;
+    return { runId, controllerOccurrenceId, providerRequestId: decodeURIComponent(parts[3]!) };
+  } catch {
+    return null;
+  }
+}
+
 // Action inputs share this request without importing Voice-dependent stream events.
 export const ExecutionRunTurnStreamReadRequestSchema = lazyZodSchema(() => z.looseObject({
   runId: z.string().check(z.minLength(1)),

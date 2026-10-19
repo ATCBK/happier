@@ -206,6 +206,35 @@ describe('extractFirstUserActionQuestion', () => {
 
 describe('summarizeToolInputForNotification', () => {
   it.each([
+    { questionCount: 5, choiceCount: 2 },
+    { questionCount: 1, choiceCount: 9 },
+  ])('opens the full form above the remote question or choice cap: %o', ({ questionCount, choiceCount }) => {
+    const toolInput = {
+      questions: Array.from({ length: questionCount }, (_, index) => ({
+        id: `question-${index}`,
+        question: `Private question ${index}?`,
+        options: Array.from({ length: choiceCount }, (_, choice) => ({ label: `Choice ${choice}` })),
+      })),
+    };
+    expect(summarizeToolInputForNotification('AskUserQuestion', toolInput))
+      .toBe(`Answer all ${questionCount} in Happier`);
+    expect(buildAgentRequestSemanticSummary({ kind: 'user_action', toolName: 'AskUserQuestion', toolInput }).questions)
+      .toHaveLength(questionCount);
+  });
+
+  it('keeps all questions and choices visible at the existing remote caps', () => {
+    const details = summarizeToolInputForNotification('AskUserQuestion', {
+      questions: Array.from({ length: 4 }, (_, index) => ({
+        question: `Question ${index}?`,
+        options: Array.from({ length: 8 }, (_, choice) => ({ label: `Choice ${choice}` })),
+      })),
+    });
+    expect(details).toContain('Question 3?');
+    expect(details).toContain('Choice 7');
+    expect(details).not.toContain('Answer all');
+  });
+
+  it.each([
     ['ExitPlanMode', { name: 'Migration', overview: 'Preserve existing data', plan: '1. Back up\n2. Apply migration' }, ['Migration', 'Preserve existing data', '1. Back up', '2. Apply migration']],
     ['AcpHistoryImport', { note: 'History differs. Importing may duplicate messages.', reason: 'no_overlap' }, ['History differs. Importing may duplicate messages.']],
     ['WebFetch', { url: 'https://example.test/documentation' }, ['https://example.test/documentation']],

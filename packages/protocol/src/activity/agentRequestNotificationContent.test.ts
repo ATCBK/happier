@@ -3,6 +3,30 @@ import { describe, expect, it } from 'vitest';
 import { buildAgentRequestNotificationContent } from './agentRequestNotificationContent.js';
 
 describe('buildAgentRequestNotificationContent', () => {
+  it('keeps an above-cap push linked to the complete form even when explicit details were supplied', () => {
+    const content = buildAgentRequestNotificationContent({
+      kind: 'user_action',
+      sessionId: 'session-1',
+      requestId: 'request-five',
+      toolName: 'AskUserQuestion',
+      toolInput: { questions: Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index}?` })) },
+      toolDetails: 'Question 0?',
+    });
+    expect(content).toMatchObject({
+      body: 'Agent needs your input for AskUserQuestion\nAnswer all 5 in Happier',
+      toolDetails: 'Answer all 5 in Happier',
+      data: { sessionId: 'session-1', requestId: 'request-five', type: 'user_action_request' },
+    });
+    expect(buildAgentRequestNotificationContent({
+      kind: 'user_action',
+      sessionId: 'session-1',
+      requestId: 'request-five',
+      toolName: 'AskUserQuestion',
+      toolInput: { questions: Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index}?` })) },
+      includeMessageText: false,
+    })).toMatchObject({ body: 'Agent needs your input for AskUserQuestion', toolDetails: null });
+  });
+
   it('builds permission-request payloads with full tool details', () => {
     expect(
       buildAgentRequestNotificationContent({

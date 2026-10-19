@@ -1,4 +1,8 @@
 import { extractShellCommand, stripShellCommandPreludeForDisplay } from './shellCommand.js';
+import {
+  SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION,
+  SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS,
+} from '../sessions/permissions/v1.js';
 
 export type AgentRequestKind = 'permission' | 'user_action';
 const LEGACY_USER_ACTION_TOOLS = new Set<string>([
@@ -324,6 +328,11 @@ const defaultLabels: RequestNotificationLabels = {
   localMessages: 'Local messages', remoteMessages: 'Remote messages',
 };
 
+export function requiresFullFormForRemoteUserAction(questions: readonly AgentRequestQuestionSummary[]): boolean {
+  return questions.length > SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS
+    || questions.some((question) => question.choices.length > SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION);
+}
+
 export function summarizeToolInputForNotification(toolName: string, toolInput: unknown, labels?: Partial<RequestNotificationLabels>): string | null {
   const display = { ...defaultLabels, ...labels };
   const summary = buildAgentRequestSemanticSummary({
@@ -332,6 +341,9 @@ export function summarizeToolInputForNotification(toolName: string, toolInput: u
     toolInput,
   });
   if (summary.questions.length) {
+    if (requiresFullFormForRemoteUserAction(summary.questions)) {
+      return `Answer all ${summary.questionCount} in Happier`;
+    }
     return summary.questions.map((question) => [
       question.header && question.header !== question.question ? question.header : null,
       question.question,
