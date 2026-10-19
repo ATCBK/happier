@@ -122,23 +122,51 @@ export function applyProjectContextIntentV1<Row extends Readonly<{ promptStack?:
   return applyPromptStackIntentV1(row, intent);
 }
 
-/** One captured context target for both hosts; existing personal/Source Actions remain the writers. */
-export async function readProjectContextAttachmentTargetV1(deps: Readonly<{
+type ProjectContextReadDepsV1 = Readonly<{
   readRows(): Promise<Readonly<{ workspaceRefs: readonly WorkspaceRefV1[]; organizations: readonly Readonly<{
     key: QualifiedProjectKeyV1; revision: number; value: ProjectAccountOrganizationV1;
   }>[] }>>;
   readSource(input: ProjectSourcesReadInputV1): Promise<unknown>;
+}>;
+
+/** One Project/Source selection for read-only search and admitted attachment writes. */
+async function readProjectContextSnapshotV1(deps: ProjectContextReadDepsV1, target: QualifiedProjectKeyV1) {
+  const rows = await deps.readRows();
+  const organization = rows.organizations.find(row => row.key.serverId === target.serverId && row.key.projectKey === target.projectKey);
+  const association = resolveProjectContextSourceV1({ projectRef: target, workspaceRefs: rows.workspaceRefs,
+    organizationPresent: !!organization });
+  if (association.kind === 'unavailable') throw Object.assign(new Error('project_context_unavailable'), { code: 'project_context_unavailable' });
+  const qualify = (entries: readonly PromptStackEntryV1[]) => entries.map(entry => ({ ...entry,
+    ref: { ...entry.ref, serverId: entry.ref.serverId ?? target.serverId } }));
+  if (association.kind === 'source') {
+    const result = ProjectSourcesReadOutputV1Schema.safeParse(await deps.readSource({ serverId: target.serverId, sourceId: association.sourceId }));
+    if (!result.success || !result.data.ok || result.data.source.id !== association.sourceId) {
+      throw Object.assign(new Error('project_context_unavailable'), { code: 'project_context_unavailable' });
+    }
+    return { rows, organization, association, source: result.data,
+      entries: qualify((result.data.source.attachments ?? []).flatMap(attachment => attachment.purpose === 'context' ? [attachment.entry] : [])) };
+  }
+  return { rows, organization, association, source: null,
+    entries: qualify(organization?.value.promptStack ?? []) };
+}
+
+/** Read authority does not require the Source's separate management authority. */
+export async function readProjectContextEntriesV1(deps: ProjectContextReadDepsV1, target: QualifiedProjectKeyV1): Promise<Readonly<{
+  entries: readonly PromptStackEntryV1[]; workspaceRefs: readonly WorkspaceRefV1[];
+}>> {
+  const captured = await readProjectContextSnapshotV1(deps, target);
+  return { entries: captured.entries, workspaceRefs: captured.rows.workspaceRefs };
+}
+
+/** One captured context target for both hosts; existing personal/Source Actions remain the writers. */
+export async function readProjectContextAttachmentTargetV1(deps: ProjectContextReadDepsV1 & Readonly<{
   updateSource(input: ProjectSourcesUpdateInputV1): Promise<unknown>;
   updatePersonalContext(input: ProjectContextUpdateInputV1): Promise<ProjectContextUpdateOutputV1>;
 }>, target: QualifiedProjectKeyV1): Promise<Readonly<{
   entries: readonly PromptStackEntryV1[]; safety: 'safe' | 'danger'; attach(entry: PromptStackEntryV1): Promise<boolean>;
 }>> {
-  const rows = await deps.readRows();
-  const organization = rows.organizations.find(row => row.key.serverId === target.serverId && row.key.projectKey === target.projectKey);
-  const association = resolveProjectContextSourceV1({ projectRef: target, workspaceRefs: rows.workspaceRefs,
-    organizationPresent: !!organization });
+  const { organization, association, source: capturedSource, entries } = await readProjectContextSnapshotV1(deps, target);
   const refuse = (code: string): never => { throw Object.assign(new Error(code), { code }); };
-  if (association.kind === 'unavailable') return refuse('project_context_unavailable');
   const assertAssociation = async () => {
     const current = await deps.readRows();
     const resolved = resolveProjectContextSourceV1({ projectRef: target, workspaceRefs: current.workspaceRefs,
@@ -147,15 +175,10 @@ export async function readProjectContextAttachmentTargetV1(deps: Readonly<{
       refuse('project_context_conflict');
     }
   };
-  const qualify = (entries: readonly PromptStackEntryV1[]) => entries.map(entry => ({ ...entry,
-    ref: { ...entry.ref, serverId: entry.ref.serverId ?? target.serverId } }));
   if (association.kind === 'source') {
-    const result = ProjectSourcesReadOutputV1Schema.safeParse(await deps.readSource({ serverId: target.serverId, sourceId: association.sourceId }));
-    if (!result.success || !result.data.ok || result.data.source.id !== association.sourceId) return refuse('project_context_unavailable');
-    if (!result.data.canManage) return refuse('project_context_access_denied');
-    const source = result.data.source;
-    const entries = (source.attachments ?? []).flatMap(attachment => attachment.purpose === 'context' ? [attachment.entry] : []);
-    return { safety: 'danger', entries: qualify(entries), attach: async entry => {
+    if (!capturedSource || !capturedSource.canManage) return refuse('project_context_access_denied');
+    const source = capturedSource.source;
+    return { safety: 'danger', entries, attach: async entry => {
       const authored = PromptStackEntryAuthoringV1Schema.safeParse(entry);
       if (!authored.success) return refuse('invalid_parameters');
       await assertAssociation();
@@ -172,7 +195,7 @@ export async function readProjectContextAttachmentTargetV1(deps: Readonly<{
       return true;
     } };
   }
-  return { safety: 'safe', entries: qualify(organization?.value.promptStack ?? []), attach: async entry => {
+  return { safety: 'safe', entries, attach: async entry => {
     await assertAssociation();
     const intent = ProjectContextIntentV1Schema.safeParse({ kind: 'attach', entry });
     if (!intent.success) return refuse('invalid_parameters');

@@ -6,6 +6,10 @@ import { ActionInvokeInputProtocolSchema } from '../actions/actionInvokeInput.js
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion, type ProtocolJsonValue, type ProtocolSchemaInput, type ProtocolSchemaOutput } from '../plugins/actions/protocolComposableSchema.js';
 
+/** Views of one comparison; Commits is available only for pending working-tree changes. */
+export const SCM_COMPARISON_VIEWS = ['files', 'walkthrough', 'commits'] as const;
+export type ScmComparisonView = (typeof SCM_COMPARISON_VIEWS)[number];
+
 const identity = z.string().check(z.minLength(1));
 const textEvidence = z.discriminatedUnion('state', [
   z.strictObject({ state: z.literal('available') }),

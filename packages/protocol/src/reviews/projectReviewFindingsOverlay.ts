@@ -1,10 +1,15 @@
 import type { ExecutionRunStatus, ExecutionRunStructuredRunRef, ReviewCommentAnchorV1, ReviewFinding } from '../index.js';
 import type { ScmChangeOccurrence, ScmComparison, ScmComparisonFile, ScmDiffSummaryWalkthrough } from '../scm/index.js';
 
+/** Durable comments retain finding content and severity, but not the original category. Display only. */
+export type ReviewOverlayFinding = Pick<ReviewFinding,
+    'id' | 'title' | 'severity' | 'summary' | 'filePath' | 'startLine' | 'endLine' | 'comment'
+> & { category?: ReviewFinding['category'] };
+
 export type ReviewFindingsOverlayReview = Readonly<{
     runRef: ExecutionRunStructuredRunRef;
     comparisonId?: string;
-    findings: readonly ReviewFinding[];
+    findings: readonly ReviewOverlayFinding[];
     status?: ExecutionRunStatus;
     hasOutput: boolean;
     findingsTruncated?: boolean;
@@ -14,7 +19,7 @@ export type ReviewFindingsOverlayReview = Readonly<{
 export type ReviewFindingOverlayEntry = Readonly<{
     key: string;
     runRef: ExecutionRunStructuredRunRef;
-    finding: ReviewFinding;
+    finding: ReviewOverlayFinding;
     state: 'mapped' | 'unmapped' | 'outdated';
     reason?: 'comparison_unbound' | 'comparison_mismatch' | 'comparison_stale' | 'evidence_unavailable' | 'evidence_ambiguous' | 'location_missing' | 'side_ambiguous';
     side?: 'before' | 'after';
@@ -31,10 +36,11 @@ export type ReviewFindingsOverlay = Readonly<{
 
 /** Deterministic local projection. Findings never generate prose or change importance/marks. */
 export function projectReviewFindingsOverlay(params: Readonly<{
-    comparison: ScmComparison;
+    comparison: ScmComparison | null;
     walkthrough?: ScmDiffSummaryWalkthrough | null;
     reviews: readonly ReviewFindingsOverlayReview[];
 }>): ReviewFindingsOverlay {
+    const { comparison } = params;
     const stopsByChange = new Map<string, string[]>();
     for (const stop of params.walkthrough?.stops ?? []) {
         for (const ref of stop.changeRefs) {
@@ -44,7 +50,7 @@ export function projectReviewFindingsOverlay(params: Readonly<{
         }
     }
     const filesByPath = new Map<string, ScmComparisonFile[]>();
-    for (const file of params.comparison.inventory.files) {
+    for (const file of comparison?.inventory.files ?? []) {
         for (const path of new Set([file.path, file.previousPath].filter((path): path is string => Boolean(path)))) {
             const files = filesByPath.get(path) ?? [];
             files.push(file);
@@ -56,9 +62,10 @@ export function projectReviewFindingsOverlay(params: Readonly<{
         const unmatched = (reason: NonNullable<ReviewFindingOverlayEntry['reason']>, state: 'unmapped' | 'outdated' = 'unmapped'): ReviewFindingOverlayEntry => ({
             ...base, state, reason, changeRefs: [], stopIds: [],
         });
+        if (!comparison) return unmatched('evidence_unavailable');
         if (!review.comparisonId) return unmatched('comparison_unbound');
-        if (review.comparisonId !== params.comparison.id) return unmatched('comparison_mismatch', 'outdated');
-        if (params.comparison.freshness === 'stale') return unmatched('comparison_stale', 'outdated');
+        if (review.comparisonId !== comparison.id) return unmatched('comparison_mismatch', 'outdated');
+        if (comparison.freshness === 'stale') return unmatched('comparison_stale', 'outdated');
         const anchor = review.anchorsByFindingId?.[finding.id];
         // Hunk renderer IDs and file-only locations are navigation hints, not exact occurrences.
         if (anchor && anchor.kind !== 'line' && anchor.kind !== 'range') return unmatched('location_missing');
@@ -86,7 +93,13 @@ export function projectReviewFindingsOverlay(params: Readonly<{
         }
         if (matches.some((match) => !match.available)) return unmatched('evidence_unavailable');
         const sides = new Set(matches.map((match) => match.side));
-        if (sides.size > 1) return unmatched('side_ambiguous');
+        if (sides.size > 1) {
+            const beforeRefs = new Set(matches.filter((match) => match.side === 'before').map((match) => match.occurrence.id));
+            const afterRefs = new Set(matches.filter((match) => match.side === 'after').map((match) => match.occurrence.id));
+            // Overlapping line coordinates still identify an exact hunk when both sides agree.
+            // Keep the side unknown rather than inventing one; different hunk sets stay ambiguous.
+            if (beforeRefs.size !== afterRefs.size || [...beforeRefs].some((ref) => !afterRefs.has(ref))) return unmatched('side_ambiguous');
+        }
         // A pending file can carry several independent index/worktree comparisons. Their line
         // coordinates do not choose an endpoint/layer, even when the path and side are the same.
         const bases = new Set(matches.map(({ occurrence }) => JSON.stringify([
@@ -96,15 +109,15 @@ export function projectReviewFindingsOverlay(params: Readonly<{
         if (bases.size > 1) return unmatched('evidence_ambiguous');
         const changeRefs = [...new Set(matches.map((match) => match.occurrence.id))];
         const stopIds = [...new Set(changeRefs.flatMap((ref) => stopsByChange.get(ref) ?? []))];
-        return { ...base, state: 'mapped', side: matches[0]!.side, changeRefs, stopIds };
+        return { ...base, state: 'mapped', ...(sides.size === 1 ? { side: matches[0]!.side } : {}), changeRefs, stopIds };
     }));
-    const evidenceAvailable = params.comparison.inventory.files.every((file) => file.occurrences.length > 0
+    const evidenceAvailable = comparison?.inventory.files.every((file) => file.occurrences.length > 0
         ? file.occurrences.every((occurrence) => (occurrence.evidence?.state ?? file.evidence.state) === 'available')
         : file.evidence.state === 'available');
-    const complete = params.comparison.inventory.state === 'complete' && evidenceAvailable && params.reviews.length > 0 && params.reviews.every((review) => (
+    const complete = comparison !== null && comparison.inventory.state === 'complete' && evidenceAvailable && params.reviews.length > 0 && params.reviews.every((review) => (
         review.hasOutput && review.status === 'succeeded' && !review.findingsTruncated
         && (review.reviewOutcome === undefined || review.reviewOutcome === 'complete')
-        && review.comparisonId === params.comparison.id && params.comparison.freshness !== 'stale'
+        && review.comparisonId === comparison.id && comparison.freshness !== 'stale'
     ));
     return {
         status: complete ? (entries.length > 0 ? 'findings' : 'clean') : 'incomplete',

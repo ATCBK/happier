@@ -244,7 +244,9 @@ export const ScmDiffSummaryModelOutputSchema = lazyZodSchema(() => (<T extends z
 export type ScmDiffSummaryModelOutput = z.infer<typeof ScmDiffSummaryModelOutputSchema>;
 
 function progress<T extends z.ZodMiniType>(value: T) {
-  return z.strictObject({ state: ScmDiffSummaryOutputStateSchema, value: z.optional(value), reason: z.optional(z.string().check(z.minLength(1))) }).check(z.refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value'));
+  return z.strictObject({ state: ScmDiffSummaryOutputStateSchema, value: z.optional(value),
+    reason: z.optional(z.string().check(z.minLength(1))), reasonCode: z.optional(z.literal('generation_cancelled')),
+  }).check(z.refine((output) => output.state !== 'complete' || output.value !== undefined, 'Complete output requires a value'));
 }
 export const ScmDiffSummaryOutputsSchema = lazyZodSchema(() => z.strictObject({
   summary: z.optional(progress(ScmDiffSummarySummarySchema)),
@@ -317,7 +319,7 @@ export function normalizeScmDiffSummaryModelOutput(value: unknown, params: Reado
   if ((carriesSummary && !allowed.includes('summary')) || (output.walkthrough && !allowed.includes('walkthrough')) || (output.commitPlan && !allowed.includes('commitPlan'))) {
     throw new Error('Unrequested output cannot be published');
   }
-  function resolveGroup(groups: readonly (readonly string[])[]) {
+  function resolveGroup(groups: readonly (readonly string[])[], keepUnassignedInOtherChanges = false) {
     const used = new Set<string>();
     const resolved = groups.map((group) => group.map((ref) => {
       const id = refs.get(ref);
@@ -326,7 +328,12 @@ export function normalizeScmDiffSummaryModelOutput(value: unknown, params: Reado
       used.add(id);
       return id;
     }));
-    if (params.requireCompleteCoverage && used.size !== occurrences.length) throw new Error('Unassigned comparison changes must remain explicitly reachable');
+    if (params.requireCompleteCoverage && used.size !== occurrences.length) {
+      if (!keepUnassignedInOtherChanges) throw new Error('Unassigned comparison changes must remain explicitly reachable');
+      // The host keeps captured changes outside the model's story reachable;
+      // this disposition does not establish analysis or personal review coverage.
+      resolved[resolved.length - 1].push(...occurrences.filter(occurrence => !used.has(occurrence.id)).map(occurrence => occurrence.id));
+    }
     return resolved;
   }
   function uniqueIds(ids: readonly string[]) {
@@ -334,7 +341,8 @@ export function normalizeScmDiffSummaryModelOutput(value: unknown, params: Reado
   }
   if (output.walkthrough) {
     uniqueIds(output.walkthrough.stops.map((stop) => stop.id));
-    const resolved = resolveGroup([...output.walkthrough.stops.map((stop) => stop.changeRefs), output.walkthrough.otherChangeRefs]);
+    const resolved = resolveGroup([...output.walkthrough.stops.map((stop) => stop.changeRefs), output.walkthrough.otherChangeRefs],
+      params.referenceMode !== 'canonical');
     output.walkthrough = { ...output.walkthrough, stops: output.walkthrough.stops.map((stop, index) => ({ ...stop, changeRefs: resolved[index] })), otherChangeRefs: resolved[resolved.length - 1] };
   }
   if (output.commitPlan) {

@@ -134,6 +134,7 @@ export {
 } from './backendCapabilities.js';
 export { resolveScmScopedChangedPaths } from './pathScope.js';
 export {
+  ScmHostingProviderKindProtocolSchema,
   ScmHostingProviderKindSchema,
   resolveScmHostingProviderFollowupAllowedBaseUrl,
   type ScmHostingProviderKind,
@@ -814,6 +815,7 @@ export function classifyScmOperationErrorCode(
     case SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY:
       return 'repository';
     case SCM_OPERATION_ERROR_CODES.INVALID_PATH:
+    case SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND:
       return 'path';
     case SCM_OPERATION_ERROR_CODES.INVALID_REQUEST:
       return 'request';

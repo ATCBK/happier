@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readProjectContextAttachmentTargetV1, updatePersonalProjectContextV1, ProjectContextUpdateInputV1Schema, type ProjectContextActionOwnerDepsV1 } from './projectContextV1.js';
+import { readProjectContextEntriesV1, readProjectContextAttachmentTargetV1, updatePersonalProjectContextV1, ProjectContextUpdateInputV1Schema, type ProjectContextActionOwnerDepsV1 } from './projectContextV1.js';
 import type { ProjectAccountOrganizationV1 } from './projectAccountRowsV1.js';
 import type { ProjectSourceV1, ProjectSourcesUpdateInputV1 } from './sources/projectSourceV1.js';
 
@@ -75,6 +75,11 @@ describe('personal Project context Account Action owner', () => {
     await expect(shared.attach(entry.entry)).resolves.toBe(false);
     expect(sourceWrites).toHaveLength(1);
     canManage = false;
+    // Search consumes current readable Source context without gaining management
+    // authority. The same canonical selection still refuses attachment writes.
+    await expect(readProjectContextEntriesV1(ports, target)).resolves.toMatchObject({
+      entries: [{ id: 'entry', ref: { serverId: 'home' } }, { id: 'memory', ref: { serverId: 'home' } }],
+    });
     await expect(shared.attach(entry.entry)).rejects.toMatchObject({ code: 'project_context_access_denied' });
     await expect(readProjectContextAttachmentTargetV1(ports, target)).rejects.toMatchObject({ code: 'project_context_access_denied' });
     expect(sourceWrites).toHaveLength(1);

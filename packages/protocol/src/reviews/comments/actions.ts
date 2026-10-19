@@ -24,6 +24,8 @@ import { StoredJsonContentEnvelopeSchema } from '../../storage/storedJsonContent
 import { PluginSourceCustodyV1Schema } from '../../plugins/runtime/sourceCustody.js';
 import { PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../../plugins/contributionIdentity.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
+import { WorkflowSessionScopeV1Schema, type WorkflowSessionScopeV1 } from '../../workflows/workflowSessionScopeV1.js';
+export { isWorkflowSessionScopeTargetV1, readWorkflowActionInvocationV1 } from '../../workflows/workflowSessionScopeV1.js';
 
 export const REVIEW_COMMENT_ACTION_IDS_V1 = Object.freeze([
   'reviews.comments.create',
@@ -98,8 +100,10 @@ export type ReviewCommentCurrentIntentV1 = z.infer<typeof ReviewCommentCurrentIn
 export const ReviewCommentPrincipalHeaderV1Schema = lazyZodSchema(() => z.strictObject({
   actor: ReviewCommentActorRefV1Schema,
   currentIntent: z.optional(ReviewCommentCurrentIntentV1Schema),
+  workflowScope: z.optional(WorkflowSessionScopeV1Schema),
   proof: z.optional(ReviewCommentPrincipalProofV1Schema),
-}));
+}).check(z.refine(value => value.workflowScope === undefined || value.actor.kind === 'workflow',
+  'Only Workflow principals carry invocation Session authority')));
 export type ReviewCommentPrincipalHeaderV1 = z.infer<typeof ReviewCommentPrincipalHeaderV1Schema>;
 
 function normalizeCanonicalJsonValue(value: unknown): unknown {
@@ -130,11 +134,13 @@ export function stringifyReviewCommentPrincipalCanonicalJsonV1(value: unknown): 
 export function createReviewCommentPrincipalSigningInputV1(params: Readonly<{
   actor: z.infer<typeof ReviewCommentActorRefV1Schema>;
   currentIntent?: ReviewCommentCurrentIntentV1;
+  workflowScope?: WorkflowSessionScopeV1;
   proof: Omit<ReviewCommentPrincipalProofV1, 'signatureBase64Url'>;
 }>): Uint8Array {
   return new TextEncoder().encode(`happier.reviewCommentPrincipal.v1\u0000${stringifyReviewCommentPrincipalCanonicalJsonV1({
     actor: params.actor,
     ...(params.currentIntent ? { currentIntent: params.currentIntent } : {}),
+    ...(params.workflowScope ? { workflowScope: params.workflowScope } : {}),
     proof: params.proof,
   })}`);
 }
@@ -142,7 +148,7 @@ export function createReviewCommentPrincipalSigningInputV1(params: Readonly<{
 export const ReviewCommentActionIdV1Schema = lazyZodSchema(() => z.enum(REVIEW_COMMENT_ACTION_IDS_V1));
 export type ReviewCommentActionIdV1 = z.infer<typeof ReviewCommentActionIdV1Schema>;
 
-const ReviewCommentListTaxonomyIdsV1Schema = lazyZodSchema(() => z.optional(z.pipe(z.transform((value) => typeof value === 'string' ? [value] : value), z.array(z.string().check(z.minLength(1))))));
+const ReviewCommentListTaxonomyIdsV1Schema = lazyZodSchema(() => z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => typeof value === 'string' ? [value] : value), z.array(z.string().check(z.minLength(1))))));
 
 export const ReviewCommentOperationErrorCodeV1Schema = lazyZodSchema(() => z.enum([
   'review_comment_not_found',
