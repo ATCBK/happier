@@ -1729,8 +1729,8 @@ export async function runPermissionModePromptLoop(opts: {
         // Awaited context and checkpoint preparation can withdraw the resolved plan.
         if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         recordPreparationPhase('host_context');
-        await preparedDispatch.assertAdmission();
         if (!hostContextOnly) await preparedHostContext?.commitWorkerUpdateEvents?.();
+        await preparedDispatch.assertAdmission();
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         const readyTurnContext = opts.onBeforeTurnBegin?.(message.message, assistantTextSnapshotScope);
         if (typeof readyTurnContext === 'function') readReadyTurnContext = readyTurnContext;

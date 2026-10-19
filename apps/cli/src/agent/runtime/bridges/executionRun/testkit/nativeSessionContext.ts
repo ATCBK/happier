@@ -93,6 +93,7 @@ export function createVoiceSessionRuntimeThroughNativeFactory(params: Readonly<{
     runtime: AgentRuntime;
     capabilities: AgentSessionCapabilities;
     modelId: string;
+    configuration?: CreateCliExecutionRunBackendParams['configuration'];
     start?: CreateCliExecutionRunBackendParams['start'];
     /** Real Session composition; tests supply its Socket/HTTP boundaries separately. */
     session?: ApiSessionClient;
@@ -128,6 +129,7 @@ export function createVoiceSessionRuntimeThroughNativeFactory(params: Readonly<{
         const runtime = adapter.runtimeCore.createExecutionRunBackend(params.runtimeOptions ?? {
             cwd: '/repo', runId: 'host-voice-run', controllerOccurrenceId: `voice-${params.modelId}`, scope: 'session_owned',
             backendId: agent.id, modelId: params.modelId, permissionMode: 'read_only',
+            ...(params.configuration ? { configuration: params.configuration } : {}),
             start: params.start ?? { intent: 'voice_agent', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
             sessionOwnedRunScope: params.sessionOwnedRunScope,
             sessionInteractionHost: {

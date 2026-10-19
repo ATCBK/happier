@@ -24,6 +24,24 @@ source_kind="legacyUnknown"
 </happier_input_context>`;
 
 describe('registerPermissionModeMessageQueueBinding', () => {
+  it('keeps independently cancellable wake replies separate even with the same admitted cause', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode), {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {} });
+    const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+      returnedAnswer: { requestSessionId: 'receiver', requestLocalId: 'question', outcome: 'answer', delivery: 'wake' } });
+    const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } });
+    for (const localId of ['cancelled-reply', 'valid-reply']) harness.emit({ role: 'user', localId,
+      content: { type: 'text', text: localId }, meta: withSessionInputAuthority({}, authority) });
+    const first = await queue.waitForMessagesAndGetAsString();
+    expect(first?.message).toMatchObject({ text: 'cancelled-reply', localIds: ['cancelled-reply'] });
+    expect((await queue.waitForMessagesAndGetAsString())?.message).toMatchObject({ text: 'valid-reply', localIds: ['valid-reply'] });
+  });
+
   it('keeps only public-safe matched reasons from the exact admitted Follow receipt on its queued original', async () => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
       batcher: combinePermissionModeQueuedPrompts,

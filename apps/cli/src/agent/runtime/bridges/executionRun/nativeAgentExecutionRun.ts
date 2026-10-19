@@ -60,10 +60,12 @@ import { issueAgentNativeLaunchQualifierForHost } from '@/plugins/runtime/invoca
 import {
     createNativeAgentSessionInteractionOperations,
     applyNativeAgentConfigurationUpdate,
+    assertNativeAgentSessionModeAvailable,
     resolveNativeAgentSessionNativeHomeService,
     resolveAgentSessionMcpLaunchConfigs,
     toNativeAgentUsageObservation,
 } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import type { NativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import type { UsageObservation } from '@/usage/usageObservation';
 import type { UsageObservationPublishResult } from '@/usage/createUsageObservationPublisher';
 import {
@@ -118,6 +120,7 @@ type NativeAgentRunUsagePublisher = Readonly<{
 
 type NativeAgentSessionContextLease = Readonly<{
     context: AgentSessionRuntimeContext;
+    publications?: NativeAgentSessionPublications;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
     mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
@@ -1680,6 +1683,13 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                         const opened = await sessions.open(sessionRequest, runScopedContext);
                         sourceSession = opened;
                         let boundaryError = readBoundaryError();
+                        if (!boundaryError) {
+                            try { assertNativeAgentSessionModeAvailable(sessionRequest.configuration, sessionContext.publications); }
+                            catch (error) {
+                                await opened.dispose('runtime_recovery');
+                                throw error;
+                            }
+                        }
                         if (!boundaryError && opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
                             await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
                             boundaryError = readBoundaryError();
@@ -1923,6 +1933,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 opened = await sessions.open(request, context);
                 sourceSession = opened;
                 assertUsable();
+                assertNativeAgentSessionModeAvailable(request.configuration, sessionContext.publications);
                 if (opened.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
                     await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
                     assertUsable();
@@ -1936,6 +1947,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                             sourceSession = resumed;
                             try {
                                 assertUsable();
+                                assertNativeAgentSessionModeAvailable(request.configuration, sessionContext.publications);
                                 if (resumed.skillsDelivered === false && sessionContext.skills && sessionContext.capabilityNoticeSession) {
                                     await publishSkillLaunchNotice(sessionContext.capabilityNoticeSession, sessionContext.skills);
                                     assertUsable();
@@ -1957,6 +1969,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                     cwd: params.options.cwd,
                     context,
                     capabilities: params.sessionCapabilities,
+                    ...(sessionContext.publications ? { publications: sessionContext.publications } : {}),
                     ...(sessionContext.usagePublisher || params.options.start?.observeWorkflowUsage ? {
                         usagePublisher: {
                             provider: sessionContext.usagePublisher?.provider ?? params.lease.agentId,

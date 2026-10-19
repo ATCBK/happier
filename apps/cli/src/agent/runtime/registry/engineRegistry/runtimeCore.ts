@@ -937,6 +937,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             ? host.session.enqueueSessionEventCommitted?.bind(host.session) : undefined;
                                         return Object.freeze({
                                             context,
+                                            publications,
                                             ...(host.session.publishUsageObservation ? {
                                                 usagePublisher: Object.freeze({
                                                     provider: nativeIdentity.agentId,

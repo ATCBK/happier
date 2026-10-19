@@ -425,7 +425,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     if (returnedAnswer) {
       // Information is never a slash command, in-flight steer, or queue-clear.
       // Continue answers remain retained context until a real input arrives.
-      opts.queue.push(queuedPrompt, queueMode);
+      opts.queue.pushIsolate(queuedPrompt, queueMode);
       if (returnedAnswer.delivery === 'wake' && opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
       return true;
     }
@@ -439,6 +439,9 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           message: queuedPrompt,
           text,
           mode: queueMode,
+          // Protected originals can be independently withdrawn after queueing.
+          // Keep their native dispatch and rejection settlement independent too.
+          isolate: Boolean(causalPermissionAuthority),
         });
       }
       if (opts.inFlightSteer?.isTurnInFlight()) notifyPromptQueuedDuringTurnBestEffort();
@@ -720,9 +723,9 @@ export function registerPermissionModeMessageQueueBinding(opts: {
                 ? { sessionFollowUpdates: preparedSessionFollowContext.updates, workerUpdates: preparedSessionFollowContext.workerUpdates }
                 : {}),
             });
-            await preparedDispatch.assertAdmission();
-            if (stopForUnavailableSteer()) return;
             await preparedSessionFollowContext?.commitWorkerUpdateEvents?.();
+            if (stopForUnavailableSteer()) return;
+            await preparedDispatch.assertAdmission();
             if (stopForUnavailableSteer()) return;
             const confirmProviderPromptAccepted = (): void => {
               const settle = settleReplaySeedOnProviderAcceptance;

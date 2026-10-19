@@ -60,6 +60,30 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
+it.each(['bounded', 'long_lived'] as const)('refuses an unavailable native mode through the real %s Session-owned Run factory', async (runClass) => {
+    const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+    const dispose = vi.fn();
+    const runtime: AgentRuntime = { sessions: { async open(_request, context) {
+        context.session.services.modes.bind({
+            read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+            subscribe: () => ({ dispose() {} }),
+        });
+        return { send, dispose, watch: () => ({ dispose() {} }) };
+    } } };
+    const host = createVoiceSessionRuntimeThroughNativeFactory({ runtime, modelId: 'native-mode-fixture',
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        configuration: { mode: { value: 'default', updatedAtMs: 1 }, model: { value: null, updatedAtMs: 0 },
+            permissionIntent: { value: null, updatedAtMs: 0 }, options: {} },
+        start: { intent: runClass === 'bounded' ? 'memory_hints' : 'voice_agent', runClass, retentionPolicy: 'ephemeral' },
+    });
+    try {
+        await expect(host.provisionRuntime({ initialPrompt: 'Do not send' }))
+            .rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+        expect(send).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    } finally { await host.dispose(); }
+});
+
 it('settles a native execution-only Run when send returns unavailable without a terminal event', async () => {
     const host = createNativeAgentExecutionRunHostRuntime({
         runtime: { executionRuns: { async open() { return {

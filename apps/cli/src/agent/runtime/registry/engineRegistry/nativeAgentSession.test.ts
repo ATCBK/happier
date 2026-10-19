@@ -6148,6 +6148,59 @@ describe('native Agent session host adapter', () => {
         await created.operations.resetOrDisposeRuntime();
     });
 
+    it.each([
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false },
+        { mode: 'custom', modes: [{ id: 'custom', name: 'Custom' }], currentModeId: 'build', accepted: true },
+        { mode: 'custom', modes: null, currentModeId: null, accepted: true },
+        { mode: 'custom', modes: [], currentModeId: 'custom', accepted: true },
+    ])('admits external native mode $mode against its observed inventory ($accepted)', async ({ mode, modes, currentModeId, accepted }) => {
+        const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+        const dispose = vi.fn();
+        const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(async () => ({
+            status: 'applied', changed: ['mode'],
+        }));
+        const open: AgentSessionRuntimeFactory['open'] = async (_request, context) => {
+            // Native inventory is produced at the external plugin boundary and consumed through the real host binding.
+            context.session.services.modes.bind({
+                read: () => ({ modes, currentModeId }),
+                subscribe: () => ({ dispose() {} }),
+            });
+            return { send, updateConfiguration, watch: () => ({ dispose() {} }), dispose };
+        };
+        const agentId = 'acme-native-mode-admission';
+        const contributions = createExternalContributionFixtures(agentId);
+        const plan = await createNativeAgentRuntimeSessionPlan({
+            runtime: { sessions: { open } }, lease: createLease(agentId),
+            backend: contributions.backend, agent: contributions.agent,
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true },
+            createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/repo',
+                backendTarget: { kind: 'backend', backendId: agentId }, sessionModeId: mode }),
+        });
+        if (!plan.config.createSessionRuntime) throw new Error('Expected native Session factory');
+        const admission = plan.config.createSessionRuntime({ directory: '/repo', metadata: {},
+            machineId: 'machine-1', session: createNativeSessionClientTestPort('native-mode-admission'),
+            transcriptSession: {}, messageBuffer: {}, mcpServers: {}, permissionHandler: {},
+            getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
+        } as never);
+        if (!accepted) {
+            await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+            expect(send).not.toHaveBeenCalled();
+            expect(dispose).toHaveBeenCalledOnce();
+            return;
+        }
+        const created = await admission;
+        try {
+            await created.operations.sendTurnPrompt('continue', { localId: 'native-mode-input' });
+            expect(send).toHaveBeenCalledOnce();
+            if (modes !== null && modes.length > 0) {
+                await expect(created.operations.updateSessionRuntimeConfig({ modeId: 'missing' }))
+                    .resolves.toMatchObject({ status: 'failed', reason: 'native_agent_session_mode_unavailable' });
+                expect(updateConfiguration).not.toHaveBeenCalled();
+            }
+        } finally { await created.operations.resetOrDisposeRuntime(); }
+    });
+
     it('delegates the host compact command once to the native session with stripped instructions', async () => {
         const compact = vi.fn<NonNullable<AgentSessionRuntime['compact']>>(async () => ({ status: 'admitted' }));
         const session: AgentSessionRuntime = {
@@ -9942,6 +9995,40 @@ describe('native Agent session host adapter', () => {
         unsubscribe();
         await runtime.resetOrDisposeRuntime('session_closed');
         expect(disposeRuntimeScope).toHaveBeenCalledOnce();
+    });
+
+    it('preserves native send refusal codes without logging private diagnostic content', async () => {
+        // The native Session is the external plugin boundary; the host admission path stays real.
+        const session: AgentSessionRuntime = {
+            send: async () => ({
+                status: 'unavailable',
+                retryable: false,
+                diagnostic: {
+                    code: 'external_input_custody_unknown', severity: 'error',
+                    message: 'private provider response', details: { privateValue: 'private native detail' },
+                },
+            }),
+            watch: () => ({ dispose() {} }),
+            dispose() {},
+        };
+        const fileLog = vi.spyOn(logger, 'infoFile');
+        const runtime = createNativeAgentSessionOperations(session, 'session-send-refusal');
+        try {
+            await expect(runtime.sendTurnPrompt('private prompt', {
+                localId: 'input-send-refusal', turnId: 'turn-send-refusal',
+            })).rejects.toThrow("status 'unavailable'");
+            const returns = fileLog.mock.calls.filter(([name, facts]) => name === '[NativeAgentSession] Turn phase'
+                && (facts as { phase?: string }).phase === 'send_returned');
+            expect(returns).toEqual([[expect.any(String), expect.objectContaining({
+                phase: 'send_returned', sessionId: 'session-send-refusal', turnId: 'turn-send-refusal',
+                localId: 'input-send-refusal', status: 'unavailable',
+                diagnosticCode: 'external_input_custody_unknown', retryable: false,
+            })]]);
+            expect(JSON.stringify(returns)).not.toContain('private');
+        } finally {
+            await runtime.resetOrDisposeRuntime('session_closed');
+            fileLog.mockRestore();
+        }
     });
 
     it('times the first admitted foreground assistant text without counting reasoning or sidechains', async () => {

@@ -1,4 +1,5 @@
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { isSessionModeSelectionUnavailable } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { randomUUID } from 'node:crypto';
@@ -1636,6 +1637,31 @@ export function applyNativeAgentConfigurationUpdate(
     };
 }
 
+function isNativeAgentSessionModeUnavailable(
+    configuration: AgentSessionConfigurationSnapshot | undefined,
+    publications: NativeAgentSessionPublications | undefined,
+): boolean {
+    const modeId = configuration?.mode.value;
+    if (!modeId || !publications) return false;
+    const snapshot = publications.modesSource.read();
+    return isSessionModeSelectionUnavailable(modeId, {
+        availableModes: snapshot.modes, currentModeId: snapshot.currentModeId,
+    });
+}
+
+export function assertNativeAgentSessionModeAvailable(
+    configuration: AgentSessionConfigurationSnapshot | undefined,
+    publications: NativeAgentSessionPublications | undefined,
+): void {
+    if (isNativeAgentSessionModeUnavailable(configuration, publications)) {
+        throw new PluginError({
+            code: 'native_agent_session_mode_unavailable',
+            message: 'The selected native Agent mode is not available in this Session.',
+            retryable: false,
+        });
+    }
+}
+
 function toHostConfigurationOutcome(
     result: Awaited<ReturnType<NonNullable<AgentSessionRuntime['updateConfiguration']>>>,
 ): RuntimeConfigUpdateOutcomeV1 {
@@ -2347,6 +2373,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
     initialConfiguration?: AgentSessionConfigurationSnapshot;
     expectedProviderSessionId?: string;
     usagePublisher?: NativeAgentSessionUsagePublisher;
+    publications?: NativeAgentSessionPublications;
 }>): PluginRuntimeHookOperations {
     const capabilities = params.capabilities;
     return createNativeAgentSessionOperations(
@@ -2378,6 +2405,7 @@ export function createNativeAgentSessionInteractionOperations(params: Readonly<{
                 params.session,
             ),
         },
+        params.publications,
     );
 }
 
@@ -3889,6 +3917,10 @@ export function createNativeAgentSessionOperations(
                     logger.infoFile('[NativeAgentSession] Turn phase', {
                         phase: 'send_returned', sessionId: expectedSessionId,
                         turnId: correlation.turnId, localId: correlation.inputId, status: result.status,
+                        ...(result.status !== 'admitted' ? {
+                            diagnosticCode: result.diagnostic.code,
+                            ...('retryable' in result ? { retryable: result.retryable } : {}),
+                        } : {}),
                         durationMs: Math.round(performance.now() - sendStartedAt),
                     });
                 } catch (error) {
@@ -4156,6 +4188,9 @@ export function createNativeAgentSessionOperations(
             const nextConfiguration = applyNativeAgentConfigurationUpdate(configuration, {
                 ...update, ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             }, directFacets.getWorkspaceWrites);
+            if (isNativeAgentSessionModeUnavailable(nextConfiguration.snapshot, publications)) {
+                return reportOutcome({ status: 'failed', reason: 'native_agent_session_mode_unavailable' }, 'native_agent_session_mode_unavailable');
+            }
             if (nextConfiguration.snapshot.workspaceWrites === 'deny' && directFacets.capabilities.workspaceWrites !== 'deny') {
                 return reportOutcome({ status: 'failed', reason: 'role_policy_unenforceable' }, 'role_policy_unenforceable');
             }
@@ -5914,6 +5949,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             let manualCompaction: NativeAgentSessionManualCompaction;
             try {
                 assertGenerationCurrent();
+                assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
                 cancellation = resolveNativeAgentSessionCancellation(
                     identity.agentId,
                     sessionCapabilities,

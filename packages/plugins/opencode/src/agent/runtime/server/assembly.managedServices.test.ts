@@ -142,22 +142,38 @@ describe('OpenCode server managed-service assembly', () => {
       ]));
     } finally { await assembly.dispose(); }
   });
-  it('keeps V1 controls staged for the next prompt rather than claiming native zero-turn application', async () => {
+  it.each(['plan', 'default'] as const)('keeps V1 controls staged and rejects unavailable mode %s before prompt delivery', async (mode) => {
     const requests: Array<{ path: string; method: string }> = [];
+    const nativeModes: { source: AgentSessionModesSource | null } = { source: null };
     const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213', managedServerRequest: async (input) => {
       requests.push({ path: input.pathAndQuery, method: input.method ?? 'GET' });
       const path = input.pathAndQuery.split('?')[0];
       const body = path === '/session' ? { id: 'oc-v1-staged' }
+        : path === '/agent' ? [{ name: 'build', mode: 'primary' }, { name: 'plan', mode: 'primary' }]
         : path === '/provider' ? { all: [{ id: 'openai', models: { luna: { id: 'luna', name: 'Luna' } } }] } : {};
       return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
     } });
-    const assembly = await createOpenCodeServerRuntimeAssembly({ ctx, directory: '/repo', happierSessionId: 'happy-v1-staged', endpoint: { mode: 'managed-spawn' }, request: { kind: 'create', sessionId: 'happy-v1-staged', cwd: '/repo' } });
+    const admission = createOpenCodeServerRuntimeAssembly({ ctx, directory: '/repo', happierSessionId: 'happy-v1-staged', endpoint: { mode: 'managed-spawn' },
+      modes: { bind(source) { nativeModes.source = source; return { dispose() {} }; } },
+      request: { kind: 'create', sessionId: 'happy-v1-staged', cwd: '/repo', configuration: {
+        mode: { value: mode, updatedAtMs: 1 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: null, updatedAtMs: 0 }, options: {},
+      } } });
+    if (mode === 'default') {
+      await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+      expect(requests.some(({ path, method }) => method === 'POST' && path.includes('/message'))).toBe(false);
+      return;
+    }
+    const assembly = await admission;
     try {
+      // The real OpenCode producer must keep the observed default separate from the invalid desired mode.
+      expect(nativeModes.source?.read()).toMatchObject({ currentModeId: 'build', modes: [{ id: 'build' }, { id: 'plan' }] });
       if (!('updateConfiguration' in assembly.runtime) || !assembly.runtime.updateConfiguration) throw new Error('Session configuration unavailable');
       await expect(assembly.runtime.updateConfiguration({
         mode: { value: 'plan', updatedAtMs: 1 }, model: { value: 'openai/luna', updatedAtMs: 1 },
         permissionIntent: { value: null, updatedAtMs: 0 }, options: {},
       })).resolves.toMatchObject({ status: 'deferred' });
+      expect(nativeModes.source?.read().currentModeId).toBe('build');
       expect(requests.some(({ path, method }) => method === 'POST' && (path.endsWith('/model') || path.endsWith('/agent') || path.includes('/message')))).toBe(false);
     } finally { await assembly.dispose(); }
   });
