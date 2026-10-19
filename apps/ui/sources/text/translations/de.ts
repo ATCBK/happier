@@ -16737,7 +16737,6 @@ settingsSession: {
             refMissing: ({ ref }: { ref: string }) => `${ref} ist in diesem Repository nicht mehr verfügbar.`,
             offline: 'Offline · deine Auswahl bleibt erhalten',
             pickAnother: "Anderen wählen",
-            accessLost: "Du hast keinen Zugriff mehr auf diesen Rechner.",
             targetMismatch: "Der Rechner konnte den ausgewählten Home und Rechner nicht bestätigen.",
             targetMismatchHint: "Wähle den Rechner erneut aus. Falls das weiterhin auftritt, verbinde ihn erneut mit diesem Home und versuche es noch einmal. Deine Auswahl bleibt erhalten.",
             invalidFolder: "Wähle einen Ordner in diesem Checkout.",

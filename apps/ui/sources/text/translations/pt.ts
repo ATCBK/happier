@@ -16741,7 +16741,6 @@ settingsSession: {
         refMissing: ({ ref }: { ref: string }) => `${ref} não está mais disponível neste repositório.`,
         offline: 'Offline · suas escolhas foram mantidas',
         pickAnother: "Escolher outra",
-        accessLost: "Você não tem mais acesso a esta máquina.",
         targetMismatch: "A máquina não conseguiu verificar o Home e a máquina selecionados.",
         targetMismatchHint: "Escolha a máquina novamente. Se isso continuar, reconecte-a a este Home e tente outra vez. Suas escolhas são mantidas.",
         invalidFolder: "Escolha uma pasta dentro deste checkout.",

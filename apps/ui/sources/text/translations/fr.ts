@@ -16504,7 +16504,6 @@ settingsSession: {
         refMissing: ({ ref }: { ref: string }) => `${ref} n’est plus disponible dans ce dépôt.`,
         offline: 'Hors ligne · tes choix sont conservés',
         pickAnother: "En choisir une autre",
-        accessLost: "Tu n’as plus accès à cette machine.",
         targetMismatch: "La machine n’a pas pu vérifier le Home et la machine sélectionnés.",
         targetMismatchHint: "Choisis à nouveau la machine. Si cela continue, reconnecte-la à ce Home et réessaie. Tes choix sont conservés.",
         invalidFolder: "Choisis un dossier dans ce checkout.",

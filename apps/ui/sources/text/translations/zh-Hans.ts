@@ -16235,7 +16235,6 @@ settingsSession: {
         refMissing: ({ ref }: { ref: string }) => `${ref} 在此仓库中已不可用。`,
         offline: '已离线 · 你的选择会保留',
         pickAnother: "选择其他",
-        accessLost: "你已无法访问此机器。",
         targetMismatch: "机器无法验证所选的Home和机器。",
         targetMismatchHint: "请重新选择机器。如果问题持续，请将它重新连接到此Home后重试。你的选择会保留。",
         invalidFolder: "请选择此检出内的文件夹。",

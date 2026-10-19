@@ -15656,7 +15656,6 @@ settingsSession: {
         refMissing: ({ ref }: { ref: string }) => `${ref} nie jest już dostępna w tym repozytorium.`,
         offline: 'Offline · twoje wybory zostają',
         pickAnother: "Wybierz inną",
-        accessLost: "Nie masz już dostępu do tej maszyny.",
         targetMismatch: "Maszyna nie mogła zweryfikować wybranego Home i maszyny.",
         targetMismatchHint: "Wybierz maszynę ponownie. Jeśli problem nadal występuje, połącz ją ponownie z tym Home i spróbuj jeszcze raz. Twój wybór zostaje zachowany.",
         invalidFolder: "Wybierz folder w tym checkoucie.",

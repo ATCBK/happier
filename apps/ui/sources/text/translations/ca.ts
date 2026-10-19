@@ -14580,7 +14580,6 @@ settingsSession: {
             refMissing: ({ ref }: { ref: string }) => `${ref} ja no està disponible en aquest repositori.`,
             offline: 'Desconnectada · les teves opcions es conserven',
             pickAnother: "Tria’n una altra",
-            accessLost: "Ja no tens accés a aquesta màquina.",
             targetMismatch: "La màquina no ha pogut verificar el Home i la màquina seleccionats.",
             targetMismatchHint: "Torna a triar la màquina. Si continua passant, reconnecta-la a aquest Home i torna-ho a provar. Les teves opcions es conserven.",
             invalidFolder: "Tria una carpeta dins d’aquest checkout.",

@@ -16538,7 +16538,6 @@ settingsSession: {
         refMissing: ({ ref }: { ref: string }) => `${ref} はこのリポジトリで利用できなくなりました。`,
         offline: 'オフライン · 選択は保持されます',
         pickAnother: "別のものを選ぶ",
-        accessLost: "このマシンにアクセスできなくなりました。",
         targetMismatch: "選択したHomeとマシンを確認できませんでした。",
         targetMismatchHint: "マシンを選び直してください。問題が続く場合は、このHomeにマシンを再接続して再試行してください。選択内容は保持されます。",
         invalidFolder: "このチェックアウト内のフォルダーを選んでください。",

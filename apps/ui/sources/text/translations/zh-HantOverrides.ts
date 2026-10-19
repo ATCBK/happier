@@ -12609,7 +12609,6 @@ settingsSession: {
             refMissing: ({ ref }: { ref: string }) => `${ref} 在此儲存庫中已無法使用。`,
             offline: '已離線 · 你的選擇會保留',
             pickAnother: "選擇其他",
-            accessLost: "你已無法存取此機器。",
             targetMismatch: "機器無法驗證所選的Home和機器。",
             targetMismatchHint: "請重新選擇機器。如果問題持續，請將它重新連線至此Home後再試。你的選擇會保留。",
             invalidFolder: "請選擇此簽出內的資料夾。",

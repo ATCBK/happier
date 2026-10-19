@@ -20231,7 +20231,6 @@ const enProjects = {
       refMissing: ({ ref }: { ref: string }) => `${ref} is no longer available in this repository.`,
       offline: 'Offline · your choices are kept',
       pickAnother: "Pick another",
-      accessLost: "You no longer have access to this machine.",
       targetMismatch: "The machine couldn’t verify the selected Home and machine.",
       targetMismatchHint: "Choose the machine again. If this continues, reconnect it to this Home and retry. Your choices are kept.",
       invalidFolder: "Choose a folder inside this checkout.",
