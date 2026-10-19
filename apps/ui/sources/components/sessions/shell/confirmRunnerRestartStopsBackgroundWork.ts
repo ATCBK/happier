@@ -3,24 +3,34 @@ import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { deriveSessionRuntimePresentationStateForSession } from '@/utils/sessions/sessionUtils';
 
+// Repeated presses while the dialog is open must not stack dialogs (and restart requests).
+let confirmationOpen = false;
+
 /**
  * Restarting a session runner ends its provider process, which also stops every background agent
- * or shell it hosts. The daemon cannot see that work, so the user decides here before the restart
- * request is sent; the daemon trusts this confirmation for UI-originated restarts.
+ * or shell it hosts. The user decides here before the restart request is sent; the daemon trusts
+ * this confirmation and does not re-check background activity for UI-originated restarts.
  * Resolves `true` when the restart may proceed.
  */
 export async function confirmRunnerRestartStopsBackgroundWork(sessionId: string): Promise<boolean> {
     const session = storage.getState().sessions[sessionId];
+    // SessionView renders only stored sessions, so a missing record has no runtime to protect.
     if (!session) return true;
     const runtime = deriveSessionRuntimePresentationStateForSession(session, Date.now());
     if (!runtime.backgroundActive) return true;
-    return await Modal.confirm(
-        t('session.runnerRestartBackgroundWork.title'),
-        t('session.runnerRestartBackgroundWork.body', { count: runtime.backgroundActiveCount }),
-        {
-            cancelText: t('common.cancel'),
-            confirmText: t('session.runnerRestartBackgroundWork.confirmAction'),
-            destructive: true,
-        },
-    );
+    if (confirmationOpen) return false;
+    confirmationOpen = true;
+    try {
+        return await Modal.confirm(
+            t('session.runnerRestartBackgroundWork.title'),
+            t('session.runnerRestartBackgroundWork.body', { count: runtime.backgroundActiveCount }),
+            {
+                cancelText: t('common.cancel'),
+                confirmText: t('session.runnerRestartBackgroundWork.confirmAction'),
+                destructive: true,
+            },
+        );
+    } finally {
+        confirmationOpen = false;
+    }
 }

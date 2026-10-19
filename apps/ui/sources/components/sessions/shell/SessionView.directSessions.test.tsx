@@ -1724,6 +1724,24 @@ describe('SessionView (direct sessions)', () => {
     });
   });
 
+  it('opens one background-agent confirmation for repeated restart presses', async () => {
+    installStaleSessionRunnerStatus();
+    installBackgroundActivity(1);
+    let confirmStop: (value: boolean) => void = () => {};
+    modalConfirmSpy.mockImplementationOnce(() => new Promise<boolean>((resolve) => { confirmStop = resolve; }));
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-staleRunner-version-restart'));
+    await pressTestInstanceAsync(screen.findByTestId('session-staleRunner-version-restart'));
+    await act(async () => {
+      confirmStop(true);
+    });
+    await settleDirectSessionView();
+
+    expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+    expect(restartStaleSessionRunnerSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('restarts the stale runner without asking when no background agents run', async () => {
     installStaleSessionRunnerStatus();
 

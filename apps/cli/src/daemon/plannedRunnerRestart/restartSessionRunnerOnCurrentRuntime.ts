@@ -1,5 +1,5 @@
 import type { TrackedSession } from '@/daemon/types';
-import type { SessionRunnerRestartDisabledReason } from '@happier-dev/protocol';
+import type { SessionRunnerRestartDisabledReason, SessionRuntimeActivityState } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
 import { readTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
 
@@ -33,7 +33,7 @@ type RequestRestart = (input: Readonly<{
 type RestartSessionRunnerEndpointSummary = NonNullable<RestartSessionRunnerResult['previous']>;
 type ResolveActivityDisabledReason = (sessionId: string) => SessionRunnerRestartDisabledReason | null;
 type ServerRuntimeActivity = Readonly<{
-  runtimeActivityState?: string | null;
+  runtimeActivityState?: SessionRuntimeActivityState | null;
   runtimeActivityActiveCount?: number | null;
 }>;
 type ReadServerRuntimeActivity = (sessionId: string) => Promise<ServerRuntimeActivity | null>;

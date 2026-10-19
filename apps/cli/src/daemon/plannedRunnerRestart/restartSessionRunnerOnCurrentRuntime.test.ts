@@ -253,6 +253,26 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
     expect(requestRestart).not.toHaveBeenCalled();
   });
 
+  it('previews an unconfirmed dry run as busy while the server projects background activity', async () => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+
+    const result = await restartSessionRunnerOnCurrentRuntime({
+      request: {
+        sessionId: 'sess-1',
+        mode: 'if_stale',
+        reason: 'daemon_restart_session_runners_command',
+        dryRun: true,
+      },
+      tracked: trackedSession(),
+      currentIdentity: currentIdentity('0.2.11'),
+      requestRestart,
+      readServerRuntimeActivity: async () => ({ runtimeActivityState: 'active', runtimeActivityActiveCount: 1 }),
+    });
+
+    expect(result).toEqual({ ok: false, status: 'busy', sessionId: 'sess-1', reasonCode: 'turn_in_progress' });
+    expect(requestRestart).not.toHaveBeenCalled();
+  });
+
   it('restarts an unconfirmed request when the server projects no background activity', async () => {
     const requestRestart = vi.fn(async () => ({ signaled: true }));
 
