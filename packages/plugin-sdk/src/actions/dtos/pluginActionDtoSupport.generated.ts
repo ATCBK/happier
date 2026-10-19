@@ -9017,6 +9017,14 @@ export type SessionTerminalLayoutV1 = {
     first: SessionTerminalLayoutV1;
     second: SessionTerminalLayoutV1;
 };
+export interface FilesystemTreeNode {
+    readonly name: string;
+    readonly path: string;
+    readonly type: 'file' | 'directory';
+    readonly size?: number;
+    readonly modified?: number;
+    readonly children?: readonly FilesystemTreeNode[];
+}
 export type PluginSettingFieldSchemaV2 = {
     type?: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'integer' | undefined;
     title?: string | undefined;
