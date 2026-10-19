@@ -425,7 +425,7 @@ test('the finite public SDK task stages materialization before its mutation guar
   assert.equal(sdkPackage.scripts['api:finite'], 'yarn -s check:api-governance:prepared');
   assert.equal(
     rootPackage.scripts['check:public-sdk:finite:local'],
-    'turbo run api:finite test:finite typecheck:finite --filter=@happier-dev/plugin-sdk --filter=@happier-dev/plugin-ui --filter=@happier-dev/sdk',
+    'turbo run api:finite test:finite typecheck:finite --filter=@happier-dev/plugin-sdk --filter=@happier-dev/plugin-ui --filter=@happier-dev/sdk --filter=@happier-dev/embed',
   );
   assert.deepEqual(turboConfig.tasks['test:finite'].dependsOn, ['api:finite']);
   assert.deepEqual(turboConfig.tasks['typecheck:finite'].dependsOn, ['api:finite']);
