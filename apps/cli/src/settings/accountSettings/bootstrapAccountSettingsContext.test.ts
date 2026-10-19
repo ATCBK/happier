@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, QualifiedConnectedAccountPurposeBindingsV1Schema } from '@happier-dev/protocol';
+import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -73,6 +74,41 @@ describe('bootstrapAccountSettingsContext', () => {
 
   beforeEach(() => {
     resetInMemoryAccountSettingsContextForTests();
+  });
+
+  it.each(['plain', 'e2ee'] as const)('parses unchanged %s refresh content once while retaining fresh reads and changed-content admission', async mode => {
+    Object.assign(mutableConfigurationForTest(), { clientEncryptionRequirement: 'follow_account' });
+    const credentials = mode === 'plain' ? createTokenOnlyCredentialsStub() : createCredentialsStub();
+    const contents = [
+      { schemaVersion: 2, themePreference: 'dark' },
+      { schemaVersion: 2, themePreference: 'dark' },
+      { schemaVersion: 2, themePreference: 'light' },
+    ];
+    let revision = 0;
+    const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+      const raw = contents[revision++]!;
+      const content = mode === 'plain' ? { t: 'plain' as const, v: raw }
+        : { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+          material: { type: 'legacy', secret: new Uint8Array(32).fill(1) }, payload: raw,
+          randomBytes: length => new Uint8Array(length).fill(revision) }) };
+      return { status: 200, data: { version: revision, content } };
+    });
+    // Transparent instrumentation: the canonical parser and decryptor execute unchanged.
+    const parses = vi.spyOn(AccountSettingsSchema, 'parse');
+    const options = { credentials, refresh: 'force' as const,
+      deps: { resolveCachePath: () => '/tmp/happier-settings-parse-reuse', readCache: async () => null,
+        writeCache: async () => {}, applySideEffects: () => {} } };
+    const first = await bootstrapAccountSettingsContext(options);
+    expect(parses).toHaveBeenCalledTimes(1);
+    const same = await bootstrapAccountSettingsContext(options);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(parses).toHaveBeenCalledTimes(1);
+    expect(same.settings).toBe(first.settings);
+    const changed = await bootstrapAccountSettingsContext(options);
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(parses).toHaveBeenCalledTimes(2);
+    expect(changed.settings.themePreference).toBe('light');
+    expect(changed.settings).not.toBe(first.settings);
   });
 
   it('identifies a failed network refresh without recording Account content or the transport error', async () => {

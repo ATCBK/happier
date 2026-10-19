@@ -2,6 +2,7 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import axios from 'axios';
 import { HttpStatusError } from '@/api/client/httpStatusError';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import type { AgentId } from '@happier-dev/agents';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -731,6 +732,16 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     rawSettings: Readonly<Record<string, unknown>>;
     settings: AccountSettings;
   }>> => {
+    const parseSettings = (raw: Readonly<Record<string, unknown>>): AccountSettings => {
+      // Reuse only the current Account owner's already-admitted projection.
+      // Fresh HTTP/decryption and publication still run; changed raw content or
+      // a different Account/Home scope must go through the canonical parser.
+      const active = getActiveAccountSettingsSnapshot();
+      return active?.scopeKey === scopeKey && active.rawSettings !== undefined
+        && isDeepStrictEqual(active.rawSettings, raw)
+        ? active.settings
+        : parseBootstrapAccountSettings(raw);
+    };
     if (content && params.expectedAccountEncryptionMode
       && (params.expectedAccountEncryptionMode === 'plain' ? content.t !== 'plain' : content.t !== 'encrypted')) {
       throw new AccountSettingsContentInvalidError(new Error('account_settings_mode_mismatch'));
@@ -743,7 +754,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     }
     if (content.t === 'plain') {
       const rawSettings = readRawAccountSettingsObject(content.v);
-      const settings = parseBootstrapAccountSettings(rawSettings);
+      const settings = parseSettings(rawSettings);
       assertAccountEncryptionModeAllowedByEffectiveClientRequirement('plain', settings);
       return {
         rawSettings,
@@ -761,7 +772,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     }
     return {
       rawSettings: decrypted,
-      settings: parseBootstrapAccountSettings(decrypted),
+      settings: parseSettings(decrypted),
     };
   };
 
