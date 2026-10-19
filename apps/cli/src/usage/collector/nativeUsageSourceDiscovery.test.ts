@@ -51,7 +51,7 @@ describe('native source metadata discovery', () => {
                 budgetRegistry: new ExecutionBudgetRegistry({ maxConcurrentExecutionRuns: null, maxConcurrentOneShotTasks: null }),
                 discoverSources: () => discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
                     activeServerId: 'home', activeServerDir: directory, signal: new AbortController().signal,
-                    resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true }) }),
+                    resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true }) }),
                 resolveRoot: unavailable, readAccounting: unavailable, subscribeSource: unavailable,
                 publisher: { publish: unavailable }, deleteHistory: unavailable,
             });
@@ -106,7 +106,7 @@ describe('native source metadata discovery', () => {
             });
             const discoverSources = () => discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
                 activeServerId: 'home', activeServerDir: directory, signal: new AbortController().signal,
-                resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+                resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                     isCurrent: () => !retirement.signal.aborted }),
             });
             const [before] = await discoverSources();
@@ -154,7 +154,7 @@ describe('native source metadata discovery', () => {
             const legacyKey = resolveExternalSessionsSourceKeyForDeclaration(legacyDeclaration, legacySource);
             expect(await readNativeUsageAccountingAtAdmission({ agents, agentId: 'pi',
                 source: legacySource, admittedSourceKey: legacyKey, activeServerDir: directory,
-                signal: new AbortController().signal, boundary: { externalSessions: bounded,
+                signal: new AbortController().signal, boundary: { catalogEntry: null, externalSessions: bounded,
                     occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true },
             })).toEqual({ ok: false, code: 'unavailable' });
             const legacyId = deriveNativeUsageAccountingIdentity({ authority, storage, agent: captured.agent, sourceKey: legacyKey }).sourceRootKey;
@@ -173,19 +173,19 @@ describe('native source metadata discovery', () => {
                 resolveRoot: async () => { throw new Error('No root edit requested'); },
                 readAccounting: (source, signal) => readNativeUsageAccountingAtAdmission({ agents, agentId: 'pi',
                     source: source.source, admittedSourceKey: source.sourceKey, cursor: source.cursor,
-                    activeServerDir: directory, signal, boundary: { externalSessions: bounded, occurrenceId: 'current',
+                    activeServerDir: directory, signal, boundary: { catalogEntry: null, externalSessions: bounded, occurrenceId: 'current',
                         retirementSignal: retirement.signal, isCurrent: () => true } }),
                 subscribeSource: async (source, onChange, signal) => {
                     const resolved = await resolveNativeUsageSourceMetadata({ agents, agentId: 'pi', source: source.source,
                         admittedSourceKey: source.sourceKey, activeServerDir: directory, signal,
-                        boundary: { externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true } });
+                        boundary: { catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true } });
                     const descriptor = resolved?.metadata.accountingSource;
                     if (!resolved || !descriptor) throw new Error('Source unavailable');
                     return await observation!.registerAccountingSource({ source: resolved.descriptor.source,
                         resource: { pluginId: source.agent.pluginId, agentLocalId: source.agent.localId,
                             occurrenceId: 'current', resourceKey: descriptor.resourceKey, retirementSignal: signal },
                         changeObservation: descriptor.changeObservation, watchFileChanges: descriptor.watchFileChanges,
-                        onChange });
+                        onChange: input => onChange(input.changedNativeSessionIds) });
                 },
                 publisher: createUsageObservationPublisher({ token: 'token', apiServerUrl: 'https://home.test',
                     emitLegacyUsageReport: () => false,
@@ -252,7 +252,7 @@ describe('native source metadata discovery', () => {
         const sources = await discoverNativeUsageSourceMetadata({
             agents, account: { connectedServicesV2: [] }, agentSettings: { claudeConfigDir: '/configured/claude' },
             activeServerId: 'home', activeServerDir: '/happier/home', signal: new AbortController().signal,
-            resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+            resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                 isCurrent: () => !retirement.signal.aborted }),
         });
         expect(sources).toEqual([expect.objectContaining({ agent: { pluginId: manifest.id, localId: 'claude' },
@@ -265,7 +265,7 @@ describe('native source metadata discovery', () => {
         retirement.abort();
         expect(await discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
             activeServerId: 'home', activeServerDir: '/happier/home', signal: new AbortController().signal,
-            resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+            resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                 isCurrent: () => !retirement.signal.aborted }) })).toEqual([]);
     });
 });

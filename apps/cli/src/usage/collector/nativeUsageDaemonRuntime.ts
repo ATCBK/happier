@@ -10,7 +10,7 @@ import { fetchAccountProfile } from '@/api/accountProfile';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { acquireAuthoritativePluginRuntimeRegistryLease, tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
+import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
 import { getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshotChanges } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { configuredExternalSessionSourcesUseConnectedProfiles } from '@/session/external/configuredSourceMaterializer';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
@@ -67,10 +67,11 @@ export function createNativeUsageDaemonRuntime(input: NativeUsageDaemonRuntimeIn
             const agents = lease.registry.contributes.agents;
             const selected = agents.find(candidate => candidate.identity?.pluginId === agent.pluginId && candidate.identity.localId === agent.localId);
             if (!selected) return null;
-            await activateAgentRuntimeContributionOnDemand(lease.registry, selected.id);
+            const catalogEntry = await readRegistryCatalogHook(lease.registry, selected.id, entry => entry);
             const runtime = lease.registry.agentRuntimesByAgentId.get(selected.id);
             if (!runtime?.externalSessions || !runtime.isCurrent() || runtime.retirementSignal.aborted) return null;
             const boundary: NativeUsageSourceBoundary = {
+                catalogEntry,
                 externalSessions: runtime.externalSessions, occurrenceId: runtime.occurrenceId,
                 retirementSignal: runtime.retirementSignal, isCurrent: runtime.isCurrent,
             };

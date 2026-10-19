@@ -6,7 +6,7 @@ import { FeaturesResponseSchema, UsageEventIngestRequestSchema } from '@happier-
 import { createPiExternalSessionsContribution } from '../../../../../packages/plugins/pi/src/agent/externalSessions/contribution';
 import { createOpenCodeExternalSessionsContribution } from '../../../../../packages/plugins/opencode/src/agent/surfaces/sessions/external/contribution';
 import { createClaudeExternalSessionsContribution } from '../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/contribution';
-import type { AgentExternalSessionsManagedEndpointRead, AgentExternalSessionObservationObserveResourceRequest } from '@happier-dev/plugin-sdk/sessions/external';
+import type { AgentExternalSessionsManagedEndpointRead } from '@happier-dev/plugin-sdk/sessions/external';
 import { createBoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
@@ -144,7 +144,7 @@ describe('consented native accounting collector', () => {
                 managedEndpointRead: async ({ signal }) => { readSignal = signal; return managedEndpointRead; },
                 createInvocationExec: async () => createUnavailablePluginServices().exec,
             });
-            let observerInput: AgentExternalSessionObservationObserveResourceRequest | undefined;
+            let observerInput: Parameters<Parameters<typeof createExternalSessionObservationReconciler>[0]['acquireObserver']>[0] | undefined;
             const reconciler = createExternalSessionObservationReconciler({ acquireObserver: async input => {
                 observerInput = input;
                 return { dispose() {} };
