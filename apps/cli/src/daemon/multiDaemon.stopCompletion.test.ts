@@ -70,6 +70,12 @@ describe.sequential('stopAllDaemonsBestEffort completion', () => {
       }), 'utf-8');
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: string | URL | Request) => {
         const url = new URL(typeof input === 'string' ? input : input.toString());
+        if (url.pathname === '/ping') {
+          throw new TypeError('Daemon control endpoint closed', {
+            cause: Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' }),
+          });
+        }
+        if (url.pathname !== '/stop') throw new Error(`unexpected daemon control request: ${url}`);
         if (url.port === '43211') {
           process.kill(canonical.pid, 'SIGTERM');
         } else if (url.port === '43212') {
@@ -83,8 +89,9 @@ describe.sequential('stopAllDaemonsBestEffort completion', () => {
       try {
         await stopAllDaemonsBestEffort();
 
-        expect(fetchSpy).toHaveBeenCalledTimes(2);
-        expect(fetchSpy.mock.calls.map(([input]) => new URL(String(input)).port).sort()).toEqual(['43211', '43212']);
+        const stopUrls = fetchSpy.mock.calls.map(([input]) => new URL(String(input)))
+          .filter((url) => url.pathname === '/stop');
+        expect(stopUrls.map((url) => url.port).sort()).toEqual(['43211', '43212']);
       } finally {
         fetchSpy.mockRestore();
         await canonical.kill();

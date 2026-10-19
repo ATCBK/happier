@@ -34,15 +34,20 @@ describe.skipIf(process.platform !== 'linux')('Stop exit confirmation', () => {
     await once(child, 'message');
     const pid = child.pid!;
     const identity = await readProcessIdentityByPid(pid);
-    if (!identity) throw new Error('fixture native identity unavailable');
+    if (!identity || identity.processStartTimeMs === undefined) throw new Error('fixture native identity unavailable');
     const tracked: TrackedSession = { pid, startedBy: 'daemon', happySessionId: 'native-first-signal',
       processStartTimeMs: identity.processStartTimeMs, childProcess: child,
       vendorResumeId: 'native-resume', spawnOptions: { directory: '/fixture' } };
     const sessions = new Map([[pid, tracked]]);
     let timestampAtSignal: number | undefined;
+    let durableIntentAtSignal = false;
+    let durableIntentRecorded = false;
     const originalKill = process.kill.bind(process);
     const kill = vi.spyOn(process, 'kill').mockImplementation((targetPid, signal) => {
-      if (targetPid === pid && signal === 'SIGTERM') timestampAtSignal = tracked.stopRequestedAtMs;
+      if (targetPid === pid && signal === 'SIGTERM') {
+        timestampAtSignal = tracked.stopRequestedAtMs;
+        durableIntentAtSignal = durableIntentRecorded;
+      }
       return originalKill(targetPid, signal);
     });
     try {
@@ -54,10 +59,12 @@ describe.skipIf(process.platform !== 'linux')('Stop exit confirmation', () => {
         spawnSession: async () => { throw new Error('Intentional Process Stop must not respawn'); },
         logDebug: () => {}, logWarn: () => {} });
       const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
-        markStopRequested: respawn.markStopRequested, stopSession: stop });
+        markStopRequested: respawn.markStopRequested,
+        recordExplicitStopIntent: async () => { durableIntentRecorded = true; }, stopSession: stop });
       await expect(lifecycle.stopExactSession({ sessionId: tracked.happySessionId!, pid,
         start: { startTimeMs: identity.processStartTimeMs } })).resolves.toEqual({ status: 'stopped' });
       expect(timestampAtSignal).toEqual(expect.any(Number));
+      expect(durableIntentAtSignal).toBe(true);
       expect(respawn.handleUnexpectedExit(tracked, { reason: 'process-exited', code: null, signal: 'SIGTERM' })).toBe('ignored');
     } finally {
       kill.mockRestore();

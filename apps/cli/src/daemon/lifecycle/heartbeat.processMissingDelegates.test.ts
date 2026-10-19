@@ -212,6 +212,57 @@ describe('startDaemonHeartbeatLoop process-missing delegation', () => {
     expect(pidToTrackedSession.has(pid)).toBe(false);
   });
 
+  it('prunes an adopted runner once the process table reports a zombie', async () => {
+    const pid = 111116;
+    const tracked = { pid, happySessionId: 'sess-adopted-zombie', startedBy: 'terminal' as const };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[pid, tracked]]);
+    let tick: (() => Promise<void>) | undefined;
+    vi.spyOn(global, 'setInterval').mockImplementation((handler) => {
+      tick = async () => { await handler(); };
+      return 1 as unknown as NodeJS.Timeout;
+    });
+    vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: NodeJS.Signals | number) => {
+      if (targetPid === pid && signal === 0) return true;
+      throw new Error(`unexpected process signal ${String(signal)} for ${targetPid}`);
+    }) as typeof process.kill);
+    const onChildExited = vi.fn(async (targetPid: number) => {
+      pidToTrackedSession.delete(targetPid);
+    });
+    const readProcessRunStateFn = vi.fn(async () => 'zombie' as const);
+
+    const { startDaemonHeartbeatLoop } = await import('./heartbeat');
+    startDaemonHeartbeatLoop({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      onChildExited,
+      pidSafetyDependencies: { readProcessRunStateFn },
+      controlPort: 8765,
+      fileState: {
+        pid: process.pid,
+        httpPort: 8765,
+        startedAt: Date.now(),
+        startedWithCliVersion: '1.0.0',
+        daemonLogPath: '/tmp/daemon.log',
+      },
+      currentCliVersion: '1.0.0',
+      requestShutdown: vi.fn(),
+      writeDaemonStateForCurrentOwner: vi.fn(() => true),
+    });
+
+    expect(tick).toBeTypeOf('function');
+    await tick!();
+
+    expect(readProcessRunStateFn).toHaveBeenCalledWith(pid);
+    expect(onChildExited).toHaveBeenCalledOnce();
+    expect(onChildExited).toHaveBeenCalledWith(
+      pid,
+      expect.objectContaining({ reason: 'process-missing' }),
+    );
+    expect(pidToTrackedSession.has(pid)).toBe(false);
+  });
+
   it('keeps a held child even when liveness probing fails, but prunes a reused PID exactly once', async () => {
     vi.mocked(readDaemonState).mockResolvedValue({
       pid: process.pid,

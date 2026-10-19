@@ -83,7 +83,7 @@ it('retains pending wrapper custody until a reported runner has paired generatio
   const sessions = new Map([[pid, tracked]]);
   const awaiters = new Map<number, (session: TrackedSession) => void>();
   const resolvers = new Map<number, (result: SpawnSessionResult) => void>();
-  const timeouts = new Map<number, ReturnType<typeof setTimeout>>();
+  const timeouts = new Map<number, NodeJS.Timeout>();
   const completion = waitForSessionWebhook({
     pid, pidToTrackedSession: sessions, pidToAwaiter: awaiters,
     pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
@@ -215,7 +215,7 @@ it.each(['present', 'reused', 'unknown', 'stopped'] as const)('promotes wrapper 
     // Filesystem boundary models the marker committed for the live captured runner.
     promoteSessionMarkerFn: async () => ({ sourceMarkerOwnership: null,
       targetMarkerOwnership: { happySessionId: 'paired-runner', processStartTimeMs: 2000, processCommandHash } }),
-    removeSessionMarkerFn: async () => {}, stageObservedExitFn: async () => {},
+    removeSessionMarkerFn: async () => {},
   });
   try {
     await exit(pid, { reason: 'process-exited', code: 0, signal: null });

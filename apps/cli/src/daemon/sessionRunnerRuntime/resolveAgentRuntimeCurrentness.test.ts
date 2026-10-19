@@ -174,10 +174,9 @@ function providerResolution(
 ) {
   return {
     machineId: 'machine-a',
-    accountSettings: {
-      providerSettingsV1: {
-        ...DEFAULT_PROVIDER_SETTINGS_V1,
-        connections: [{
+    providerSettings: {
+      ...DEFAULT_PROVIDER_SETTINGS_V1,
+      connections: [{
           v: 1 as const,
           id: SELECTED_PROVIDER_CONNECTION_ID,
           source: {
@@ -191,8 +190,7 @@ function providerResolution(
           revision: 1,
           createdAt: 1,
           updatedAt: 1,
-        }],
-      },
+      }],
     },
     registry,
   };

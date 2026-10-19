@@ -18,6 +18,19 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export type SessionRunnerActivityRefusal = Readonly<{
+  reasonCode: SessionRunnerRestartDisabledReason;
+  diagnostics?: Record<string, unknown>;
+}>;
+
+export function resolveTrackedSessionRunnerActivity(tracked: TrackedSession | null | undefined): SessionRunnerActivityRefusal | null {
+  const turnId = normalizeString(tracked?.activeTurnId)
+    || normalizeString(tracked?.reattachedInterruptedTurnId);
+  return turnId ? { reasonCode: 'turn_in_progress', diagnostics: {
+    busySource: normalizeString(tracked?.activeTurnId) ? 'foreground_turn' : 'interrupted_foreground_turn', turnId,
+  } } : null;
+}
+
 function readStartedBy(value: unknown): 'daemon' | 'local' | 'unknown' {
   if (value === 'daemon') return 'daemon';
   if (typeof value === 'string' && value.trim()) return 'local';
@@ -34,21 +47,6 @@ function readDaemonEntrypointSource(
 
 function resolveDisabledReason(tracked: TrackedSession | null): SessionRunnerRestartDisabledReason | null {
   return resolveSessionRunnerRestartEligibility(tracked).disabledReason;
-}
-
-function resolveIdentityDisabledReason(input: Readonly<{
-  runnerIdentity: SessionRunnerEntrypointIdentity;
-  currentIdentity: SessionRunnerEntrypointIdentity;
-}>): SessionRunnerRestartDisabledReason | null {
-  if (input.currentIdentity.status !== 'known') return 'current_entrypoint_unknown';
-  if (input.runnerIdentity.status !== 'known') return 'runner_entrypoint_unknown';
-  if (
-    input.runnerIdentity.comparableId === input.currentIdentity.comparableId
-    && !isGenerationAttestedComparableId(input.runnerIdentity.comparableId)
-  ) {
-    return 'runner_generation_unattested';
-  }
-  return null;
 }
 
 function resolveVersionState(input: Readonly<{
@@ -92,7 +90,7 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
     : { status: 'unknown', source: 'unknown', reason: 'empty_command' } satisfies SessionRunnerEntrypointIdentity;
   const disabledReason =
     resolveDisabledReason(tracked) ??
-    resolveIdentityDisabledReason({ runnerIdentity, currentIdentity: params.currentIdentity }) ??
+    (params.currentIdentity.status !== 'known' ? 'current_entrypoint_unknown' : null) ??
     params.agentRuntimeRestartUnavailableReason ??
     (sessionId ? params.resolveActivityDisabledReason?.(sessionId) ?? null : null);
   const versionState = params.agentRuntimeVersionState === 'unknown'

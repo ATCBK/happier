@@ -14,6 +14,81 @@ describe('retireExactTerminalControlServiceability', () => {
         vi.restoreAllMocks();
     });
 
+    it.each(['plain', 'tmux'] as const)('finishes %s control retirement when the Session has been deleted', async terminalMode => {
+        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).includes('/v2/sessions/')
+            ? { status: 404, data: { error: 'Session not found' } }
+            : { status: 200, data: { mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        const patch = vi.spyOn(axios, 'patch').mockRejectedValue(new Error('Deleted Session must not be written'));
+        const target = terminalMode === 'plain'
+            ? { terminalMode, expectedRunner: { pid: 999_123_456, startTimeMs: 1 } }
+            : { terminalMode, attachmentId: 'retired-attachment' };
+        await expect(retireExactTerminalControlServiceability({
+            credentials: { token: 'fixture', encryption: null }, sessionId: 'deleted-session', ...target,
+        })).resolves.toBe('retired');
+        expect(patch).not.toHaveBeenCalled();
+    });
+
+    it.each([403, 500])('retains retirement custody when the Session read fails with HTTP %s', async status => {
+        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).includes('/v2/sessions/')
+            ? { status, data: { error: 'unavailable' } }
+            : { status: 200, data: { mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+        await expect(retireExactTerminalControlServiceability({
+            credentials: { token: 'fixture', encryption: null }, sessionId: 'unavailable-session',
+            terminalMode: 'tmux', attachmentId: 'retained-attachment',
+        })).rejects.toThrow();
+    });
+
+    it('refuses deleted Session retirement after requester admission is lost during the Home read', async () => {
+        let current = true;
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            if (String(url).includes('/v2/sessions/')) return { status: 404, data: { error: 'Session not found' } };
+            current = false;
+            return { status: 200, data: { mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        });
+        await expect(retireExactTerminalControlServiceability({
+            credentials: { token: 'fixture', encryption: null }, sessionId: 'deleted-session',
+            terminalMode: 'tmux', attachmentId: 'retained-attachment',
+            currentness: { verifyCurrent: async () => current },
+        })).rejects.toMatchObject({ code: 'session_publisher_authority_lost' });
+    });
+
+    it('overlaps independent Home reads while awaiting the retirement commit', async () => {
+        vi.useFakeTimers();
+        try {
+            const startedAt = Date.now();
+            const completedAt: number[] = [];
+            vi.spyOn(axios, 'get').mockImplementation(async url => {
+                const sessionRead = String(url).includes('/v2/sessions/');
+                await new Promise(resolve => setTimeout(resolve, sessionRead ? 2000 : 1000));
+                return { status: 200, data: sessionRead
+                    ? { session: createSessionRecordFixture({ id: 'session-parallel-retirement', encryptionMode: 'plain',
+                        metadataLayoutVersion: 0, metadataVersion: 1,
+                        metadata: JSON.stringify({ path: '/repo', terminal: { mode: 'tmux', controlServiceabilityV1: {
+                            v: 1, attachmentId: 'attachment-parallel', state: 'servable', observedAt: 1,
+                        } } }) }) }
+                    : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            });
+            vi.spyOn(axios, 'patch').mockImplementation(async () => {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                return { status: 200, data: { success: true, metadataLayoutVersion: 1,
+                    sharedMetadata: { version: 2 }, agentState: { version: 0 } } };
+            });
+            const retirement = retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
+                sessionId: 'session-parallel-retirement', attachmentId: 'attachment-parallel', terminalMode: 'tmux' })
+                .then(result => { completedAt.push(Date.now() - startedAt); return result; });
+            await vi.advanceTimersByTimeAsync(2499);
+            expect(completedAt).toEqual([]);
+            await vi.advanceTimersByTimeAsync(1001);
+            await expect(retirement).resolves.toBe('retired');
+            expect(completedAt).toEqual([2500]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it.each((['live-runner', 'present-host', 'unreadable-host', 'replacement-runner'] as const)
         .flatMap(state => [true, false].map(hasProjection => ({ state, hasProjection }))))(
         'does not retire hosted metadata without dead-runner and absent-host authority: $state, projection=$hasProjection', async ({ state, hasProjection }) => {

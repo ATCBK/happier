@@ -121,7 +121,7 @@ describe('activatePendingInactiveSession', () => {
         } };
       expect(await activatePendingInactiveSession(params)).toMatchObject({ status: 'rejected', reason: 'spawn-rejected' });
       expect((await activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'start_failed', rule: 'idle_sessions', ref: 'guard-stop', note: expect.stringContaining('Could not resume'),
+        expect.objectContaining({ kind: 'start_failed', rule: 'idle_sessions', ref: 'guard-stop',
           failure: { reason: 'too_many_open_files', errno: 'EMFILE' }, nextStep: 'review_processes', attribution })]));
       expect(spawnSession.mock.calls[0]?.[0]).toMatchObject({ existingSessionId: 'session-1', directory: '/repo',
         permissionMode: 'read-only', permissionModeUpdatedAt: 5, initialTranscriptAfterSeq: 12,

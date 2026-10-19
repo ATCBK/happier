@@ -29,7 +29,9 @@ import type {
 } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import type { RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
-import type { OwnerRemainderCapture } from './processes/endOwnerRemainder';
+import type { OwnerRemainderCapture, OwnerRemainderResult } from './processes/endOwnerRemainder';
+import type { ConnectedServiceMaterializedStateObservationBinding } from './connectedServices/materialization/materializer';
+import type { ChildExit } from './sessions/onChildExited';
 
 export type DaemonSpawnStartupReadinessFailure = Extract<
   SpawnSessionResult,
@@ -40,6 +42,9 @@ export type { AgentSessionStartupInstructionsMarkerV1 };
 
 export type RunnerAgentInvocationContext = Readonly<{
   cwd: string;
+    /** Value-free launch selection, retained by host custody rather than child environment. */
+    profileId?: string;
+    secretReferenceOverlay?: import('@happier-dev/protocol').SecretReferenceOverlayV1;
   /** Stable daemon-service context only; launch-time secret material is never retained here. */
   environment: Readonly<Record<string, string>>;
   /** Exact non-secret Agent CLI launch selected during spawn/admission. */
@@ -61,6 +66,8 @@ export type RunnerAgentBootstrapIdentity = Readonly<
  * Session tracking for daemon
  */
 export interface TrackedSession {
+  /** Original startup operation while the native Agent has not opened; never marker-persisted. */
+  projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
   /** Generation-bound pre-exit chain observations; ephemeral evidence, never marker-persisted. */
   ownerRemainderCapture?: OwnerRemainderCapture;
   /** Live private Account ports; never serialized in a marker or respawn descriptor. */
@@ -71,6 +78,8 @@ export interface TrackedSession {
   happySessionId?: string;
   /** Exact currently open runtime turn. Persisted marker state is authoritative. */
   activeTurnId?: string;
+  /** Requester reason for this occurrence's planned signal; diagnostics only, never persisted. */
+  plannedRestartReason?: string;
   /**
    * A turn that was active when a prior daemon incarnation stopped observing
    * this runner. It is exit-settlement evidence only and must never be used as
@@ -101,7 +110,7 @@ export interface TrackedSession {
   /** Transient startup completion consumed only by canonical actual-exit retirement. */
   startupCustody?: Readonly<{
     finalization: Promise<void>;
-    observeExit: (exit: Readonly<{ reason: string; code: number | null; signal: string | null }>) => void;
+    observeExit: (exit: Readonly<ChildExit>) => void;
   }>;
   /**
    * In-memory-only fresh-session activation that consumes the canonical server
@@ -139,6 +148,8 @@ export interface TrackedSession {
   runnerAgentBootstrapIdentity?: RunnerAgentBootstrapIdentity;
   /** Exact non-secret source custody persisted in the exact runner marker. */
   runnerAgentSourceCustodyV1?: PluginSourceCustodyV1;
+  /** Exact host-materialized state links; never accepted from spawn options or Session metadata. */
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
   runnerManagedDependencyRetentionV1?:
     RunnerManagedDependencyRetentionV1;
   /**
@@ -229,6 +240,8 @@ export interface TrackedSession {
   stopRequestedAtMs?: number;
   /** Person-requested process Kill; uses the same stopping fact, never a restart intent. */
   stopRequestedReason?: 'user_process_kill';
+  /** Result already produced by the final runner-exit owner for Stop to reuse. */
+  ownerRemainderResult?: OwnerRemainderResult;
   /**
    * Exact nested terminal attachment whose servable projection this daemon has published.
    * Prevents repeated capability probes when the runner reports unrelated metadata later.

@@ -70,6 +70,7 @@ async function loadCliModule(): Promise<typeof import('./cli.js')> {
 
 function writeValidInstalledDaemonServiceFile(
   installedPath: string,
+  happierHomeDir: string,
   options: Readonly<{
     activeServerId?: string;
     releaseChannel?: 'stable' | 'preview' | 'dev';
@@ -82,6 +83,8 @@ function writeValidInstalledDaemonServiceFile(
       description: 'Happier Daemon',
       execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
       env: {
+        HAPPIER_HOME_DIR: happierHomeDir,
+        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
         HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
         HAPPIER_DAEMON_SERVICE_TARGET_MODE: options.targetMode ?? 'default-following',
         HAPPIER_ACTIVE_SERVER_ID: options.activeServerId ?? 'cloud',
@@ -124,8 +127,19 @@ function writeValidInstalledWindowsDaemonServiceFile(
 
 describe('runDaemonServiceCliCommand', () => {
   let envScope = createEnvKeyScope(SCOPED_ENV_KEYS);
+  let fixtureDaemonOwner: ReturnType<typeof spawnDaemonLifecycleOwner> | null = null;
+
+  function fixtureDaemonPid(): number {
+    if (!fixtureDaemonOwner) {
+      const owner = spawnDaemonLifecycleOwner();
+      fixtureDaemonOwner = owner;
+      onTestFinished(async () => { await owner.kill(); });
+    }
+    return fixtureDaemonOwner.pid;
+  }
 
   afterEach(() => {
+    fixtureDaemonOwner = null;
     envScope.restore();
     envScope = createEnvKeyScope(SCOPED_ENV_KEYS);
     stopDaemonMock.mockReset();
@@ -189,10 +203,10 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir);
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43118,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -238,7 +252,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43121,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -246,7 +260,7 @@ describe('runDaemonServiceCliCommand', () => {
         runtimeId: 'runtime-1',
       });
 
-      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/install/i);
+      await expect(runDaemonServiceCliCommand({ argv: ['install', '--takeover'] })).rejects.toThrow(/Background service command failed/);
       expect(stopDaemonMock).toHaveBeenCalledTimes(1);
       expect(restartDaemonAndWaitMock).toHaveBeenCalledTimes(1);
     });
@@ -284,7 +298,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43124,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -314,7 +328,7 @@ describe('runDaemonServiceCliCommand', () => {
           return { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
         writeDaemonStateImpl?.({
-          pid: process.pid,
+          pid: fixtureDaemonPid(),
           httpPort: 43125,
           startedAt: Date.now(),
           startedWithCliVersion: '0.0.0-service',
@@ -344,7 +358,7 @@ describe('runDaemonServiceCliCommand', () => {
       resolveDaemonServicePaths(runtime);
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43126,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -397,7 +411,7 @@ describe('runDaemonServiceCliCommand', () => {
           'utf-8',
         );
         writeDaemonStateImpl?.({
-          pid: process.pid,
+          pid: fixtureDaemonPid(),
           httpPort: 43131,
           startedAt: Date.now(),
           startedWithCliVersion: '0.0.0-service',
@@ -430,7 +444,7 @@ describe('runDaemonServiceCliCommand', () => {
       mkdirSync(dirname(installedPath), { recursive: true });
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43132,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -473,7 +487,7 @@ describe('runDaemonServiceCliCommand', () => {
           const installedContents = readFileSync(installedPath, 'utf-8');
           writeFileSync(installedPath, installedContents, 'utf-8');
           writeDaemonStateImpl?.({
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43127,
             startedAt: Date.now(),
             startedWithCliVersion: configuration.currentCliVersion,
@@ -508,7 +522,7 @@ describe('runDaemonServiceCliCommand', () => {
       mkdirSync(dirname(installedPath), { recursive: true });
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43128,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -565,7 +579,7 @@ describe('runDaemonServiceCliCommand', () => {
           const installedContents = readFileSync(installedPath, 'utf-8');
           writeFileSync(installedPath, installedContents, 'utf-8');
           writeDaemonStateImpl?.({
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43132,
             startedAt: Date.now(),
             startedWithCliVersion: configuration.currentCliVersion,
@@ -601,7 +615,7 @@ describe('runDaemonServiceCliCommand', () => {
       mkdirSync(dirname(installedPath), { recursive: true });
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43133,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -661,7 +675,7 @@ describe('runDaemonServiceCliCommand', () => {
             const installedContents = readFileSync(installedPath, 'utf-8');
             writeFileSync(installedPath, installedContents, 'utf-8');
             writeDaemonStateImpl?.({
-              pid: process.pid,
+              pid: fixtureDaemonPid(),
               httpPort: 43134,
               startedAt: Date.now(),
               startedWithCliVersion: configuration.currentCliVersion,
@@ -698,7 +712,7 @@ describe('runDaemonServiceCliCommand', () => {
       mkdirSync(dirname(installedPath), { recursive: true });
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43135,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -754,7 +768,7 @@ describe('runDaemonServiceCliCommand', () => {
             if (command === 'systemctl' && args.includes('restart')) {
               restartObserved = true;
               writeDaemonStateImpl?.({
-                pid: process.pid,
+                pid: fixtureDaemonPid(),
                 httpPort: 43133,
                 startedAt: Date.now(),
                 startedWithCliVersion: currentCliVersion,
@@ -770,6 +784,8 @@ describe('runDaemonServiceCliCommand', () => {
                 description: 'Happier Daemon',
                 execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
                 env: {
+                  HAPPIER_HOME_DIR: happierHomeDir,
+                  HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
                   HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
                   HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
                   HAPPIER_DAEMON_SERVICE_LABEL: expectedServiceLabel,
@@ -808,9 +824,7 @@ describe('runDaemonServiceCliCommand', () => {
         stdout.restore();
       }
       expect(restartObserved).toBe(true);
-      // The install (including the ownership wait) renders as one timed step.
-      expect(stdout.text()).toContain('- [..] Installing background service\n');
-      expect(stdout.text()).toContain('- [✓] Installed background service\n');
+      expect(stdout.text()).toContain('Background service installed.');
     });
   });
 
@@ -1050,6 +1064,7 @@ describe('runDaemonServiceCliCommand', () => {
       processEnv: {
         ...process.env,
         HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+        HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
         HOME: '/isolated-stack-home',
         USERPROFILE: '/isolated-stack-home',
       },
@@ -1089,6 +1104,8 @@ describe('runDaemonServiceCliCommand', () => {
       processEnv: {
         ...process.env,
         HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+        HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: '',
         HAPPIER_DAEMON_SERVICE_UID: '0',
         SUDO_USER: 'sudo-user',
         HOME: '/root',
@@ -1148,6 +1165,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
@@ -1159,7 +1178,7 @@ describe('runDaemonServiceCliCommand', () => {
       );
 
       const manualOwnerState = {
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43116,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -1228,7 +1247,7 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir);
       clearDaemonStateForTestTeardown();
 
       const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
@@ -1346,7 +1365,7 @@ describe('runDaemonServiceCliCommand', () => {
     });
   });
 
-  it('renders background service start and stop as timed steps', async () => {
+  it('reports completed background service start and stop', async () => {
     await withTempDir('happier-service-start-stop-steps-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       envScope.patch({
@@ -1375,7 +1394,7 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir);
       clearDaemonStateForTestTeardown();
 
       const startOutput = captureStdout();
@@ -1384,8 +1403,7 @@ describe('runDaemonServiceCliCommand', () => {
       } finally {
         startOutput.restore();
       }
-      expect(startOutput.text()).toContain('- [..] Starting background service\n');
-      expect(startOutput.text()).toContain('- [✓] Started background service\n');
+      expect(startOutput.text()).toContain('Background service started.');
 
       const stopOutput = captureStdout();
       try {
@@ -1393,8 +1411,7 @@ describe('runDaemonServiceCliCommand', () => {
       } finally {
         stopOutput.restore();
       }
-      expect(stopOutput.text()).toContain('- [..] Stopping background service\n');
-      expect(stopOutput.text()).toContain('- [✓] Stopped background service\n');
+      expect(stopOutput.text()).toContain('Background service stopped.');
     });
   });
 
@@ -1423,7 +1440,7 @@ describe('runDaemonServiceCliCommand', () => {
         spawnedCommands.push({ command, args });
         if (command === 'systemctl' && args.includes('restart')) {
           writeDaemonStateImpl?.({
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43137,
             startedAt: Date.now(),
             startedWithCliVersion: expectedCliVersion,
@@ -1454,7 +1471,7 @@ describe('runDaemonServiceCliCommand', () => {
       const paths = resolveDaemonServicePaths(runtime);
       expectedServiceLabel = paths.label;
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath, {
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir, {
         releaseChannel: 'stable',
         targetMode: 'default-following',
       });
@@ -1499,7 +1516,7 @@ describe('runDaemonServiceCliCommand', () => {
         spawnedCommands.push({ command, args });
         if (command === 'systemctl' && args.includes('restart')) {
           writeDaemonStateImpl?.({
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43138,
             startedAt: Date.now(),
             startedWithCliVersion: expectedCliVersion,
@@ -2048,7 +2065,7 @@ describe('runDaemonServiceCliCommand', () => {
             : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
         writeDaemonStateImpl?.({
-          pid: process.pid,
+          pid: fixtureDaemonPid(),
           httpPort: 43122,
           startedAt: Date.now(),
           startedWithCliVersion: configuration.currentCliVersion,
@@ -2080,6 +2097,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
@@ -2092,7 +2111,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeDaemonStateImpl = writeDaemonState;
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43119,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -2136,7 +2155,7 @@ describe('runDaemonServiceCliCommand', () => {
             : { status: 1, stdout: Buffer.from(''), stderr: Buffer.from('inactive') };
         }
         writeDaemonStateImpl?.({
-          pid: process.pid,
+          pid: fixtureDaemonPid(),
           httpPort: 43123,
           startedAt: Date.now(),
           startedWithCliVersion: configuration.currentCliVersion,
@@ -2168,6 +2187,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
@@ -2180,7 +2201,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeDaemonStateImpl = writeDaemonState;
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43124,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -2244,6 +2265,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
@@ -2255,7 +2278,7 @@ describe('runDaemonServiceCliCommand', () => {
       );
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43120,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -2280,12 +2303,12 @@ describe('runDaemonServiceCliCommand', () => {
       });
       vi.resetModules();
 
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }, { resolveDaemonServiceInstallRuntimeTarget }] = await Promise.all([
+      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }] = await Promise.all([
         loadCliModule(),
         import('@/persistence'),
         import('@/configuration'),
-        import('./resolveDaemonServiceInstallRuntimeTarget'),
       ]);
+      const { resolveDaemonServiceInstallRuntimeTarget } = await import('./resolveDaemonServiceInstallRuntimeTarget');
 
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
@@ -2315,7 +2338,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43117,
         startedAt: Date.now(),
         startedWithCliVersion: configuration.currentCliVersion,
@@ -2382,7 +2405,7 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir);
       clearDaemonStateForTestTeardown();
 
       const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
@@ -2407,13 +2430,13 @@ describe('runDaemonServiceCliCommand', () => {
       });
       vi.resetModules();
 
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }, { resolveDaemonServiceInstallRuntimeTarget }, controlClient] = await Promise.all([
+      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }, controlClient] = await Promise.all([
         loadCliModule(),
         import('@/persistence'),
         import('@/configuration'),
-        import('./resolveDaemonServiceInstallRuntimeTarget'),
         import('@/daemon/controlClient'),
       ]);
+      const { resolveDaemonServiceInstallRuntimeTarget } = await import('./resolveDaemonServiceInstallRuntimeTarget');
 
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
@@ -2443,7 +2466,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43127,
         startedAt: Date.now(),
         startedWithCliVersion: configuration.currentCliVersion,
@@ -2454,7 +2477,7 @@ describe('runDaemonServiceCliCommand', () => {
       vi.spyOn(controlClient, 'inspectDaemonRunningStateAndCleanupStaleState').mockResolvedValue({
         status: 'running',
         state: {
-          pid: process.pid,
+          pid: fixtureDaemonPid(),
           httpPort: 43129,
           startedAt: Date.now(),
           startedWithCliVersion: configuration.currentCliVersion,
@@ -2527,7 +2550,7 @@ describe('runDaemonServiceCliCommand', () => {
           }
           ownerWritten = true;
           writeDaemonStateImpl?.({
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43124,
             startedAt: Date.now(),
             startedWithCliVersion: configuration.currentCliVersion,
@@ -2567,6 +2590,8 @@ describe('runDaemonServiceCliCommand', () => {
           programArgs: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
             PATH: '/usr/bin:/bin',
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_LABEL: paths.label,
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
@@ -2626,7 +2651,7 @@ describe('runDaemonServiceCliCommand', () => {
         commandExistsInPath: vi.fn(() => true),
       }));
       const expectedDaemonState = {
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43129,
         startedAt: Date.now(),
         startedWithCliVersion: '',
@@ -2645,12 +2670,12 @@ describe('runDaemonServiceCliCommand', () => {
         };
       });
 
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }, { resolveDaemonServiceInstallRuntimeTarget }] = await Promise.all([
+      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }] = await Promise.all([
         loadCliModule(),
         import('@/persistence'),
         import('@/configuration'),
-        import('./resolveDaemonServiceInstallRuntimeTarget'),
       ]);
+      const { resolveDaemonServiceInstallRuntimeTarget } = await import('./resolveDaemonServiceInstallRuntimeTarget');
 
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
@@ -3042,6 +3067,8 @@ describe('runDaemonServiceCliCommand', () => {
     const { runDaemonServiceCliCommand } = await loadCliModule();
     envScope.patch({
       HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+      HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+      HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: '',
       HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'pinned',
       HAPPIER_DAEMON_SERVICE_INSTANCE_ID: 'company',
       HAPPIER_DAEMON_SERVICE_NODE_PATH: '/usr/local/bin/happier',
@@ -3196,6 +3223,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
@@ -3206,7 +3235,7 @@ describe('runDaemonServiceCliCommand', () => {
       );
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3005,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-other',
@@ -3297,6 +3326,8 @@ describe('runDaemonServiceCliCommand', () => {
           description: 'Happier Daemon',
           execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
           env: {
+            HAPPIER_HOME_DIR: happierHomeDir,
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
             HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
             HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
             HAPPIER_ACTIVE_SERVER_ID: 'cloud',
@@ -3308,7 +3339,7 @@ describe('runDaemonServiceCliCommand', () => {
       );
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3007,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-other',
@@ -3371,7 +3402,7 @@ describe('runDaemonServiceCliCommand', () => {
       writeFileSync(paths.installedPath, '[Unit]\nDescription=Happier\n');
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3006,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-other',
@@ -3421,7 +3452,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       const manualOwnerState = {
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3005,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0',
@@ -3471,7 +3502,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3006,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0',
@@ -3515,7 +3546,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3007,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0',
@@ -3559,7 +3590,7 @@ describe('runDaemonServiceCliCommand', () => {
       ]);
 
       await writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 3008,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0',
@@ -3736,10 +3767,10 @@ describe('runDaemonServiceCliCommand', () => {
       const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
       const paths = resolveDaemonServicePaths(runtime);
       mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledDaemonServiceFile(paths.installedPath);
+      writeValidInstalledDaemonServiceFile(paths.installedPath, happierHomeDir);
 
       writeDaemonState({
-        pid: process.pid,
+        pid: fixtureDaemonPid(),
         httpPort: 43118,
         startedAt: Date.now(),
         startedWithCliVersion: '0.0.0-manual',
@@ -3797,12 +3828,12 @@ describe('runDaemonServiceCliCommand', () => {
         const stableUnitPath = resolveDaemonServicePaths(stableRuntime).installedPath;
         const previewUnitPath = resolveDaemonServicePaths(previewRuntime).installedPath;
         await mkdir(dirname(stableUnitPath), { recursive: true });
-        writeValidInstalledDaemonServiceFile(stableUnitPath, {
+        writeValidInstalledDaemonServiceFile(stableUnitPath, stableRuntime.happierHomeDir, {
           activeServerId: 'company',
           releaseChannel: 'stable',
           targetMode: 'pinned',
         });
-        writeValidInstalledDaemonServiceFile(previewUnitPath, {
+        writeValidInstalledDaemonServiceFile(previewUnitPath, previewRuntime.happierHomeDir, {
           activeServerId: 'company',
           releaseChannel: 'preview',
           targetMode: 'pinned',
@@ -4170,7 +4201,7 @@ describe('runDaemonServiceCliCommand', () => {
           }));
           // The Home's pinned service owns the Home's daemon lock and answers its control socket.
           const pinnedDaemonState: DaemonLocallyPersistedState = {
-            pid: process.pid,
+            pid: fixtureDaemonPid(),
             httpPort: 43131,
             startedAt: Date.now(),
             startedWithCliVersion: 'set-below',

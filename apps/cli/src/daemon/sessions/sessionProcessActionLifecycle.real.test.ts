@@ -17,6 +17,7 @@ import type { ApiMachineClient } from '@/api/apiMachine';
 import { createEndOwnerRemainder } from '../processes/endOwnerRemainder';
 import { createLeftBehindPass } from '../processes/leftBehind/leftBehindPass';
 import type { HappierProcessRoot } from '../processes/ownership/types';
+import { createSessionStopOperationBarrier } from './sessionStopOperationBarrier';
 
 describe.skipIf(process.platform === 'win32')('native Session process Action intent', () => {
   it('lets the custodian kill a guest session through the real Action owner while actual exit retirement preserves final verification', async () => {
@@ -52,7 +53,11 @@ describe.skipIf(process.platform === 'win32')('native Session process Action int
       isSessionAlreadyRunning: () => false, spawnSession: async () => { spawned++; return { type: 'success' }; },
       logDebug: () => {}, logWarn: () => {} });
     // Home terminal mutation transport is the network boundary, not exit orchestration.
-    const machine = { enqueueDaemonTerminalExactTurnEnd: async () => undefined } as unknown as ApiMachineClient;
+    const machine = {
+      enqueueDaemonTerminalExactTurnEnd: async () => undefined,
+      captureMachineSessionTerminal: async () => ({ v: 1, status: 'already_inactive', sessionId } as const),
+      finalizeMachineSessionTerminal: async () => { throw new Error('Inactive Session must not request terminal finalization'); },
+    } satisfies Pick<ApiMachineClient, 'enqueueDaemonTerminalExactTurnEnd' | 'captureMachineSessionTerminal' | 'finalizeMachineSessionTerminal'>;
     const onExit = createOnChildExited({ pidToTrackedSession: sessions, ownerRemainder, spawnResourceCleanupByPid: new Map(),
       sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => machine,
       removeSessionMarkerFn: async () => undefined,
@@ -61,7 +66,9 @@ describe.skipIf(process.platform === 'win32')('native Session process Action int
       await onExit(tracked.pid, { reason: 'process-exited', code, signal });
     });
     const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
-      markStopRequested: respawn.markStopRequested, stopSession: createStopSession({ pidToTrackedSession: sessions }) });
+      registerPhysicalStopEffect: createSessionStopOperationBarrier().registerPhysicalStopEffect,
+      markStopRequested: respawn.markStopRequested, recordExplicitStopIntent: async () => {},
+      stopSession: createStopSession({ pidToTrackedSession: sessions }) });
     const actions = createProcessActionExecutor({ ownership, leftBehind,
       requesterForOwner: owner => owner.kind === 'session' ? { accountId: 'guest' } : { accountId: 'custodian' },
       allProcessesVisible: () => false, prepareKill: lifecycle.prepareKill });
@@ -112,7 +119,9 @@ describe.skipIf(process.platform === 'win32')('native Session process Action int
       isSessionAlreadyRunning: () => false, spawnSession: async () => { spawned++; return { type: 'success' }; },
       logDebug: () => {}, logWarn: () => {} });
     const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
-      markStopRequested: respawn.markStopRequested, stopSession: createStopSession({ pidToTrackedSession: sessions }) });
+      registerPhysicalStopEffect: createSessionStopOperationBarrier().registerPhysicalStopEffect,
+      markStopRequested: respawn.markStopRequested, recordExplicitStopIntent: async () => {},
+      stopSession: createStopSession({ pidToTrackedSession: sessions }) });
     try {
       const stamp = await lifecycle.prepareKill({ targets: capture.capturedTargets });
       if (!stamp) throw new Error('native generation binding refused');

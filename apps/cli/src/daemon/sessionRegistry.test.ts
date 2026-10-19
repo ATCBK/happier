@@ -663,15 +663,19 @@ describe('sessionRegistry', () => {
     const { createOnHappySessionWebhook } = await import('./sessions/onHappySessionWebhook');
     const { readSessionMarkerForPid } = await import('./sessionRegistry');
     const { configuration } = await import('@/configuration');
-    const spec = await buildCgroupSelfMigratingHappyCliLaunchSpec({
-      launchSpec: { runtime: 'node', filePath: process.execPath, args: ['-e', 'console.log(process.pid);setInterval(()=>{},1000)'] },
-    });
-    expect(spec?.filePath).toMatch(/\/systemd-run$/);
-    const launchProbe = spawnSync(spec!.filePath, [...spec!.args.slice(0, spec!.args.indexOf('--') + 1), 'true']);
+    const launchSpec = { runtime: 'node' as const, filePath: process.execPath,
+      args: ['-e', 'console.log(process.pid);setInterval(()=>{},1000)'] };
+    const probeSpec = await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec });
+    expect(probeSpec?.filePath).toMatch(/\/systemd-run$/);
+    const launchProbe = spawnSync(probeSpec!.filePath, [...probeSpec!.args.slice(0, probeSpec!.args.indexOf('--') + 1), 'true']);
     if (launchProbe.status !== 0) {
       context.skip(`Owner systemd launch unavailable: ${String(launchProbe.stderr).trim()}`);
       return;
     }
+    // A launch spec owns one physical scope identity. The completed probe may
+    // still be loaded, so the real child needs its own canonical launch spec.
+    const spec = await buildCgroupSelfMigratingHappyCliLaunchSpec({ launchSpec });
+    expect(spec?.filePath).toMatch(/\/systemd-run$/);
     const child = spawn(spec!.filePath, spec!.args, { env: { ...process.env, ...spec!.env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';

@@ -1,8 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { isPidPresent, isPidProvablyAbsent } from '@happier-dev/cli-common/process';
 
-type DaemonStartProcessObservation = Pick<ChildProcess, 'exitCode' | 'signalCode'>
-  & Partial<Pick<ChildProcess, 'pid'>>
+export type DaemonStartProcessObservation = Partial<Pick<ChildProcess, 'exitCode' | 'signalCode' | 'pid'>>
   & { detachedDaemonPid?: number };
 
 export function hasObservableDaemonStartProcessExited(
@@ -38,10 +37,12 @@ export async function waitForDaemonRunningWithinBudget(params: {
   isStillStarting?: () => boolean | Promise<boolean>;
   onStillStarting?: () => void;
   timeoutMs: number;
+  /** The first checkpoint may already have consumed time preparing the successor launch. */
+  initialTimeoutMs?: number;
   pollMs: number;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<boolean> {
-  let deadline = performance.now() + params.timeoutMs;
+  let deadline = performance.now() + (params.initialTimeoutMs ?? params.timeoutMs);
   if (await params.isRunning()) return true;
   if (params.shouldAbort?.()) return false;
 

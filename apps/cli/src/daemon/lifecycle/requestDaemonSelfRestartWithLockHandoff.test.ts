@@ -9,12 +9,28 @@ describe('requestDaemonSelfRestartWithLockHandoff', () => {
   it('projects the exact successor fingerprint into the inherited restart environment', () => {
     expect(resolveDaemonSelfRestartEnvironment(
       'abcdef1234567890',
+      undefined,
       { KEEP_ME: '1' },
     )).toEqual({
       KEEP_ME: '1',
       HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT: 'abcdef1234567890',
     });
-    expect(resolveDaemonSelfRestartEnvironment(undefined, { KEEP_ME: '1' })).toBeUndefined();
+    expect(resolveDaemonSelfRestartEnvironment(undefined, undefined, { KEEP_ME: '1' })).toBeUndefined();
+  });
+
+  it('projects only validated server URL bindings into the inherited restart environment', () => {
+    expect(resolveDaemonSelfRestartEnvironment(
+      undefined,
+      {
+        serverUrl: 'http://127.0.0.1:4301',
+        webappUrl: 'http://qa-stack.localhost:4301',
+      },
+      { KEEP_ME: '1', HAPPIER_SERVER_URL: 'http://127.0.0.1:59671' },
+    )).toEqual({
+      KEEP_ME: '1',
+      HAPPIER_SERVER_URL: 'http://127.0.0.1:4301',
+      HAPPIER_WEBAPP_URL: 'http://qa-stack.localhost:4301',
+    });
   });
 
   it('quiesces plugin changes and session admission before releasing the daemon lock', async () => {

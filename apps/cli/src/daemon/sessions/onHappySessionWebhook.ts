@@ -18,7 +18,7 @@ import {
 import { applyProviderSessionIdSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
 import { adoptTrackedSessionRunnerIdentity, bindTrackedSessionIdentity, getParentPid, findTrackedSessionByRunnerPid, findPendingWindowsTerminalTrackedSession, resolveOrdinaryDaemonParentCorrelation } from './sessionReportCorrelation';
 
-import { findHappyProcessByPid } from '../doctor';
+import { findHappyProcessByPid } from '../processInspection';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { readProcessRunState } from '../processRunState';
 import { classifySessionRunnerProcessPresence } from '../sessionRunnerLock';
@@ -174,7 +174,7 @@ export async function registerExternalSessionIdentity(input: Readonly<{
   let accepted = false;
   // Register custody before the first OS await: exit retirement must include
   // this pending observation, not allow it to publish a new owner afterwards.
-  const work = (async (): Promise<TrackedSession | null> => {
+  const observeIdentity = async (): Promise<TrackedSession | null> => {
     try {
       const processIdentity = await readProcessIdentityByPid(input.pid);
       const runState = await readProcessRunState(input.pid);
@@ -206,7 +206,8 @@ export async function registerExternalSessionIdentity(input: Readonly<{
         input.pidToTrackedSession.delete(input.pid);
       }
     }
-  })();
+  };
+  const work = observeIdentity();
   const marker = work.then(result => result !== null);
   if (!existing) tracked.sessionMarkerPersistence = marker;
   custody.pending = Promise.all([custody.pending, work]).then(() => {});

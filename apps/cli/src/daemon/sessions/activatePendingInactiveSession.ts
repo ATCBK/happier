@@ -15,7 +15,7 @@ import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolve
 import { SpawnFailureSpawnErrorDetailSchema } from '@happier-dev/protocol/spawnSession';
 import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
-import type { PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import type { PendingActivationAuthorizationV1, PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 
 type PendingInactiveSessionActivationResult =
   | Readonly<{ status: 'activated' }>
@@ -68,6 +68,11 @@ export async function activatePendingInactiveSession(params: PendingInactiveSess
 }
 
 async function activateAtAdmittedHome(params: PendingInactiveSessionActivationParams): Promise<PendingInactiveSessionActivationResult> {
+  // Account reconnect scans see every owned Session. Only its admitted Machine
+  // may terminalize activation, including when resume metadata cannot be opened.
+  const matchesMachine = (authorization: PendingActivationAuthorizationV1) =>
+    [authorization.admittedTarget?.machineId, authorization.managedWakeTargetV1?.enrolledMachineId]
+      .every(machineId => machineId === undefined || machineId === params.machineId);
   const matchesTarget = (actual: SessionInputMachineTargetV1 | undefined) => !params.expectedTarget || actual !== undefined
     && actual.homeId === params.expectedTarget.homeId && actual.accountId === params.expectedTarget.accountId
     && actual.sessionId === params.expectedTarget.sessionId && actual.machineId === params.expectedTarget.machineId
@@ -96,6 +101,7 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     return { status: 'not-needed', reason: 'authorization-stale' };
   }
   const authorization = rawSession.pendingActivationAuthorization;
+  if (authorization && !matchesMachine(authorization)) return { status: 'not-needed', reason: 'target-mismatch' };
   if (
     !authorization
     || authorization.requestId !== params.requestId
@@ -182,6 +188,7 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     || finalAuthorization.requestId !== params.requestId
     || finalAuthorization.requestedAt !== authorization.requestedAt
     || finalAuthorization.status !== 'waiting'
+    || !matchesMachine(finalAuthorization)
     || !matchesTarget(finalAuthorization.admittedTarget)
     || !await isCurrent()
     || params.requester && readSessionAccessProjectionRoleV1(finalRawSession) !== 'owner'

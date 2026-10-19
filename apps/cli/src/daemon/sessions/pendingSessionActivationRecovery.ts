@@ -3,6 +3,7 @@ import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions
 
 import { fetchSessionsPage as fetchSessionsPageDefault } from '@/session/transport/http/sessionsHttp';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
@@ -61,7 +62,7 @@ export async function recoverPendingSessionActivations(params: Readonly<{
   activate: (input: PendingSessionActivationInput) => Promise<void>;
   warn: (message: string, input: PendingSessionActivationInput, error: unknown) => void;
   fetchSessionsPage?: typeof fetchSessionsPageDefault;
-  visitOwnedSession?: (sessionId: string) => Promise<void>;
+  visitOwnedSession?: (sessionId: string, session: RawSessionListRow) => Promise<void>;
 }>): Promise<void> {
   const fetchSessionsPage = params.fetchSessionsPage ?? fetchSessionsPageDefault;
   let cursor: string | undefined;
@@ -74,9 +75,9 @@ export async function recoverPendingSessionActivations(params: Readonly<{
     });
     for (const session of page.sessions) {
       if (!isOwnedSessionForPendingActivation(session)) continue;
-      if ((session.pendingCount ?? 0) > 0) {
-        await params.visitOwnedSession?.(session.id);
-      }
+      // Follow progress has its own source custody, so a dormant receiver need
+      // not already have an authored Pending row to be observed on reconnect.
+      await params.visitOwnedSession?.(session.id, session);
       const authorization = session.pendingActivationAuthorization;
       if (!authorization || authorization.status !== 'waiting') continue;
       const input: PendingSessionActivationInput = {
@@ -100,7 +101,7 @@ export function createPendingSessionActivationRecovery(params: Readonly<{
   activate: (input: PendingSessionActivationInput) => Promise<void>;
   warn: (message: string, input: PendingSessionActivationInput, error: unknown) => void;
   fetchSessionsPage?: typeof fetchSessionsPageDefault;
-  visitOwnedSession?: (sessionId: string) => Promise<void>;
+  visitOwnedSession?: (sessionId: string, session: RawSessionListRow) => Promise<void>;
   /** Host composition discovers only already-held protected requester Session refs. */
   recoverRequesterSessions?: () => Promise<void>;
 }>): Readonly<{

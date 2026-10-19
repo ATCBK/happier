@@ -63,6 +63,10 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
         let patchRejection: unknown = null;
         let patchValidation: unknown = null;
         let routeValidation: string | null = null;
+        let detailFailure: Error | null = null;
+        app.addHook('onError', async (request, _reply, error) => {
+            if (request.method === 'GET' && request.url.startsWith('/v2/sessions/')) detailFailure = error;
+        });
         app.addHook('preHandler', async request => {
             if (request.method === 'PATCH' && request.validationError) routeValidation = request.validationError.message;
         });
@@ -183,7 +187,10 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
             const callback = vi.fn();
             await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method: `${machineId}:${RPC_METHODS.STOP_SESSION}`,
                 params: 'fixture-request', authorization: { kind: 'session.write', sessionId: session.id } }, callback);
-            const raw = await fetchSessionByIdCompat({ token: credentials.token, sessionId: session.id });
+            const raw = await fetchSessionByIdCompat({ token: credentials.token, sessionId: session.id }).catch(error => {
+                if (detailFailure) throw new Error('Composed Session detail failed', { cause: detailFailure });
+                throw error;
+            });
             if (!raw) throw new Error('Stopped fixture disappeared');
             const owner = tryDecryptSessionOwnerMetadataView({ credentials, accountEncryptionMode: 'plain', rawSession: raw });
             const actionTarget = createSessionActionTarget({ session: createSessionFixture({ id: session.id, active: raw.active,

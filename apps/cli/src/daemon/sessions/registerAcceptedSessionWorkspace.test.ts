@@ -7,7 +7,7 @@ import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
-import { projectProjectListV1 } from '@happier-dev/protocol/projects/projectListProjectionV1';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { mutateProjectAccountOrganization, getActiveProjectAccountRowsSnapshot, createProjectAccountSnapshotMutation } from '@/workspaces/projectAccountRows';

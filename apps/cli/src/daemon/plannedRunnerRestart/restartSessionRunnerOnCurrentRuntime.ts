@@ -6,7 +6,7 @@ import type {
 
 import type { SessionRunnerEntrypointIdentity } from '../sessionRunnerRuntime/types';
 import type { SessionRunnerAgentRuntimeCurrentness } from '../sessionRunnerRuntime/resolveAgentRuntimeCurrentness';
-import { resolveSessionRunnerRuntimeState } from '../sessionRunnerRuntime/resolveRuntimeState';
+import { resolveSessionRunnerRuntimeState, resolveTrackedSessionRunnerActivity, type SessionRunnerActivityRefusal } from '../sessionRunnerRuntime/resolveRuntimeState';
 import { resolveSessionRunnerEntrypointIdentityFromProcessCommand } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import {
   resolveSessionRunnerRestartEligibility,
@@ -31,6 +31,7 @@ type RequestRestart = (input: Readonly<{
   sessionId: string;
   tracked: TrackedSession;
   reason: 'version_runtime_refresh';
+  requesterReason?: RestartSessionRunnerRequest['reason'] | 'request_auth_source_cutover';
   transientSpawnOptions?: SpawnSessionOptions;
   completionTimeoutMs?: number | null;
   canSignal?: () =>
@@ -43,7 +44,7 @@ type RequestRestart = (input: Readonly<{
 }>>;
 
 type RestartSessionRunnerEndpointSummary = NonNullable<RestartSessionRunnerResult['previous']>;
-type ResolveActivityDisabledReason = (sessionId: string) => SessionRunnerRestartDisabledReason | null;
+type ResolveActivityDisabledReason = (sessionId: string) => SessionRunnerRestartDisabledReason | SessionRunnerActivityRefusal | null;
 type ResolveAgentRuntimeCurrentness = (
   tracked: TrackedSession,
 ) => Promise<SessionRunnerAgentRuntimeCurrentness>;
@@ -156,6 +157,7 @@ function mapRestartNotSignaledReasonToDisabledReason(
     || reason === 'superseded'
     || reason === 'shutting_down'
     || reason === 'runner_identity_changed'
+    || reason === 'activity_observation_unavailable'
   ) {
     return null;
   }
@@ -241,13 +243,20 @@ function resolveExpectedRunnerProcessIdentity(input: Readonly<{
   return input.expectedRunnerProcessIdentity;
 }
 
-function resolveTrackedActivityDisabledReason(
+function resolveActivityRefusal(
   tracked: TrackedSession,
-): SessionRunnerRestartDisabledReason | null {
-  return normalizeString(tracked.activeTurnId)
-    || normalizeString(tracked.reattachedInterruptedTurnId)
-    ? 'turn_in_progress'
-    : null;
+  sessionId: string,
+  resolve?: ResolveActivityDisabledReason,
+): SessionRunnerActivityRefusal | null {
+  const trackedActivity = resolveTrackedSessionRunnerActivity(tracked);
+  if (trackedActivity) return trackedActivity;
+  const activity = resolve?.(sessionId) ?? null;
+  return typeof activity === 'string' ? { reasonCode: activity } : activity;
+}
+
+function busy(sessionId: string, activity: SessionRunnerActivityRefusal): RestartSessionRunnerResult {
+  return { ...skipped('busy', sessionId, activity.reasonCode),
+    ...(activity.diagnostics ? { diagnostics: activity.diagnostics } : {}) };
 }
 
 function resolveProviderRecoverySpawnOptions(input: Readonly<{
@@ -291,19 +300,21 @@ function resolveVersionGate(input: Readonly<{
       input.agentRuntimeRestartUnavailableReason,
   });
 
+  if (mode === 'force_current_cli') {
+    const disabledReason = state.plannedRestart.disabledReason;
+    if (disabledReason) {
+      return skipped(disabledReason === 'current_entrypoint_unknown' ? 'version_unknown' : 'ineligible',
+        input.request.sessionId, disabledReason);
+    }
+    return null;
+  }
+
   if (input.agentRuntimeRestartUnavailableReason) {
     return skipped(
       'ineligible',
       input.request.sessionId,
       input.agentRuntimeRestartUnavailableReason,
     );
-  }
-
-  if (mode === 'force_current_cli') {
-    if (input.currentIdentity.status !== 'known') {
-      return skipped('version_unknown', input.request.sessionId, 'current_entrypoint_unknown');
-    }
-    return null;
   }
 
   if (state.versionState === 'current') {
@@ -404,12 +415,9 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
     return providerRecoverySpawnOptions;
   }
 
-  const activityDisabledReason =
-    resolveTrackedActivityDisabledReason(tracked)
-    ?? input.resolveActivityDisabledReason?.(sessionId)
-    ?? null;
-  if (activityDisabledReason) {
-    return skipped('busy', sessionId, activityDisabledReason);
+  const activityRefusal = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
+  if (activityRefusal) {
+    return busy(sessionId, activityRefusal);
   }
 
   if ('dryRun' in input.request && input.request.dryRun === true) {
@@ -477,15 +485,14 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
       if (signalVersionGateResult) {
         return agentRuntimeRestartUnavailableReason ?? false;
       }
-      return resolveTrackedActivityDisabledReason(tracked)
-        ?? input.resolveActivityDisabledReason?.(sessionId)
-        ?? true;
+      return resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason)?.reasonCode ?? true;
     }
     : undefined;
   const restart = await input.requestRestart({
     sessionId,
     tracked,
     reason: 'version_runtime_refresh',
+    requesterReason: sourceCutover ? 'request_auth_source_cutover' : input.request.reason,
     ...(providerRecoverySpawnOptions
       ? { transientSpawnOptions: providerRecoverySpawnOptions }
       : {}),
@@ -493,11 +500,8 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
       ? {
         completionTimeoutMs: null,
         canSignal: () => {
-          const activityDisabledReason =
-            resolveTrackedActivityDisabledReason(tracked)
-            ?? input.resolveActivityDisabledReason?.(sessionId)
-            ?? null;
-          if (activityDisabledReason) return activityDisabledReason;
+          const activity = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
+          if (activity) return activity.reasonCode;
           return isSourceCutoverCurrent({
             sourceCutover,
             tracked,
@@ -511,6 +515,10 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
   });
   if (!restart.signaled) {
     if (signalVersionGateResult) return signalVersionGateResult;
+    if (restart.notSignaledReason === 'activity_observation_unavailable') {
+      return { ok: false, status: 'partial_failure', sessionId,
+        diagnostics: { activityObservation: 'unavailable' } };
+    }
     if (
       restart.notSignaledReason === 'unsafe_process'
       || restart.notSignaledReason === 'runner_identity_changed'
@@ -518,7 +526,8 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
       return skipped('runner_identity_changed', sessionId);
     }
     const activityDisabledReason = mapRestartNotSignaledReasonToDisabledReason(restart.notSignaledReason);
-    if (activityDisabledReason) return skipped('busy', sessionId, activityDisabledReason);
+    if (activityDisabledReason) return busy(sessionId,
+      resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason) ?? { reasonCode: activityDisabledReason });
     return skipped('busy', sessionId);
   }
   if (sourceCutover && !restart.completion) {

@@ -134,13 +134,16 @@ describe('daemon service legacy cleanup planning', () => {
       installedPath: 'C:\\Users\\tester\\.happier\\services\\happier-daemon.preview.foo.ps1',
     });
 
-    expect(plan.commands).toContainEqual({
-      cmd: 'schtasks',
-      args: ['/End', '/TN', 'Happier\\happier-daemon.preview.foo'],
-    });
-    expect(plan.commands).toContainEqual({
-      cmd: 'schtasks',
-      args: ['/Delete', '/F', '/TN', 'Happier\\happier-daemon.preview.foo'],
-    });
+    const stop = plan.commands.find((command) => command.cmd === 'powershell.exe'
+      && command.args.at(-1)?.includes('Stop-ScheduledTask'));
+    const remove = plan.commands.find((command) => command.cmd === 'powershell.exe'
+      && command.args.at(-1)?.includes('Unregister-ScheduledTask'));
+    expect(stop?.cmd).toBe('powershell.exe');
+    expect(stop?.args.at(-1)).toContain('$taskName = "happier-daemon.preview.foo"');
+    expect(stop?.args.at(-1)).toContain('happier-daemon.preview.foo.ps1');
+    expect(stop?.args.at(-1)).toContain('Stop-ScheduledTask');
+    expect(remove?.cmd).toBe('powershell.exe');
+    expect(remove?.args.at(-1)).toContain('$taskName = "happier-daemon.preview.foo"');
+    expect(remove?.args.at(-1)).toContain('Unregister-ScheduledTask');
   });
 });

@@ -35,6 +35,7 @@ export type PlannedRunnerRestartNotSignaledReason =
   | 'unsafe_process'
   | 'superseded'
   | 'activity_in_progress'
+  | 'activity_observation_unavailable'
   | 'source_cutover_requirement_missing'
   | 'runner_identity_changed'
   | 'shutting_down'
@@ -42,6 +43,7 @@ export type PlannedRunnerRestartNotSignaledReason =
 
 export type PlannedRunnerRestartSignalGateResult =
   | boolean
+  | 'activity_observation_unavailable'
   | 'source_cutover_requirement_missing'
   | 'runner_identity_changed'
   | SessionRunnerRestartDisabledReason;
@@ -59,7 +61,7 @@ export type PlannedRunnerRestartDeferralQueue = Readonly<{
     policy: PlannedRunnerRestartPolicy;
     source: PlannedRunnerRestartSource;
     target: ConnectedServiceSwitchTarget;
-    runSwitch: () => Promise<unknown>;
+    runSwitch: (signal?: AbortSignal) => Promise<unknown>;
   }>) => Promise<unknown>;
 }>;
 

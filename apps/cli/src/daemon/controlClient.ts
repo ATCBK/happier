@@ -4,6 +4,9 @@
  */
 
 import { isPidPresent, isPidProvablyAbsent } from '@happier-dev/cli-common/process';
+import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
+export type { SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import {
   processGenerationMatches,
   readProcessInstanceFingerprintSync,
@@ -31,6 +34,7 @@ import { classifyDaemonLifecycleProcessByPid } from '@/daemon/processInspection'
 import { Metadata, type SessionCreationOutcome } from '@/api/types';
 import { projectPath, projectPathFromModuleUrl } from '@/projectPath';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'fs';
 import { configuration } from '@/configuration';
 import type { SpawnDaemonSessionRequest } from '@/rpc/handlers/spawnSessionOptionsContract';
@@ -93,8 +97,11 @@ import {
   ConnectedServiceRunRuntimeAuthRefreshRequestSchema,
   type ConnectedServiceRunRuntimeAuthRefreshRequest,
   type ConnectedServiceRunRejectedStartRequest,
+  ConnectedServiceRunRejectedStartResultSchema,
   type ConnectedServiceRunRejectedStartResult,
   type ConnectedServiceRunMaterializeRequest,
+  ConnectedServiceRunMaterializeSuccessResponseSchema,
+  ConnectedServiceRunReleaseResultSchema,
   type ConnectedServiceRunReleaseRequest,
   type ConnectedServiceRunGenerationCurrentRequest,
   type ExecutionRunConnectedServicesRegistrationV1,
@@ -107,6 +114,7 @@ import type {
 } from './spawn/persistedTakeoverAdmission';
 import { daemonPost, type DaemonControlRequestOptions } from './controlHttp';
 import { EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema } from './lifecycle/admissionDrain';
+import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 export type { DaemonControlRequestOptions } from './controlHttp';
 import { inspectDaemonPublicationPresence, type DaemonPublicationPresenceInspection } from './controlLiveness';
 import {
@@ -880,11 +888,13 @@ export async function notifyDaemonConnectedServiceTurnLifecycle(
 }
 
 /** Invalidation only: the daemon re-reads the current host and never trusts a reported idle Boolean. */
-export async function notifyDaemonSessionActivityChanged(sessionId: string): Promise<void> {
-  const response: unknown = await daemonPost('/session-activity-changed', { sessionId });
-  if (!response || typeof response !== 'object' || !('ok' in response) || response.ok !== true) {
+export async function notifyDaemonSessionActivityChanged(sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1): Promise<SessionActivityChangedResult> {
+  const response: unknown = await daemonPost('/session-activity-changed', { sessionId, ...(followOccurrence ? { followOccurrence } : {}) });
+  const parsed = SessionActivityChangedResponseSchema.safeParse(response);
+  if (!parsed.success || (parsed.data.personalFollow && parsed.data.personalFollow.sourceSessionId !== sessionId)) {
     throw new Error('session_activity_notification_unavailable');
   }
+  return parsed.data.personalFollow ? { personalFollow: parsed.data.personalFollow } : {};
 }
 
 export async function notifyDaemonConnectedServiceUsageLimitWaitResumeCancel(
@@ -1016,26 +1026,15 @@ export type DaemonSessionRunnerRestartMode = SessionRunnerRestartModeV1;
 export type RestartAllDaemonSessionRunnersRequest = RestartAllSessionRunnersRequestV1;
 export type RestartAllDaemonSessionRunnersResult = RestartAllSessionRunnersResultV1;
 
-const DAEMON_SESSION_RUNNER_RESTART_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_SESSION_RUNNER_RESTART_HTTP_TIMEOUT_MS';
-const DEFAULT_DAEMON_SESSION_RUNNER_RESTART_TIMEOUT_MS = 75_000;
-
-export function resolveDaemonSessionRunnerRestartTimeoutMs(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
-  return resolvePositiveIntValue(
-    env[DAEMON_SESSION_RUNNER_RESTART_TIMEOUT_ENV_KEY],
-    DEFAULT_DAEMON_SESSION_RUNNER_RESTART_TIMEOUT_MS,
-    { min: 1_000, max: 300_000 },
-  );
-}
-
 export async function requestDaemonSessionRunnerRestart(
   request: RestartSessionRunnerRequestV1,
   options: DaemonControlRequestOptions = {},
 ): Promise<RestartSessionRunnerResultV1> {
   const body = RestartSessionRunnerRequestV1Schema.parse(request);
   const result = await daemonPost('/session-runners/restart', body, {
-    timeoutMs: resolveDaemonSessionRunnerRestartTimeoutMs(),
+    // Planned retirement and respawn own completion. Observe under the caller
+    // lifetime; an explicit caller deadline may still narrow that lifetime.
+    timeoutMs: null,
     ...options,
   });
   if (result?.error) {
@@ -1054,7 +1053,7 @@ export async function requestDaemonSessionRunnerRestartV2(
 ): Promise<RestartSessionRunnerResultV1> {
   const body = RestartSessionRunnerRequestV2Schema.parse(request);
   const result = await daemonPost('/session-runners/restart-v2', body, {
-    timeoutMs: resolveDaemonSessionRunnerRestartTimeoutMs(),
+    timeoutMs: null,
     ...options,
   });
   if (result?.error) {
@@ -1073,7 +1072,7 @@ export async function restartAllDaemonSessionRunners(
 ): Promise<RestartAllDaemonSessionRunnersResult> {
   const body = RestartAllSessionRunnersRequestV1Schema.parse(request);
   const result = await daemonPost('/session-runners/restart-all', body, {
-    timeoutMs: resolveDaemonSessionRunnerRestartTimeoutMs(),
+    timeoutMs: null,
     ...options,
   });
   if (result?.error) {
@@ -1219,15 +1218,65 @@ export async function readAppliedParentConnectedServices(
 }
 
 export async function requestExecutionRunConnectedServicesMaterialization(
-  request: ConnectedServiceRunMaterializeRequest,
+  request: Omit<ConnectedServiceRunMaterializeRequest, 'activationId'>,
+  options: Readonly<{ signal?: AbortSignal }> = {},
 ): Promise<
   | { ok: true; result: { activationId: string; env: Record<string, string>; unsetEnvKeys?: readonly string[]; connectedServicesBindings: unknown; registration: ExecutionRunConnectedServicesRegistrationV1 } }
   | { ok?: false; error?: string; errorCode?: string; errorMessage?: string }
 > {
-  return await daemonPost(CONNECTED_SERVICE_RUN_MATERIALIZE_PATH, request, {
+  options.signal?.throwIfAborted();
+  // Allocate the existing activation identity before dispatch, so a lost
+  // successful response cannot take exact cleanup custody away from the runner.
+  const activationId = randomUUID();
+  const state = await readDaemonState();
+  if (!state?.httpPort) return { ok: false, error: 'No daemon running, no state file found' };
+  const target = { pid: state.pid, httpPort: state.httpPort, controlToken: state.controlToken };
+  options.signal?.throwIfAborted();
+  const response: unknown = await daemonPost(CONNECTED_SERVICE_RUN_MATERIALIZE_PATH, { ...request, activationId }, {
     authScope: 'connected-service-run-materialize',
     timeoutMs: resolveExecutionRunConnectedServiceMaterializeTimeoutMs(),
+    target,
+    signal: options.signal,
   });
+  const parsed = ConnectedServiceRunMaterializeSuccessResponseSchema.safeParse(response);
+  const identityMatches = parsed.success && parsed.data.result.activationId === activationId
+    && parsed.data.result.registration.activationId === activationId;
+  if (parsed.success && identityMatches && !options.signal?.aborted) return parsed.data;
+
+  // Keep cleanup independent of the ended observation and on the issuing daemon.
+  // The canonical release owner distinguishes absence from retained cleanup failure.
+  const cleanup = ConnectedServiceRunReleaseResultSchema.safeParse(await releaseExecutionRunConnectedServices({
+    runId: request.runId, runnerPid: request.runnerPid, activationId,
+  }, { target }));
+  if (!cleanup.success || !cleanup.data.ok) {
+    const errorCode = cleanup.success && !cleanup.data.ok
+      ? cleanup.data.errorCode : 'connected_service_run_cleanup_failed';
+    logger.warn('[EXECUTION RUN] Abandoned materialization cleanup did not complete', {
+      runId: request.runId, activationId, errorCode,
+    });
+    return { ok: false, errorCode, errorMessage: 'Execution-run connected-services cleanup did not complete' };
+  }
+  if (parsed.success && !identityMatches) {
+    return { ok: false, errorCode: 'connected_service_run_activation_mismatch',
+      errorMessage: 'Execution-run connected-services activation did not match its request' };
+  }
+  const failure = response && typeof response === 'object' ? response as Record<string, unknown> : null;
+  // HTTP failures retain the domain body under response. The materialization
+  // and rejected-start owners share this typed refusal envelope.
+  const refusal = ConnectedServiceRunRejectedStartResultSchema.safeParse(failure?.response ?? response);
+  if (refusal.success && !refusal.data.ok) {
+    return { ok: false, errorCode: refusal.data.errorCode,
+      ...(typeof failure?.error === 'string' ? { error: sanitizeConnectedServiceDiagnosticString(failure.error) } : {}),
+      errorMessage: refusal.data.errorMessage
+        ? sanitizeConnectedServiceDiagnosticString(refusal.data.errorMessage)
+        : 'Execution-run connected-services materialization failed',
+    };
+  }
+  return { ok: false,
+    ...(typeof failure?.errorCode === 'string' ? { errorCode: sanitizeConnectedServiceDiagnosticString(failure.errorCode) } : {}),
+    ...(typeof failure?.error === 'string' ? { error: sanitizeConnectedServiceDiagnosticString(failure.error) } : {}),
+    errorMessage: typeof failure?.errorMessage === 'string' ? sanitizeConnectedServiceDiagnosticString(failure.errorMessage) : 'Execution-run connected-services materialization failed',
+  };
 }
 
 /**
@@ -1236,8 +1285,10 @@ export async function requestExecutionRunConnectedServicesMaterialization(
  */
 export async function releaseExecutionRunConnectedServices(
   request: ConnectedServiceRunReleaseRequest,
-): Promise<{ ok?: boolean; released?: boolean; error?: string }> {
+  options: Pick<DaemonControlRequestOptions, 'target'> = {},
+): Promise<{ ok?: boolean; released?: boolean; error?: string; errorCode?: string }> {
   return await daemonPost(CONNECTED_SERVICE_RUN_RELEASE_PATH, request, {
+    ...options,
     authScope: 'connected-service-run-materialize',
   });
 }

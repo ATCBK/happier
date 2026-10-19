@@ -279,7 +279,8 @@ describe('daemon control client plugin changes', () => {
       const client = await import('./controlClient');
 
       const listed = await client.listDaemonPluginChanges();
-      expect(listed.changes.map((entry) => [entry.kind, entry.pendingChangeId])).toEqual([
+      expect(listed.kind).toBe('available');
+      expect(listed.kind === 'available' ? listed.changes.map((entry) => [entry.kind, entry.pendingChangeId]) : []).toEqual([
         ['reviewRequired', 'pending-1'],
         ['reviewRequired', 'pending-2'],
         ['applying', 'pending-3'],
@@ -290,10 +291,7 @@ describe('daemon control client plugin changes', () => {
     }
   });
 
-  it('reports no outstanding pending changes when the daemon cannot answer', async () => {
-    // Pending changes are in-memory daemon-lifetime state. An unreachable
-    // daemon holds none, so enumeration degrades to "nothing to decide" rather
-    // than to an error a settings screen would have to model.
+  it('keeps a live daemon list failure distinct from a proven empty list', async () => {
     const server = http.createServer((request, response) => {
       request.resume();
       request.on('end', () => {
@@ -315,7 +313,41 @@ describe('daemon control client plugin changes', () => {
       });
       const client = await import('./controlClient');
 
-      await expect(client.listDaemonPluginChanges()).resolves.toEqual({ changes: [] });
+      await expect(client.listDaemonPluginChanges()).resolves.toEqual({
+        kind: 'unavailable',
+        code: 'daemon_unavailable',
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('reports an authoritative empty list only after the daemon answers with one', async () => {
+    const server = http.createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ changes: [] }));
+      });
+    });
+    try {
+      const { port } = await listen(server);
+      home = await createTempDir('happier-plugin-change-list-client-');
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      writeDaemonState({
+        pid: process.pid,
+        httpPort: port,
+        startedAt: Date.now(),
+        startedWithCliVersion: 'test',
+        controlToken: 'control-token',
+      });
+      const client = await import('./controlClient');
+
+      await expect(client.listDaemonPluginChanges()).resolves.toEqual({
+        kind: 'available',
+        changes: [],
+      });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

@@ -47,7 +47,7 @@ describe('plugin control operation lifetime', () => {
     expect(results[4]).toMatchObject({ kind: 'status' });
     expect(results[5]).toMatchObject({ matched: true, result: { ok: true } });
     expect(results[2]).toEqual({ kind: 'applying', pendingChangeId: 'change-1' });
-    expect(results[3]).toEqual({ changes: [{ kind: 'applying', pendingChangeId: 'change-1' }] });
+    expect(results[3]).toEqual({ kind: 'available', changes: [{ kind: 'applying', pendingChangeId: 'change-1' }] });
   });
 
   it('withdraws an unissued operation and preserves uncertainty after issuing an effect', async () => {
@@ -100,7 +100,10 @@ describe('plugin control operation lifetime', () => {
     const deadline = listDaemonPluginChanges({ target, timeoutMs: 1000 });
     const retained = listDaemonPluginChanges({ target });
     await vi.advanceTimersByTimeAsync(2000);
-    await expect(deadline).resolves.toEqual({ changes: [] });
-    await expect(retained).resolves.toEqual({ changes: [{ kind: 'applying', pendingChangeId: 'change-1' }] });
+    await expect(deadline).resolves.toEqual({ kind: 'unavailable', code: 'timeout' });
+    await expect(retained).resolves.toEqual({
+      kind: 'available',
+      changes: [{ kind: 'applying', pendingChangeId: 'change-1' }],
+    });
   });
 });

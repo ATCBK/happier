@@ -455,13 +455,14 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
       tracked: trackedSession(),
       currentIdentity: currentIdentity('0.2.11'),
       requestRestart,
-      resolveActivityDisabledReason: () => 'turn_in_progress',
+      resolveActivityDisabledReason: () => ({ reasonCode: 'turn_in_progress', diagnostics: { busySource: 'pending_foreground_begin' } }),
     });
 
     expect(result).toEqual(expect.objectContaining({
       ok: false,
       status: 'busy',
       reasonCode: 'turn_in_progress',
+      diagnostics: { busySource: 'pending_foreground_begin' },
     }));
     expect(requestRestart).not.toHaveBeenCalled();
   });
@@ -488,6 +489,10 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
       ok: false,
       status: 'busy',
       reasonCode: 'turn_in_progress',
+      diagnostics: {
+        busySource: 'activeTurnId' in activity ? 'foreground_turn' : 'interrupted_foreground_turn',
+        turnId: 'activeTurnId' in activity ? activity.activeTurnId : activity.reattachedInterruptedTurnId,
+      },
     }));
     expect(requestRestart).not.toHaveBeenCalled();
   });

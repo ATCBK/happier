@@ -31,7 +31,7 @@ import {
   type StopSessionIncompleteReason,
   type StopSessionResult,
 } from './stopSessionContract';
-import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement } from './retireTerminalControlServiceability';
+import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement, retireExactTerminalControlServiceability } from './retireTerminalControlServiceability';
 import { resolveTrackedSessionTerminalPresentation } from './resolveTrackedSessionTerminalPresentation';
 
 function mapDispositionFailureReason(
@@ -59,6 +59,9 @@ export type ExactTrackedRunnerStopWitness = Readonly<{
 }>;
 
 export type StopSessionOptions = Readonly<{
+  /** Captured authenticated metadata authority for this Stop; never transported. */
+  metadataContext?: Pick<Parameters<typeof retireExactTerminalControlServiceability>[0],
+    'credentials' | 'currentness' | 'resolveAuthorizationHeaders'>;
   expectedTrackedRunner?: ExactTrackedRunnerStopWitness;
   beforeSignalExactTrackedRunner?: (tracked: TrackedSession) => void | boolean | Promise<void | boolean>;
 }>;
@@ -187,16 +190,19 @@ export function createStopSession(params: Readonly<{
     attachmentInfo: ExactTerminalHostAttachmentInfo;
   }>) => Promise<void>;
   retireExactTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     happyHomeDir: string;
     sessionId: string;
     attachmentInfo: ExactTerminalHostAttachmentInfo;
     terminalMode: TerminalMode;
   }>) => Promise<ExactTerminalControlServiceabilityRetirement | void>;
   retireAbsentTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     trackedSession: TrackedSession;
   }>) => Promise<RetainedPlainRunnerRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     expectedAttachmentId?: string;
   }>) => Promise<StopSessionResult | null>;
@@ -487,6 +493,7 @@ export function createStopSession(params: Readonly<{
         try {
           const recovered = await params.recoverStrandedTerminalControlServiceability({
             sessionId: normalizedSessionId,
+            ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
             ...(attachmentInfo?.version === 2
               ? { expectedAttachmentId: attachmentInfo.attachmentId }
               : {}),
@@ -557,7 +564,9 @@ export function createStopSession(params: Readonly<{
       ? await observeStopPhase('remainder_capture', () => params.ownerRemainder!.capture(remainderOwner))
       : undefined;
     if (capturedRemainder) {
-      for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture = capturedRemainder;
+      // A planned retirement already captured this generation's physical tree.
+      // A later logical Session census must not erase its reparented Run children.
+      for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture ??= capturedRemainder;
     }
     let stoppedAny = false;
     const signaledPids: number[] = [];
@@ -696,12 +705,19 @@ export function createStopSession(params: Readonly<{
       trackedRunnerCount: pidsToStop.length,
     });
     if (params.ownerRemainder && pidsToStop.length > 0) {
-      const remainder = [...expectedTrackedSessionsByPid.values()]
-        .map((session) => session.ownerRemainderResult)
-        .find((result) => result !== undefined)
-        ?? await params.ownerRemainder.end(remainderOwner, capturedRemainder);
-      if (remainder.status !== 'complete') {
-        logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, remainder);
+      const expectedSessions = [...expectedTrackedSessionsByPid.values()];
+      const completedCaptures = new Set(expectedSessions.filter((session) => session.ownerRemainderResult)
+        .map((session) => session.ownerRemainderCapture ?? capturedRemainder));
+      const pendingCaptures = new Set(expectedSessions.filter((session) => !session.ownerRemainderResult)
+        .map((session) => session.ownerRemainderCapture ?? capturedRemainder)
+        .filter((capture) => !completedCaptures.has(capture)));
+      const remainders = [
+        ...expectedSessions.flatMap((session) => session.ownerRemainderResult ? [session.ownerRemainderResult] : []),
+        ...await Promise.all([...pendingCaptures].map((capture) => params.ownerRemainder!.end(remainderOwner, capture))),
+      ];
+      const incompleteRemainder = remainders.find((remainder) => remainder.status !== 'complete');
+      if (incompleteRemainder) {
+        logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, incompleteRemainder);
         return incompleteStopSession('runner_signal_incomplete');
       }
     }
@@ -726,6 +742,7 @@ export function createStopSession(params: Readonly<{
           ? async ({ attachmentInfo: currentAttachmentInfo }) => {
               const serviceabilityStartedAtMs = Date.now();
               await params.retireExactTerminalControlServiceability!({
+                ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
                 happyHomeDir: configuration.happyHomeDir,
                 sessionId: normalizedSessionId,
                 attachmentInfo: currentAttachmentInfo,
@@ -779,6 +796,7 @@ export function createStopSession(params: Readonly<{
           const serviceabilityStartedAtMs = Date.now();
           if (params.retireExactTerminalControlServiceability && retiredTerminalMode) {
             await params.retireExactTerminalControlServiceability({
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
               happyHomeDir: configuration.happyHomeDir,
               sessionId: normalizedSessionId,
               attachmentInfo: currentAttachmentInfo,
@@ -829,7 +847,8 @@ export function createStopSession(params: Readonly<{
         let retired = false;
         for (const trackedSession of expectedTrackedSessionsByPid.values()) {
           const retirement = await observeStopPhase('plain_control_serviceability_retirement', () =>
-            params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession }));
+            params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession,
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}) }));
           if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
             return incompleteStopSession('terminal_control_serviceability_retirement_failed');
           }

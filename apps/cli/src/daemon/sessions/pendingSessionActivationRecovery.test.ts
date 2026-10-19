@@ -14,10 +14,10 @@ import {
 } from './pendingSessionActivationRecovery';
 
 describe('pending session activation recovery', () => {
-  it('reconstructs reset demand for owned Pending rows through the same reconnect scan before activation', async () => {
+  it('visits owned idle receivers without Pending rows so Follow recovery survives reconnect', async () => {
     const visited: string[] = [];
     const activated: string[] = [];
-    const recovery = createPendingSessionActivationRecovery({
+    const createRecovery = () => createPendingSessionActivationRecovery({
       token: 'token',
       activate: async input => { activated.push(input.sessionId); },
       visitOwnedSession: async sessionId => { visited.push(sessionId); },
@@ -25,13 +25,15 @@ describe('pending session activation recovery', () => {
       fetchSessionsPage: async () => ({
         sessions: createSessionListResponseFixture([
           createSessionRecordFixture({ id: 'held-reset', pendingCount: 1 }),
+          createSessionRecordFixture({ id: 'idle-follow', pendingCount: 0, active: false }),
           createSessionRecordFixture({ id: 'shared', pendingCount: 1, share: { accessLevel: 'view', canApprovePermissions: false } }),
         ]).sessions,
         hasNext: false, nextCursor: null,
       }),
     });
-    await recovery.recoverAfterConnect();
-    expect(visited).toEqual(['held-reset']);
+    await createRecovery().recoverAfterConnect();
+    await createRecovery().recoverAfterConnect();
+    expect(visited).toEqual(['held-reset', 'idle-follow', 'held-reset', 'idle-follow']);
     expect(activated).toEqual([]);
   });
   it('routes live hints and the reconnect scan through one canonical activator', async () => {

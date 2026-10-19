@@ -175,6 +175,7 @@ describe('readDaemonStatusSnapshot', () => {
         expect(snapshot.daemon.serviceLabel).toBe('com.happier.cli.daemon.default');
         expect(snapshot.service).toEqual({
             installed: true,
+            autostart: null,
             running: true,
         });
     });
@@ -276,6 +277,7 @@ describe('readDaemonStatusSnapshot', () => {
         expect(snapshot.daemon.serviceLabel).toBe('com.happier.cli.daemon.other');
         expect(snapshot.service).toEqual({
             installed: false,
+            autostart: null,
             running: false,
         });
     });

@@ -19,7 +19,7 @@ import { reattachTrackedSessionsFromMarkers, readOrphanedDeadPlainRunnerMarkers 
 import { publishOrphanedStartupSessionEnds } from './publishOrphanedStartupSessionEnds';
 
 describe.skipIf(process.platform !== 'linux')('offline Stop through physical exit, marker custody and Home recovery', () => {
-  it.each(['bound', 'missing-owned-host', 'mode-only', 'mode-only-offline', 'missing-marker', 'live-child'] as const)('releases only durably recoverable dead custody: %s', async wiring => {
+  it.each(['bound', 'missing-owned-host', 'mode-only', 'mode-only-offline', 'terminal-started-offline', 'missing-marker', 'live-child'] as const)('releases only durably recoverable dead custody: %s', async wiring => {
     await withConfiguredDaemonTestHome({ prefix: 'offline-stop-' }, async ({ homeDir }) => {
       const child = spawn(process.execPath, ['-e', "process.send('ready'); setInterval(() => {}, 1000)"],
         { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -29,12 +29,13 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       const identity = await readProcessIdentityByPid(pid);
       if (!identity) throw new Error('Owned fixture process identity unavailable');
       const sessionId = `offline-stop-${wiring}`;
-      const tracked: TrackedSession = { pid, childProcess: child, startedBy: 'daemon', happySessionId: sessionId,
+      const startedBy = wiring === 'terminal-started-offline' ? 'terminal' as const : 'daemon' as const;
+      const tracked: TrackedSession = { pid, childProcess: child, startedBy, happySessionId: sessionId,
         processStartTimeMs: identity.processStartTimeMs, processCommandHash: identity.processCommandHash,
         stopRequestedAtMs: Date.now(), spawnOptions: { directory: homeDir },
         ...(wiring === 'missing-owned-host' ? { hostedTerminal: { mode: 'tmux' as const },
           publishedTerminalControlServiceabilityAttachmentId: 'retired-owned-host' } : {}) };
-      if (wiring !== 'missing-marker') await writeSessionMarker({ pid, happySessionId: sessionId, startedBy: 'daemon',
+      if (wiring !== 'missing-marker') await writeSessionMarker({ pid, happySessionId: sessionId, startedBy,
         processStartTimeMs: identity.processStartTimeMs, processCommandHash: identity.processCommandHash });
       const modeOnly = wiring === 'mode-only' || wiring === 'mode-only-offline';
       let online = wiring === 'mode-only';
@@ -110,7 +111,8 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
             retireTerminalControlServiceability: async () => { await retire(); } })).toEqual([]);
           expect(await readSessionMarkerForPid(pid)).toBeNull();
           expect(retired).toBe(false);
-        } else if (wiring === 'bound' || wiring === 'missing-owned-host' || wiring === 'mode-only-offline') {
+        } else if (wiring === 'bound' || wiring === 'missing-owned-host' || wiring === 'mode-only-offline'
+            || wiring === 'terminal-started-offline') {
           expect(result).toEqual({ status: 'stopped' });
           expect(sessions.size).toBe(0);
           expect(await readSessionMarkerForPid(pid)).toMatchObject({ happySessionId: sessionId, processStartTimeMs: identity.processStartTimeMs });

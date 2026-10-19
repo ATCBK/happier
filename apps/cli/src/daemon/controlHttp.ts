@@ -3,6 +3,7 @@ import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpo
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { Agent } from 'undici';
+import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number | null;
@@ -63,7 +64,7 @@ async function resolveTimeout(path: string, options: DaemonControlRequestOptions
   if (path === '/connected-service-run/applied-parent-selection'
     || path === '/connected-service-run/generation-current') return null;
   if (path === '/spawn-session') {
-    const { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } = await import('@happier-dev/protocol');
+    const { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } = await import('@happier-dev/protocol/sessions/creation/sessionSpawnBudget');
     const raw = process.env.HAPPIER_DAEMON_SPAWN_HTTP_TIMEOUT;
     return positiveTimeout(raw?.trim() ? raw : process.env.HAPPIER_DAEMON_HTTP_TIMEOUT, DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS, 300_000);
   }
@@ -72,7 +73,7 @@ async function resolveTimeout(path: string, options: DaemonControlRequestOptions
 
 async function logControlError(message: string): Promise<void> {
   const { logger } = await import('@/ui/logger');
-  logger.debug(`[CONTROL CLIENT] ${message}`);
+  logger.debug(`[CONTROL CLIENT] ${sanitizeConnectedServiceDiagnosticString(message)}`);
 }
 
 // HTTP JSON is an untyped external boundary. Existing control callers validate

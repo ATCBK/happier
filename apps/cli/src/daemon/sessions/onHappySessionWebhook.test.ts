@@ -1,6 +1,6 @@
 import { bindTrackedSessionIdentity } from './sessionReportCorrelation';
 import { createPersistedTakeoverAdmissionWaiter } from '../spawn/persistedTakeoverAdmission';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { Metadata } from '@/api/types';
 import { configuration } from '@/configuration';
@@ -65,7 +65,7 @@ describe('createOnHappySessionWebhook', () => {
         pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
         agentRuntimeDaemonServiceAuthorityFilePath: path.join(dir, 'authority.json'),
         acceptedSpawnMarkerGate: Promise.resolve(true),
-        spawnOptions: { directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'wrapper-launch' },
+        spawnOptions: { directory: dir, backendTarget: { kind: 'backend', backendId: 'claude' }, spawnNonce: 'wrapper-launch' },
       };
       await writeSessionMarker({
         pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: dir,
@@ -157,6 +157,13 @@ describe('createOnHappySessionWebhook', () => {
   });
 
   it('retains startup and fences Resume while a reported wrapper runner generation is still being read', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'happier-pending-wrapper-marker-'));
+    const originalHome = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
+    onTestFinished(async () => {
+      Object.defineProperty(configuration, 'happyHomeDir', originalHome);
+      await rm(dir, { recursive: true, force: true });
+    });
+    Object.defineProperty(configuration, 'happyHomeDir', { ...originalHome, value: dir });
     const wrapperPid = 649124;
     const runnerPid = process.pid;
     const sessionId = 'session-report-generation-pending';
@@ -166,13 +173,13 @@ describe('createOnHappySessionWebhook', () => {
     }
     const tracked: TrackedSession = {
       pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
-      processStartTimeMs: 1000, spawnOptions: { directory: '/tmp' },
+      processStartTimeMs: 1000, spawnOptions: { directory: '/tmp', spawnNonce: 'pending-wrapper-launch' },
       agentRuntimeDaemonServiceAuthorityFilePath: '/tmp/fixture-session-authority',
     };
     const sessions = new Map([[wrapperPid, tracked]]);
     const awaiters = new Map<number, (session: TrackedSession) => void>();
     const resolvers = new Map<number, (result: SpawnSessionResult) => void>();
-    const timeouts = new Map<number, ReturnType<typeof setTimeout>>();
+    const timeouts = new Map<number, NodeJS.Timeout>();
     const completion = waitForSessionWebhook({
       pid: wrapperPid, pidToTrackedSession: sessions, pidToAwaiter: awaiters,
       pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
@@ -184,17 +191,23 @@ describe('createOnHappySessionWebhook', () => {
     let releaseReadiness!: () => void;
     const readinessGate = new Promise<void>((resolve) => { releaseReadiness = resolve; });
     let identityReadStarted = false;
+    const readIdentity = async (pid: number) => {
+      if (pid !== runnerPid) return { pid, processStartTimeMs: 1000, command: 'wrapper' };
+      identityReadStarted = true;
+      await identityGate;
+      return runnerIdentity;
+    };
+    await writeSessionMarker({ pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon',
+      processStartTimeMs: 1000, respawn: { version: 1, directory: '/tmp', spawnNonce: 'pending-wrapper-launch' } });
+    const promoteMarker = (fromPid: number, toPid: number) => promoteSessionMarkerPid(fromPid, toPid,
+      { readProcessIdentityByPidFn: readIdentity });
     const report = createOnHappySessionWebhook({
       pidToTrackedSession: sessions, pidToAwaiter: awaiters,
       getParentPidFn: () => wrapperPid,
       // Hold the OS read after the real report owner records its runner PID.
-      readProcessIdentityByPidFn: async (pid) => {
-        if (pid !== runnerPid) return { pid, processStartTimeMs: 1000, command: 'wrapper' };
-        identityReadStarted = true;
-        await identityGate;
-        return runnerIdentity;
-      },
-      writeSessionMarkerFn: async () => {}, listSessionMarkersFn: async () => [], readCredentialsFn: async () => null,
+      readProcessIdentityByPidFn: readIdentity,
+      promoteSessionMarkerFn: promoteMarker,
+      readCredentialsFn: async () => null,
     });
     const reporting = report(sessionId, createMetadata(runnerPid, 'daemon'), async () => await readinessGate);
     const readState = async (pid: number) => pid === wrapperPid ? 'dead' as const : 'servable' as const;
@@ -202,12 +215,7 @@ describe('createOnHappySessionWebhook', () => {
       pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
       getApiMachineForSessions: () => null,
       processPresenceDependencies: { readProcessRunState: readState, readProcessIdentityByPid },
-      // Marker IO is a persistent-system boundary; lifecycle/promotion stay real.
-      promoteSessionMarkerFn: async () => ({ sourceMarkerOwnership: null, targetMarkerOwnership: {
-        happySessionId: sessionId, processStartTimeMs: runnerIdentity.processStartTimeMs,
-        processCommandHash: hashProcessCommand(runnerIdentity.command!),
-      } }),
-      removeSessionMarkerFn: async () => {},
+      promoteSessionMarkerFn: promoteMarker,
     });
     try {
       await vi.waitFor(() => expect(identityReadStarted).toBe(true));
@@ -257,7 +265,7 @@ describe('createOnHappySessionWebhook', () => {
         pid, startedBy: 'daemon', happySessionId: 'PID-' + pid,
         agentRuntimeDaemonServiceAuthorityFilePath: path.join(dir, 'authority.json'),
         acceptedSpawnMarkerGate: Promise.resolve(true),
-        spawnOptions: { directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'current-launch' },
+        spawnOptions: { directory: dir, backendTarget: { kind: 'backend', backendId: 'claude' }, spawnNonce: 'current-launch' },
       };
       await writeSessionMarker({
         pid, happySessionId: 'PID-' + pid, startedBy: 'daemon', cwd: dir, processStartTimeMs: 123456,
@@ -267,7 +275,7 @@ describe('createOnHappySessionWebhook', () => {
       const onTrackedSessionReady = vi.fn();
       const report = createOnHappySessionWebhook({
         pidToTrackedSession: new Map([[pid, tracked]]), pidToAwaiter: new Map([[pid, () => {}]]),
-        readProcessIdentityByPidFn: async () => ({ pid, processStartTimeMs: 123456 }),
+        readProcessIdentityByPidFn: async () => ({ pid, processStartTimeMs: 123456, command: '/runtime/versions/1.2.3/bin/happier claude' }),
         readCredentialsFn: async () => null, onTrackedSessionReady,
       });
       await expect(report('session-before-webhook', createMetadata(pid, 'daemon', dir)))

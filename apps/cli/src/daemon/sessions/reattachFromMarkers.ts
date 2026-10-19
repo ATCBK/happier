@@ -594,7 +594,8 @@ function projectOrphanedDeadDaemonSession(marker: DaemonSessionMarker): Orphaned
 export async function readOrphanedDeadPlainRunnerMarkers(): Promise<readonly OrphanedDeadDaemonSession[]> {
   const orphans: OrphanedDeadDaemonSession[] = [];
   for (const marker of await listSessionMarkers({ requireComplete: true })) {
-    if (marker.startedBy !== 'daemon' || !normalizeSessionId(marker.happySessionId) || isPidPresent(marker.pid)) continue;
+    if ((marker.startedBy !== 'daemon' && marker.startedBy !== 'terminal')
+      || !normalizeSessionId(marker.happySessionId) || isPidPresent(marker.pid)) continue;
     const attachment = await readTerminalHostAttachmentState({ happyHomeDir: marker.happyHomeDir, sessionId: marker.happySessionId });
     if (attachment.status === 'absent') orphans.push(projectOrphanedDeadDaemonSession(marker));
   }
@@ -669,7 +670,8 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         aliveMarkers.push(marker);
       } else {
         const sessionId = normalizeSessionId(marker.happySessionId);
-        const attachmentState = marker.startedBy === 'daemon' && sessionId
+        const hasRetainedPlainRunnerOrigin = marker.startedBy === 'daemon' || marker.startedBy === 'terminal';
+        const attachmentState = hasRetainedPlainRunnerOrigin && sessionId
           ? await readTerminalHostAttachmentState({ happyHomeDir: marker.happyHomeDir, sessionId })
           : { status: 'absent' as const };
         if (
@@ -704,7 +706,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
           });
           continue;
         }
-        if (marker.startedBy === 'daemon' && sessionId) {
+        if (hasRetainedPlainRunnerOrigin && sessionId) {
           orphanedDeadDaemonSessions.push(projectOrphanedDeadDaemonSession(marker));
           continue;
         }

@@ -202,6 +202,35 @@ describe('daemon control server: /restart', () => {
     }
   });
 
+  it('passes validated successor server URLs to self-restart without accepting arbitrary environment', async () => {
+    const requestSelfRestart = vi.fn(async () => {});
+    const app = createBaseApp({ requestSelfRestart } as Partial<Parameters<typeof createDaemonControlApp>[0]>);
+    try {
+      await app.ready();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/restart',
+        headers: { 'x-happier-daemon-token': 'test-token' },
+        payload: {
+          successorServerUrls: {
+            serverUrl: 'http://127.0.0.1:4301',
+            webappUrl: 'http://qa-stack.localhost:4301',
+          },
+        },
+      });
+
+      expect(res.statusCode).toBe(202);
+      await vi.waitFor(() => expect(requestSelfRestart).toHaveBeenCalledWith(expect.objectContaining({
+        successorServerUrls: {
+          serverUrl: 'http://127.0.0.1:4301',
+          webappUrl: 'http://qa-stack.localhost:4301',
+        },
+      })));
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects malformed successor dist fingerprints before self-restart', async () => {
     const requestSelfRestart = vi.fn(async () => {});
     const app = createBaseApp({ requestSelfRestart } as Partial<Parameters<typeof createDaemonControlApp>[0]>);

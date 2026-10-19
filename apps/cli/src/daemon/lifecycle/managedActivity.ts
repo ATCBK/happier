@@ -28,9 +28,12 @@ export type LiveWorkInventoryV1 = Readonly<{
     idleSince?: number;
 }>;
 
+/** Observations retire pending reads without claiming a material work edge. */
+export type LiveWorkListenerV1 = (change?: 'observation') => void;
+
 export type LiveWorkProducerV1 = Readonly<{
     read(): Omit<LiveWorkInventoryV1, 'idleSince'> | Promise<Omit<LiveWorkInventoryV1, 'idleSince'>>;
-    subscribe(listener: () => void): () => void;
+    subscribe(listener: LiveWorkListenerV1): () => void;
 }>;
 
 export type ManagedActivityInventory = Readonly<{
@@ -66,11 +69,11 @@ export function readWorkspaceSessionIdle(
 
 /** Binds late/replaced incumbent owners; retains references, never copied work state. */
 export function createLiveWorkProducerGroup(resolve: () => readonly LiveWorkProducerV1[] | null) {
-    const listeners = new Set<() => void>();
+    const listeners = new Set<LiveWorkListenerV1>();
     const subscriptions = new Map<LiveWorkProducerV1, () => void>();
     let observing = false;
     let disposed = false;
-    const notifyChanged = () => { if (!disposed) for (const listener of listeners) listener(); };
+    const notifyChanged: LiveWorkListenerV1 = change => { if (!disposed) for (const listener of listeners) listener(change); };
     const read = () => {
         const owners = resolve();
         if (observing) {
@@ -99,7 +102,7 @@ export function createLiveWorkProducerGroup(resolve: () => readonly LiveWorkProd
     };
     return {
         read,
-        subscribe(listener: () => void) {
+        subscribe(listener: LiveWorkListenerV1) {
             observing = true; listeners.add(listener);
             return () => {
                 listeners.delete(listener);
@@ -158,10 +161,10 @@ export function createManagedActivityInventory(params: Readonly<{
         if (unsubscribe || disposed) return;
         unsubscribe = [];
         for (const producer of params.producers) {
-            unsubscribe.push(producer.subscribe(() => {
-                // An asynchronous invalidation may coalesce active→settled before
+            unsubscribe.push(producer.subscribe(change => {
+                // A material invalidation may coalesce active→settled before
                 // the exact owner can be reread. Never carry idle through that gap.
-                idleSince = undefined;
+                if (change !== 'observation') idleSince = undefined;
                 ownerEdge += 1;
                 void read();
             }));

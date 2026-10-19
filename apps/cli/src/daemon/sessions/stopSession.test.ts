@@ -314,9 +314,7 @@ describe('createStopSession', () => {
       pidToTrackedSession,
       ownerRemainder,
       waitForTrackedRunnersExit: vi.fn(async () => {
-        pidToTrackedSession.get(111)!.ownerRemainderResult = await ownerRemainder.end(
-          { kind: 'session', sessionId: 'sess-1' },
-        );
+        pidToTrackedSession.get(111)!.ownerRemainderResult = await ownerRemainder.end();
         return true;
       }),
     });

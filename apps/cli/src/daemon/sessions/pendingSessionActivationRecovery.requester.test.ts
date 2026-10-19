@@ -9,6 +9,7 @@ import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/i
 import type { SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { createRequesterSessionCredentialCustody, resolveRequesterSessionBootstrap,
   listRequesterSessionCredentialBindings, type RequesterSessionMachineAdmissionBoundary } from '../sessionEncryption/requesterSessionCredentials';
 import { readRequesterPendingSessionActivation } from './pendingSessionActivationRecovery';
@@ -23,7 +24,11 @@ const origin = 'http://bob-home.test';
 let app: FastifyInstance | undefined;
 let directory: string | undefined;
 let restore: (() => void) | undefined;
+let currentnessChannel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>> | undefined;
+let requesterBootstrap: Awaited<ReturnType<typeof resolveRequesterSessionBootstrap>>;
 afterEach(async () => {
+  await requesterBootstrap?.dispose(); requesterBootstrap = null;
+  await currentnessChannel?.close(); currentnessChannel = undefined;
   vi.restoreAllMocks();
   restore?.(); restore = undefined;
   await app?.close(); app = undefined;
@@ -83,10 +88,12 @@ describe('requester pending reconnect through protected custody and the Home net
     }) }));
     await app.ready();
     restore = installAxiosFastifyAdapter({ app, origin });
+    currentnessChannel = await createRequesterCurrentnessSocketHarness();
     const boundary: RequesterSessionMachineAdmissionBoundary = { machineId: attribution.machineId, daemonToken: 'alice-daemon',
       isHomeCurrent: () => true, readInstallation: () => ({ installationId: attribution.installationId, privateKey: keyPair.secretKey }) };
     const bootstrap = await resolveRequesterSessionBootstrap({ happyHomeDir: directory, sessionId: target.sessionId,
       attribution, serverHttpBaseUrl: origin, machineAdmissionBoundary: boundary });
+    requesterBootstrap = bootstrap;
     expect(bootstrap).not.toBeNull();
     if (!bootstrap) throw new Error('Missing real requester bootstrap');
     const resolveCurrentMachineExecutionOriginContext = createCurrentMachineExecutionOriginContextResolver({ serverUrl: origin,

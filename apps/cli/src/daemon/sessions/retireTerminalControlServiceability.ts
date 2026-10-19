@@ -2,6 +2,7 @@ import type { StoredCredentials } from '@/persistence';
 import { updateSessionMetadataWithRetry, verifySessionMetadataMutationCurrentness,
     type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { configuration } from '@/configuration';
 import { isPidPresent } from '@happier-dev/cli-common/process';
@@ -22,10 +23,10 @@ export type TerminalControlServiceabilityRetirementTarget = Readonly<{ attachmen
 export async function readRetainedPlainRunnerExitMarker(tracked: TrackedSession): Promise<DaemonSessionMarker | null> {
     const pid = tracked.sessionRunnerPid ?? tracked.pid;
     const startTimeMs = tracked.runnerProcessIdentity?.processStartTimeMs ?? tracked.processStartTimeMs;
-    if (tracked.startedBy !== 'daemon' || !tracked.happySessionId || startTimeMs === undefined
+    if (!tracked.happySessionId || startTimeMs === undefined
         || isPidPresent(pid) || (pid !== tracked.pid && isPidPresent(tracked.pid))) return null;
     const marker = await readSessionMarkerForPid(pid);
-    if (!marker || marker.startedBy !== 'daemon' || marker.happySessionId !== tracked.happySessionId
+    if (!marker || marker.startedBy !== tracked.startedBy || marker.happySessionId !== tracked.happySessionId
         || marker.processStartTimeMs !== startTimeMs) return null;
     const attachment = await readTerminalHostAttachmentState({ happyHomeDir: configuration.happyHomeDir, sessionId: marker.happySessionId });
     return attachment.status === 'absent' ? marker : null;
@@ -52,17 +53,30 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     credentials: StoredCredentials;
     sessionId: string;
     currentness?: SessionMetadataMutationCurrentness;
+    resolveAuthorizationHeaders?: Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders'];
 }> & TerminalControlServiceabilityRetirementTarget): Promise<ExactTerminalControlServiceabilityRetirement> {
     const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
         !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
             && (params.expectedRunner.startTimeMs === undefined || metadata.hostProcessStartTimeMs === params.expectedRunner.startTimeMs));
     await verifySessionMetadataMutationCurrentness(params.currentness);
-    const rawSession = await fetchSessionByIdCompat({
-        token: params.credentials.token,
-        sessionId: params.sessionId,
-    });
+    const currentnessHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' });
+    if (params.resolveAuthorizationHeaders && !currentnessHeaders) throw new Error('Terminal retirement Account authorization unavailable');
+    // These independent Home reads share the same admitted Account. The tuple
+    // writer still checks requester currentness immediately before its CAS.
+    const [rawSession, accountEncryptionCurrentness] = await Promise.all([
+        fetchSessionByIdCompat({
+            token: params.credentials.token,
+            sessionId: params.sessionId,
+            ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+        }),
+        fetchAccountEncryptionCurrentness({ token: params.credentials.token,
+            ...(currentnessHeaders ? { authorizationHeaders: currentnessHeaders } : {}) }),
+    ]);
     if (!rawSession) {
-        throw new Error('terminal_control_serviceability_retirement_session_not_found');
+        // Callers prove physical retirement before reaching this publication step.
+        // A deleted Session has no remaining control projection to clear.
+        await verifySessionMetadataMutationCurrentness(params.currentness);
+        return 'retired';
     }
     let retiredAttachmentId = params.attachmentId;
     let projectionAlreadyAbsent = false;
@@ -71,7 +85,9 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
         credentials: params.credentials,
         sessionId: params.sessionId,
         rawSession,
+        accountEncryptionCurrentness,
         currentness: params.currentness,
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         updater: async (metadata) => {
             retiredAttachmentId = params.attachmentId;
             projectionAlreadyAbsent = false;

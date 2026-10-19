@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,30 +31,30 @@ const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
 const REMOTE_DEV_BACKEND_TARGET_REF_V1_READER = z.union([
   z.object({
     kind: z.literal('builtInAgent'),
-    agentId: z.string().min(1),
+    agentId: z.string().check(z.minLength(1)),
   }),
   z.object({
     kind: z.literal('configuredAcpBackend'),
-    backendId: z.string().min(1),
+    backendId: z.string().check(z.minLength(1)),
   }),
 ]);
 
-const REMOTE_DEV_RESPAWN_DESCRIPTOR_V1_READER = z.object({
+const REMOTE_DEV_RESPAWN_DESCRIPTOR_V1_READER = z.looseObject({
   version: z.literal(1),
   directory: z.string(),
-  backendTarget: REMOTE_DEV_BACKEND_TARGET_REF_V1_READER.optional(),
-  vendorResumeId: z.string().optional(),
-  modelId: z.string().optional(),
-  modelUpdatedAt: z.number().int().optional(),
-  terminal: z.object({
-    mode: z.enum(['plain', 'tmux', 'windows_terminal', 'windows_console']).optional(),
-    tmux: z.object({
-      sessionName: z.string().optional(),
-      isolated: z.boolean().optional(),
-      tmpDir: z.union([z.string(), z.null()]).optional(),
-    }).passthrough().optional(),
-  }).passthrough().optional(),
-}).passthrough();
+  backendTarget: z.optional(REMOTE_DEV_BACKEND_TARGET_REF_V1_READER),
+  vendorResumeId: z.optional(z.string()),
+  modelId: z.optional(z.string()),
+  modelUpdatedAt: z.optional(z.number().check(z.int())),
+  terminal: z.optional(z.looseObject({
+    mode: z.optional(z.enum(['plain', 'tmux', 'windows_terminal', 'windows_console'])),
+    tmux: z.optional(z.looseObject({
+      sessionName: z.optional(z.string()),
+      isolated: z.optional(z.boolean()),
+      tmpDir: z.optional(z.union([z.string(), z.null()])),
+    })),
+  })),
+});
 
 const REMOTE_DEV_NATIVE_RESPAWN_DESCRIPTOR_V1 = {
   version: 1 as const,

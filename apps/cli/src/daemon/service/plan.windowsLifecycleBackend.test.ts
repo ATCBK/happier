@@ -1,37 +1,22 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-const { planServiceActionMock } = vi.hoisted(() => ({
-  planServiceActionMock: vi.fn(() => ({ writes: [], commands: [] })),
-}));
-
-vi.mock('@happier-dev/cli-common/service', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@happier-dev/cli-common/service')>();
-  return {
-    ...actual,
-    planServiceAction: planServiceActionMock,
-  };
-});
+import { describe, expect, it } from 'vitest';
 
 import { planDaemonServiceLifecycle } from './plan';
 
-describe('daemon service lifecycle planning windows backend selection', () => {
-  afterEach(() => {
-    planServiceActionMock.mockClear();
-  });
-
-  it('uses the system scheduled-task backend for win32 system mode lifecycle actions', () => {
-    planDaemonServiceLifecycle({
+describe('daemon service lifecycle planning for Windows system services', () => {
+  it('restarts the selected system scheduled task', () => {
+    const plan = planDaemonServiceLifecycle({
       platform: 'win32',
       mode: 'system',
       action: 'restart',
       channel: 'stable',
       instanceId: 'company',
       userHomeDir: 'C:\\Users\\test',
+      happierHomeDir: 'C:\\ProgramData\\happier',
     });
 
-    expect(planServiceActionMock).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'schtasks-system',
-      action: 'restart',
-    }));
+    expect(plan.commands).toEqual([
+      { cmd: 'schtasks', args: ['/End', '/TN', 'Happier\\happier-daemon.company'] },
+      { cmd: 'schtasks', args: ['/Run', '/TN', 'Happier\\happier-daemon.company'] },
+    ]);
   });
 });

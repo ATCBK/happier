@@ -61,6 +61,7 @@ describe('subscribeManagedSessionDirectoryRemoval', () => {
       ...harness,
       token: 'token',
       stopSession: async () => {
+        if (stopped) return { status: 'not_found' };
         expect(await readFile(join(first.directory, 'notes.md'), 'utf8')).toBe('retained work');
         stopped = true;
         return { status: 'stopped' };
@@ -156,34 +157,42 @@ describe('subscribeManagedSessionDirectoryRemoval', () => {
     dispose();
   });
 
-  it('retries failed deletion on daemon startup without rejecting the Account change', async () => {
+  it('retains a failed runner retirement for deletion-cursor redelivery before removing directories', async () => {
     const harness = await createHarness();
     const allocation = await harness.directories.materializeForFreshSpawn({ sessionCreationTag: 'creation:pending' });
     await harness.directories.bind({ allocationId: allocation.allocationId, sessionId: 'pending-session' });
+    let available = false;
     const dispose = await subscribeManagedSessionDirectoryRemoval({
       ...harness,
       token: 'token',
-      stopSession: async () => { throw new Error('process_boundary_unavailable'); },
+      stopSession: async () => {
+        if (!available) throw new Error('process_boundary_unavailable');
+        return { status: 'stopped' };
+      },
       onSessionDeletedChange: harness.deleted.subscribe,
       onSessionAccessReset: harness.reset.subscribe,
     });
-    await expect(harness.deleted.emit({ sessionId: 'pending-session' })).resolves.toBeUndefined();
+    await expect(harness.deleted.emit({ sessionId: 'pending-session' })).rejects.toThrow('process_boundary_unavailable');
     expect(await harness.directories.listRecords()).toEqual([
-      expect.objectContaining({ allocationId: allocation.allocationId, pendingRemoval: true }),
+      expect.objectContaining({ allocationId: allocation.allocationId, sessionId: 'pending-session' }),
     ]);
     await expect(access(allocation.directory)).resolves.toBeUndefined();
-    dispose();
-
-    const disposeRestarted = await subscribeManagedSessionDirectoryRemoval({
-      ...harness,
-      token: 'token',
-      stopSession: async () => ({ status: 'stopped' }),
-      onSessionDeletedChange: harness.deleted.subscribe,
-      onSessionAccessReset: harness.reset.subscribe,
-    });
+    available = true;
+    await harness.deleted.emit({ sessionId: 'pending-session' });
     expect(await harness.directories.listRecords()).toEqual([]);
     await expect(access(allocation.directory)).rejects.toMatchObject({ code: 'ENOENT' });
-    disposeRestarted();
+    dispose();
+  });
+
+  it('does not acknowledge incomplete runner retirement for a Session without managed directories', async () => {
+    const harness = await createHarness();
+    const dispose = await subscribeManagedSessionDirectoryRemoval({
+      ...harness, token: 'token', stopSession: async () => ({ status: 'incomplete', reason: 'runner_signal_incomplete' }),
+      onSessionDeletedChange: harness.deleted.subscribe, onSessionAccessReset: harness.reset.subscribe,
+    });
+    await expect(harness.deleted.emit({ sessionId: 'unmanaged-session' }))
+      .rejects.toThrow('deleted_session_runner_retirement_incomplete');
+    dispose();
   });
 
   it('does not assign ownership when a creation tag resolves ambiguously', async () => {
@@ -295,7 +304,7 @@ describe('subscribeManagedSessionDirectoryRemoval', () => {
       } else {
         await harness.connection.emit({ phase: 'online' });
       }
-      expect(stopped).toEqual(['gone']);
+      expect(new Set(stopped)).toEqual(new Set(['gone']));
       await expect(access(goneDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       for (const retained of ['active', 'archived', 'unknown']) {
         expect(await readFile(join(allocations.get(retained)!, 'notes.md'), 'utf8')).toBe(retained);
@@ -303,7 +312,7 @@ describe('subscribeManagedSessionDirectoryRemoval', () => {
       expect((await harness.directories.listRecords()).map((record) => record.sessionId).sort()).toEqual(['active', 'archived', null]);
       dispose();
       await harness.connection.emit({ phase: 'online' });
-      expect(stopped).toEqual(['gone']);
+      expect(new Set(stopped)).toEqual(new Set(['gone']));
     },
   );
 });

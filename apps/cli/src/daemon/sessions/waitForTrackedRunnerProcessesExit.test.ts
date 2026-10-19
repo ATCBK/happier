@@ -129,6 +129,10 @@ describe('waitForTrackedRunnerProcessesExit', () => {
 
 
 describe('observePlannedRunnerRetirement', () => {
+  it('reports unsuccessful adopted retirement instead of dropping the physical observation', async () => {
+    await expect(observePlannedRunnerRetirement({ tracked: { pid: 101, startedBy: 'daemon' },
+      timeoutMs: 0, pollIntervalMs: 0, readRunState: async () => 'servable' })).resolves.toBe(false);
+  });
   it('limits adopted restart process scans to twice per second within the existing completion budget', async () => {
     vi.useFakeTimers();
     try {

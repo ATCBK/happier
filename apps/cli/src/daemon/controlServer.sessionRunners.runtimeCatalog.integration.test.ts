@@ -142,7 +142,7 @@ describe('daemon control server: session runner restarts', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ status: 'incomplete', reason: 'runner_exit_timeout' });
-      expect(stopSession).toHaveBeenCalledWith('sess-1');
+      expect(stopSession).toHaveBeenCalledWith('sess-1', 'explicit_stop');
     } finally {
       await app.close();
     }

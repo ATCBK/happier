@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const EXECUTION_RUN_ADMISSION_PATH = '/execution-run/admission';
 export const ExecutionRunDaemonAdmissionResponseSchema = z.discriminatedUnion('admitted', [
-    z.object({ admitted: z.literal(true) }).strict(),
-    z.object({ admitted: z.literal(false), reason: z.enum(['daemon_draining', 'daemon_shutting_down']) }).strict(),
+    z.strictObject({ admitted: z.literal(true) }),
+    z.strictObject({ admitted: z.literal(false), reason: z.enum(['daemon_draining', 'daemon_shutting_down']) }),
 ]);
 
 export type DaemonAdmissionDrain = Readonly<{

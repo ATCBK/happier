@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DaemonLockRecord } from '@happier-dev/cli-common/process';
@@ -11,9 +11,20 @@ import { spawnSleepyDetachedProcess, spawnStoppableHttpDaemon, withConfiguredDae
 let controlClient: typeof import('./controlClient');
 let multiDaemon: typeof import('./multiDaemon');
 let daemonCommand: typeof import('@/cli/commands/daemon');
+const pendingImports = new Set(['controlClient', 'multiDaemon', 'daemonCommand']);
 beforeAll(async () => {
-  [controlClient, multiDaemon, daemonCommand] = await Promise.all([import('./controlClient'), import('./multiDaemon'), import('@/cli/commands/daemon')]);
+  // The CLI entry imports both control owners. Load that graph once before
+  // requesting its dependencies, avoiding competing Vitest module evaluations.
+  daemonCommand = await import('@/cli/commands/daemon');
+  pendingImports.delete('daemonCommand');
+  controlClient = await import('./controlClient');
+  pendingImports.delete('controlClient');
+  multiDaemon = await import('./multiDaemon');
+  pendingImports.delete('multiDaemon');
 }, 300_000);
+afterAll(() => {
+  if (pendingImports.size > 0) console.error('Daemon stop fixture imports did not settle', [...pendingImports]);
+});
 
 // The HTTP service and child are real. Only the caller's PID namespace is an OS boundary fixture.
 describe('confirmed stop across a hidden daemon PID namespace', () => {

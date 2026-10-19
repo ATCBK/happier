@@ -69,7 +69,15 @@ export async function subscribeManagedSessionDirectoryRemoval(
 
   const unsubscribes = [
     params.onSessionDeletedChange(async ({ sessionId }) => {
-      await params.directories.removeForSession({ sessionId, stopSession: params.stopSession });
+      // Home inactivity is not physical death: an automatic successor can still
+      // own this Session, including one with an ordinary (unmanaged) directory.
+      // Stop fences pending launches as well as retiring every tracked runner.
+      // Keep failed cleanup inside the deletion cursor's existing replay custody.
+      const stopped = await params.stopSession(sessionId);
+      if (stopped.status !== 'stopped' && stopped.status !== 'not_found') {
+        throw new Error('deleted_session_runner_retirement_incomplete');
+      }
+      await params.directories.removeForSession({ sessionId, stopSession: async () => stopped });
     }),
     params.onSessionAccessReset(reconcile),
   ];

@@ -5,10 +5,11 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import { probeTerminalHostForRecovery } from '@/integrations/terminal/host/recoveryLiveness';
 import type { StoredCredentials } from '@/persistence';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
-import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { buildTerminalHostProbeHandleFromMetadata } from '@/terminal/runtime/terminalMetadata';
 import { incompleteStopSession, type StopSessionResult } from './stopSessionContract';
+import { verifySessionMetadataMutationCurrentness, type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
 
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -20,9 +21,11 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
   credentials: StoredCredentials;
   currentMachineId: string;
   sessionId: string;
+  currentness?: SessionMetadataMutationCurrentness;
+  resolveAuthorizationHeaders?: Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders'];
   expectedAttachmentId?: string;
   loadTerminalHostAdapters: () => Promise<Readonly<Partial<Record<TerminalHostAdapter['kind'], TerminalHostAdapter>>>>;
-  fetchSession?: (input: Readonly<{ token: string; sessionId: string }>) => Promise<RawSessionRecord | null>;
+  fetchSession?: typeof fetchSessionByIdCompat;
   resolveAccountEncryptionMode?: (token: string) => Promise<'plain' | 'e2ee'>;
   retireExactTerminalControlServiceability: (input: Readonly<{
     sessionId: string;
@@ -33,12 +36,18 @@ export async function recoverStrandedTerminalControlServiceability(params: Reado
   const currentMachineId = params.currentMachineId.trim();
   if (!currentMachineId) return null;
   const fetchSession = params.fetchSession ?? fetchSessionByIdCompat;
+  await verifySessionMetadataMutationCurrentness(params.currentness);
+  const headers = params.resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' });
+  if (params.resolveAuthorizationHeaders && !headers) throw new Error('Terminal recovery Account authorization unavailable');
   const resolveAccountEncryptionMode = params.resolveAccountEncryptionMode
-    ?? (async (token: string) => (await fetchAccountEncryptionCurrentness({ token })).mode);
+    ?? (async (token: string) => (await fetchAccountEncryptionCurrentness({ token,
+      ...(headers ? { authorizationHeaders: headers } : {}) })).mode);
   const [rawSession, accountEncryptionMode] = await Promise.all([
-    fetchSession({ token: params.credentials.token, sessionId: params.sessionId }),
+    fetchSession({ token: params.credentials.token, sessionId: params.sessionId,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}) }),
     resolveAccountEncryptionMode(params.credentials.token),
   ]);
+  await verifySessionMetadataMutationCurrentness(params.currentness);
   if (!rawSession) return null;
   const metadata = tryDecryptSessionOwnerMetadataView({
     credentials: params.credentials,

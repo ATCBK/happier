@@ -3,12 +3,18 @@ import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract'
 export { RequesterWorkAttributionV1Schema, RequesterWorkAttributionStoredReadV1Schema,
   type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 
+/** Principal equality only; the caller must still verify the admission's currentness. */
+export function isCustodianMachineAdmission(admission: Pick<NonNullable<RpcHandlerContext['machineAdmission']>,
+  'actorAccountId' | 'custodianAccountId'>): boolean {
+  return admission.actorAccountId === admission.custodianAccountId;
+}
+
 /** C41 owns Machine permission. This only prevents borrowing a different Account's credentials. */
 export async function canUseCustodianAccountForMachineRequest(context: Pick<RpcHandlerContext,
   'machineAdmission' | 'verifyMachineAdmissionCurrent'> & Readonly<{ signal?: AbortSignal }> | undefined): Promise<boolean> {
   if (!context?.machineAdmission) return !context?.signal?.aborted;
   const admission = context.machineAdmission;
-  if (context.signal?.aborted || admission.actorAccountId !== admission.custodianAccountId
+  if (context.signal?.aborted || !isCustodianMachineAdmission(admission)
     || !context.verifyMachineAdmissionCurrent) return false;
   try { return await context.verifyMachineAdmissionCurrent() && !context.signal?.aborted; }
   catch { return false; }
