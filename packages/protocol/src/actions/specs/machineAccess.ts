@@ -5,6 +5,7 @@ import {
   MachineAccessGrantSetInputV1Schema, MachineAccessGrantRemoveInputV1Schema,
   MachineAccessLeaveInputV1Schema, MachineAccessPrepareKeysInputV1Schema,
   MachineAccessMutationResultV1Schema, MachineKeyPreparationResultV1Schema,
+  MachineAccessGrantsListResponseV1Schema,
 } from '../../machines/machineAccessV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { MachineWorkSummaryGetInputV1Schema, MachineWorkSummaryGetResultV1Schema } from '../../machines/machineWorkSummaryV1.js';
@@ -37,6 +38,17 @@ export function machineAccessApprovalDisclosure(actionId: string, input: unknown
   } as const;
 }
 
+/** Only a committed grant reduction avoids new exposure; missing facts keep confirmation. */
+export function machineAccessGrantSetRequiresUiConfirmation(input: unknown, committedAccess?: unknown): boolean {
+  const change = MachineAccessGrantSetInputV1Schema.safeParse(input);
+  const current = MachineAccessGrantsListResponseV1Schema.safeParse(committedAccess);
+  return !(change.success && current.success && current.data.canManage
+    && current.data.machineId === change.data.machineId && change.data.level === 'view'
+    && current.data.grants.some(grant => grant.level === 'admin'
+      // Both principals were parsed by the same strict schema, including its key order.
+      && JSON.stringify(grant.principal) === JSON.stringify(change.data.principal)));
+}
+
 const targetFields = [
   { path: 'serverId', title: 'Home ID', widget: 'text', required: true },
   { path: 'machineId', title: 'Machine ID', widget: 'text', required: true },
@@ -64,7 +76,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: targetFields },
   },
   {
-    id: 'machines.access.grant.set', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Share a machine',
+    id: 'machines.access.grant.set', approvalPolicy: { uiConfirmation: 'direct', uiConfirmationForInput: machineAccessGrantSetRequiresUiConfirmation }, approval: {result: 'required'}, title: 'Share a machine',
     description: `Save or change a current person, Team or group grant. Can manage includes sharing and owner-equivalent machine administration. ${disclosure}`,
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_grant_set', voiceClientToolName: 'setMachineAccessGrant' },

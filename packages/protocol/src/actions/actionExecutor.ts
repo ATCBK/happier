@@ -124,7 +124,8 @@ import { WorkflowEventsListInputV1Schema } from './specs/workflowEvents.js';
 import { WorkspaceFilesSearchActionInputSchema } from './actionSpecs.js';
 import { HomeConnectInputSchema, HomeReconnectInputSchema, MachineAddCommandInputSchema, MachinePairingCreateInputSchema, MACHINE_ADD_SSH_ACTION_IDS, MACHINE_ADD_SSH_INPUT_SCHEMAS, MACHINE_PAGE_ACTION_IDS, MACHINE_PAGE_ACTION_INPUT_SCHEMAS, type MachineAddSshActionId, type MachinePageActionId } from './specs/machineConnection.js';
 import { isMachineTerminalActionId, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from './specs/machineTerminal.js';
-import { MachineAccessActionIdSchema, machineAccessApprovalDisclosure } from './specs/machineAccess.js';
+import { MachineAccessActionIdSchema, machineAccessApprovalDisclosure, machineAccessGrantSetRequiresUiConfirmation } from './specs/machineAccess.js';
+import { MachineAccessGrantSetInputV1Schema } from '../machines/machineAccessV1.js';
 import { MachineWorkSummaryGetInputV1Schema } from '../machines/machineWorkSummaryV1.js';
 import { MachineVitalsActionIdSchema, MACHINE_VITALS_ACTION_INPUT_SCHEMAS } from './specs/machineVitals.js';
 import { MachineStorageActionIdSchema, MACHINE_STORAGE_ACTION_INPUT_SCHEMAS } from './specs/storage.js';
@@ -4435,6 +4436,25 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
       }
     }
+    let contextualUiConfirmation = widgetMoveWidensAudience || widgetRemovalDeletesContent || homeRemovalDeletesContent ? true : undefined;
+    if (!existingAdmission && actionId === 'machines.access.grant.set'
+      && ctx.surface === 'ui' && resolveHostStampedAuthority(ctx) === 'present_user' && deps.machineAccessAction) {
+      const change = MachineAccessGrantSetInputV1Schema.parse(admittedInput);
+      if (ctx.serverId && !isSameHome(change.serverId, ctx.serverId, ctx)) {
+        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      }
+      if (change.level === 'view') {
+        // Read the committed grant through the same scoped transport as the effect;
+        // the sheet cannot supply its own approval classification or stale draft.
+        const current = await deps.machineAccessAction({ actionId: 'machines.access.grants.list',
+          input: { serverId: change.serverId, machineId: change.machineId }, context: ctx,
+          ...(ctx.signal ? { signal: ctx.signal } : {}) });
+        const failure = readActionFailureEnvelope(current);
+        if (failure) return failure;
+        contextualUiConfirmation = machineAccessGrantSetRequiresUiConfirmation(admittedInput, current);
+      }
+    }
+    if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const resolveBaseApprovalRouting = (context: ActionExecutorContext) => resolveActionApprovalRouting({
       actionId,
       spec,
@@ -4445,12 +4465,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
       ...(computerSelection ? { computerConsentGranted: computerSelection.consentGranted } : {}),
       ...(contextualSafety === undefined ? {} : { defaultSafety: contextualSafety }),
-      ...(widgetMoveWidensAudience || widgetRemovalDeletesContent || homeRemovalDeletesContent ? { defaultUiConfirmation: true } : {}),
+      ...(contextualUiConfirmation === undefined ? {} : { defaultUiConfirmation: contextualUiConfirmation }),
       // Pass the raw policy-hook result through (boolean | undefined). When the hook is unwired,
       // `undefined` propagates so `resolveActionApprovalRouting` applies its centralized fail-safe
       // default instead of coercing an unwired dependency to "no approval" here. (F7)
-      requiredByPolicy: context.bypassApprovals ? false : widgetMoveWidensAudience || widgetRemovalDeletesContent || homeRemovalDeletesContent
-        ? deps.isActionApprovalRequired?.(actionId, context, admittedInput, true) : contextualSafety === undefined
+      requiredByPolicy: context.bypassApprovals ? false : contextualUiConfirmation !== undefined
+        ? deps.isActionApprovalRequired?.(actionId, context, admittedInput, contextualUiConfirmation) : contextualSafety === undefined
         || visualAdmission && context.surface === 'ui' && resolveHostStampedAuthority(context) === 'present_user'
         ? deps.isActionApprovalRequired?.(actionId, context, admittedInput) : undefined,
     });
