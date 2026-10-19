@@ -29,7 +29,7 @@
   },
   "files": [
     "dist",
-    "native",
+    "native/*.node",
     "ios/HappierIrohNativeModule.swift",
     "ios/HappierIrohNative.podspec",
     "android/build.gradle",

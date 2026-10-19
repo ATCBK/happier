@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 
+import { DEFAULT_BUN_COMPILE_OPTIONS } from '../src/componentArtifacts/commands.ts';
+
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { SOURCE_CONDITION, createWorkspaceSourceResolver, readWorkspacePackages } from '../sourceRuntimeEntries.mjs';
@@ -37,42 +39,51 @@ const result = await Bun.build({
   conditions: [SOURCE_CONDITION],
   external,
   compile: {
+    ...DEFAULT_BUN_COMPILE_OPTIONS,
     target,
     outfile,
+    ...(process.argv.includes('--no-compile-autoload-bunfig') ? { autoloadBunfig: false }
+      : process.argv.includes('--compile-autoload-bunfig') ? { autoloadBunfig: true } : {}),
   },
   plugins: [createWorkspaceSourceResolver({ workspacePackages, requireFromProject, externalPackages: [] }), {
     name: 'load-packaged-sharp-addon',
     setup(build) {
-      // Sharp selects its native binding through an opaque computed require.
-      // Compiled Bun executables cannot discover that addon, while embedding it
-      // extracts the file away from its libvips sidecar. Keep Sharp's public JS
-      // implementation bundled and replace only its binding loader so dlopen
-      // uses the target-filtered sidecar tree packaged beside the executable.
-      build.onLoad(
-        { filter: /[/\\]node_modules[/\\]sharp[/\\]lib[/\\]sharp\.js$/ },
-        (args) => ({
+      // Sharp's public CJS entry uses static native imports. Its ESM entry uses
+      // createRequire(import.meta.url), whose compiled Bun referrer is virtual.
+      // Keep Sharp's own platform selection, CPU checks and error reporting.
+      build.onResolve({ filter: /^sharp$/ }, (args) => ({
+        path: createRequire(args.importer).resolve('sharp'),
+      }));
+      // Sharp's guarded platform hint must not embed every installed libvips.
+      // The selected library is already staged beside its native addon.
+      build.onResolve({ filter: /^@img\/sharp-libvips-[^/]+\/binary$/ }, (args) => {
+        if (!/[/\\]node_modules[/\\]@img[/\\]sharp-[^/\\]+[/\\]/.test(args.importer)) return;
+        return { path: args.path, external: true };
+      });
+      build.onResolve({ filter: /\.node$/ }, (args) => {
+        if (!/[/\\]node_modules[/\\]@img[/\\]sharp-[^/\\]+[/\\]/.test(args.importer)
+          || !args.path.startsWith('./lib/')) return;
+        const path = resolve(dirname(args.importer), args.path);
+        // Optional foreign-platform addons may be absent at build time.
+        // Sharp selects the actual staged binding at runtime.
+        return { path, namespace: 'sharp-sidecar' };
+      });
+      build.onLoad({ filter: /.*/, namespace: 'sharp-sidecar' }, (args) => {
+        const nativePackage = args.path.match(/^(.*[/\\]node_modules[/\\]@img[/\\](sharp-[^/\\]+))[/\\]/);
+        if (!nativePackage) throw new Error(`Invalid Sharp native addon path: ${args.path}`);
+        const segments = ['node_modules', '@img', nativePackage[2], ...relative(nativePackage[1], args.path).split(/[/\\]/)];
+        // Load the actual imported addon beside its packaged libvips libraries.
+        // Embedded Bun assets are renamed and lose that native library layout.
+        return {
           contents: `
             const { dirname, join } = require('node:path');
-            const { runtimePlatformArch } = require('./libvips');
-            const runtimePlatform = runtimePlatformArch();
-            const bindingModule = { exports: {} };
-            process.dlopen(
-              bindingModule,
-              join(
-                dirname(process.execPath),
-                'node_modules',
-                '@img',
-                'sharp-' + runtimePlatform,
-                'lib',
-                'sharp-' + runtimePlatform + '.node',
-              ),
-            );
-            module.exports = bindingModule.exports;
+            const binding = { exports: {} };
+            process.dlopen(binding, join(dirname(process.execPath), ...${JSON.stringify(segments)}));
+            module.exports = binding.exports;
           `,
           loader: 'js',
-          resolveDir: dirname(args.path),
-        }),
-      );
+        };
+      });
     },
   }],
 });

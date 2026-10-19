@@ -19,6 +19,9 @@ export type RunCommand = (
   },
 ) => Promise<void> | void;
 
+// Standalone tools must not execute project-local Bun preload configuration.
+export const DEFAULT_BUN_COMPILE_OPTIONS = Object.freeze({ autoloadBunfig: false });
+
 const DEFAULT_BUN_COMPILE_ATTEMPTS = 3;
 const MAX_BUN_COMPILE_ATTEMPTS = 5;
 
@@ -238,7 +241,8 @@ export async function compileBunBinary({
   maxAttempts,
   buildRunnerEntrypoint,
   autoloadDotenv,
-  autoloadBunfig,
+  autoloadBunfig = DEFAULT_BUN_COMPILE_OPTIONS.autoloadBunfig,
+  autoloadPackageJson,
   defines = {},
 }: {
   entrypoint: string;
@@ -252,6 +256,7 @@ export async function compileBunBinary({
   buildRunnerEntrypoint?: string;
   autoloadDotenv?: boolean;
   autoloadBunfig?: boolean;
+  autoloadPackageJson?: boolean;
   defines?: Readonly<Record<string, string>>;
 }): Promise<void> {
   const resolvedBunCommand = (() => {
@@ -273,15 +278,16 @@ export async function compileBunBinary({
     throw new Error('[component-artifacts] compile definitions are unsupported by the custom Bun build runner');
   }
   for (const [name, value] of Object.entries(defines)) args.push(`--define=${name}=${value}`);
-  const appendCompileAutoloadOption = (name: 'dotenv' | 'bunfig', enabled: boolean | undefined): void => {
+  const appendCompileAutoloadOption = (name: 'dotenv' | 'bunfig' | 'package-json', enabled: boolean | undefined): void => {
     if (enabled === undefined) return;
-    if (buildRunnerEntrypoint) {
+    if (buildRunnerEntrypoint && name !== 'bunfig') {
       throw new Error(`[component-artifacts] compile autoload options are unsupported by the custom Bun build runner: ${name}`);
     }
     args.push(enabled ? `--compile-autoload-${name}` : `--no-compile-autoload-${name}`);
   };
   appendCompileAutoloadOption('dotenv', autoloadDotenv);
   appendCompileAutoloadOption('bunfig', autoloadBunfig);
+  appendCompileAutoloadOption('package-json', autoloadPackageJson);
   for (const external of externals) {
     const value = String(external ?? '').trim();
     if (!value) continue;

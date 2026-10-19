@@ -15,6 +15,7 @@ import type {
 } from 'esbuild';
 import {
   SOURCE_CONDITION,
+  SOURCE_RUNTIME_OUTPUT_OPTIONS,
   bundleCliSourceSidecars,
   createWorkspaceSourceResolver,
   readCliSourceEntries,
@@ -51,6 +52,7 @@ import {
 } from './commands.js';
 import {
   resolveWorkspaceBundlesFromPackageJson,
+  resolveWorkspacePackageDeclaredFileEntries,
   vendorBundledPackageRuntimeDependencies,
 } from '../workspaces/index.js';
 import { readCliNodeWorkspaceRuntimeIdentityFromRuntimeRoot } from './copyCliNodeRuntimePayload.js';
@@ -64,6 +66,7 @@ import { stageCliTargetRuntimeDependencies } from './stageCliTargetRuntimeDepend
 export { getCliBinaryArtifactSupportTargetUnavailableReason } from '../../componentArtifactTarget.mjs';
 
 export const CLI_RUNTIME_EXTERNAL_PACKAGES = [
+  'sharp',
   '@huggingface/transformers',
   'ffmpeg-static',
   'sherpa-onnx-node',
@@ -402,12 +405,7 @@ export function readCliBinaryArtifactSupportIdentity({
         'node_modules',
       ),
     });
-    const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
-      files?: string[];
-    };
-    for (const name of (manifest.files ?? []).filter(
-      (name) => name === 'native',
-    )) {
+    for (const name of resolveWorkspacePackageDeclaredFileEntries(dirname(packageJsonPath), 'native')) {
       const sourcePath = join(dirname(packageJsonPath), name);
       if (existsSync(sourcePath))
         hashSupportInputTree({
@@ -629,6 +627,7 @@ export async function buildCliBinaryArtifactCodePayload({
     format: 'esm',
     platform: 'node',
     target: 'node20',
+    ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
     // Each authored entry keeps its own tsconfig. Forcing the CLI tsconfig on
     // third-party JavaScript wrongly parses legacy CommonJS as strict modules.
     conditions: [SOURCE_CONDITION],
@@ -826,6 +825,9 @@ export async function buildCliBinaryArtifactCodePayload({
       externals: mergedExternals,
       bunCommand,
       autoloadDotenv: false,
+      // The physical graph resolves exports-only native packages beside itself.
+      // Ambient project configuration must not preload code into the CLI.
+      autoloadPackageJson: true,
       runCommand,
     });
   } finally {
@@ -933,15 +935,12 @@ async function stageCliBinaryArtifactSupportPayload({
     });
     // Native/static support is consumed beside the source-bundled graph.
     // Authored TypeScript and private package dist never enter this tree.
-    const manifest = JSON.parse(
-      readFileSync(join(srcDir, 'package.json'), 'utf8'),
-    ) as { files?: string[] };
-    for (const name of (manifest.files ?? []).filter(
-      (name) => name === 'native',
-    )) {
+    for (const name of resolveWorkspacePackageDeclaredFileEntries(srcDir, 'native')) {
       const source = join(srcDir, name);
-      if (existsSync(source))
+      if (existsSync(source)) {
+        await mkdir(dirname(join(destination, name)), { recursive: true });
         await cp(source, join(destination, name), { recursive: true });
+      }
     }
     if (existsSync(join(destination, 'native')))
       await copyFile(

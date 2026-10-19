@@ -443,7 +443,7 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     const nativePath = 'native/happier-iroh-native-lifecycle.linux-x64.node';
     writePackage(sourceDir, {
       name: '@happier-dev/iroh-native', version: '0.0.0', type: 'module',
-      exports: { '.': './dist/index.js' }, files: ['dist', 'native'],
+      exports: { '.': './dist/index.js' }, files: ['dist', 'native/*.node'],
     }, { 'dist/index.js': 'export const generation = "current";\n' });
     writePackage(destinationDir, {
       name: '@happier-dev/iroh-native', version: '0.0.0', type: 'module',
@@ -460,15 +460,19 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
       },
     });
 
-    expect(publish).toThrow("Bundled workspace package declared file is missing: 'native'");
+    expect(publish).toThrow();
     expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('last-green');
     expect(readFileSync(join(destinationDir, nativePath), 'utf8')).toBe('last-green native fixture bytes');
 
     // Opaque byte-copy fixture, never loaded as or represented as a real addon.
     mkdirSync(join(sourceDir, 'native'));
     writeFileSync(join(sourceDir, nativePath), 'prepared native fixture bytes');
+    mkdirSync(join(sourceDir, 'native/.private-staging'));
+    writeFileSync(join(sourceDir, 'native/.private-staging/in-progress.node'), 'private native bytes');
+    symlinkSync(root, join(sourceDir, 'native/.private-staging/escaping'), process.platform === 'win32' ? 'junction' : 'dir');
     publish();
     expect(readFileSync(join(destinationDir, nativePath), 'utf8')).toBe('prepared native fixture bytes');
+    expect(existsSync(join(destinationDir, 'native/.private-staging'))).toBe(false);
     expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('current');
   });
 });

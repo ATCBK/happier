@@ -2,6 +2,7 @@ import {
   copyFileSync,
   type Dirent,
   existsSync,
+  globSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -634,7 +635,7 @@ function collectWorkspacePackageReferencedFiles(rawPackageJson: any, includeType
 function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string[] {
   if (rawPackageJson?.files === undefined) return [];
   if (!Array.isArray(rawPackageJson.files) || rawPackageJson.files.some((entry: unknown) => typeof entry !== 'string')) {
-    throw new Error('Bundled workspace package files must be an array of exact relative paths');
+    throw new Error('Bundled workspace package files must be an array of relative paths or patterns');
   }
   return [...new Set(rawPackageJson.files as string[])].filter((entry) => {
     if (
@@ -642,7 +643,7 @@ function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string
       || entry.includes('\\')
       || entry.startsWith('/')
       || entry.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-      || /[*?{}[\]]/u.test(entry)
+      || (isPrepublicationAuthorPackage(rawPackageJson) && /[*?{}[\]]/u.test(entry))
     ) {
       throw new Error(`Bundled workspace package file must be an exact relative path: '${entry}'`);
     }
@@ -653,10 +654,24 @@ function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string
   });
 }
 
+/** Resolve the package-owned files declaration for both workspace and native payload staging. */
+export function resolveWorkspacePackageDeclaredFileEntries(packageDir: string, relativePrefix?: string): string[] {
+  const entries = collectWorkspacePackageDeclaredFileEntries(readJson(resolve(packageDir, 'package.json')));
+  return [...new Set(entries
+    .filter((entry) => !relativePrefix || entry === relativePrefix || entry.startsWith(`${relativePrefix}/`))
+    .flatMap((entry) => {
+      if (!/[*?{}[\]]/u.test(entry)) return [entry];
+      const matches = globSync(entry, { cwd: packageDir }).sort();
+      // Keep missing declarations visible: publication rejects them, while
+      // health/identity readers retain their existing missing-input behavior.
+      return matches.length > 0 ? matches : [entry];
+    }))];
+}
+
 function collectPrepublicationAuthoringFileEntries(rawPackageJson: any): string[] | undefined {
   if (rawPackageJson?.files === undefined) return undefined;
 
-  // The workspace copier already owns the exact relative-path validation for
+  // The workspace copier already owns the relative-path/pattern validation for
   // declared package files. Keep the complete canonical inventory here (rather
   // than its copy-only subset) because npm still needs dist/package.json entries
   // when this flattened package is later materialized for external authors.
@@ -688,7 +703,7 @@ function copyBundledWorkspacePackageContents(params: Readonly<{
     resolve(params.tempDir, '.happier-plugin'),
   );
 
-  const declaredFiles = new Set(collectWorkspacePackageDeclaredFileEntries(params.rawPackageJson));
+  const declaredFiles = new Set(resolveWorkspacePackageDeclaredFileEntries(params.srcDir));
   const files = params.includeFiles ?? ['README.md'];
   for (const f of files) {
     // Required declarations own overlapping paths. Copying a read-only bundle
@@ -1344,7 +1359,7 @@ function hasBundledWorkspaceSourceContentParity(
   const expectedOutputPaths: string[] = [];
   const contentEntries = new Set([
     ...collectWorkspacePackageReferencedFiles(workspacePackageJson),
-    ...collectWorkspacePackageDeclaredFileEntries(workspacePackageJson),
+    ...resolveWorkspacePackageDeclaredFileEntries(workspacePackageDir),
   ]);
   for (const declaredEntry of contentEntries) {
     if (declaredEntry === 'package.json') continue;
