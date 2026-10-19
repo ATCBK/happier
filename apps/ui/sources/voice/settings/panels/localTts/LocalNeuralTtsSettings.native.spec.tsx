@@ -56,6 +56,28 @@ describe('LocalNeuralTtsSettings through device boundaries', () => {
     expect([...device.files.keys()].some(path => path.includes('/modelPackUpdates/'))).toBe(false);
   });
 
+  it('shows a verifying phase once every byte has arrived but files are still being checked', async () => {
+    seedInstalledPack(packId, 'tts');
+    device.fetch.mockImplementation(async () => Response.json(modelPackManifest(packId, 'tts')));
+    const { screen, row } = await renderSettings();
+    await act(async () => {
+      await pressTestInstanceAsync(row(t('settingsVoice.local.kokoro.updates.title')));
+      await vi.waitFor(() => expect(device.transfers.length).toBe(2));
+    });
+    await act(async () => {
+      device.transfers[0]!.report(4, 4);
+      device.transfers[1]!.report(4, 4);
+    });
+    expect(row(modelTitle()).props.detail).toBe(t('settingsVoice.local.modelPackDownload.verifyingDetail'));
+    expect(collectText(row(modelTitle()))).toContain(t('settingsVoice.local.modelPackDownload.verifyingProgress', {
+      verified: '0 B', total: '8 B', filesDone: 0, filesTotal: 2,
+    }));
+    expect(screen.findAll(n => n.props.accessibilityRole === 'progressbar')[0]?.props.accessibilityValue)
+      .toEqual({ min: 0, max: 100, now: 0 });
+    await act(async () => { row(modelTitle()).props.rightElement.props.onPress(); });
+    await vi.waitFor(() => expect(row(modelTitle()).props.detail).toBe(t('settingsVoice.local.kokoro.modelStatus.ready')));
+  });
+
   it('shows a partial download from an earlier session and discards its actual files after confirmation', async () => {
     device.files.set(`${voiceFilesRoot}/modelPacks/${packId}/saved.bin`, new Uint8Array(3));
     const { row } = await renderSettings();
