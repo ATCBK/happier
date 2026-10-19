@@ -67,6 +67,7 @@ import { ClaudeLocalPermissionBridge, DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE } f
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { computeRunnerTerminationOutcome, type RunnerTerminationEvent } from '@/agent/runtime/runnerTerminationOutcome';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTerminationHandlers';
+import { settleClaudeRunnerLoop, type ClaudeRunnerLoopSettlement } from './claudeRunnerLoopSettlement';
 import { createClaudeShouldTerminateOnUnhandledRejection } from './claudeUnhandledRejectionPolicy';
 import { requestClaudeExplicitRunnerStop } from './claudeExplicitRunnerStop';
 import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
@@ -1134,7 +1135,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     let activeLoopAbortController: AbortController | null = null;
     let activeLoopPromise: Promise<number> | null = null;
-    let activeLoopShouldWaitOnTermination = false;
+    let terminationRequested = false;
     let endpointArtifactsOwnedByAttachment = adoptEndpointRecovery !== null;
     let stopTerminalHostForExplicitStop: (() => Promise<void>) | null = null;
 
@@ -1151,7 +1152,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         });
 
         try {
-            if (activeLoopShouldWaitOnTermination && activeLoopPromise) {
+            // Every Claude runtime launcher honours the loop signal, so end it first: its teardown
+            // (provider child stop, workflow-activity finalize + flush) must write through a live
+            // transport, and its provider dispatch must be over before admission drains below.
+            if (activeLoopPromise) {
                 if (activeLoopAbortController && !activeLoopAbortController.signal.aborted) {
                     activeLoopAbortController.abort('claude-runner-termination');
                 }
@@ -1206,6 +1210,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             exit: (code) => process.exit(code),
             sessionExitReport: { sessionId: session.sessionId },
             onTerminationRequested: () => {
+                terminationRequested = true;
                 session.beginRuntimeTermination?.();
                 void currentSession?.closeProviderInputAdmissionAndWaitForDispatches();
             },
@@ -1273,26 +1278,9 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     }, installedRuntimeCapabilities), sessionRuntimeModeKind);
     let exitCode = 0;
     let loopError: unknown = null;
+    let loopSettlement: ClaudeRunnerLoopSettlement<number> | null = null;
     try {
         activeLoopAbortController = new AbortController();
-        // Only the unified-terminal runtime is abortable, so only it may be awaited on termination.
-        //
-        // `loop()` forwards `signal` to `claudeUnifiedTerminalLauncher` alone; the local and remote
-        // launchers take no signal, so aborting the controller cannot make them return and the
-        // await in `cleanup()` would simply not settle. That await runs FIRST, so a runtime that
-        // cannot honour it would starve everything behind it — the metadata drain, the session
-        // archive, session death/flush/close, the runtime-activity dispose, and the hook settings
-        // + plugin-dir removal — until `registerRunnerTerminationHandlers` hard-exits at
-        // HAPPIER_RUNNER_TERMINATION_TIMEOUT_MS. Moving the await after that teardown is no better:
-        // the launcher's shutdown finalize would then write through a transport already closed.
-        //
-        // KNOWN RESIDUAL: on SIGINT/SIGTERM/uncaught under the local and remote runtimes, those
-        // launchers' `finally` blocks (RULING-14 workflow-activity finalize + flush) may not run,
-        // so live rows stay "Working" until the next session start reconciles them from the
-        // persisted headline. Closing it belongs to the launchers — give them an `opts.signal` the
-        // way the unified-terminal launcher has one, and this flag becomes unconditional with no
-        // new mechanism here.
-        activeLoopShouldWaitOnTermination = unifiedTerminalRuntimeActive;
         logger.infoFile('[CLAUDE_STARTUP] stage=provider_loop_started');
         activeLoopPromise = loop({
             path: workingDirectory,
@@ -1392,7 +1380,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             },
             jsRuntime: options.jsRuntime,
             defaultSystemPromptText,
-            signal: activeLoopShouldWaitOnTermination ? activeLoopAbortController.signal : undefined,
+            signal: activeLoopAbortController.signal,
             expectedExistingTerminalHostAttachmentId: adoptEndpointRecovery?.state.attachmentId,
             onTerminalHostReady: async ({
                 handle,
@@ -1425,14 +1413,22 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 });
             },
         });
-        exitCode = await activeLoopPromise;
+        loopSettlement = await settleClaudeRunnerLoop(activeLoopPromise, {
+            isRequested: () => terminationRequested,
+            whenTerminated: terminationHandlers.whenTerminated,
+        });
     } catch (error) {
         loopError = error;
     } finally {
         activeLoopAbortController = null;
         activeLoopPromise = null;
-        activeLoopShouldWaitOnTermination = false;
     }
+    if (loopSettlement?.kind === 'terminated') {
+        // Termination cleanup already tore down the session and exited with its outcome code.
+        return;
+    }
+    if (loopSettlement?.kind === 'completed') exitCode = loopSettlement.value;
+    if (loopSettlement?.kind === 'failed') loopError = loopSettlement.error;
 
     terminationHandlers.dispose();
 
@@ -1548,6 +1544,9 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
     const messageQueue = new MessageQueue2<EnhancedMode>(hashClaudeEnhancedModeForQueue);
 
     let currentSession: import('./session').Session | null = null;
+    let terminationRequested = false;
+    const loopAbortController = new AbortController();
+    let loopPromise: Promise<number> | null = null;
     const runtimeActivity = await createClaudeBackendRunRuntimeActivityLifecycle('supported');
     const activateProviderTaskRuntimeActivity = runtimeActivity.activateProviderRuntime;
     if (!activateProviderTaskRuntimeActivity) {
@@ -2169,7 +2168,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         ...currentClaudeRemoteMetaState,
                     }, installedRuntimeCapabilities), sessionRuntimeModeKind);
 
-                    const exitCode = await loop({
+                    loopPromise = loop({
                         path: workingDirectory,
                         model: options.model,
                         permissionMode: options.permissionMode,
@@ -2298,9 +2297,10 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                                 }),
                             });
                         },
+                        signal: loopAbortController.signal,
                     });
 
-                return exitCode;
+                return await loopPromise;
             },
         },
     });
@@ -2324,6 +2324,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
             exit: (code) => process.exit(code),
             sessionExitReport: { sessionId: coordinator.artifacts.deferredSession.sessionId },
             onTerminationRequested: () => {
+                terminationRequested = true;
                 coordinator.artifacts.deferredSession.beginRuntimeTermination?.();
                 void currentSession?.closeProviderInputAdmissionAndWaitForDispatches();
             },
@@ -2331,6 +2332,14 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
             restoreStdinBestEffort({ stdin: process.stdin as any });
             try {
                 try {
+                    // End the provider loop first so launcher teardown flushes through a live
+                    // transport and its provider dispatch is over before admission drains.
+                    loopAbortController.abort('claude-runner-termination');
+                    await loopPromise?.catch((error: unknown) => {
+                        logger.debug('[START] Active Claude loop ended during termination cleanup', {
+                            cause: formatErrorForUi(error),
+                        });
+                    });
                     coordinator.cancel();
                     coordinator.artifacts.deferredSession.cancel();
                     await currentSession?.closeProviderInputAdmissionAndWaitForDispatches();
@@ -2390,12 +2399,16 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
     // materialized Happier session so the UI does not keep a dead runner active.
     let exitCode = 0;
     let spawnError: unknown = null;
-    try {
-        await coordinator.spawnPromise;
-        exitCode = coordinator.artifacts.exitCode ?? 0;
-    } catch (error) {
-        spawnError = error;
+    const spawnSettlement = await settleClaudeRunnerLoop(coordinator.spawnPromise, {
+        isRequested: () => terminationRequested,
+        whenTerminated: terminationHandlers.whenTerminated,
+    });
+    if (spawnSettlement.kind === 'terminated') {
+        // Termination cleanup already tore down the session and exited with its outcome code.
+        return;
     }
+    if (spawnSettlement.kind === 'completed') exitCode = coordinator.artifacts.exitCode ?? 0;
+    if (spawnSettlement.kind === 'failed') spawnError = spawnSettlement.error;
     try {
         await coordinator.backgroundPromise;
     } catch {

@@ -686,6 +686,31 @@ describe('claudeLocalLauncher', () => {
     await expect(launcherPromise).resolves.toEqual({ type: 'switch' });
   });
 
+  it('stops the local Claude child and exits without a remote switch when runner termination aborts the launcher', async () => {
+    const { session } = createLocalHarness();
+    const localStarted = createDeferred<void>();
+    mockClaudeLocal.mockImplementationOnce(async (opts: LocalLaunchOptions) => {
+      localStarted.resolve(undefined);
+      await waitForAbort(opts.abort);
+      // A SIGTERM'd Claude child exits 143; the launcher owns classifying that exit.
+      const { ExitCodeError } = await import('./claudeLocal');
+      throw new ExitCodeError(143);
+    });
+    const termination = new AbortController();
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launch = claudeLocalLauncher(session, { signal: termination.signal });
+    await localStarted.promise;
+
+    termination.abort('claude-runner-termination');
+
+    const settled = await Promise.race([
+      launch,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
+    ]);
+    expect(settled).toEqual({ type: 'exit', code: 0 });
+    expect(mockClaudeLocal).toHaveBeenCalledOnce();
+  });
+
   it('defers UI-triggered remote switch until the active local Claude turn settles', async () => {
     vi.useFakeTimers();
     const { session } = createLocalHarness();

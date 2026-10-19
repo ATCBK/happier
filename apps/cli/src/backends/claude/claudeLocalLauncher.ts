@@ -99,6 +99,12 @@ export async function claudeLocalLauncher(
          * UI input through terminal-host injection and must not enter legacy remote mode.
          */
         remoteSwitchingEnabled?: boolean;
+        /**
+         * Runner termination. Aborting stops the local Claude child through the launcher's own
+         * process abort and returns `exit` (never a remote switch), so the launcher teardown runs
+         * before the caller closes the session transport.
+         */
+        signal?: AbortSignal;
     },
 ): Promise<LauncherResult> {
 
@@ -248,7 +254,23 @@ export async function claudeLocalLauncher(
     // Handle abort
     let exitReason: LauncherResult | null = null;
     let abortingForModeSwitch = false;
+    let terminationRequested = false;
     const processAbortController = new AbortController();
+    const terminationSignal = opts?.signal;
+    const onTermination = () => {
+        logger.debug('[local]: runner termination requested');
+        terminationRequested = true;
+        abortingForModeSwitch = false;
+        exitReason = { type: 'exit', code: 0 };
+        if (!processAbortController.signal.aborted) {
+            processAbortController.abort(terminationSignal?.reason ?? 'claude-runner-termination');
+        }
+    };
+    if (terminationSignal?.aborted) {
+        onTermination();
+    } else {
+        terminationSignal?.addEventListener('abort', onTermination, { once: true });
+    }
     let exitFuture = new Future<void>();
     let syncLastPermissionModeFromMetadata: (() => void) | null = null;
     let deferredRemoteSwitch: { dispose: () => void } | null = null;
@@ -526,6 +548,10 @@ export async function claudeLocalLauncher(
                         logger.debug('[local]: Claude exited due to mode switch abort', { exitCode: e.exitCode });
                         break;
                     }
+                    if (terminationRequested) {
+                        logger.debug('[local]: Claude exited due to runner termination', { exitCode: e.exitCode });
+                        break;
+                    }
                     exitReason = { type: 'exit', code: e.exitCode };
                     break;
                 }
@@ -560,6 +586,7 @@ export async function claudeLocalLauncher(
             logger.debug('[local]: launch done');
 	        }
 	    } finally {
+        terminationSignal?.removeEventListener('abort', onTermination);
 	        const clientEmitter = session.client as unknown as {
 	            off?: (event: string, listener: () => void) => void;
 	        };
