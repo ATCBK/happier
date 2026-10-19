@@ -1019,6 +1019,11 @@ label ("Loaded 10:42"), so one notice can carry the reason beside its `action`.
 `BrandMark size="small"` sits at text size beside a label; larger sizes keep their
 image steps.
 
+A `Popover` that holds a large panel (a form, a picker with search, a detail view) sets
+`floatingRole="panel"`, so Happier draws it with the same heavier coat as its own dialogs and
+panels and its words stay legible over the page. Leave it off for a small popover; menus keep the
+lighter coat. The coat is Happier's to paint: there is no opacity or colour prop.
+
 In the Developer Preview source contract, a page Collection can supply
 `detailHeader(key)` with the item's `title`, optional `subtitle` and `actions`,
 plus an optional `leading` mark beside the title (the item's own glyph) and a

@@ -1276,6 +1276,12 @@ trigger count. `Item.titleEllipsizeMode="middle"` preserves a long title's suffi
 and full accessible name. See the [author example](../packages/plugin-ui/README.md#collection-filters-and-long-titles-03-development-source)
 and generated [public declarations](../packages/plugin-ui/api-declarations.md).
 
+A public `Popover` takes `floatingRole` (`'menu'`, the default, or `'panel'`). The role rides the
+public material request (`HappierMaterialSurfaceRender` input, `HappierSurface.floatingRole`) to the
+host's `GlassSurface`, which owns the coat: a large anchored panel takes the dialog coat, while menus,
+tooltips and small popovers keep the hair coat. `Menu` and its variants stay menus; there is no opacity
+or paint prop.
+
 In 0.3 development source, the public themed `ApprovalPrompt` and core approval
 adapter share the neutral interaction presentation's title, subtitle, icon, body
 and footer anatomy. Callers supply reviewed facts and decisions; admission,
