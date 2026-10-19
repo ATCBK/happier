@@ -171,6 +171,7 @@ describe("markAccountChanged", () => {
     it("falls back to the Prisma update + upsert path outside the postgres raw fast path", async () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const tx: any = {
+            session: { findUnique: vi.fn().mockResolvedValue({ id: "s1" }) },
             account: {
                 update: vi.fn().mockResolvedValue({ seq: 7 }),
             },
@@ -288,6 +289,7 @@ describe("markAccountChanged", () => {
     it("links pet changes to account pet packages in the Prisma fallback path", async () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const tx: any = {
+            accountPetPackage: { findUnique: vi.fn().mockResolvedValue({ id: "pet-package-1" }) },
             account: {
                 update: vi.fn().mockResolvedValue({ seq: 8 }),
             },
@@ -380,6 +382,7 @@ describe("markAccountChanged", () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const changes: Array<{ accountId: string; sessionId: string; hint: unknown; cursor: number }> = [];
         const tx = {
+            session: { findUnique: vi.fn(async () => ({ id: "session-1" })) },
             account: {
                 update: vi.fn(async ({ where }: { where: { id: string } }) => ({ seq: where.id === "a1" ? 11 : 24 })),
                 updateMany: vi.fn(async () => ({ count: 2 })),

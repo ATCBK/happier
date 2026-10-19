@@ -6,8 +6,31 @@ import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, withSqliteReadS
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
+import { flushAccountChangesInTx } from '@/app/changes/markAccountChanged';
 
 export type Tx = TransactionClient;
+const transactionResultSymbol = Symbol('transaction-result');
+
+/** Explicit projection of values that are allocated by terminal publication. */
+export interface TransactionResult<T> {
+    readonly [transactionResultSymbol]: true;
+    resolveResult(): T;
+}
+
+export type ResolvedTransactionResult<T> = T extends TransactionResult<infer Result> ? Result : T;
+
+export function transactionResult<T>(resolveResult: () => T): TransactionResult<T> {
+    return { [transactionResultSymbol]: true, resolveResult };
+}
+
+function resolveTransactionResult<T>(value: T): ResolvedTransactionResult<T> {
+    if (value && typeof value === 'object' && transactionResultSymbol in value
+        && value[transactionResultSymbol] === true && 'resolveResult' in value
+        && typeof value.resolveResult === 'function') {
+        return value.resolveResult();
+    }
+    return value as ResolvedTransactionResult<T>;
+}
 export type InTxOptions = Readonly<{
     readOnly?: boolean;
     isolationLevel?: "Serializable" | "RepeatableRead" | "ReadCommitted";
@@ -20,12 +43,15 @@ export type InTxOptions = Readonly<{
 }>;
 
 /** A coherent read view, without certifying a serial ordering with writers. */
-export function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: Pick<InTxOptions, "transactionClass">): Promise<T> {
-    return inTx(read, {
+export async function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: Pick<InTxOptions, "transactionClass">): Promise<T> {
+    // A snapshot captures caller-owned data; only write transaction results
+    // participate in terminal publication projection.
+    const captured = await inTx(async tx => ({ value: await read(tx) }), {
         ...options,
         readOnly: true,
         isolationLevel: getDbProviderFromEnv(process.env, "postgres") === "postgres" ? "RepeatableRead" : "Serializable",
     });
+    return captured.value;
 }
 
 export type TransactionReplayReason = "session-account-audience-changed"
@@ -91,6 +117,22 @@ class TransactionAttemptDeadlineExceededError extends Error {
 }
 
 const symbol = Symbol();
+interface TransactionContext extends TransactionContextView {
+    callbacks: (() => void)[];
+}
+
+export interface TransactionContextView {
+    readonly readOnly: boolean;
+}
+
+/** Native Prisma transaction proxies may share their property backing target. */
+export function getTransactionContext(tx: Tx): object;
+export function getTransactionContext(tx: Tx, options: Readonly<{ optional: true }>): TransactionContextView | undefined;
+export function getTransactionContext(tx: Tx, options?: Readonly<{ optional: true }>): TransactionContextView | undefined {
+    const context = (tx as Tx & { [symbol]?: TransactionContext })[symbol];
+    if (!context && !options?.optional) throw new Error('Account publication requires an inTx() transaction');
+    return context;
+}
 
 function errorMessage(err: unknown): string {
     if (err instanceof Error && typeof err.message === "string") return err.message;
@@ -183,11 +225,9 @@ export function afterTx(tx: Tx, callback: () => void) {
     // - Instead, schedule them with afterTx so they only fire after commit.
     //
     // `afterTx` is only valid for transactions created via `inTx()`.
-    const callbacks = (tx as any)[symbol] as (() => void)[] | undefined;
-    if (!callbacks) {
-        throw new Error('afterTx(tx, ...) called outside inTx() transaction');
-    }
-    callbacks.push(callback);
+    const context = (tx as Tx & { [symbol]?: TransactionContext })[symbol];
+    if (!context) throw new Error('afterTx(tx, ...) called outside inTx() transaction');
+    context.callbacks.push(callback);
 }
 
 function canStartAnotherSqliteTransactionAttempt(params: Readonly<{
@@ -289,17 +329,17 @@ async function withPostgresStatementBudget(tx: Tx, timeoutMs: number, startedAtM
     });
 }
 
-export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions): Promise<T> {
+export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions): Promise<ResolvedTransactionResult<T>> {
     const provider = getDbProviderFromEnv(process.env, "postgres");
     if (provider === "sqlite" && options?.readOnly) {
         if (options.prepare) {
             const fence = await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass);
             return await withSqliteReadSnapshot(async tx => {
                 await fence(tx);
-                return fn(tx);
+                return resolveTransactionResult(await fn(tx));
             }, { deadlineAtMs: options.deadlineAtMs });
         }
-        return await withSqliteReadSnapshot(fn, { deadlineAtMs: options.deadlineAtMs });
+        return await withSqliteReadSnapshot(async tx => resolveTransactionResult(await fn(tx)), { deadlineAtMs: options.deadlineAtMs });
     }
     const transactionConfig = readDatabaseTransactionConfigFromEnv(process.env, provider);
     let counter = 0;
@@ -325,12 +365,21 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             // an expired callback cannot retain a pooled connection indefinitely.
             tx = await withPostgresStatementBudget(tx, timeoutMs, attemptStartedAtMs);
         }
-        (tx as any)[symbol] = [];
+        // Keep all per-attempt state on this closure-owned object, rather than
+        // assigning through Prisma's proxy onto a potentially shared client.
+        const context: TransactionContext = { callbacks: [], readOnly: options?.readOnly === true };
+        tx = new Proxy(tx, {
+            get(target, property) {
+                return property === symbol ? context : Reflect.get(target, property, target);
+            },
+        });
         if (fence) await fence(tx);
         let result = await timeWebLatencyPhase('db.transaction.callback', () => fn(tx), options?.transactionClass);
-        let callbacks = (tx as any)[symbol] as (() => void)[];
+        await flushAccountChangesInTx(tx);
+        const resolvedResult = resolveTransactionResult(result);
+        let callbacks = context.callbacks;
         transactionCallbackCompleted = true;
-        return { result, callbacks };
+        return { result: resolvedResult, callbacks };
     }
     while (true) {
         transactionCallbackEntered = false;
@@ -353,11 +402,10 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             const boundedTimeoutMs = remainingMs === null
                 ? configuredTimeoutMs
                 : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
-            // Account-local writes take their existing Account fence before
-            // admission reads, then use this ReadCommitted default. A fence
-            // cannot safely change isolation after a caller has read rows.
+            // Admission stability precedes domain reads; resource locks/CAS
+            // protect domain writes and Account publication flushes last.
             // Keep Serializable opt-in for predicates not protected by those
-            // locks/CAS (for example another Account's shared-secret grants).
+            // locks/CAS. Isolation cannot change after a caller has read rows.
             // Coherent readers use inReadSnapshot rather than joining SSI.
             const txOpts =
                 provider === "sqlite"

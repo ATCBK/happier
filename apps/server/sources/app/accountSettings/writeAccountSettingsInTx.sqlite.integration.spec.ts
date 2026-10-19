@@ -235,6 +235,7 @@ describe("writeAccountSettingsInTx (SQLite integration)", () => {
     });
 
     it("rechecks transferred catalog authority before publishing a new legacy Settings root", async () => {
+        process.env.HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST = "none";
         const account = await db.account.create({ data: {
             publicKey: null, encryptionMode: "plain", settings: null, settingsVersion: 0,
         } });

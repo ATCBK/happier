@@ -72,9 +72,10 @@ export async function acquireSessionAccountCursorLocksInTx(
     return fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds, options);
 }
 
-async function fenceSessionAccountCursorAudienceInTx(
+/** Reuse a complete captured audience without extending its resource lock set. */
+export async function fenceSessionAccountCursorAudienceInTx(
     tx: Tx,
-    { projectionSessionIds, accountIds }: Awaited<ReturnType<typeof readSessionAccountCursorAudienceInTx>>,
+    { projectionSessionIds, accountIds }: Readonly<{ projectionSessionIds: readonly string[]; accountIds: readonly string[] }>,
     sessionIds: readonly string[],
     additionalAccountIds: readonly string[],
     options?: SessionAccountCursorLockOptions,

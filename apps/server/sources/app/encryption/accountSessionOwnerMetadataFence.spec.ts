@@ -2,17 +2,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Tx } from "@/storage/inTx";
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
-import {
+import { inTxPostgresControlStatementMock, installDbModuleMock } from "@/app/api/testkit/dbMocks";
+
+const transaction = vi.fn();
+installDbModuleMock(() => ({ db: { $transaction: transaction } }));
+const {
     acquireAccountSessionOwnerMetadataFenceInTx,
     acquireAccountSessionOwnerMetadataFencesInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
-} from "./accountSessionOwnerMetadataFence";
+} = await import("./accountSessionOwnerMetadataFence");
+const { inTx } = await import("@/storage/inTx");
+const { markAccountChanged } = await import("@/app/changes/markAccountChanged");
 
 describe("acquireAccountSessionOwnerMetadataFenceInTx", () => {
     const envSnapshot = snapshotEnv();
 
     afterEach(() => {
         restoreEnv(envSnapshot);
+        transaction.mockReset();
     });
 
     it.each([
@@ -109,5 +116,80 @@ describe("acquireAccountSessionOwnerMetadataFenceInTx", () => {
         ).rejects.toBeInstanceOf(
             AccountSessionOwnerMetadataFenceAccountNotFoundError,
         );
+    });
+
+    it.each(["postgres", "mysql"] as const)("refuses a nested lower-id audience before issuing its late %s lock", async provider => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: provider });
+        const admissionSql = vi.fn(async () => [{ id: "z" }]);
+        const reserveWriter = vi.fn(async (_sql: string, ..._args: unknown[]) => 1);
+        const writeResource = vi.fn(async () => ({ id: "session" }));
+        transaction.mockImplementationOnce(async work => work({ ...inTxPostgresControlStatementMock,
+            $queryRawUnsafe: admissionSql,
+            $executeRawUnsafe: async (sql: string, ...args: unknown[]) => sql.startsWith("SET LOCAL")
+                ? inTxPostgresControlStatementMock.$executeRawUnsafe(sql, ...args) : reserveWriter(sql, ...args),
+            session: { update: writeResource },
+        }));
+        await inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["z"], "content");
+            await tx.session.update({ where: { id: "session" }, data: { seq: { increment: 1 } } });
+            await expect(acquireAccountSessionOwnerMetadataFencesInTx(tx, ["z", "a"], "content"))
+                .rejects.toMatchObject({ reason: "transaction-account-audience-changed" });
+        });
+        expect(writeResource).toHaveBeenCalledOnce();
+        expect(admissionSql).toHaveBeenCalledOnce();
+    });
+
+    it.each(["postgres", "mysql", "sqlite"] as const)("only forbids an actual held-lock upgrade on %s", async provider => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: provider });
+        const admissionSql = vi.fn(async () => [{ id: "a" }]);
+        const reserveWriter = vi.fn(async (_sql: string, ..._args: unknown[]) => 1);
+        transaction.mockImplementationOnce(async work => work({ ...inTxPostgresControlStatementMock,
+            $queryRawUnsafe: admissionSql,
+            $executeRawUnsafe: async (sql: string, ...args: unknown[]) => sql.startsWith("SET LOCAL")
+                ? inTxPostgresControlStatementMock.$executeRawUnsafe(sql, ...args) : reserveWriter(sql, ...args),
+        }));
+        await inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "content");
+            const stronger = acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "exclusive");
+            if (provider === "postgres") await expect(stronger).rejects.toMatchObject({ reason: "transaction-account-audience-changed" });
+            else await expect(stronger).resolves.toEqual(["a"]);
+        });
+        expect(provider === "sqlite" ? reserveWriter : admissionSql).toHaveBeenCalledTimes(provider === "postgres" ? 1 : 2);
+    });
+
+    it("refuses a newly queued terminal recipient before any terminal Account SQL", async () => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: "mysql", HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        const admissionSql = vi.fn(async () => [{ id: "z" }]);
+        const allocate = vi.fn(async () => ({ seq: 1 }));
+        const persist = vi.fn(async () => ({}));
+        transaction.mockImplementationOnce(async work => work({
+            $queryRawUnsafe: admissionSql,
+            account: { update: allocate }, accountChange: { upsert: persist },
+        }));
+        await expect(inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["z"], "content");
+            // A publisher can queue an audience without calling admission again.
+            await markAccountChanged(tx, { accountId: "a", entityId: "projection", kind: "account" });
+        })).rejects.toMatchObject({ code: "database_transaction_conflict_exhausted",
+            cause: { reason: "transaction-account-audience-changed" } });
+        expect(admissionSql).toHaveBeenCalledOnce();
+        expect(allocate).not.toHaveBeenCalled();
+        expect(persist).not.toHaveBeenCalled();
+    });
+
+    it("keeps valid foreign-recipient publication on SQLite's single writer", async () => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: "sqlite", HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        const reserveWriter = vi.fn(async () => 1);
+        const allocate = vi.fn(async () => ({ seq: 1 }));
+        const persist = vi.fn(async () => ({}));
+        transaction.mockImplementationOnce(async work => work({ $executeRawUnsafe: reserveWriter,
+            account: { update: allocate }, accountChange: { upsert: persist } }));
+        await expect(inTx(async tx => {
+            await acquireAccountSessionOwnerMetadataFencesInTx(tx, ["owner"], "content");
+            await markAccountChanged(tx, { accountId: "viewer", entityId: "projection", kind: "account" });
+        })).resolves.toBeUndefined();
+        expect(reserveWriter).toHaveBeenCalledOnce();
+        expect(allocate).toHaveBeenCalledOnce();
+        expect(persist).toHaveBeenCalledOnce();
     });
 });

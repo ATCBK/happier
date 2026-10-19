@@ -8,6 +8,9 @@ import { acquireSessionAccountCursorLocksInTx, prepareSessionAccountCursorLocks 
 import { markSessionProjectionRecipientsChanged } from "./markSessionProjectionRecipientsChanged";
 import { sourceKeyForSessionFollowSourceV1 } from "@/app/session/follow/sessionFollowSourceIdentity";
 import { markAccountChangesForSessionAccounts } from "./markAccountChangesForSessionAccounts";
+import { prepareLayout1SessionCreate } from "@/app/session/create/prepareLayout1SessionCreate";
+import { createOrRejoinLayout1SessionByTag } from "@/app/session/create/createOrRejoinLayout1SessionByTag";
+import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Prepared Session cursor audience", () => {
     let connected = false;
@@ -21,6 +24,36 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         connected = true;
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it("creates initial foreign access through the complete publication admission cohort", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        try {
+            await db.userRelationship.create({ data: { fromUserId: owner.id, toUserId: recipient.id, status: "friend" } });
+            const prepared = prepareLayout1SessionCreate({
+                accountId: owner.id, tag: randomUUID(), metadata: JSON.stringify({ v: 1 }),
+                ownerMetadata: { t: "plain", v: { v: 1 } }, agentState: null, dataEncryptionKey: null,
+                requestedEncryptionMode: undefined, requestedStorageState: undefined, organizationPlacement: undefined,
+                accountEncryptionMode: "plain", storagePolicy: "optional", defaultAccountMode: "plain",
+                initialAccess: { grants: [{ subject: { kind: "account", accountId: recipient.id },
+                    accessLevel: "view", canApprovePermissions: false }] },
+            });
+            if (!prepared.ok) throw new Error(`Unexpected preparation refusal: ${prepared.rejection.reason}`);
+            const outcome = await createOrRejoinLayout1SessionByTag(prepared.prepared, createPresentUserSessionAccessAuthentication());
+            expect(outcome.kind).toBe("created");
+            if (outcome.kind !== "created") throw new Error("Expected a new Session");
+            expect(await db.sessionShare.findUnique({ where: { sessionId_sharedWithUserId: {
+                sessionId: outcome.session.id, sharedWithUserId: recipient.id,
+            } }, select: { accessLevel: true } })).toEqual({ accessLevel: "view" });
+            const changes = await db.accountChange.findMany({ where: { kind: "session", entityId: outcome.session.id },
+                orderBy: { accountId: "asc" }, select: { accountId: true, cursor: true } });
+            expect(changes.map(change => change.accountId)).toEqual([owner.id, recipient.id].sort());
+            expect(changes.every(change => Number.isSafeInteger(change.cursor) && change.cursor > 0)).toBe(true);
+        } finally {
+            await db.session.deleteMany({ where: { accountId: owner.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, recipient.id] } } });
+        }
+    });
 
     it("replays an audience that grows after domain admission before terminal publication", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });

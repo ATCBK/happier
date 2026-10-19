@@ -5,7 +5,7 @@ import { eventRouter } from "@/app/events/connectionEventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { ChangeKindSchema, type ChangeKind } from '@happier-dev/protocol/changes';
 import { PluginDomainChangeHintSchema, buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
-import { acquireAccountSessionOwnerMetadataFencesInTx, type AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
+import { acquireAccountSessionOwnerMetadataFencesInTx, assertAccountSessionOwnerMetadataAdmissionAudienceInTx, type AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 
 /** An allocation intent, resolved only by the transaction's publication phase. */
 export interface AccountChangePublication {
@@ -100,6 +100,7 @@ export async function flushAccountChangesInTx(tx: Tx): Promise<void> {
     state.phase = 'validating';
     if (state.operations.length > 0) {
         const accountIds = [...state.accountIds].sort();
+        assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx, accountIds);
         const provider = getDbProviderFromEnv(process.env, 'postgres');
         if (accountIds.length > 0 && provider === 'postgres') {
             await tx.$queryRawUnsafe(
@@ -337,7 +338,9 @@ async function publishAccountProjectionChanges(
             )
             SELECT next."id", $2, requested."entityId",
                 next."seq" - totals.total + row_number() OVER (PARTITION BY next."id" ORDER BY requested."entityId"),
-                $3, CASE WHEN $2 = 'session' THEN requested."entityId" ELSE NULL END
+                $3, CASE WHEN $2 = 'session' AND EXISTS (
+                    SELECT 1 FROM "Session" WHERE "id" = requested."entityId"
+                ) THEN requested."entityId" ELSE NULL END
             FROM requested JOIN next ON next."id" = requested."accountId"
                 JOIN totals ON totals."accountId" = next."id"
             ON CONFLICT ("accountId", "kind", "entityId") DO UPDATE SET
@@ -400,11 +403,14 @@ async function publishAccountProjectionChanges(
         where: { OR: identities },
     });
     const nextCursorByAccountId = new Map(cursorRows.map(row => [row.id, row.seq - counts.get(row.id)!]));
+    const retainedSessionIds = kind === "session" ? new Set((await tx.session.findMany({
+        where: { id: { in: [...recipientsByEntity.keys()] } }, select: { id: true },
+    })).map(row => row.id)) : new Set<string>();
     const changes = requests.map(({ accountId, entityId }) => {
         const cursor = nextCursorByAccountId.get(accountId)! + 1;
         nextCursorByAccountId.set(accountId, cursor);
         return { accountId, kind, entityId, cursor, changedAt,
-            ...(kind === "session" ? { sessionId: entityId,
+            ...(kind === "session" ? { sessionId: retainedSessionIds.has(entityId) ? entityId : null,
                 hint: hintByIdentity.get(JSON.stringify([accountId, entityId])) ?? undefined } : {}),
         };
     });
@@ -535,10 +541,10 @@ async function publishAccountChanged(
                 next."seq",
                 $4,
                 $5::jsonb,
-                $6,
-                $7,
-                $8,
-                $9
+                CASE WHEN EXISTS (SELECT 1 FROM "Session" WHERE "id" = $6) THEN $6 ELSE NULL END,
+                CASE WHEN EXISTS (SELECT 1 FROM "Machine" WHERE "id" = $7) THEN $7 ELSE NULL END,
+                CASE WHEN EXISTS (SELECT 1 FROM "Artifact" WHERE "id" = $8) THEN $8 ELSE NULL END,
+                CASE WHEN EXISTS (SELECT 1 FROM "AccountPetPackage" WHERE "id" = $9) THEN $9 ELSE NULL END
             FROM next
             ON CONFLICT ("accountId", "kind", "entityId")
             DO UPDATE SET
@@ -610,18 +616,25 @@ async function publishAccountChanged(
         return cursor;
     }
 
-    const fk = (() => {
+    // These nullable links detect orphaned changes; entityId/hint are the
+    // durable removal invalidation. Match ON DELETE SET NULL when domain work
+    // removed an entity after recording its publication intent.
+    const fk = await (async () => {
         if (sessionId) {
-            return { sessionId };
+            const row = await tx.session.findUnique({ where: { id: sessionId }, select: { id: true } });
+            return { sessionId: row?.id ?? null };
         }
         if (machineId) {
-            return { machineId };
+            const row = await tx.machine.findUnique({ where: { id: machineId }, select: { id: true } });
+            return { machineId: row?.id ?? null };
         }
         if (artifactId) {
-            return { artifactId };
+            const row = await tx.artifact.findUnique({ where: { id: artifactId }, select: { id: true } });
+            return { artifactId: row?.id ?? null };
         }
         if (accountPetPackageId) {
-            return { accountPetPackageId };
+            const row = await tx.accountPetPackage.findUnique({ where: { id: accountPetPackageId }, select: { id: true } });
+            return { accountPetPackageId: row?.id ?? null };
         }
         return {};
     })();

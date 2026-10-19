@@ -4,8 +4,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
 import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
-import { inTx } from "@/storage/inTx";
-import { markAccountChanged, markAccountsChanged } from "./markAccountChanged";
+import { inTx, transactionResult } from "@/storage/inTx";
+import { eventRouter } from "@/app/events/connectionEventRouter";
+import { markAccountChanged, markAccountsChanged, markSessionAccountsChanged } from "./markAccountChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 function resolveContractProvider(): "postgres" | "mysql" {
@@ -39,6 +40,7 @@ describe("AccountChange coalescing database contract", () => {
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         await db.session.deleteMany({ where: { account: { publicKey: { startsWith: publicKeyPrefix } } } });
         await db.account.deleteMany({
             where: { publicKey: { startsWith: publicKeyPrefix } },
@@ -47,6 +49,47 @@ describe("AccountChange coalescing database contract", () => {
 
     afterAll(async () => {
         if (dbConnected) await db.$disconnect();
+    });
+
+    it(`retains queued Session and Machine removal changes after domain work deletes their rows on ${provider}`, async () => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const pointSession = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}" } });
+        const batchSession = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}" } });
+        const pointMachine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const batchMachine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const emit = vi.fn();
+        eventRouter.setIo({ to: () => ({ emit, disconnectSockets: vi.fn() }) });
+
+        const changes = await inTx(async tx => {
+            const pointSessionChange = await markAccountChanged(tx, {
+                accountId: account.id, kind: "session", entityId: pointSession.id, hint: { removed: true },
+            });
+            const [batchSessionChange] = await markSessionAccountsChanged(tx, new Map([[batchSession.id, [account.id]]]));
+            const pointMachineChange = await markAccountChanged(tx, {
+                accountId: account.id, kind: "machine", entityId: pointMachine.id, hint: { removed: true },
+            });
+            const [batchMachineChange] = await markAccountsChanged(tx, {
+                accountIds: [account.id], kind: "machine", entityId: batchMachine.id, hint: { removed: true, batch: true },
+            });
+            await tx.session.deleteMany({ where: { id: { in: [pointSession.id, batchSession.id] } } });
+            await tx.machine.deleteMany({ where: { id: { in: [pointMachine.id, batchMachine.id] } } });
+            expect(emit).not.toHaveBeenCalled();
+            return transactionResult(() => [
+                { kind: "session", entityId: pointSession.id, cursor: pointSessionChange.resolveCursor(), hint: { removed: true } },
+                { kind: "session", entityId: batchSession.id, cursor: batchSessionChange.resolveCursor(), hint: null },
+                { kind: "machine", entityId: pointMachine.id, cursor: pointMachineChange.resolveCursor(), hint: { removed: true } },
+                { kind: "machine", entityId: batchMachine.id, cursor: batchMachineChange.resolveCursor(), hint: { removed: true, batch: true } },
+            ]);
+        });
+
+        expect(changes.map(change => change.cursor).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
+        await expect(db.accountChange.findMany({ where: { accountId: account.id }, orderBy: { cursor: "asc" },
+            select: { kind: true, entityId: true, cursor: true, hint: true,
+                sessionId: true, machineId: true, artifactId: true, accountPetPackageId: true } }))
+            .resolves.toEqual(changes.map(change => ({ ...change,
+                sessionId: null, machineId: null, artifactId: null, accountPetPackageId: null,
+            })).sort((left, right) => left.cursor - right.cursor));
+        expect(emit).toHaveBeenCalledWith("update", expect.objectContaining({ seq: 4, body: { t: "account-change" } }));
     });
 
     it.skipIf(provider !== "postgres")("allocates cursors in terminal commit order and never exposes a late cursor below the checkpoint", async () => {
