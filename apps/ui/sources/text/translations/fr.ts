@@ -9324,6 +9324,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     actionOutcome: {
       refused: "Refusé",
       failed: "Échec",
+      mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} en échec · ${refused} refusées`,
       cause: {
         outsideAgentSessions: "Pas une session de cet Agent",
         unverifiedAgentAccess: "Accès de cet Agent impossible à confirmer",

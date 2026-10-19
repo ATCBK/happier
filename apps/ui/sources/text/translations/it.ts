@@ -9709,6 +9709,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     actionOutcome: {
       refused: "Rifiutata",
       failed: "Non riuscita",
+      mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} non riuscite · ${refused} rifiutate`,
       cause: {
         outsideAgentSessions: "Non è una sessione di questo Agent",
         unverifiedAgentAccess: "Impossibile confermare l’accesso di questo Agent",

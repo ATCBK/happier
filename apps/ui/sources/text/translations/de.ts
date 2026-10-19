@@ -9420,6 +9420,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         actionOutcome: {
           refused: "Abgelehnt",
           failed: "Fehlgeschlagen",
+          mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} fehlgeschlagen · ${refused} abgelehnt`,
           cause: {
             outsideAgentSessions: "Keine Sitzung dieses Agents",
             unverifiedAgentAccess: "Zugriff dieses Agents nicht bestätigt",

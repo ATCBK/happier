@@ -9790,6 +9790,7 @@ localTailscale: {
     actionOutcome: {
       refused: "拒否",
       failed: "失敗",
+      mixed: ({ failed, refused }: { failed: number; refused: number }) => `失敗 ${failed} · 拒否 ${refused}`,
       cause: {
         outsideAgentSessions: "このエージェントのセッションではありません",
         unverifiedAgentAccess: "このエージェントのアクセスを確認できませんでした",

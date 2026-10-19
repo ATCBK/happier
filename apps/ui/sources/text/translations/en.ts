@@ -11223,6 +11223,8 @@ const enToolView = {
   actionOutcome: {
     refused: 'Refused',
     failed: 'Failed',
+    mixed: ({ failed, refused }: { failed: number; refused: number }) =>
+      `${failed} failed · ${refused} refused`,
     cause: {
       outsideAgentSessions: 'Not one of this Agent’s sessions',
       unverifiedAgentAccess: 'Couldn’t confirm this Agent’s access',

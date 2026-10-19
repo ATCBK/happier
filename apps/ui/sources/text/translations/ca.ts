@@ -8721,6 +8721,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         actionOutcome: {
           refused: "Rebutjada",
           failed: "Fallida",
+          mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} amb error · ${refused} rebutjades`,
           cause: {
             outsideAgentSessions: "No és una sessió d’aquest Agent",
             unverifiedAgentAccess: "No s’ha pogut confirmar l’accés d’aquest Agent",

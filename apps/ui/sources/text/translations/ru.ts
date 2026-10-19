@@ -9340,6 +9340,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     actionOutcome: {
       refused: "Отклонено",
       failed: "Не удалось",
+      mixed: ({ failed, refused }: { failed: number; refused: number }) => `${failed} с ошибкой · ${refused} отклонено`,
       cause: {
         outsideAgentSessions: "Не сессия этого агента",
         unverifiedAgentAccess: "Не удалось подтвердить доступ этого агента",

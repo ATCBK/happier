@@ -9142,6 +9142,7 @@ const zhHansValues = {
     actionOutcome: {
       refused: "已拒绝",
       failed: "失败",
+      mixed: ({ failed, refused }: { failed: number; refused: number }) => `失败 ${failed} · 拒绝 ${refused}`,
       cause: {
         outsideAgentSessions: "不是此智能体的会话",
         unverifiedAgentAccess: "无法确认此智能体的访问权限",
