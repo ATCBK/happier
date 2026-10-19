@@ -18,7 +18,7 @@ export type PrismaClientType = PrismaClientInstance;
 
 export * from "./enums.generated";
 
-import type { DbProvider } from '@/config/databaseProvider';
+import { getDbProviderFromEnv, type DbProvider } from '@/config/databaseProvider';
 export { parseDbProvider, getDbProviderFromEnv, requireDbProviderFromEnv, type DbProvider } from '@/config/databaseProvider';
 
 const requireFromHere = createRequire(import.meta.url);
@@ -588,7 +588,7 @@ function parsePositiveInteger(value: string | null): number | null {
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function readSqliteDatabaseUrlSearchParam(env: NodeJS.ProcessEnv, key: string): string | null {
+function readDatabaseUrlSearchParam(env: NodeJS.ProcessEnv, key: string): string | null {
     const rawUrl = String(env.DATABASE_URL ?? "").trim();
     if (!rawUrl) return null;
     try {
@@ -598,14 +598,21 @@ function readSqliteDatabaseUrlSearchParam(env: NodeJS.ProcessEnv, key: string): 
     }
 }
 
+/** The effective explicit Prisma pool budget; absence does not imply a guessed pool size. */
+export function resolvePrismaConnectionLimitFromEnv(env: NodeJS.ProcessEnv): number | null {
+    const configured = getDbProviderFromEnv(env, 'postgres') === 'postgres'
+        ? { ...env, DATABASE_URL: applyConfiguredDatabaseConnectionLimit(env.DATABASE_URL ?? '', env) } : env;
+    return parsePositiveInteger(readDatabaseUrlSearchParam(configured, 'connection_limit'));
+}
+
 export function resolveSqliteStartupDiagnosticsFromEnv(env: NodeJS.ProcessEnv): SqliteStartupDiagnostics {
     const pragmas = resolveSqliteRuntimePragmasFromEnv(env);
-    const rawConnectionLimit = readSqliteDatabaseUrlSearchParam(env, "connection_limit");
+    const rawConnectionLimit = readDatabaseUrlSearchParam(env, "connection_limit");
     const databaseUrlConnectionLimit = parsePositiveInteger(rawConnectionLimit);
     const databaseUrlConnectionLimitStatus: SqliteDatabaseUrlConnectionLimitStatus =
         rawConnectionLimit === null ? "missing" : databaseUrlConnectionLimit === null ? "invalid" : "configured";
     const ignoredDatabaseUrlQueryParameters = [
-        ...(readSqliteDatabaseUrlSearchParam(env, "pool_timeout") !== null ? ["pool_timeout"] : []),
+        ...(readDatabaseUrlSearchParam(env, "pool_timeout") !== null ? ["pool_timeout"] : []),
     ];
 
     return {
@@ -614,7 +621,7 @@ export function resolveSqliteStartupDiagnosticsFromEnv(env: NodeJS.ProcessEnv): 
         synchronous: pragmas.synchronous,
         busyTimeoutMs: pragmas.busyTimeoutMs,
         journalSizeLimitBytes: pragmas.journalSizeLimitBytes,
-        databaseUrlSocketTimeoutSeconds: parsePositiveInteger(readSqliteDatabaseUrlSearchParam(env, "socket_timeout")),
+        databaseUrlSocketTimeoutSeconds: parsePositiveInteger(readDatabaseUrlSearchParam(env, "socket_timeout")),
         databaseUrlConnectionLimit,
         databaseUrlConnectionLimitStatus,
         databaseUrlPoolAcquisitionTimeoutStatus: "unbounded",
