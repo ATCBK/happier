@@ -43,6 +43,13 @@ slots only after they have an ordinary Session; selection creates no Session or 
 Incomplete reads refuse the whole selection before effects. The remaining declaration
 sweep and the coordination program's loaded-runtime validation are separate gates.
 
+The human Discussion composer additionally retains invited, unstarted model-slot
+mentions in its existing draft. Explicit Send resolves those slots through the
+existing invitation/rejoin and ordinary Session-start Actions before posting the
+canonical Session mentions; selecting a suggestion alone has no start effect.
+This does not turn the read-only Discussion Session selector into a launcher.
+See [model participant birth](session-collaboration.md#model-participant-birth-development-integration).
+
 External selector preparation signs these reads under the original Action root.
 The catalog declares `follow.list` as a read so the existing route-purpose check
 admits it; the verifier still binds each preparation phase to its exact signed
@@ -3046,6 +3053,12 @@ Companion instance payloads, instance input/rename intents and conditional
 instance-removal captures remain host-internal. The author subset reuses the
 host's canonical validators; it is not a second presentation owner or a way
 around widget admission.
+`chat.item.show` is the "Show here" of a transcript reply: it asks that a
+readable Board item run its one live body in its Chat reply, so every Board host
+previews it. The mounted Board controller keeps that request while a reply that
+draws the item is on screen; opening the item on a Board host takes it back, and
+`unavailable` is the typed result when no such reply is visible. It changes only
+this viewer's single-runner election, never the item or its Board placement.
 
 The same development presentation subset admits `viewer.open` and
 `viewer.source.select` with source `computer` or `browser`, plus `viewer.close`,
