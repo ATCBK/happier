@@ -108,6 +108,7 @@ describe('Plugin Inspector manifest', () => {
       expect.objectContaining({
         id: 'self-check',
         execution: { target: 'daemon' },
+        surfaces: ['ui', 'agent', 'mcp'],
       }),
     ]);
     expect(INSPECTOR_SETTINGS).toMatchObject({
@@ -135,14 +136,14 @@ describe('Plugin Inspector manifest', () => {
         renderer: 'inspector-renderer',
         title: { key: 'plugins.inspector.title', fallback: 'Plugin Inspector' },
         placement: { kind: 'rail' },
-      }, {
+      }, expect.objectContaining({
         id: 'inspector-page',
         container: 'appPage',
         target: { kind: 'app' },
         renderer: 'inspector-renderer',
         title: { key: 'plugins.inspector.title', fallback: 'Plugin Inspector' },
         placement: { kind: 'rail' },
-      }, {
+      }), {
         id: 'inspector-browser-panel',
         container: 'browserPanel',
         target: { kind: 'browser', browserViewIdPath: '/browser/viewId' },

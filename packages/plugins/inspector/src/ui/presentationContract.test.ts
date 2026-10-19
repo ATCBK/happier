@@ -5,6 +5,7 @@ import {
   createSurfaceContextFixture,
 } from '@happier-dev/plugin-sdk/testing';
 import * as React from 'react';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 // First-party RNW contract coverage consumes the same public testing subpath
@@ -62,6 +63,52 @@ function verticalScrollAncestors(element: HTMLElement): HTMLElement[] {
 }
 
 describe('Inspector public presentation contract', () => {
+
+  it('waits for shared host readiness before reading inventory and reacquires without Retry', async () => {
+    let withdrawn = true;
+    let inventoryReads = 0;
+    let deferRefresh = false;
+    let rejectRefresh: ((error: PluginError) => void) | undefined;
+    let title = 'Review Assistant';
+    const initial = { ...createInspectorSurfaceContext(), machineConnectionPending: true, machineExecutionReady: false };
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'inventory-readiness', mountNonce: 'inventory-readiness-mount' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: initial,
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async ({ action }: InspectorExecuteActionRequest) => {
+        if (action !== 'plugins.list') return { ok: true };
+        inventoryReads += 1;
+        if (withdrawn) throw new PluginError({ code: 'unavailable', retryable: true,
+          diagnostics: [{ code: 'target_unavailable', severity: 'error' }] });
+        if (deferRefresh) return new Promise<never>((_resolve, reject) => { rejectRefresh = reject; });
+        return { plugins: [{ pluginId: 'com.acme.review-assistant', title, enabled: true }] };
+      } },
+    });
+    try {
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      expect(inventoryReads).toBe(0);
+      await expect(fixture.queryByText('No plugins installed.')).resolves.toBeUndefined();
+      withdrawn = false;
+      await React.act(async () => { await fixture.updateSurface({ ...initial,
+        machineConnectionPending: false, machineExecutionReady: true }); });
+      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      deferRefresh = true;
+      await fixture.press(await findInventoryRefreshRow(fixture));
+      expect(rejectRefresh).toBeTypeOf('function');
+      await React.act(async () => { await fixture.updateSurface(initial); });
+      await React.act(async () => { rejectRefresh?.(new PluginError({ code: 'unavailable', retryable: true })); });
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
+      deferRefresh = false;
+      title = 'Updated review assistant';
+      await React.act(async () => { await fixture.updateSurface({ ...initial,
+        machineConnectionPending: false, machineExecutionReady: true }); });
+      await expect(fixture.getByRole('button', { name: 'Reload Updated review assistant' })).resolves.toBeDefined();
+    } finally { await fixture.dispose(); }
+  });
 
   it('publishes the settled public Action result for the mounted self-check', async () => {
     const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => (
@@ -283,11 +330,12 @@ describe('Inspector public presentation contract', () => {
       if (listReadCount === 1) throw new Error('plugin_action_unavailable');
       return { plugins: [] };
     });
+    const context = { ...createInspectorSurfaceContext(), machineConnectionPending: false, machineExecutionReady: true };
     const fixture = await createPluginUiTestkit({
       identity: { instanceId: 'fixture-instance-155-error', mountNonce: 'fixture-mount-155-error' },
       authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
       surface: renderSurface,
-      surfaceContext: createInspectorSurfaceContext(),
+      surfaceContext: context,
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       handlers: { executeAction },
     });
@@ -296,6 +344,10 @@ describe('Inspector public presentation contract', () => {
       await expect(fixture.getByRole('alert')).resolves.toBeDefined();
       await expect(fixture.getByText('Plugin inventory unavailable')).resolves.toBeDefined();
       await expect(fixture.getByText('A plugin UI test host handler failed.')).resolves.toBeDefined();
+
+      await React.act(async () => { await fixture.updateSurface({ ...context }); });
+      expect(listReadCount).toBe(1);
+      await expect(fixture.getByRole('alert')).resolves.toBeDefined();
 
       await fixture.press(await fixture.findByRole('button', { name: 'Try inventory again' }));
 
