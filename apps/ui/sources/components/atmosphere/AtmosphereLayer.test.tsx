@@ -222,3 +222,17 @@ it('decides the Wallpaper veil at the window\'s middle for every surface, so Hom
         expect(regions.at.y - regions.reach.y).toBeLessThanOrEqual(regions.look.y0 + 1e-9);
     }
 });
+
+it('veils the whole column where cards come to rest, wherever a surface stands its head lines', async () => {
+    const { wallpaperToneRegions } = await import('./AtmosphereLayer');
+    const frame = { x: 0, y: 0, width: 1440, height: 1000 };
+    const rect = { x: 440, y: 40, width: 1000, height: 960 };
+    // The Wallpaper stays put while the page scrolls, so a card can rest anywhere in the pane's column: over the
+    // picture's bright horizon in the lower half too, not only around the head lines (FA22 GL1e).
+    for (const focusY of [400, 45, 600]) {
+        const regions = wallpaperToneRegions(frame, { rect, band: 0, horizonAt: 0.86, focus: { x: 500, y: focusY } });
+        expect(regions.at.y - regions.reach.y).toBeLessThanOrEqual(rect.y / frame.height + 1e-9);
+        expect(regions.at.y + regions.reach.y).toBeGreaterThanOrEqual((rect.y + rect.height) / frame.height - 1e-9);
+        expect(regions.reach.x).toBeCloseTo(rect.width / frame.width / 2);
+    }
+});
