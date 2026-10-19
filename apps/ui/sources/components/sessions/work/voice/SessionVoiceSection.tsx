@@ -96,6 +96,7 @@ export const SessionVoiceSection = React.memo(function SessionVoiceSection(
     >
       {field && declaration ? (
         <SessionVoicePicker
+          key={JSON.stringify([props.serverId, props.session.id, choice.providerId])}
           session={props.session}
           serverId={props.serverId}
           providerId={choice.providerId}

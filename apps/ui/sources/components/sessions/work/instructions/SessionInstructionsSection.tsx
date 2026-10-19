@@ -128,6 +128,7 @@ export const SessionInstructionsSection = React.memo(
     });
     return (
       <SessionInstructionsBody
+        key={JSON.stringify([serverId, session.id])}
         session={session}
         serverId={serverId}
         source={source}

@@ -46,7 +46,7 @@ export const SessionContextSection = React.memo(function SessionContextSection(p
     const access = resolveSessionInstructionsAccess(session);
     const ownerMetadata = React.useMemo(() => readSessionOwnerMetadataView(session), [session]);
     if (access !== 'readable' || !ownerMetadata) return null;
-    return <SessionContextBody session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
+    return <SessionContextBody key={JSON.stringify([serverId, session.id])} session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
 });
 
 const SessionContextBody = React.memo(function SessionContextBody(props: Readonly<{

@@ -72,7 +72,8 @@ export const SessionMemorySection = React.memo(function SessionMemorySection(pro
     const access = resolveSessionInstructionsAccess(session);
     const ownerMetadata = React.useMemo(() => readSessionOwnerMetadataView(session), [session]);
     if (access !== 'readable' || !ownerMetadata) return null;
-    return <SessionMemoryBody session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
+    // A pending choice belongs to this Session, including while another Session opens in Info.
+    return <SessionMemoryBody key={JSON.stringify([serverId, session.id])} session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
 });
 
 const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<{
