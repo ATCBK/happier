@@ -31,6 +31,7 @@ import type { StoredCredentials } from '@/persistence';
 
 import {
     createAccountPluginDataStorageHost,
+    type AccountPluginDataHttpClient,
     type PluginAccountCollectionWatchInvalidation,
 } from './accountPluginDataStorage';
 import { publishPluginAccountAvailabilityChanges, publishPluginAccountCollectionWatchInvalidation, retirePluginAccountCollectionWatchScope } from './pluginAccountSettingsChangeBroker';
@@ -871,7 +872,7 @@ describe('Account plugin Data storage host', () => {
             resolveReleaseLessDeclaration?: (pluginId: string) => ParsedPluginManifestV2 | null;
             resolveReleaseLessCollectionMigrations?: () => Promise<import('@happier-dev/plugin-sdk').PluginAccountCollectionMigrationRuntimeProjection>;
             scopeKey: () => string;
-            post: (url: string, body: string) => Promise<Readonly<{ status: number; data: unknown }>>;
+            post: AccountPluginDataHttpClient['post'];
         }>) {
             const host = createAccountPluginDataStorageHost({
                 contracts: params.contracts ?? [admitted],
@@ -1037,6 +1038,44 @@ describe('Account plugin Data storage host', () => {
             await collection.get('task-2');
             await collection.get('task-3');
             expect(calls.filter((url) => url === CLAIM_URL)).toHaveLength(2);
+        });
+
+        it('encodes an immutable declaration once across retryable claims without transport reparsing', async () => {
+            const encodedClaim = JSON.stringify({ manifest: declaredManifest });
+            const claimBodies: unknown[] = [];
+            // Axios's adapter is the actual HTTP boundary. Keep its real request
+            // transforms and the host's serializers, validators and retry owner.
+            const transport = axios.create({
+                adapter: async config => {
+                    const claim = config.url === CLAIM_URL;
+                    if (claim) claimBodies.push(config.data);
+                    return { config, headers: {}, statusText: '',
+                        status: claim ? 503 : 200,
+                        data: claim ? {} : { row: null, absenceEpoch: 0 } };
+                },
+            });
+            // Passive native-engine observations measure the expensive work
+            // itself; neither JSON operation has a substituted implementation.
+            const stringify = vi.spyOn(JSON, 'stringify');
+            const parse = vi.spyOn(JSON, 'parse');
+            try {
+                const bind = claimingHost({
+                    resolveReleaseLessDeclaration: () => declaredManifest,
+                    scopeKey: () => 'encoded-declaration-retry',
+                    post: async (url, body, config) => await transport.post(url, body, config),
+                });
+                const collection = bind().collection(collectionDefinition);
+                await expect(collection.get('task-1')).resolves.toBeNull();
+                await expect(collection.get('task-2')).resolves.toBeNull();
+                expect(claimBodies).toEqual([encodedClaim, encodedClaim]);
+                const encodings = stringify.mock.calls.filter(([value]) => value
+                    && typeof value === 'object' && 'manifest' in value && value.manifest === declaredManifest);
+                expect(encodings).toHaveLength(1);
+                expect(parse.mock.calls.filter(([value]) => value === encodedClaim)).toHaveLength(0);
+            } finally {
+                stringify.mockRestore();
+                parse.mockRestore();
+            }
         });
 
         it('retains a deterministic refusal for repeated and concurrent operations, with a typed remedy', async () => {
