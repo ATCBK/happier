@@ -70,25 +70,45 @@ async function waitForAllGone(pids, timeoutMs, isAlive) {
 }
 
 // Roots currently held by the discovery fence below. A stopped process never acts on SIGTERM,
-// so if this owner exits mid-discovery the root would stay frozen and orphaned forever.
+// so if this owner exits or is signalled mid-discovery the root would stay frozen and orphaned.
 const fencedRoots = new Set();
 let fenceExitGuardInstalled = false;
+const FENCE_TERMINATION_SIGNALS = process.platform === 'win32' ? [] : ['SIGTERM', 'SIGINT', 'SIGHUP'];
 
-function releaseFencedRootsOnExit() {
+function releaseFencedRoots() {
   for (const proc of fencedRoots) {
     if (proc.exitCode != null || proc.signalCode != null) continue;
     bestEffortKillPid(proc.pid, 'SIGTERM', () => {});
     bestEffortKillPid(proc.pid, 'SIGCONT', () => {});
   }
   fencedRoots.clear();
+  removeFenceSignalGuards();
+}
+
+function onFenceSignal(signal) {
+  releaseFencedRoots();
+  // Listening for a signal replaces its default termination; restore it when no other owner handles it.
+  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+}
+
+function removeFenceSignalGuards() {
+  for (const signal of FENCE_TERMINATION_SIGNALS) process.off(signal, onFenceSignal);
 }
 
 function holdFencedRoot(proc) {
   if (!fenceExitGuardInstalled) {
     fenceExitGuardInstalled = true;
-    process.on('exit', releaseFencedRootsOnExit);
+    process.on('exit', releaseFencedRoots);
+  }
+  if (fencedRoots.size === 0) {
+    for (const signal of FENCE_TERMINATION_SIGNALS) process.on(signal, onFenceSignal);
   }
   fencedRoots.add(proc);
+}
+
+function releaseFencedRoot(proc) {
+  fencedRoots.delete(proc);
+  if (fencedRoots.size === 0) removeFenceSignalGuards();
 }
 
 async function killProcessTree(proc, opts, enumerate = psList) {
@@ -140,7 +160,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   for (const targetPid of descendants) kill(targetPid, 'SIGTERM');
   if (rootStopped) kill(pid, 'SIGCONT');
   kill(pid, 'SIGTERM');
-  fencedRoots.delete(proc);
+  releaseFencedRoot(proc);
   await waitForAllGone(all, graceMs, isAlive);
 
   const remaining = all.filter((p) => isAlive(p));

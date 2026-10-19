@@ -119,22 +119,27 @@ describe('killProcessTree', () => {
     }
   });
 
-  it.runIf(process.platform !== 'win32')('does not leave the root stopped when its owner exits during discovery', async () => {
+  it.runIf(process.platform !== 'win32').each(['exit', 'SIGTERM'] as const)('does not leave the root stopped when its owner ends by %s during discovery', async ending => {
     const processTreePath = join(__dirname, '../../../../scripts/process_tree.cjs');
-    // Real owner process: it stops its detached root, then exits before discovery settles,
+    // Real owner process: it stops its detached root, then ends before discovery settles,
     // like a provider runner that finishes shutdown while cleanup is still pending.
     const owner = spawnInlineNodeTestProcess(`
       const { spawn } = require('node:child_process');
       const { killProcessTree } = require(${JSON.stringify(processTreePath)});
       const root = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+      void killProcessTree(root, { graceMs: 25 }, () => new Promise(() => {}));
       console.log(String(root.pid));
-      const pendingDiscovery = () => new Promise(() => { setTimeout(() => process.exit(0), 100); });
-      void killProcessTree(root, { graceMs: 25 }, pendingDiscovery);
+      if (${JSON.stringify(ending)} === 'exit') setTimeout(() => process.exit(0), 100);
+      else setInterval(() => {}, 1000);
     `, { stdio: ['ignore', 'pipe', 'ignore'] });
     const [output] = await once(owner.stdout!, 'data');
     const rootPid = Number(String(output).trim());
     try {
-      await once(owner, 'exit');
+      const ended = once(owner, 'exit');
+      if (ending === 'SIGTERM') owner.kill('SIGTERM');
+      const [, signal] = await ended;
+      // The guard must not swallow the owner's default signal termination.
+      expect(signal).toBe(ending === 'SIGTERM' ? 'SIGTERM' : null);
       await expect(waitForProcessExit(rootPid, { timeoutMs: 3_000 })).resolves.toBe(true);
     } finally {
       try { process.kill(rootPid, 'SIGKILL'); } catch { /* already gone */ }
