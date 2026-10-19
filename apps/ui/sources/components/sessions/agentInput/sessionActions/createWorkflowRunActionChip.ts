@@ -2,7 +2,9 @@ import type { AgentInputExtraActionChip } from '../agentInputContracts';
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import type { AgentInputContentPopoverRenderArgs } from '../components/AgentInputContentPopover';
 import type { ReactNode } from 'react';
-import { WORKFLOW_START_PICKER_MAX_WIDTH_PX } from '@/components/workflows/run/WorkflowStartPicker';
+
+/** Room for the picker's list beside its preview (lab T4-R); narrower windows keep the list alone. */
+const WORKFLOW_START_PICKER_MAX_WIDTH_PX = 640;
 
 /** Shared Run… descriptor. The composer owns intent/overflow; details mount only in its demanded content. */
 export function createWorkflowRunActionChip(params: Readonly<{

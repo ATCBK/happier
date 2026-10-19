@@ -112,15 +112,18 @@ const styles = StyleSheet.create((theme) => ({
     subjectHeaderScrolled: {
         borderBottomColor: theme.colors.border.default,
     },
+    subjectText: {
+        flexShrink: 1,
+        flexGrow: 1,
+        minWidth: 0,
+    },
     subjectTitle: {
         ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        flexShrink: 1,
     },
     subjectLocation: {
         ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        flexShrink: 1,
     },
     trailing: {
         marginLeft: 'auto',
@@ -183,15 +186,17 @@ export function WorkflowBlockOptions(props: WorkflowInspectorProps & Readonly<{ 
                 {showBack ? (
                     <HeaderAction label={t('workflows.page.inspector.back')} onPress={() => setPage('main')} testID={`${testIDPrefix}-back`} />
                 ) : null}
-                {/* A sub-page leads with what it edits; the block it belongs to becomes its location. */}
-                <Text style={styles.subjectTitle} numberOfLines={1}>{subPageTitle(page, block) ?? blockTitle(block)}</Text>
-                {subPageTitle(page, block) !== null ? (
-                    <Text style={styles.subjectLocation} numberOfLines={1}>{`· ${blockTitle(block)}`}</Text>
-                ) : block.kind === 'step' ? (
-                    <Text style={styles.subjectLocation} numberOfLines={1}>
-                        {`· ${stepDiffers(block) ? t('workflows.page.inspector.differsFromWorkflow') : t('workflows.page.inspector.followsWorkflow')}`}
-                    </Text>
-                ) : null}
+                {/* A sub-page leads with what it edits; the block it belongs to becomes its location, under the title (lab I1). */}
+                <View style={styles.subjectText}>
+                    <Text style={styles.subjectTitle} numberOfLines={1}>{subPageTitle(page, block) ?? blockTitle(block)}</Text>
+                    {subPageTitle(page, block) !== null ? (
+                        <Text style={styles.subjectLocation} numberOfLines={1}>{blockTitle(block)}</Text>
+                    ) : block.kind === 'step' ? (
+                        <Text style={styles.subjectLocation} numberOfLines={1}>
+                            {stepDiffers(block) ? t('workflows.page.inspector.differsFromWorkflow') : t('workflows.page.inspector.followsWorkflow')}
+                        </Text>
+                    ) : null}
+                </View>
                 {props.presentation === 'popover' && props.onDone !== undefined ? (
                     <HeaderAction label={t('common.done')} onPress={props.onDone} testID={`${testIDPrefix}-done`} trailing />
                 ) : null}

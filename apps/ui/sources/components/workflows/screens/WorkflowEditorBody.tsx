@@ -283,6 +283,9 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s12,
         paddingBottom: theme.space.s8,
     },
+    settingsModalBody: {
+        paddingHorizontal: theme.space.s16,
+    },
     /** The seeded composer at the foot of the Agent tab, where the Session's own composer will sit. */
     agentDraft: {
         flex: 1,
@@ -319,7 +322,8 @@ type WorkflowSettingsModalProps = Readonly<{
 /** Workflow settings on a phone: the same inspector content, in `@/modal`. */
 function WorkflowSettingsModal(props: WorkflowSettingsModalProps & CustomModalInjectedProps): React.ReactElement {
     return (
-        <ItemList>
+        // The card body is a contained page: it owns the edge its sections sit on (the header's), as the docked pane's does.
+        <ItemList containerStyle={styles.settingsModalBody}>
             <WorkflowInspector {...props.inspector} />
         </ItemList>
     );

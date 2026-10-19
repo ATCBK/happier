@@ -2749,6 +2749,20 @@ describe('WorkflowRunContent', () => {
     ).toBe('workflows.run.stepNumber:{"ordinal":"1"} · The Run store could not be written.');
     await unselected.unmount();
 
+    // An interrupted Run whose step failed says why under its status, from the same retained cause.
+    const interrupted = await renderContent({
+      run: createWorkflowRunSummaryFixture({ state: 'interrupted' }),
+      invocations: [invocation],
+      selectedInvocationId: null,
+      invocationProgressById: new Map([[invocation.id, progress]]),
+      firstFailedInvocationId: invocation.id,
+      firstFailedInvocationResolution: 'resolved',
+    });
+    expect(
+      interrupted.findByTestId('workflow-run-failure-reason')?.props.children,
+    ).toBe('workflows.run.stepNumber:{"ordinal":"1"} · The Run store could not be written.');
+    await interrupted.unmount();
+
     // A step that finished says nothing about an older failure reason.
     const completed = await render('completed');
     expect(completed.getTextContent()).not.toContain(

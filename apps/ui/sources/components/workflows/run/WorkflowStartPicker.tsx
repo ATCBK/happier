@@ -18,10 +18,11 @@ import { resolveWorkflowBuiltinInputPresentation } from '../presentation/workflo
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
-/** Two panes (lab T4-R): the list, and beside it what the highlighted pattern does and asks for. */
+/**
+ * Two panes (lab T4-R): the list, and beside it what the highlighted pattern does and asks for. The Run…
+ * chip (`createWorkflowRunActionChip`) gives the popover the width; narrower, the list stands alone.
+ */
 const PICKER_DETAIL_PANE = Object.freeze({ minListWidthPx: 560, widthPx: 320 });
-/** Room for the list beside its preview; a phone sheet or a narrow window falls back to the list alone. */
-export const WORKFLOW_START_PICKER_MAX_WIDTH_PX = 640;
 
 const styles = StyleSheet.create((theme) => ({
     preview: { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s12 },
@@ -37,21 +38,26 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 /** The highlighted pattern itself: what it does, the steps it takes, and what it asks for. */
-function WorkflowStartPreview(props: Readonly<{ selection: WorkflowStartSelection; asks: string }>) {
-    const steps = props.selection.definition.blocks;
+function WorkflowStartPreview(props: Readonly<{ selection: WorkflowStartSelection }>) {
+    const { definition } = props.selection;
+    const presentation = resolveWorkflowBuiltinInputPresentation(props.selection.id);
+    const inputs = definition.inputs.map((input) => presentation?.[input.name]?.title ?? workflowInputTitle(input));
     return <ScrollView testID={`workflow-start-preview:${props.selection.id}`} contentContainerStyle={styles.preview}>
         <View style={styles.previewHead}>
             <Text style={styles.previewTitle}>{props.selection.name}</Text>
             {props.selection.description ? <Text style={styles.previewBody}>{props.selection.description}</Text> : null}
         </View>
-        {steps.length === 0 ? null : <View style={styles.previewSection}>
+        {definition.blocks.length === 0 ? null : <View style={styles.previewSection}>
             <Text style={styles.previewLabel}>{t('workflows.tabs.steps')}</Text>
-            {steps.map((block, index) => <View key={block.id} style={styles.previewStep}>
+            {definition.blocks.map((block, index) => <View key={block.id} style={styles.previewStep}>
                 <Text style={styles.previewOrdinal}>{index + 1}</Text>
                 <Text style={styles.previewStepName}>{workflowBlockReferenceLabel(block, t('workflows.start.workflow'))}</Text>
             </View>)}
         </View>}
-        <Text style={styles.previewMeta}>{props.asks}</Text>
+        {inputs.length === 0 ? <Text style={styles.previewMeta}>{t('workflows.start.noInputs')}</Text> : <View style={styles.previewSection}>
+            <Text style={styles.previewLabel}>{t('workflows.start.inputs')}</Text>
+            <Text style={styles.previewStepName}>{inputs.join(' · ')}</Text>
+        </View>}
     </ScrollView>;
 }
 
@@ -101,7 +107,7 @@ export function WorkflowStartPicker(props: Readonly<{
                 // What it does helps choose; what it asks for is shown once it is chosen.
                 id: entry.id, label: entry.name, subtitle: entry.description || asks(entry.definition, entry.id),
                 testID: `workflow-choice:${entry.id}`,
-                detailContent: () => <WorkflowStartPreview selection={entry} asks={asks(entry.definition, entry.id)} />,
+                detailContent: () => <WorkflowStartPreview selection={entry} />,
                 disabled: props.hasOriginSession !== true
                     && BUILTIN_WORKFLOW_CATALOG_V1.find((candidate) => candidate.id === entry.id)?.requiresOriginSession,
             })) },
@@ -128,7 +134,7 @@ export function WorkflowStartPicker(props: Readonly<{
                             source: { kind: 'saved', definitionId: result.definitionId, revision: result.revision },
                         } satisfies WorkflowStartSelection;
                         return { option: { id: selection.id, label: selection.name, subtitle: selection.description || asks(selection.definition),
-                            detailContent: () => <WorkflowStartPreview selection={selection} asks={asks(selection.definition)} /> }, selection };
+                            detailContent: () => <WorkflowStartPreview selection={selection} /> }, selection };
                     }));
                     if (signal.aborted || !lifetime.isCurrent()) return { options: [] };
                     setLibraryShown(true);
@@ -139,7 +145,7 @@ export function WorkflowStartPicker(props: Readonly<{
             },
             { kind: 'static', id: 'plugins', title: t('workflows.plugins.fromPlugins'), options: pluginSelections.map((entry) => ({
                 id: entry.id, label: entry.name, subtitle: entry.description || asks(entry.definition, entry.id), testID: `workflow-choice:${entry.id}`,
-                detailContent: () => <WorkflowStartPreview selection={entry} asks={asks(entry.definition, entry.id)} />,
+                detailContent: () => <WorkflowStartPreview selection={entry} />,
             })) },
         ],
     }), [accountLifetime, asks, builtinSelections, library.definitions, pluginSelections, props.hasOriginSession]);

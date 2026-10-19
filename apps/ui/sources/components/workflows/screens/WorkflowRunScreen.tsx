@@ -658,7 +658,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     : { revision: detail.run.revision, terminal: isTerminalWorkflowRunState(detail.run.state) };
 
                 const historyPromise = workflowRunDetailActions.listInvocations({ runId, includeContent: true }, controller.signal);
-                const failedPromise = observedState.terminal
+                // A parked interrupted Run is read the same way: its failed step is why it stopped.
+                const observedRunState = detail?.run.state ?? refreshedSummary?.state;
+                const failedPromise = observedState.terminal || observedRunState === 'interrupted'
                     ? workflowRunDetailActions.listInvocations({ runId, lifecycles: ['failed'], limit: 1 }, controller.signal).then(async (page) => {
                         const history = await historyPromise;
                         const indices = [...new Map([...history.invocations, ...page.invocations].map(index => [index.id, index])).values()];

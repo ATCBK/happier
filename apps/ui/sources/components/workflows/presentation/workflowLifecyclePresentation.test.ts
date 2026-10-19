@@ -55,6 +55,10 @@ describe('describeWorkflowInvocationLifecycle', () => {
         expect(describeWorkflowRunState('waiting_for_review', { inAttentionWindow: true }).label)
             .toBe('workStatus.buckets.needs_you');
         expect(describeWorkflowRunState('failed', { inAttentionWindow: true }).label).toBe('workflows.runState.failed');
+        // Interrupted is already the attention word, and says why the person is needed; the row and the
+        // Run page header name it the same way.
+        expect(describeWorkflowRunState('interrupted', { inAttentionWindow: true })).toMatchObject({
+            label: 'workflows.runState.interrupted', variant: 'attention' });
         // An explicit composed word (the Run page headline) stays the caller's.
         expect(describeWorkflowRunState('running', { inAttentionWindow: true, word: 'Running' }).label).toBe('Running');
     });

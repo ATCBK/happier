@@ -216,8 +216,9 @@ export function describeWorkflowRunState(
     // own state word ("Running") in the attention tone would claim healthy and urgent at once.
     // A held Run uses that same short word before attention membership catches up. A terminal
     // Run reports its outcome; an explicit composed headline stays the caller's.
+    // "Interrupted" is already an attention word that says why the person is needed, so it stays.
     const needsYou = context?.word === undefined && (state === 'waiting_for_review'
-        || context?.inAttentionWindow === true && !isTerminalWorkflowRunState(state));
+        || context?.inAttentionWindow === true && !isTerminalWorkflowRunState(state) && state !== 'interrupted');
     const status = resolveWorkStatusTone({ kind: 'workflow_run', facts: {
         state,
         word: context?.word ?? (needsYou ? t('workStatus.buckets.needs_you') : t(`workflows.runState.${state}`)),
