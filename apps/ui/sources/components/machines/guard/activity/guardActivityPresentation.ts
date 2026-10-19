@@ -8,7 +8,7 @@ import { formatGuardClock, formatGuardDuration, guardLevelWord } from '../guardP
 
 /**
  * One Activity receipt in words (lab `rg` G7, `RS.evt`): its icon, title, the bold figure (memory
- * freed, or bytes in Trash), the reason, its tone (a decision is open, or something failed) and the
+ * or disk freed, or bytes in Trash), the reason, its tone (a decision is open, or something failed) and the
  * ways back. The receipt is the daemon's; nothing here re-derives what happened.
  */
 
@@ -24,7 +24,7 @@ export type GuardActivityRowModel = Readonly<{
     at: number;
     icon: IconName;
     title: string;
-    /** The bold amount: memory freed, or bytes now in Trash. */
+    /** The bold amount: memory or disk freed, or bytes now in Trash. */
     figure: string | null;
     reason: string | null;
     /** Typed copy input for the shared row presenter; diagnostics never become its reason. */

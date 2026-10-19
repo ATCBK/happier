@@ -9,6 +9,9 @@ describe('Guard Activity presentation data', () => {
     it('keeps reclaimed housekeeping and emptied Trash as decimal disk bytes beside binary freed memory', () => {
         const receipt = (kind: 'housekeeping' | 'stopped_session' | 'trash_emptied', freedBytes: number, undoneAt?: number) => MachineGuardActivityRowV1Schema.parse({
             v: 1, id: kind, at: 1000, kind, rule: kind === 'stopped_session' ? 'idle_sessions' : 'housekeeping',
+            subject: kind === 'stopped_session' ? { kind: 'session', sessionId: 'session', title: 'Build' }
+                : kind === 'housekeeping' ? { kind: 'housekeeping', logs: 4, recordings: 1, trashEntries: 2 }
+                : { kind: 'trash', items: 3 },
             outcome: 'done', attribution: { kind: 'unknown' }, freedBytes, ...(undoneAt === undefined ? {} : { undoneAt }),
         });
         const housekeeping = receipt('housekeeping', 1_000_000_000);
