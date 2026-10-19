@@ -106,6 +106,19 @@ describe('active account settings snapshot publication', () => {
     expect(changed.snapshot.settings.sessionPendingQueueDeliveryTiming).toBe('after_foreground_ready');
   });
 
+  it('retains Provider admission when a newer preference publication reobserves the same row', () => {
+    const base = snapshot({ scopeKey: 'scope-provider-refresh', version: 1, timing: 'after_runtime_idle' });
+    const admitted = { status: 'ready' as const, revision: 4, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    setActiveAccountSettingsSnapshot({ ...base, providerConnectionsCatalog: admitted });
+    const reobserved = { ...admitted, catalog: ProviderConnectionsCatalogV1Schema.parse(admitted.catalog) };
+    const result = commitActiveAccountSettingsSnapshot({ ...base, settingsVersion: 2, providerConnectionsCatalog: reobserved });
+    expect(result.didCommit).toBe(true);
+    expect(sameProviderConnectionsCatalogAuthority(admitted, result.snapshot.providerConnectionsCatalog)).toBe(true);
+    const changed = { ...reobserved, revision: 5 };
+    const newer = commitActiveAccountSettingsSnapshot({ ...base, settingsVersion: 3, providerConnectionsCatalog: changed });
+    expect(sameProviderConnectionsCatalogAuthority(admitted, newer.snapshot.providerConnectionsCatalog)).toBe(false);
+  });
+
   it('publishes ACP row-only revisions and rejects a retired lifetime without rewriting preferences', () => {
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-acp', version: 7, timing: 'after_runtime_idle' }));
     const bound = { scopeKey: 'scope-acp', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };

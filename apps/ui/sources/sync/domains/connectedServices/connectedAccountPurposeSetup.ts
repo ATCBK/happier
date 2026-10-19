@@ -58,8 +58,9 @@ export function resolveConnectedAccountPurposeSetupSelectedAccount(input: Readon
     });
 }
 
-/** Resource-default Actions retain Resource-only admission. */
+/** Provisioner setup returns an explicit input choice rather than writing a default. */
 export function isConnectedAccountPurposeSetupTargetCurrent(input: Parameters<typeof resolveConnectedAccountPurposeSetupSelectedAccount>[0]): boolean {
-    return readConnectedAccountPurposeSetupDeclaration(input.request, input.viewer, input.runtime)?.consumerKind === 'resource'
+    const declaration = readConnectedAccountPurposeSetupDeclaration(input.request, input.viewer, input.runtime);
+    return Boolean(declaration && declaration.consumerKind !== 'machineProvisioner')
         && resolveConnectedAccountPurposeSetupSelectedAccount(input) !== null;
 }

@@ -39,8 +39,8 @@ export type ConnectedServiceConfigurationActionHostV1 = Readonly<{
   /** One acknowledged catalog CAS, atomically retiring any changed predecessor default carriers. */
   mutatePurposeBindings(mutate: ConnectedAccountPurposeMutationIntentV1): Promise<void>;
   resolveAgent(agentId: string, machineId?: string): Promise<AgentDefaultChoiceAgent | null>;
-  /** The installed Resource projection admits the exact target and retains its incumbent currentness. */
-  admitResourcePurposeTarget?(input: ReturnType<(typeof inputs)['connectedServices.purposes.default.set']['parse']>): Promise<(() => void) | null>;
+  /** The installed consumer projection admits the exact target and retains its currentness. */
+  admitPurposeTarget?(input: ReturnType<(typeof inputs)['connectedServices.purposes.default.set']['parse']>): Promise<(() => void) | null>;
   resetQuota(input: QuotaResetInput): Promise<unknown>;
   /** Open B only through the captured Account's canonical reader. */
   readQuota?(input: ConnectedServiceQuotaGetInputV1): Promise<unknown>;
@@ -387,8 +387,8 @@ export async function executeConnectedServiceConfigurationActionV1(
     }
     case 'connectedServices.purposes.default.set': {
       const args = inputs[actionId].parse(input);
-      if (!host.admitResourcePurposeTarget) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-      const assertDeclared = await host.admitResourcePurposeTarget(args);
+      if (!host.admitPurposeTarget) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      const assertDeclared = await host.admitPurposeTarget(args);
       host.assertCurrent();
       if (!assertDeclared) return { ok: false, errorCode: 'connected_account_purpose_unavailable', error: 'connected_account_purpose_unavailable' };
       assertDeclared();

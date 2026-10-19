@@ -85,7 +85,7 @@ export function ConnectedServiceSetupPage(props: Readonly<{
             if (!next) throw new ConnectedAccountCatalogOperationError('connected_account_purpose_unavailable');
             if (props.onSelected) await props.onSelected(selected.ref);
             else {
-                if (declaration?.consumerKind !== 'resource') throw new ConnectedAccountCatalogOperationError('connected_account_purpose_unavailable');
+                if (!declaration || declaration.consumerKind === 'machineProvisioner') throw new ConnectedAccountCatalogOperationError('connected_account_purpose_unavailable');
                 await mutateDefaults({ kind: 'resource', input: { machineId: request.machineId, purpose: request.purpose, target: next } });
                 if (lifetime?.isCurrent()) close();
             }

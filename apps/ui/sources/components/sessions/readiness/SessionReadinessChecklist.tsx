@@ -23,7 +23,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
-import { seedNewDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
+import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
@@ -133,7 +133,7 @@ export const SessionReadinessChecklist = React.memo(function SessionReadinessChe
     if (!ownerName || !owner.accountId) return;
     const mention = `@${ownerName}`;
     const reason = joinHappierFacts(owner.botName, cause);
-    seedNewDiscussionDraft({
+    seedDiscussionDraft({
       scope: props.scope,
       title: t('session.collaboration.readiness.askTitle', { bot: owner.botName ?? t('session.collaboration.readiness.facts.agent') }),
       text: `${mention} ${t('session.collaboration.readiness.askBody', { reason })}`,

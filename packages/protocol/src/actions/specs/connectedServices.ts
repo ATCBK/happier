@@ -133,13 +133,13 @@ export const CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS = [
       { path: 'machineId', title: 'Catalog machine', widget: 'text' },
       { path: 'onlyIfUnset', title: 'Keep an intervening default', widget: 'boolean' },
     ] } },
-  { ...common, id: 'connectedServices.purposes.default.set', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'direct' }, title: 'Choose Resource connected-account default',
-    description: 'Choose the active personal account or pool for one purpose declared by the installed Resource on the selected machine.',
+  { ...common, id: 'connectedServices.purposes.default.set', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'direct' }, title: 'Choose default connected account',
+    description: 'Choose the active personal account or pool for one purpose declared by an installed Resource or Action on the selected machine.',
     bindings: { mcpToolName: 'connected_services_purposes_default_set' },
     inputSchema: inputs['connectedServices.purposes.default.set'], outputSchema: outputs['connectedServices.purposes.default.set'],
     inputHints: { fields: [
       { path: 'machineId', title: 'Declaration machine', widget: 'text', required: true },
-      { path: 'purpose', title: 'Qualified Resource purpose', widget: 'json', required: true },
+      { path: 'purpose', title: 'Qualified consumer purpose', widget: 'json', required: true },
       { path: 'target', title: 'Qualified account or pool', widget: 'json', required: true },
     ] } },
   { ...common, id: 'connectedServices.pools.create', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'direct' }, title: 'Create connected-service pool', description: 'Create a pool through the qualified Connected Account owner.', bindings: { mcpToolName: 'connected_services_pools_create' }, inputSchema: inputs['connectedServices.pools.create'], outputSchema: outputs['connectedServices.pools.create'], inputHints: { fields: [

@@ -162,6 +162,10 @@ export function preserveAccountCatalogsInSnapshot(
       .filter(field => previous[field] !== accepted[field] && isDeepStrictEqual(previous[field], accepted[field]));
     if (unchanged.length > 0) accepted = { ...accepted,
       ...Object.fromEntries(unchanged.map(field => [field, previous[field]])) };
+    if (accepted.providerConnectionsCatalog && accepted.providerConnectionsCatalog !== previous.providerConnectionsCatalog) accepted = { ...accepted,
+      providerConnectionsCatalog: preserveProviderConnectionsCatalogAuthority(
+        previous.providerConnectionsCatalog, accepted.providerConnectionsCatalog),
+    };
   }
   if (previous && belongsToSameAccount(previous, accepted)
     && !isDeepStrictEqual(previous.settingsSecretsReadKeys, accepted.settingsSecretsReadKeys)) {
