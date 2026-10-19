@@ -1,5 +1,4 @@
-import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
-import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
+import { isMachineReachableV1, isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { createServerAccountScope, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -88,24 +87,8 @@ export function isMachineReachable(
         requestOutcome: readMachineRequestReachabilityObservation(scope, machine.id)?.outcome });
 }
 
-/**
- * Only explicit target-unavailable verdicts may override pushed presence. A missing method,
- * including an older Home's ambiguous verdict, establishes no Machine-wide reachability fact.
- */
-export function isMachineRequestReachabilityFailure(error: unknown): boolean {
-    const rpcErrorCode = readRpcErrorCode(error);
-    if (rpcErrorCode === 'RPC_METHOD_NOT_AVAILABLE') return false;
-    if (rpcErrorCode === 'target_unavailable' || rpcErrorCode === 'machine_unavailable' || rpcErrorCode === 'machine_offline') {
-        return true;
-    }
-    if (!error || typeof error !== 'object') return false;
-    const code = 'code' in error ? String(error.code ?? '') : '';
-    // A caller deadline measures waiting, not target availability. Slow domain
-    // work can exhaust it while presence and unrelated operations stay healthy.
-    return code === 'target_unavailable'
-        || code === 'machine_unavailable'
-        || code === 'machine_offline';
-}
+/** The protocol-owned verdict; a failed request overrides pushed presence until a later reply or reconnect. */
+export const isMachineRequestReachabilityFailure = isMachineRequestReachabilityFailureV1;
 
 export function clearMachineRequestReachabilityForMachine(scope: MachineReachabilityScope, machineId: string): void {
     const key = observationKey(scope, machineId);

@@ -5,6 +5,7 @@ import { RequesterSessionCurrentnessPurposeV1Schema, type RequesterSessionCurren
 import type { SessionApprovalDecisionCurrentnessV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { MachineAccessLossCustodyRequestV1Schema, MachineAdmissionVerifyResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext, isSocketRpcMachineAccessLossServerOriginAuthorizationContext, parseSocketRpcAuthorizationContext, resolveSocketRpcSessionWriteAuthorizationMethod, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/socketRpc';
+import { isSocketRpcMachineReadServerOriginAuthorizationContext, SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { PreparedTransferRpcRequestV1Schema, resolvePreparedTransferRpcPhaseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
 import { SessionTransferRpcMethodV1Schema } from '@happier-dev/protocol/socketRpc';
@@ -456,6 +457,19 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
   callerInputAuthorization?: ExternalActionExecutionAuthorizationV1;
   signal?: AbortSignal;
 }>, machine?: MachineRpcAdmissionBoundary): Promise<RpcAuthorizationResult> {
+  if (isSocketRpcMachineReadServerOriginAuthorizationContext(request.authorization)) {
+    const authority = request.authorization;
+    if (!machine || authority.machineId !== machine.machineId
+      || !SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS.some(method => request.method === `${machine.machineId}:${method}`))
+      return forbidden('machine_target');
+    try {
+      const custodianAccountId = await machine.resolveCustodianAccountId(request.signal);
+      if (request.signal?.aborted) return forbidden('request_cancelled');
+      if (authority.accountId !== custodianAccountId) return forbidden('machine_custodian');
+    } catch { return forbidden('authorization_unavailable'); }
+    // Read scope is stamped by the authenticated Home, never the generic client CALL parser.
+    // Keep any additional installed-Machine admission below intact.
+  }
   const isSourcePhase = request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE
     || request.method.endsWith(`:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_HANDOFF_SOURCE_PHASE}`);
   const isProjectSource = request.method.endsWith(`:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_MATERIALIZE_FOR_OPEN}`);
@@ -593,6 +607,7 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
       return forbidden('authorization_unavailable');
     }
   }
+  if (isSocketRpcMachineReadServerOriginAuthorizationContext(request.authorization)) return { ok: true };
   const sessionRule = resolveSocketRpcSessionAuthorization(request.method);
   if (sessionRule?.machineScope === true && request.machineAdmission !== undefined) {
     // The exact installation and current Home admission were verified above.

@@ -3,6 +3,18 @@ import * as socketProtocol from './socket.js';
 import { RPC_METHODS, SESSION_RPC_METHODS } from './methods.js';
 import { resolveMachineRpcRoutePolicy } from '../machines/peer/mediation/rpc/routePolicyV1.js';
 
+it('keeps Home Machine-read authority closed and outside generic client authorization', () => {
+  const authority = socketProtocol.SocketRpcMachineReadServerOriginAuthorizationContextV1Schema.parse({
+    kind: 'machine.read.serverOrigin', accountId: 'alice', machineId: 'machine-a',
+  });
+  expect(socketProtocol.isSocketRpcMachineReadServerOriginAuthorizationContext(authority)).toBe(true);
+  expect(socketProtocol.parseSocketRpcAuthorizationContext(authority)).toBeNull();
+  for (const invalid of [{ ...authority, resourceId: 'injected' }, { ...authority, accountId: '' },
+    { ...authority, machineId: '' }, { kind: authority.kind }]) {
+    expect(socketProtocol.isSocketRpcMachineReadServerOriginAuthorizationContext(invalid)).toBe(false);
+  }
+});
+
 it('classifies detached execution reads without weakening Session authority or the Session-only broker', () => {
   for (const method of [SESSION_RPC_METHODS.EXECUTION_RUN_GET, SESSION_RPC_METHODS.EXECUTION_RUN_LIST, SESSION_RPC_METHODS.EXECUTION_RUN_WAIT]) {
     expect(socketProtocol.resolveSocketRpcSessionAuthorization(method)).toMatchObject({

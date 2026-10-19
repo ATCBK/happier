@@ -366,6 +366,21 @@ describe("registerSocketRpcHandlers", () => {
             expect(acknowledge).toHaveBeenCalledWith({ ok: true, result: 'filesystem-result' });
         },
     );
+    it('never promotes a client-supplied Machine-read origin into Home authority', async () => {
+        const method = `machine-1:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY}`;
+        const emitWithAck = vi.fn(async (_event: string, _request: { authorization?: unknown }) => 'encrypted-eligibility-result');
+        const target = { id: 'broker-daemon', data: { clientType: 'machine-scoped', machineId: 'machine-1' },
+            timeout: () => ({ emitWithAck }) };
+        const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: [target], [target.id]: [target] });
+        const socket = createFakeSocket({ id: 'browser', data: { clientType: 'user-scoped' } });
+        registerSocketRpcHandlers({ userId: 'user-1', socket: socket as unknown as Socket, io });
+        const acknowledge = vi.fn();
+        await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, { method, params: 'encrypted-eligibility-request',
+            authorization: { kind: 'machine.read.serverOrigin', accountId: 'user-1', machineId: 'machine-1' } }, acknowledge);
+        expect(acknowledge).toHaveBeenCalledWith({ ok: true, result: 'encrypted-eligibility-result' });
+        expect(emitWithAck.mock.calls).toHaveLength(1);
+        expect(emitWithAck.mock.calls[0][1].authorization).toBeUndefined();
+    });
     it.each([undefined, 'old-installation', 'current-installation'])('registers current-service admission only on the current verified installation: %s', async (installationId) => {
         machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null, installationId: 'current-installation' });
         const join = vi.fn(async () => {});

@@ -35,6 +35,7 @@ import { openExternalActionRequestV2 } from '@happier-dev/protocol/actions/exter
 import { OpenProjectInputV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import { computeExternalActionSocketRpcRequestDigestV1, isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
+import { isSocketRpcMachineReadServerOriginAuthorizationContext, SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema,
     WorkspaceSyncSeedRoutingV1Schema } from '@happier-dev/protocol/socketRpc';
 import { WorkspaceSyncHandoffSourcePhaseRequestV1Schema, WorkspaceSyncPrepareBetweenRequestV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
@@ -86,6 +87,23 @@ type RequestDiagnostic = {
         causeCode?: string;
     }>;
 };
+
+// One family table owns both request decoding and response encoding. Dual-use
+// reads retain ordinary encrypted client admission; the other families are Home-only.
+const SERVER_ORIGIN_RPC_FAMILIES: readonly Readonly<{
+    methods: readonly string[];
+    isAuthorization: (value: unknown) => boolean;
+    serverOnly: boolean;
+    requiresMachineAdmission?: boolean;
+    bindsMachineRead?: boolean;
+}>[] = [
+    { methods: [AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1], isAuthorization: isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [SESSION_SERVER_START_DAEMON_RPC_METHOD_V1], isAuthorization: isSocketRpcSessionServerStartServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, MANAGED_FINITE_WAKE_RPC_METHOD], isAuthorization: isSocketRpcActionApiServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS], isAuthorization: isSocketRpcMachineAccessLossServerOriginAuthorizationContext, serverOnly: true },
+    { methods: [RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION], isAuthorization: isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext, serverOnly: true, requiresMachineAdmission: true },
+    { methods: SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS, isAuthorization: isSocketRpcMachineReadServerOriginAuthorizationContext, serverOnly: false, bindsMachineRead: true },
+];
 
 function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
@@ -619,33 +637,10 @@ export class RpcHandlerManager {
                     } };
                 if (!await requesterApprovalDecision.isCurrent()) return await deny('session_decision_currentness');
             }
-            const isReservedAutomationReplyHandoff = this.isReservedAutomationReplyHandoffRequest(request);
-            const isReservedSessionServerStart = this.isReservedSessionServerStartRequest(request);
-            const isReservedActionApi = this.isReservedActionApiRequest(request);
-            const isReservedMachineAccessLoss = this.isReservedMachineAccessLossRequest(request);
-            const isReservedLocalServicesPreviewAdmission = this.isReservedLocalServicesPreviewAdmissionRequest(request);
-            const isReservedServerOriginRequest = isReservedAutomationReplyHandoff
-                || isReservedSessionServerStart
-                || isReservedActionApi
-                || isReservedMachineAccessLoss
-                || isReservedLocalServicesPreviewAdmission;
-            const isServerOriginAutomationReplyHandoff = isReservedAutomationReplyHandoff
-                && isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginSessionServerStart = isReservedSessionServerStart
-                && isSocketRpcSessionServerStartServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginActionApi = isReservedActionApi
-                && isSocketRpcActionApiServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginMachineAccessLoss = isReservedMachineAccessLoss
-                && isSocketRpcMachineAccessLossServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginLocalServicesPreviewAdmission = isReservedLocalServicesPreviewAdmission
-                && isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext(request.authorization);
-            const isServerOriginReservedRequest = isServerOriginAutomationReplyHandoff
-                || isServerOriginSessionServerStart
-                || isServerOriginActionApi
-                || isServerOriginMachineAccessLoss
-                || isServerOriginLocalServicesPreviewAdmission;
-            if ((isReservedServerOriginRequest && !isServerOriginReservedRequest)
-                || (isReservedLocalServicesPreviewAdmission && (!machineAdmission?.success || !this.authorizeRequest))) {
+            const serverOriginFamily = this.readServerOriginRpcFamily(request);
+            const isServerOriginRequest = this.isServerOriginRequest(request);
+            if ((serverOriginFamily?.serverOnly && !isServerOriginRequest)
+                || (serverOriginFamily?.requiresMachineAdmission && (!machineAdmission?.success || !this.authorizeRequest))) {
                 return await deny('reserved_server_origin', {
                     error: RPC_ERROR_MESSAGES.FORBIDDEN,
                     errorCode: RPC_ERROR_CODES.FORBIDDEN,
@@ -656,7 +651,7 @@ export class RpcHandlerManager {
             let decryptedParams: unknown;
             try {
                 const decoded = await socketRpcCodec.decodeRequestParams(
-                    isServerOriginReservedRequest ? { mode: 'plain' } : rpcContent,
+                    isServerOriginRequest ? { mode: 'plain' } : rpcContent,
                     request.params,
                     request.method,
                 );
@@ -731,7 +726,7 @@ export class RpcHandlerManager {
             const sessionAuthorization = parseSocketRpcAuthorizationContext(request.authorization);
             diagnostic.callerClass = machineAdmission?.success
                 ? machineAdmission.data.actorAccountId === machineAdmission.data.custodianAccountId ? 'machine_custodian' : 'machine_guest'
-                : isServerOriginReservedRequest ? 'server_origin'
+                : isServerOriginRequest ? 'server_origin'
                     : sessionAuthorization?.sessionId === this.scopePrefix ? 'session' : 'unattributed';
 
             if (parsedInputAuthorization?.success && parsedInputAuthorization.data.binding.actionId === 'projects.open'
@@ -1325,7 +1320,7 @@ export class RpcHandlerManager {
 
     private encodeResponse(request: RpcRequest, response: unknown, callId: string | null, rpcContent: SocketRpcContent): Promise<unknown> {
         return socketRpcCodec.encodeResponse(
-            this.isServerOriginReservedRequest(request) ? { mode: 'plain' } : rpcContent,
+            this.isServerOriginRequest(request) ? { mode: 'plain' } : rpcContent,
             response,
             callId,
         );
@@ -1403,58 +1398,18 @@ export class RpcHandlerManager {
         return id;
     }
 
-    private isReservedAutomationReplyHandoffRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(AUTOMATION_REPLY_HANDOFF_DAEMON_RPC_METHOD_V1);
+    private readServerOriginRpcFamily(request: RpcRequest) {
+        return SERVER_ORIGIN_RPC_FAMILIES.find(family => family.methods.some(method => request.method === this.getPrefixedMethod(method)));
     }
 
-    private isServerOriginAutomationReplyHandoffRequest(request: RpcRequest): boolean {
-        return this.isReservedAutomationReplyHandoffRequest(request)
-            && isSocketRpcAutomationReplyHandoffServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedSessionServerStartRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(SESSION_SERVER_START_DAEMON_RPC_METHOD_V1);
-    }
-
-    private isServerOriginSessionServerStartRequest(request: RpcRequest): boolean {
-        return this.isReservedSessionServerStartRequest(request)
-            && isSocketRpcSessionServerStartServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedActionApiRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)
-            || request.method === this.getPrefixedMethod(MANAGED_FINITE_WAKE_RPC_METHOD);
-    }
-
-    private isServerOriginActionApiRequest(request: RpcRequest): boolean {
-        return this.isReservedActionApiRequest(request)
-            && isSocketRpcActionApiServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedMachineAccessLossRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS);
-    }
-
-    private isServerOriginMachineAccessLossRequest(request: RpcRequest): boolean {
-        return this.isReservedMachineAccessLossRequest(request)
-            && isSocketRpcMachineAccessLossServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isReservedLocalServicesPreviewAdmissionRequest(request: RpcRequest): boolean {
-        return request.method === this.getPrefixedMethod(RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_ADMISSION);
-    }
-
-    private isServerOriginLocalServicesPreviewAdmissionRequest(request: RpcRequest): boolean {
-        return this.isReservedLocalServicesPreviewAdmissionRequest(request)
-            && isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext(request.authorization);
-    }
-
-    private isServerOriginReservedRequest(request: RpcRequest): boolean {
-        return this.isServerOriginAutomationReplyHandoffRequest(request)
-            || this.isServerOriginSessionServerStartRequest(request)
-            || this.isServerOriginActionApiRequest(request)
-            || this.isServerOriginMachineAccessLossRequest(request)
-            || this.isServerOriginLocalServicesPreviewAdmissionRequest(request);
+    private isServerOriginRequest(request: RpcRequest): boolean {
+        const family = this.readServerOriginRpcFamily(request);
+        if (!family?.isAuthorization(request.authorization)) return false;
+        if (!family.bindsMachineRead) return true;
+        return isSocketRpcMachineReadServerOriginAuthorizationContext(request.authorization)
+            && request.authorization.machineId === this.scopePrefix
+            && this.localMachineId === this.scopePrefix
+            && this.authorizeRequest !== undefined;
     }
 
     private areRegistrationMethodsAcknowledged(methods: ReadonlySet<string>): boolean {

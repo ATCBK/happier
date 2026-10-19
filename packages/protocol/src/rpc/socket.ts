@@ -279,6 +279,7 @@ export const SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS = {
   ACTION_API_SERVER_ORIGIN: 'action.api.serverOrigin',
   MACHINE_ACCESS_LOSS_SERVER_ORIGIN: 'machine.accessLoss.serverOrigin',
   LOCAL_SERVICES_PREVIEW_ADMISSION_SERVER_ORIGIN: 'localServices.preview.admission.serverOrigin',
+  MACHINE_READ_SERVER_ORIGIN: 'machine.read.serverOrigin',
   CURRENT_SESSION_PRESENTATION_ORIGIN: 'session.presentation.origin',
 } as const;
 
@@ -352,6 +353,31 @@ export const LOCAL_SERVICES_PREVIEW_ADMISSION_SERVER_ORIGIN: SocketRpcLocalServi
   kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.LOCAL_SERVICES_PREVIEW_ADMISSION_SERVER_ORIGIN,
 });
 
+/** Home-owned reads also used by encrypted clients; this stamp is never client-call authority. */
+export const SocketRpcMachineReadServerOriginAuthorizationContextV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal(SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.MACHINE_READ_SERVER_ORIGIN),
+  accountId: z.string().check(z.minLength(1)),
+  machineId: z.string().check(z.minLength(1)),
+}));
+export type SocketRpcMachineReadServerOriginAuthorizationContextV1 = z.infer<typeof SocketRpcMachineReadServerOriginAuthorizationContextV1Schema>;
+
+/** Exact reads whose safe projections the Home consumes; mutations never belong here. */
+export const SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS: readonly string[] = Object.freeze([
+  RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
+  RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
+  RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_REQUEST_POLICY_SUPPORT,
+  RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_RESOURCE_TEST_CANDIDATE,
+  RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY,
+  RPC_METHODS.DAEMON_EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE,
+  SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+]);
+
+export function isSocketRpcMachineReadServerOriginAuthorizationContext(
+  value: unknown,
+): value is SocketRpcMachineReadServerOriginAuthorizationContextV1 {
+  return SocketRpcMachineReadServerOriginAuthorizationContextV1Schema.safeParse(value).success;
+}
+
 /**
  * Server-minted custody for one authenticated socket connection presenting an
  * exact Session. Public callers cannot provide or parse this authority.
@@ -386,6 +412,7 @@ export type SocketRpcAuthorizationContext =
   | SocketRpcActionApiServerOriginAuthorizationContext
   | SocketRpcMachineAccessLossServerOriginAuthorizationContext
   | SocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext
+  | SocketRpcMachineReadServerOriginAuthorizationContextV1
   | SocketRpcCurrentSessionPresentationOriginAuthorizationContext;
 
 const SOCKET_RPC_AUTHORIZATION_SESSION_ID_MAX_LENGTH = 512;
