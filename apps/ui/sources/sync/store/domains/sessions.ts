@@ -73,7 +73,7 @@ import {
     resolveSessionRuntimePresenceFields,
     SESSION_RESUMING_PRESENTATION_TIMEOUT_MS,
 } from '../../domains/session/attention/deriveSessionRuntimePresentationState';
-import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection } from '../../domains/session/sessionLifecycleProjection';
+import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection, resolveSessionPresence } from '../../domains/session/sessionLifecycleProjection';
 import { setActiveServerSessionListCache } from '../sessionListCache';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
@@ -366,15 +366,6 @@ function measureSessionApplyPhase<T>(
 ): T {
     if (!syncPerformanceTelemetry.isEnabled()) return fn();
     return syncPerformanceTelemetry.measure(name, fields(), fn);
-}
-
-/**
- * Centralized session online state resolver
- * Returns either "online" (string) or a timestamp (number) for last seen
- */
-function resolveSessionOnlineState(session: { active: boolean; activeAt: number }): "online" | number {
-    // Session is online if the active flag is true
-    return session.active ? "online" : session.activeAt;
 }
 
 /**
@@ -700,8 +691,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         resolveOrderedSessionApply(previousSession, incomingSession),
                     ),
                 );
-                // Use centralized resolver for consistent state management
-                const presence = resolveSessionOnlineState(session);
+                const presence = resolveSessionPresence(session);
 
                 // Preserve existing local mode selections, or load them from persisted local state.
                 const existingPermissionMode = previousSession?.permissionMode;

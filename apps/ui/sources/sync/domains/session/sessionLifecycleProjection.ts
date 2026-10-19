@@ -17,6 +17,15 @@ export function normalizeSessionOrderingNumber(value: unknown): number | null {
         : null;
 }
 
+/**
+ * Single owner of a session's presence: "online" while the runtime reports it active, otherwise the
+ * last-seen timestamp. Every path that changes `active` must derive presence here, or a row that
+ * comes back online keeps its last-seen value and its live-runtime signals stay hidden.
+ */
+export function resolveSessionPresence(session: Readonly<{ active: boolean; activeAt: number }>): 'online' | number {
+    return session.active ? 'online' : session.activeAt;
+}
+
 function resolveMergedSessionReadyEvent(params: Readonly<{
     previousSession: SessionLifecycleProjection | undefined;
     incomingSession: Pick<Session, 'latestReadyEventSeq' | 'latestReadyEventAt'>;
