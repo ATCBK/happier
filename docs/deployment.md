@@ -49,6 +49,17 @@ transaction minimum). The retry budget permits two complete attempts plus the
 first backoff. Explicit transaction environment overrides still take priority.
 No database schema, migration, content format or client wire contract changes.
 
+## PostgreSQL transaction deadlines (0.3 development)
+
+`inTx` charges SQL operations to the existing transaction-attempt budget. When
+its statement-budget guard expires inside the callback, that attempt rolls back
+and may replay under the existing retry/backoff policy. This is distinct from
+the containing request's deadline: retries never extend that deadline. Exhausted
+known rollbacks remain retryable storage refusals; an earlier indeterminate
+commit remains an unknown outcome. After-commit effects run only for the
+successful attempt. Domain consumers such as Pending reuse this owner rather
+than adding their own transaction retry loop.
+
 ## Managed Home owner provisioning boundary (0.3 development)
 
 The current repository has no managed-host producer that creates a Home's first Account.
@@ -199,6 +210,7 @@ console plan §3.5):
     deployment fails closed instead of appearing to work.
   - Changing either value changes the WorkOS runtime fingerprint, which invalidates
     already-started OAuth attempts bound to the previous runtime.
+- Logging format (development source): `HAPPIER_SERVER_LOG_FORMAT=json` opts Node into structured stdout through the server configuration registry and post-Home-overlay logger initialization; unset or invalid values retain pretty output.
 - Debug logging: `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` (enables file logging + dev log endpoint).
 
 ## Happier Cloud as the default Account Service (0.3)
