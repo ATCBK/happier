@@ -10,6 +10,7 @@ import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { setSessionManager } from "@/app/session/follow/sessionManagerService";
 import { setSessionFollowSource } from "@/app/session/follow/sessionFollowEdgeService";
+import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audience expansion writer fences (PostgreSQL)", () => {
     beforeAll(async () => {
@@ -18,6 +19,46 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it("waits on the ready projection's Session before terminal Account publication", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+        } });
+        let publisher: Promise<unknown> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                // Physical deletion takes this strongest parent mode. A publisher
+                // must wait here before its terminal Account/FK writes, not in them.
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${session.id} FOR UPDATE`;
+                let finished = false;
+                publisher = publishSessionReadyProjectionUpdate({ sessionId: session.id,
+                    readyProjection: { latestReadyEventSeq: 1, latestReadyEventAt: Date.now() } })
+                    .finally(() => { finished = true; });
+                void publisher.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                // Probe the persistent boundary directly: inTx deliberately
+                // retries 55P03, which would hide the lock-order observation.
+                await expect(db.$transaction(peer => peer.$queryRawUnsafe(
+                    'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
+                ))).resolves.toEqual([{ id: owner.id }]);
+            });
+            await publisher;
+        } finally {
+            await publisher;
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.delete({ where: { id: owner.id } });
+        }
+    });
 
     it("serializes a direct grant with the Session domain writer before changing its audience", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });

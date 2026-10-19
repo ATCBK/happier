@@ -85,6 +85,10 @@ export async function fenceSessionAccountCursorAudienceInTx(
         includeSingleAccount: true,
         intent: options?.intent ?? "content",
     });
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    // Direct captured-audience callers still reserve SQLite's single writer,
+    // without querying independently lockable resource scopes it does not have.
+    if (provider === "sqlite") return accountIds;
     const admittedAccountIds = new Set(accountIds);
     const admittedSessionIds = new Set(projectionSessionIds);
     const validateInitialAudience = async () => {
@@ -95,7 +99,6 @@ export async function fenceSessionAccountCursorAudienceInTx(
         }
     };
     await validateInitialAudience();
-    const provider = getDbProviderFromEnv(process.env, "postgres");
     if (projectionSessionIds.length > 0) {
         if (provider === "postgres") {
             await tx.$queryRawUnsafe(

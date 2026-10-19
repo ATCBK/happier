@@ -1664,24 +1664,37 @@ export async function acknowledgeAdmittedSessionFollowInputInTx(tx: Tx, input: R
     const request = input.request;
     const accountId = input.principal.kind === 'destination_runtime'
         ? input.principal.destinationRuntimeAccountId : input.principal.accountId;
-    const destination = await loadSession(tx, request.destinationSessionId);
-    if (!destination || destination.accountId !== accountId || destination.archivedAt !== null
-        || !await isActingAccountActive(tx, accountId)
-        || !await canSubmitDestinationInput(tx, accountId, destination.id,
-            await resolveSessionFollowRuntimePrincipalAuthenticationInTx(tx, input.principal))) return { ok: false, rejection: 'source_forbidden' };
-    if (destination.publisherGeneration.toString() !== request.expectedPublisherGeneration) return { ok: false, rejection: 'stale_publisher_generation' };
-    const custody = await readAdmittedSessionFollowInputInTx(tx, { principal: input.principal, accountId,
-        destinationSessionId: destination.id, ...('sourceSessionId' in request ? { sourceSessionId: request.sourceSessionId } : {}), localInputId: request.localInputId });
-    if (!custody) return { ok: false, rejection: 'source_forbidden' };
-    const represented = sessionFollowInputFrontiers(custody.delivery);
-    if ('original' in request ? !isDeepStrictEqual(request.original, custody.delivery.original)
-        : !isSessionFollowFrontierEqualV1(request.expected, represented.expected)
-        || !isSessionFollowFrontierEqualV1(request.observed, represented.observed)
-        || !isSessionFollowFrontierEqualV1(request.consumed, represented.observed)) return { ok: false, rejection: 'invalid_consumed_frontier' };
-    if (request.acceptance.localInputId !== request.localInputId
-        || !await hasCanonicalFollowProviderInputAcceptanceInTx(tx, { destinationSessionId: destination.id,
-            localInputId: request.localInputId, userMessageSeq: request.acceptance.userMessageSeq,
-            requireProviderAccepted: true })) return { ok: false, rejection: 'provider_acceptance_unverified' };
+    const readCurrentAdmission = async () => {
+        const destination = await loadSession(tx, request.destinationSessionId);
+        if (!destination || destination.accountId !== accountId || destination.archivedAt !== null
+            || !await isActingAccountActive(tx, accountId)
+            || !await canSubmitDestinationInput(tx, accountId, destination.id,
+                await resolveSessionFollowRuntimePrincipalAuthenticationInTx(tx, input.principal))) return { ok: false as const, rejection: 'source_forbidden' as const };
+        if (destination.publisherGeneration.toString() !== request.expectedPublisherGeneration) return { ok: false as const, rejection: 'stale_publisher_generation' as const };
+        const custody = await readAdmittedSessionFollowInputInTx(tx, { principal: input.principal, accountId,
+            destinationSessionId: destination.id, ...('sourceSessionId' in request ? { sourceSessionId: request.sourceSessionId } : {}), localInputId: request.localInputId });
+        if (!custody) return { ok: false as const, rejection: 'source_forbidden' as const };
+        const represented = sessionFollowInputFrontiers(custody.delivery);
+        if ('original' in request ? !isDeepStrictEqual(request.original, custody.delivery.original)
+            : !isSessionFollowFrontierEqualV1(request.expected, represented.expected)
+            || !isSessionFollowFrontierEqualV1(request.observed, represented.observed)
+            || !isSessionFollowFrontierEqualV1(request.consumed, represented.observed)) return { ok: false as const, rejection: 'invalid_consumed_frontier' as const };
+        if (request.acceptance.localInputId !== request.localInputId
+            || !await hasCanonicalFollowProviderInputAcceptanceInTx(tx, { destinationSessionId: destination.id,
+                localInputId: request.localInputId, userMessageSeq: request.acceptance.userMessageSeq,
+                requireProviderAccepted: true })) return { ok: false as const, rejection: 'provider_acceptance_unverified' as const };
+        return { ok: true as const, destination, custody, represented };
+    };
+    let admission = await readCurrentAdmission();
+    if (!admission.ok) return admission;
+    if (admission.custody.admissions.length > 0) {
+        // Rule progress publishes the destination Session. Admit its complete
+        // audience and resource before KV/edge writes or terminal Account locks.
+        await acquireSessionAccountCursorLocksInTx(tx, [admission.destination.id], [accountId]);
+        admission = await readCurrentAdmission();
+        if (!admission.ok) return admission;
+    }
+    const { custody, represented } = admission;
     if (!await settleSessionFollowInputReasonsInTx(tx, { progresses: custody.admissions.map(row => row.progress),
         relations: custody.relations, observed: represented.observed, delivery: custody.delivery })) return { ok: false, rejection: 'stale_expected_frontier' };
     return { ok: true, delivered: represented.observed };

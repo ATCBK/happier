@@ -20,6 +20,7 @@ import type { ExecutionRunFollowFrontierWitness } from './executionRunFollowSour
 import { markSessionFollowsChangedInTx } from './changes';
 import { observeAccountDiscussionFollowOccurrenceInTx } from './discussionFollowSource';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 
 type ProgressFailure = 'invalid_parameters' | 'credential_scope_denied' | 'account_inactive';
 type ProgressResult = Readonly<{ ok: true; value: SessionFollowPersonalProgressResponseV1 }>
@@ -44,6 +45,11 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
         && isApiTokenGrantRestrictedV1(input.authentication.apiTokenGrant)) return { ok: false, error: 'credential_scope_denied' };
     const occurrence = parsed.data;
     return inTx(async tx => {
+        if (!('discussion' in occurrence) && !('original' in occurrence)) {
+            // Personal rule progress publishes this Session. Admit its full
+            // audience and parent resource before actor admission or KV writes.
+            await acquireSessionAccountCursorLocksInTx(tx, [occurrence.sourceSessionId], [input.accountId]);
+        }
         const account = await tx.account.findUnique({ where: { id: input.accountId }, select: { status: true } });
         if (account?.status !== 'active') return { ok: false, error: 'account_inactive' };
         if ((await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content")).status !== 'ready') return unrepresented;

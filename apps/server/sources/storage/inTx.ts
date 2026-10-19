@@ -128,7 +128,7 @@ export interface TransactionContextView {
 /** Native Prisma transaction proxies may share their property backing target. */
 export function getTransactionContext(tx: Tx): object;
 export function getTransactionContext(tx: Tx, options: Readonly<{ optional: true }>): TransactionContextView | undefined;
-export function getTransactionContext(tx: Tx, options?: Readonly<{ optional: true }>): TransactionContextView | undefined {
+export function getTransactionContext(tx: Tx, options?: Readonly<{ optional: true }>): object | undefined {
     const context = (tx as Tx & { [symbol]?: TransactionContext })[symbol];
     if (!context && !options?.optional) throw new Error('Account publication requires an inTx() transaction');
     return context;

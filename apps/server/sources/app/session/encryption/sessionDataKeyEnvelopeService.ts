@@ -18,6 +18,7 @@ import {
 import { inTx, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 /**
  * The canonical per-Session recipient data-key envelope collection.
@@ -304,6 +305,8 @@ export async function applySessionDataKeyEnvelopes(input: Readonly<{
     if (validated === null) return { ok: false, error: "invalid_request" };
 
     return await inTx(async tx => {
+        await acquireSessionAccountCursorLocksInTx(tx, [input.sessionId],
+            [input.actorAccountId, ...validated.map(entry => entry.recipientAccountId)]);
         const authorization = await authorizeCollection(tx, input);
         if (!authorization.ok) return { ok: false, error: authorization.error };
         if (authorization.encryptionMode === "plain") {

@@ -757,8 +757,9 @@ export function sessionUpdateHandler(
             phase = 'publisher_transaction';
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
-                // ACK advances private route progress, with no Account cursor
-                // publication. Its authority/CAS checks share this snapshot.
+                // Legacy frontier ACK only advances private route progress.
+                // Admitted rule progress conditionally enters canonical Session
+                // publication admission and revalidates inside the edge owner.
                 authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Frontier acceptance composes current edge, source and destination authority.
                 operation: async (authority, tx) => {
