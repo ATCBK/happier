@@ -2,7 +2,7 @@ import React from 'react';
 import 'fake-indexeddb/auto';
 import type { SpeechOptions } from 'expo-speech';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
@@ -40,8 +40,13 @@ installDisconnectedServerSocketBoundary();
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 const originalState = storage.getState();
 const { VoiceConversationsSettingsScreen } = await import('@/voice/settings/screens/VoiceConversationsSettingsScreen');
+beforeEach(() => {
+    // Test Renderer presses do not create the browser's trusted activation fact.
+    vi.stubGlobal('navigator', { userActivation: { isActive: true, hasBeenActive: true } });
+});
 afterEach(() => {
     standardCleanup(); storage.setState(originalState, true); speech.texts = []; speech.failure = null;
+    vi.unstubAllGlobals();
 });
 
 function deviceVoice(providerId: 'local_direct' | 'local_conversation') {
@@ -64,7 +69,7 @@ describe('VoiceSettingsScreen (device TTS)', () => {
                 const row = screen.findRowByTitle(t('settingsVoice.local.testTts'));
                 expect(row).toBeTruthy();
                 await act(async () => row!.props.rightElement.props.onPress());
-                expect(speech.texts).toEqual([t('settingsVoice.local.testTtsSample')]);
+                await vi.waitFor(() => expect(speech.texts).toEqual([t('settingsVoice.local.testTtsSample')]));
                 expect(screen.findAllHostsByTestId('web-modal-button-0')).toHaveLength(0);
             } finally { standardCleanup(); await account.dispose(); }
         });
@@ -76,10 +81,10 @@ describe('VoiceSettingsScreen (device TTS)', () => {
             const row = screen.findRowByTitle(t('settingsVoice.local.testTts'));
             expect(row).toBeTruthy();
             await act(async () => row!.props.rightElement.props.onPress());
-            expect(speech.texts).toEqual([t('settingsVoice.local.testTtsSample')]);
-            expect(screen.findHostByTestId('web-modal-button-0')).toBeTruthy();
+            await vi.waitFor(() => expect(speech.texts).toEqual([t('settingsVoice.local.testTtsSample')]));
+            await vi.waitFor(() => expect(screen.findHostByTestId('web-modal-button-0')).toBeTruthy());
             expect(screen.getTextContent()).toContain(t('common.error'));
-            expect(screen.getTextContent()).toContain('device failed');
+            expect(screen.getTextContent()).toContain(t('settingsVoice.local.testTtsFailed'));
             expect(screen.getTextContent()).not.toContain(t('settingsVoice.local.testTtsMissingBaseUrl'));
         } finally { standardCleanup(); await account.dispose(); }
     });

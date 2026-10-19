@@ -376,7 +376,7 @@ describe('metro.config.js (web)', () => {
         ['web', '@happier-dev/plugin-sdk', 'packages/plugin-sdk/src/index.browser.ts'],
         ['ios', '@happier-dev/plugin-sdk', 'packages/plugin-sdk/src/index.ts'],
         ['web', '@happier-dev/plugins-elevenlabs/ui/voice', 'packages/plugins/elevenlabs/src/ui/voice/index.ts'],
-        ['ios', '@happier-dev/plugins-elevenlabs/ui/voice', 'packages/plugins/elevenlabs/src/ui/voice/index.native.ts'],
+        ['ios', '@happier-dev/plugins-elevenlabs/ui/voice', 'packages/plugins/elevenlabs/src/ui/voice/index.ts'],
     ])('selects the package-owned %s source for %s', (platform, moduleName, sourcePath) => {
         const uiDir = getUiDir();
         const repoRoot = resolve(uiDir, '..', '..');

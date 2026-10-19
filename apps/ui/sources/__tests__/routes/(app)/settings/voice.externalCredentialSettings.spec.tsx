@@ -10,8 +10,9 @@ import { renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { VoiceSettingsPersistenceV1Schema } from '@/sync/domains/settings/voiceSettingsPersistence';
+import { formatSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { storage } from '@/sync/domains/state/storage';
-import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
+import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { ModalProvider } from '@/modal';
 import { t, tLoose } from '@/text';
@@ -222,54 +223,30 @@ describe('VoiceSettingsScreen external provider credentials', () => {
 
   it('reports ready only for the exact account binding and ignores the selected-daemon override', async () => {
     await activateCredentialProvider();
-    const accountSecret = {
-      id: 'account-secret',
-      name: 'Account key',
-      kind: 'apiKey',
-      encryptedValue: { _isSecretValue: true, value: 'account-key' },
-      createdAt: 1,
-      updatedAt: 1,
-    };
-    const machineSecret = {
-      ...accountSecret,
-      id: 'machine-secret',
-      name: 'Machine key',
-      encryptedValue: { _isSecretValue: true, value: 'machine-key' },
-    };
-    const settings = routeSettings({
-      secrets: [accountSecret, machineSecret],
-      credentialBindings: [{
-        contribution: { pluginId: 'acme.voice', localId: 'conversation' },
-        credentialSlotId: 'api_key',
-        credentialSource: { kind: 'savedSecret' },
-        credentialBindings: {
-          account: { api_key: 'account-secret' },
-          byMachineId: {
-            'selected-daemon-that-must-not-own-client-credentials': { api_key: 'machine-secret' },
-          },
-        },
-      }],
-    });
-
-    const account = await createVoiceSettingsAccountTestHarness(settings);
+    const account = await createVoiceSettingsAccountTestHarness(routeSettings({}));
     onTestFinished(account.dispose);
-    expect(account.settings.voiceSettingsV1.credentialBindings).toMatchObject([{
-      contribution: { pluginId: 'acme.voice', localId: 'conversation' },
-      credentialSlotId: 'api_key',
-      credentialBindings: { account: { api_key: 'account-secret' } },
-    }]);
+    // Serve current material and bind it through the real source mutation owner.
+    // Legacy Settings import has its own explicit approval/lifecycle contract.
+    const accountBound = await withVoiceSettingsCredentialResource(account, {
+      settings: account.settings, declaration, pluginId: 'acme.voice', resourceId: 'account-secret',
+    });
+    account.replaceSettings(await withVoiceSettingsCredentialResource(account, {
+      settings: accountBound, declaration, pluginId: 'acme.voice', resourceId: 'machine-secret',
+      machineId: 'selected-daemon-that-must-not-own-client-credentials',
+    }));
     const screen = await renderSettingsView(<InjectedAuthProvider credentials={account.credentials}><ModalProvider><VoiceConversationsSettingsScreen /></ModalProvider></InjectedAuthProvider>);
-    // Mounting the real picker admits the retained Settings secrets through the
-    // catalog importer. Approval must use its current resource reference, not
-    // the retired Settings id that the importer has already replaced.
     await act(async () => { await refreshSavedSecretCatalog(account.scope); });
-    const accountResource = account.resources.find(resource => resource.entry.name === 'Account key');
-    const machineResource = account.resources.find(resource => resource.entry.name === 'Machine key');
-    if (!accountResource || !machineResource) throw new Error('Real SavedSecret catalog did not admit both input sources');
+    const accountRef = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: 'account-secret' });
+    const machineRef = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: 'machine-secret' });
+    const accountEntry = account.resources.find(resource => 'ref' in resource.entry && resource.entry.ref === accountRef)?.entry;
+    const machineEntry = account.resources.find(resource => 'ref' in resource.entry && resource.entry.ref === machineRef)?.entry;
+    if (!accountEntry || !('ref' in accountEntry) || !machineEntry || !('ref' in machineEntry)) {
+      throw new Error('Real SavedSecret catalog did not admit both input sources');
+    }
     expect(account.settings.voiceSettingsV1.credentialBindings).toMatchObject([{
       credentialBindings: {
-        account: { api_key: accountResource.entry.ref },
-        byMachineId: { 'selected-daemon-that-must-not-own-client-credentials': { api_key: machineResource.entry.ref } },
+        account: { api_key: accountEntry.ref },
+        byMachineId: { 'selected-daemon-that-must-not-own-client-credentials': { api_key: machineEntry.ref } },
       },
     }]);
     const providerRowTestId = `settings.voice.provider.${encodeURIComponent(providerId)}.default`;
@@ -283,7 +260,7 @@ describe('VoiceSettingsScreen external provider credentials', () => {
     if (typeof requiredDigest !== 'string') throw new Error('Activated provider recipient contract is unavailable');
     const approvedDigest = resolveAccountVoiceCredentialApprovalDigest({
       requiredRecipientContractDigest: requiredDigest,
-      savedSecret: resolveSavedSecretReference(account.scope, account.settings.secrets, accountResource.entry.ref),
+      savedSecret: resolveSavedSecretReference(account.scope, account.settings.secrets, accountEntry.ref),
     });
     if (!approvedDigest) throw new Error('Admitted Account credential has no approvable fingerprint');
     await act(async () => {
@@ -299,13 +276,12 @@ describe('VoiceSettingsScreen external provider credentials', () => {
     await act(async () => {
       await vi.waitFor(() => expect(account.persistedSettings.voiceSettingsV1.credentialBindings).toMatchObject([{
         approvedRecipientContractDigest: approvedDigest,
-        credentialBindings: { account: { api_key: accountResource.entry.ref } },
+        credentialBindings: { account: { api_key: accountEntry.ref } },
       }]));
     });
     expect(serviceStatus()).toBe(t('settingsVoice.externalCredentials.ready'));
 
     const machineOnlySettings = routeSettings({
-      secrets: [machineSecret],
       credentialBindings: [{
         contribution: { pluginId: 'acme.voice', localId: 'conversation' },
         credentialSlotId: 'api_key',
@@ -313,7 +289,7 @@ describe('VoiceSettingsScreen external provider credentials', () => {
         approvedRecipientContractDigest: recipientContractDigest,
         credentialBindings: {
           byMachineId: {
-            'selected-daemon-that-must-not-own-client-credentials': { api_key: 'machine-secret' },
+            'selected-daemon-that-must-not-own-client-credentials': { api_key: machineEntry.ref },
           },
         },
       }],
