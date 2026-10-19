@@ -624,6 +624,17 @@ state, and the original Pending input remains in custody. Native error prose,
 paths, credentials and input content are excluded. This is source behavior,
 not evidence that an already-running daemon or server has loaded it.
 
+Cold requester preparation records a failed phase's allowlisted error class,
+code, HTTP status and source frames through the shared code-only diagnostic;
+exception messages, response bodies and schema issue text remain private.
+A known definite Session-read refusal can reach that same failure CAS only
+after fresh requester recovery proves the exact Home, Account, Session,
+Machine and installation, and the current authorization and Pending row still
+match. The failed read itself grants no authority. Unavailable or cancelled
+reads, persistently unreadable authority, changed admission and stale hints
+leave activation waiting. The managed compute guard above still applies.
+This is development source behavior and requires a daemon reload.
+
 ## Execution-run targets
 
 The current development implementation uses one Pending store with the **Pending Input V3** target contract. A null `targetExecutionRunId` identifies the main conversation; a non-null value selects one exact execution run. Session Pending counters, main-queue reads, and inactive-session activation consider only null-target rows. Target reads, mutations, recovery, and materialization use the exact run resource and report that run's own queue counts.
