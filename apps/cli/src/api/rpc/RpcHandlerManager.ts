@@ -999,6 +999,8 @@ export class RpcHandlerManager {
     }>): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
         const requestStartedAtMs = Date.now();
+        const callerInputConstraints = options?.rpcContext?.callerInputConstraints
+            ?? options?.localActionContext?.callerInputConstraints;
         return this.observeRequest(prefixedMethod, undefined, async diagnostic => {
             diagnostic.admissionPredicate = 'handler_admission';
             const handler = this.handlers.get(prefixedMethod);
@@ -1013,11 +1015,11 @@ export class RpcHandlerManager {
                         machineAdmission: options.rpcContext.machineAdmission,
                         verifyMachineAdmissionCurrent: options.rpcContext.verifyMachineAdmissionCurrent,
                         callerInputAuthorization: options.rpcContext.callerInputAuthorization,
-                        callerInputConstraints: options.rpcContext.callerInputConstraints,
                         sessionActionOrigin: options.rpcContext.sessionActionOrigin,
                         originalActionEnvelope: options.rpcContext.originalActionEnvelope,
                         requesterSessionBootstrap: options.rpcContext.requesterSessionBootstrap,
                     } : {}),
+                    ...(callerInputConstraints ? { callerInputConstraints } : {}),
                     signal: options?.signal ?? new AbortController().signal,
                     requestStartedAtMs,
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),

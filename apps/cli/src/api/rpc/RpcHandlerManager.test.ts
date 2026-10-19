@@ -1324,6 +1324,19 @@ describe('RpcHandlerManager.invokeLocal', () => {
     } };
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: true, accountId: 'bob',
       authority: 'account_automation', permissionModes: ['read-only'] });
+    const { callerInputConstraints, ...admittedAuthority } = options.rpcContext;
+    await expect(rpc.invokeLocal('demo.resume', {}, { rpcContext: admittedAuthority,
+      localActionContext: { callerInputConstraints },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    await expect(rpc.invokeLocal('demo.resume', { callerInputConstraints }, { rpcContext: admittedAuthority }))
+      .resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: undefined });
+    await expect(rpc.invokeLocal('demo.resume', {}, { ...options,
+      localActionContext: { callerInputConstraints: { models: null, permissionModes: null } },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    rpc.registerHandler('demo.ceiling', async (_input, context) => context?.callerInputConstraints ?? null);
+    await expect(rpc.invokeLocal('demo.ceiling', {}, { localActionContext: { callerInputConstraints } }))
+      .resolves.toEqual(callerInputConstraints);
+    await expect(rpc.invokeLocal('demo.ceiling', { callerInputConstraints })).resolves.toBeNull();
     current = false;
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: false });
     await expect(rpc.invokeLocal('demo.resume', { machineAdmission }, { localActionContext: { surface: 'ui', authority: 'present_user' } })).resolves.toEqual({ ok: false });
