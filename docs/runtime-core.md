@@ -1722,6 +1722,14 @@ semantic refusals and exceptions share the server's structured ACK phase/cause
 diagnostic, without input content.
 This adds no timer or durable delivery history across a host restart.
 
+Quiet originals represented in a natural input retain their own Pending identities.
+The host's exact-input acceptance binding records only the originals selected by
+final Follow preparation, plus required returned-answer context. One primary
+input remains the native Turn and permission witness. Its actual native acceptance
+settles the represented originals through the same Pending writer before the
+primary's write; each Follow ACK joins its own settlement. Neither transport
+completion nor an omitted original earns acceptance.
+
 The approval reviewer is a request-scoped client of the existing permission
 owner. That owner rejects ineligible effects before starting a no-tools review
 with a redacted request, then rechecks current request/policy before an allow-once

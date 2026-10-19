@@ -1621,6 +1621,61 @@ describe('ApiSessionClient pending queue materialization', () => {
         }
     });
 
+    it('rejoins an active-turn Pending claim after the server retry delay without another wake or duplicate input', async () => {
+        const localId = 'active-turn-retained-claim';
+        const claimRequests: unknown[] = [];
+        const session = createMockSession({ encryptionMode: 'plain', pendingCount: 1, pendingVersion: 3,
+            latestTurnStatus: 'in_progress' });
+        const sessionSocket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+            if (event !== 'pending-materialize-next') return resolveApiSessionSocketDefaultAck(event, payload);
+            claimRequests.push(payload);
+            if (claimRequests.length === 1) return { ok: false, error: 'transaction-unavailable', retryAfterMs: 750 };
+            return {
+                ok: true, didMaterialize: true, didWrite: false,
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3,
+                deliveryState: { mode: 'provider', unresolved: true },
+                message: { id: null, seq: null, localId, messageRole: 'user',
+                    content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'send this once' },
+                        meta: { source: 'ui' } } },
+                    requestedAction: { v: 1, kind: 'send_now' }, providerAction: 'send', createdAt: 1, updatedAt: 1 },
+            };
+        } });
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+        const client = createClient(session);
+        const delivered: string[] = [];
+        client.onUserMessage(message => { delivered.push(message.content.text); });
+        await waitForPendingInputContract(client);
+        const consumer = createSessionProviderInputConsumer({
+            messageQueue: new MessageQueue2<{ id: string }>(() => 'mode'),
+            session: {
+                waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
+                materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
+                getMetadataSnapshot: () => client.getMetadataSnapshot(),
+                reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization(),
+            },
+        });
+        const controller = new AbortController();
+        vi.useFakeTimers();
+        const pump = consumer.pumpPendingWhileActive({ abortSignal: controller.signal });
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(claimRequests).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(749);
+            expect(claimRequests).toHaveLength(1);
+            expect(delivered).toEqual([]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(delivered).toEqual(['send this once']);
+            expect(claimRequests).toHaveLength(2);
+            expect(claimRequests[1]).toEqual(claimRequests[0]);
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(delivered).toEqual(['send this once']);
+        } finally {
+            controller.abort();
+            await pump;
+            vi.useRealTimers();
+        }
+    });
+
     it('does not redrive materialization over HTTP after a connected socket RPC becomes ambiguous', async () => {
         const sessionSocket = createApiSessionSocketStub({
             connected: true,
