@@ -10,6 +10,7 @@ vi.mock('@/text', async () => {
 
 import { resolveExecutionRunLauncherBackendChoices } from './resolveExecutionRunLauncherBackendChoices';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 
 const record = AcpCatalogRecordV1Schema.parse({
     v: 1,
@@ -42,6 +43,15 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
         const choices = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: ['claude'], intent: 'review', acpCatalogSnapshot,
             executionRunsBackends: { [targetKey]: { available: true, intents: ['review'], title: 'Claude review' } } });
         expect(choices).toEqual([expect.objectContaining({ backendId: 'claude', agentId: 'claude', title: 'Claude review', disabled: false })]);
+    });
+    it('names review choices by their catalog title, never the raw agent id, before the machine reports titles', () => {
+        const unreported = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: ['claude', 'codex'], intent: 'review', executionRunsBackends: undefined });
+        expect(unreported.map((choice) => choice.title)).toEqual(['t:agentInput.agent.claude', 't:agentInput.agent.codex']);
+        const untitled = resolveExecutionRunLauncherBackendChoices({
+            enabledAgentIds: ['claude'], intent: 'review',
+            executionRunsBackends: { claude: { available: true, intents: ['review'] } },
+        });
+        expect(untitled.map((choice) => choice.title)).toEqual(['t:agentInput.agent.claude']);
     });
     it('resolves qualified configured review targets to the exact row and operational Agent', () => {
         const targetKey = 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot';
@@ -284,5 +294,41 @@ describe('resolveExecutionRunLauncherBackendChoices', () => {
             title: 'Acme Plugin Backend',
             disabled: false,
         }));
+    });
+
+    describe('Machine facts', () => {
+        const machineAgent = (overrides: Partial<MachineAgent>): MachineAgent => ({
+            agentId: 'claude', title: 'Claude', state: 'ready', installed: true, version: '1.0.0', latestVersion: null, update: null,
+            signIn: { status: 'unknown', via: null, nativeLogin: 'terminal', connectedServices: [] },
+            platform: { supported: true },
+            install: { available: true, mode: 'vendor_recipe', sizeBytes: null, guideUrl: null, requiresVendorConsent: false },
+            dependencies: [], job: null, stale: false, ...overrides,
+        });
+
+        it('offers no review choice while the Machine has not answered, and the same choices once it has', () => {
+            const reviewable = { claude: { available: true, intents: ['review'] }, codex: { available: true, intents: ['review'] } };
+            const unread = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: ['claude', 'codex'], intent: 'review', executionRunsBackends: null });
+            expect(unread.map((choice) => choice.backendId)).toEqual(['claude', 'codex']);
+            expect(unread.every((choice) => choice.disabled)).toBe(true);
+            const answered = resolveExecutionRunLauncherBackendChoices({ enabledAgentIds: ['claude', 'codex'], intent: 'review', executionRunsBackends: reviewable });
+            expect(answered.map((choice) => choice.disabled)).toEqual([false, false]);
+        });
+
+        it('places an Agent the Machine does not have as not on the Machine, and leaves a signed-out one choosable', () => {
+            const reviewable = { claude: { available: true, intents: ['review'] }, codex: { available: true, intents: ['review'] }, opencode: { available: true, intents: ['review'] } };
+            const choices = resolveExecutionRunLauncherBackendChoices({
+                enabledAgentIds: ['claude', 'codex', 'opencode'], intent: 'review', executionRunsBackends: reviewable,
+                machineAgents: [
+                    machineAgent({ agentId: 'claude' }),
+                    machineAgent({ agentId: 'codex', state: 'needsSignIn', signIn: { status: 'signedOut', via: null, nativeLogin: 'terminal', connectedServices: [] } }),
+                    machineAgent({ agentId: 'opencode', state: 'notInstalled', installed: false, version: null }),
+                ],
+            });
+            expect(choices.map((choice) => [choice.backendId, choice.disabled, choice.unavailable])).toEqual([
+                ['claude', false, undefined],
+                ['codex', false, undefined],
+                ['opencode', true, 'notOnMachine'],
+            ]);
+        });
     });
 });

@@ -12,7 +12,7 @@ const reachabilityState = vi.hoisted(() => ({ unavailable: false }));
 const mockEnv = vi.hoisted(() => ({
   iconsRenderAsText: false,
 }));
-const summaryMockState = vi.hoisted(() => ({
+const guidanceNativeRenders = vi.hoisted(() => ({
   renderCount: 0,
 }));
 
@@ -39,18 +39,17 @@ vi.mock('expo-image', () => ({
   Image: (props: any) => React.createElement('Image', props, null),
 }));
 
-vi.mock('./SessionGettingStartedSummary', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./SessionGettingStartedSummary')>();
-  return {
-    ...actual,
-    SessionGettingStartedSummary: (props: any) => {
-      summaryMockState.renderCount += 1;
-      return React.createElement(actual.SessionGettingStartedSummary, props);
-    },
-  };
-});
-
 installSessionGuidanceCommonModuleMocks({
+  reactNative: async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
+      // Observe this View's native port, not its separately memoized Summary child.
+      ScrollView: React.forwardRef<unknown, Record<string, unknown>>((props, ref) => {
+        if (props.testID === 'session-getting-started-scroll') guidanceNativeRenders.renderCount += 1;
+        return React.createElement('ScrollView', { ...props, ref });
+      }),
+    });
+  },
   storage: () => vi.importActual('@/sync/domains/state/storage'),
   router: async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -136,7 +135,7 @@ describe('SessionGettingStartedGuidanceView', () => {
 
   it('skips rerendering the guidance view when props are equal by value', async () => {
     const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
-    summaryMockState.renderCount = 0;
+    guidanceNativeRenders.renderCount = 0;
     const createElement = () => (
       <SessionGettingStartedGuidanceView
         variant="primaryPane"
@@ -151,13 +150,11 @@ describe('SessionGettingStartedGuidanceView', () => {
     );
 
     const screen = await renderScreen(createElement());
-    expect(summaryMockState.renderCount).toBe(1);
+    expect(guidanceNativeRenders.renderCount).toBe(1);
 
-    act(() => {
-      screen.tree.update(createElement());
-    });
+    await screen.update(createElement());
 
-    expect(summaryMockState.renderCount).toBe(1);
+    expect(guidanceNativeRenders.renderCount).toBe(1);
   });
 
   it('hides terminal follow-up when setup is available', async () => {

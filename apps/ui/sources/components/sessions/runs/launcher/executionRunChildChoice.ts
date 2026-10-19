@@ -4,7 +4,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import type { ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 
 /** The part of a refused start a chooser reads: an Action result, or one member of a fan-out. */
-export type ExecutionRunStartRefusal = Readonly<{ ok: boolean; errorCode?: string; details?: unknown }>;
+export type ExecutionRunStartRefusal = Readonly<{ ok: boolean; error?: string; errorCode?: string; details?: unknown }>;
 
 /** A chooser is permission for a fresh attempt, not a retry of an unknown-effect start. */
 export function readExecutionRunChildChoice(result: ExecutionRunStartRefusal): ExecutionRunChildChoiceV1 | null {

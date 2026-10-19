@@ -8,6 +8,7 @@ import type { IconName } from '@/components/ui/icons/Icon';
 import { t } from '@/text';
 
 import type { AgentStartDraft } from './agentStartDrafts';
+import { useSessionLauncherDraftPreview } from './useSessionRetainedLauncherDraftKeys';
 
 const DRAFT_ICON: Readonly<Record<'conversation' | 'review' | 'plan' | 'delegate', IconName>> = {
     conversation: 'chat-circle',
@@ -16,10 +17,11 @@ const DRAFT_ICON: Readonly<Record<'conversation' | 'review' | 'plan' | 'delegate
     delegate: 'arrow-elbow-down-right',
 };
 
-function presentDraft(draft: AgentStartDraft): SessionAgentActivityPresentation {
+function presentDraft(draft: AgentStartDraft, preview: string): SessionAgentActivityPresentation {
     const kind = draft.intent ?? 'conversation';
     const title = t(`agentStart.startRow.${kind}` as const);
-    const subtitle = t('agentStart.startRow.subtitle');
+    // Text in the draft says which unsent start this is, in the Session list's words ("Draft · …").
+    const subtitle = preview ? `${t('sessionDrafts.badge')} · ${preview}` : t('agentStart.startRow.subtitle');
     return {
         title,
         phase: 'finished',
@@ -39,38 +41,44 @@ function presentDraft(draft: AgentStartDraft): SessionAgentActivityPresentation 
 
 /**
  * The Start row (lab `convo-S1`/`S3`: "New review · Draft · starts when you send"): each unsent start
- * open beside the Session sits at the head of the Work list until its first Send turns it into its
- * Run, so a draft is never lost behind other tabs. Pressing it brings that draft forward.
+ * open beside the Session, or kept unsent without a tab to show it, sits at the head of the Work list
+ * until its first Send turns it into its Run, so a draft is never lost behind other tabs or a closed
+ * page. Pressing it brings that draft forward.
  */
 export const SessionAgentStartDraftRows = React.memo((props: Readonly<{
+    sessionId: string;
+    serverId?: string | null;
     drafts: readonly AgentStartDraft[];
-    onOpen: (tabKey: string) => void;
+    onOpen: (draft: AgentStartDraft) => void;
 }>) => {
     if (props.drafts.length === 0) return null;
     return (
         <View testID="session-work-start-drafts">
             {props.drafts.map((draft) => (
-                <SessionAgentStartDraftRow key={draft.tabKey} draft={draft} onOpen={props.onOpen} />
+                <SessionAgentStartDraftRow key={draft.key} sessionId={props.sessionId} serverId={props.serverId} draft={draft} onOpen={props.onOpen} />
             ))}
         </View>
     );
 });
 
 const SessionAgentStartDraftRow = React.memo((props: Readonly<{
+    sessionId: string;
+    serverId?: string | null;
     draft: AgentStartDraft;
-    onOpen: (tabKey: string) => void;
+    onOpen: (draft: AgentStartDraft) => void;
 }>) => {
     const { draft, onOpen } = props;
-    const presentation = React.useMemo(() => presentDraft(draft), [draft]);
-    const onPress = React.useCallback(() => onOpen(draft.tabKey), [draft.tabKey, onOpen]);
+    const preview = useSessionLauncherDraftPreview({ sessionId: props.sessionId, serverId: props.serverId, draftKey: draft.key });
+    const presentation = React.useMemo(() => presentDraft(draft, preview), [draft, preview]);
+    const onPress = React.useCallback(() => onOpen(draft), [draft, onOpen]);
     return (
         <WorkRowShell
-            testID={`session-work-start-draft:${draft.tabKey}`}
+            testID={`session-work-start-draft:${draft.tabKey ?? draft.key}`}
             accessibilityLabel={presentation.accessibilityLabel}
             selected={draft.active}
             onPress={onPress}
         >
-            <SessionAgentActivitySummary testID={`session-work-start-draft-summary:${draft.tabKey}`} presentation={presentation} />
+            <SessionAgentActivitySummary testID={`session-work-start-draft-summary:${draft.tabKey ?? draft.key}`} presentation={presentation} />
         </WorkRowShell>
     );
 });

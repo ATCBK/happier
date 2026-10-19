@@ -46,6 +46,7 @@ export async function admitExecutionRunLaunchTarget(input: Readonly<{
     exactSettings: Settings | null;
     settings: Settings;
     accountLifetime: ServerAccountScopeLifetime | null;
+    signal?: AbortSignal;
     machineId: string | null;
     machineTarget?: ResumeContext['machineTarget'];
     machineReachable: boolean;
@@ -56,6 +57,7 @@ export async function admitExecutionRunLaunchTarget(input: Readonly<{
     readinessOperationId: string;
 }>) {
     const { session, exactSettings, accountLifetime, machineId, serverId, sessionId, requirements } = input;
+    input.signal?.throwIfAborted();
     const detached = sessionId === null;
     if ((!detached && !session) || !exactSettings || !accountLifetime?.isCurrent()
         || (detached && (!machineId || !input.cwd || !input.machineReachable))) throw new Error(t('common.unavailable'));
@@ -70,7 +72,8 @@ export async function admitExecutionRunLaunchTarget(input: Readonly<{
         const capability = await createUiExecutionRunActionDeps().executionRunCheckProtocolV2?.(sessionId, {
             detachedScope: detached, startAndWait: false, exactInputResults: false,
             runScopedAgentBindings, secretReferenceOverlay: requirements.secretReferenceOverlay,
-        }, { ...(serverId ? { serverId } : {}), ...(machineId ? { targetMachineId: machineId } : {}) });
+        }, { ...(serverId ? { serverId } : {}), ...(machineId ? { targetMachineId: machineId } : {}),
+            ...(input.signal ? { signal: input.signal } : {}) });
         if (!capability) throw createSessionInputFailureError('execution_run_target_changed');
         if (capability.ok === false) {
             if (requirements.secretReferenceOverlay && capability.errorCode === 'execution_run_protocol_unsupported') {
@@ -82,6 +85,7 @@ export async function admitExecutionRunLaunchTarget(input: Readonly<{
         admittedMachineId = capability.exactMachineId;
     }
     if (detached) {
+        input.signal?.throwIfAborted();
         if (!accountLifetime.isCurrent()) throw new Error(t('common.unavailable'));
         assertConfiguredAcpTargetsCurrent(accountLifetime.scope, targets);
         return;
@@ -91,9 +95,11 @@ export async function admitExecutionRunLaunchTarget(input: Readonly<{
         machineReachable: input.machineReachable, resumeCapabilityOptions: input.resumeCapabilityOptions,
         sessionActionDefaultBackend: input.defaultBackend, agentId: input.defaultBackend?.defaultAgentId ?? null,
         settings: input.settings, serverId, accountLifetime,
+        signal: input.signal,
         ...(input.machineTarget ? { machineTarget: input.machineTarget } : {}),
         readinessOperationId: input.readinessOperationId,
         ...(admittedMachineId ? { expectedMachineId: admittedMachineId } : {}) });
+    input.signal?.throwIfAborted();
     if (!active.ok) throw new Error(active.reason === 'machine_offline'
         ? t('session.machineOfflineCannotResume') : active.error ?? t('session.resumeFailed'));
     if (!accountLifetime.isCurrent()) throw new Error(t('common.unavailable'));

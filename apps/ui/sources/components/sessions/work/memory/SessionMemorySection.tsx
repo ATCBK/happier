@@ -1,4 +1,5 @@
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import { selectMemoryTargetV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -47,22 +48,14 @@ export function selectSessionMemory(layers: SessionContextLayers, serverId: stri
         const row = rows.find((candidate) => candidate.kind === 'memory' && candidate.entry.ref.kind === 'doc');
         return row ? { kind: 'doc' as const, artifactId: row.entry.ref.artifactId, serverId: row.entry.ref.serverId ?? serverId } : null;
     };
-    if (layers.isBot) {
-        const own = layers.session.find((row) => row.entry.id === 'session.memory' && row.entry.ref.kind === 'doc');
-        return {
-            resolving: false,
-            scope: 'session',
-            ref: own ? { kind: 'doc', artifactId: own.entry.ref.artifactId, serverId: own.entry.ref.serverId ?? serverId } : null,
-        };
-    }
-    if (layers.project.status === 'pending' || layers.project.status === 'unavailable'
-        || layers.project.rows.some(row => row.kind === 'unknown')) return { resolving: true, ref: null, scope: 'project' };
-    const project = refOf(layers.project.rows);
-    if (project) return { resolving: false, ref: project, scope: 'project' };
-    if (layers.accountStatus !== 'ready' || layers.account.some(row => row.kind === 'unknown')) {
-        return { resolving: true, ref: null, scope: 'account' };
-    }
-    return { resolving: false, ref: refOf(layers.account), scope: 'account' };
+    const own = layers.session.find(row => row.entry.id === 'session.memory' && row.entry.ref.kind === 'doc');
+    return selectMemoryTargetV1({ isBot: layers.isBot,
+        botRef: own ? { kind: 'doc', artifactId: own.entry.ref.artifactId, serverId: own.entry.ref.serverId ?? serverId } : null,
+        project: { status: layers.project.rows.some(row => row.kind === 'unknown') ? 'unavailable' : layers.project.status,
+            ref: refOf(layers.project.rows) },
+        account: { status: layers.account.some(row => row.kind === 'unknown') ? 'unavailable' : layers.accountStatus,
+            ref: refOf(layers.account) },
+    });
 }
 
 /**
@@ -134,10 +127,10 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
     }, [sessionTarget]);
 
     const documentAccess = displayedSource.view?.access ?? null;
-    const shared = documentAccess !== null && documentAccess !== 'owner';
+    const shared = displayedSource.stale ? null : displayedSource.view?.shared ?? null;
     const readOnly = ref !== null && (documentAccess === null || documentAccess === 'view');
     const canRemember = !readOnly && Boolean(displayedSource.target || (!ref && !resolving && displayedSource.status === 'none'));
-    const footer = resolving || (ref && documentAccess === null) ? undefined : shared
+    const footer = resolving || (ref && (documentAccess === null || shared === null)) ? undefined : shared
         ? joinHappierFacts(t('memoryContext.memory.accessShared'), t('memoryContext.memory.writesAskFirst'))
         : joinHappierFacts(selection.scope === 'project' ? t('memoryContext.session.projectMemory')
             : selection.scope === 'account' ? t('memoryContext.session.yourMemory') : t('memoryContext.memory.accessPrivate'),

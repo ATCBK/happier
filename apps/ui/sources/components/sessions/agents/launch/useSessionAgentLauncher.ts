@@ -25,6 +25,9 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
 import { useDeviceType } from '@/utils/platform/responsive';
 
+import { publishInteractiveExecutionRunDraftNavigationIntent } from '@/components/sessions/runs/launcher/interactiveExecutionRunDraftNavigationIntent';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { readAgentStartDraftTarget } from './agentStartDrafts';
 import { useSessionBuiltinWorkflowStart } from './useSessionBuiltinWorkflowStart';
 
 export type SessionAgentLauncher = Readonly<{
@@ -46,6 +49,11 @@ export type SessionAgentLauncher = Readonly<{
     startPluginWorkflow: (source: WorkflowPluginSourceV1) => void;
     /** Shows a Details tab where the person will see it (beside the Session, or the phone's Details). */
     openDetails: (tab: DetailsTab) => void;
+    /**
+     * Brings an unsent start back: its Details tab beside the Session, or on a phone, which has no tab
+     * for it, the Run page "New agent conversation" opens, where the same Session draft is shown.
+     */
+    openStartDraft: (tab: DetailsTab) => void;
     /** The Agent's own launch surface (a team, a teammate), when it contributes one. */
     providerLaunch: Readonly<{ title: string; subtitle: string | null; open: () => void }> | null;
 }>;
@@ -128,6 +136,17 @@ export function useSessionAgentLauncher(params: Readonly<{
         pane.openDetailsTab(createExecutionRunLauncherDetailsTab(intent, preset), { intent: 'preview' });
     }, [pane, phone, pushRunRoute]);
 
+    const openStartDraft = React.useCallback((tab: DetailsTab) => {
+        const target = phone ? readAgentStartDraftTarget(tab.resource) : null;
+        const address = normalizeSessionAddress(serverId, sessionId);
+        if (target?.discussion && address) {
+            // The same draft the wide pane keeps, found by its Discussion correlation (the Run page's
+            // existing handoff); the selected text stays out of route history.
+            router.push(publishInteractiveExecutionRunDraftNavigationIntent({ address, ...target.discussion }).href as Href);
+        } else if (target) pushRunRoute(target.intent ?? undefined, target.roleId ?? undefined);
+        else openDetails(tab);
+    }, [openDetails, phone, pushRunRoute, router, serverId, sessionId]);
+
     const startCatalogWorkflow = useSessionBuiltinWorkflowStart({ sessionId, serverId });
 
     const providerTab = React.useMemo(
@@ -145,8 +164,9 @@ export function useSessionAgentLauncher(params: Readonly<{
         openConversation,
         openRun,
         openDetails,
+        openStartDraft,
         providerLaunch,
         startBuiltinWorkflow: startCatalogWorkflow,
         startPluginWorkflow: startCatalogWorkflow,
-    }), [openDetails, agentIds, intents, launchUnavailableReason, openConversation, openRun, providerLaunch, startCatalogWorkflow]);
+    }), [openDetails, openStartDraft, agentIds, intents, launchUnavailableReason, openConversation, openRun, providerLaunch, startCatalogWorkflow]);
 }

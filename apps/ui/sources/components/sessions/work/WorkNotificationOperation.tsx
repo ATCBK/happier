@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { useHappierPageSection } from '@happier-dev/plugin-ui/presentation';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 
@@ -29,6 +30,43 @@ const stylesheet = StyleSheet.create((theme) => ({
   error: { color: theme.colors.state.danger.foreground, fontSize: 14 },
 }));
 
+type NotificationSetupReport = (needed: boolean) => void;
+const NotificationSetupContext = React.createContext<NotificationSetupReport | null>(null);
+
+/**
+ * The notification rows of one Work section. When no delivery channel exists, that is one cause for
+ * every row in it, so the section offers one setup action instead of one per row.
+ */
+export function WorkNotificationGroup(props: Readonly<{ sourceId: string; style?: StyleProp<ViewStyle>; children: React.ReactNode }>) {
+  const [needsSetup, setNeedsSetup] = React.useState(false);
+  const router = useRouter();
+  // The setup action starts where the rows' text does: on the section's own row inset.
+  const rowInsetPx = useHappierPageSection()?.rowInsetPx ?? 0;
+  return (
+    <NotificationSetupContext.Provider value={setNeedsSetup}>
+      <View style={props.style}>
+        {props.children}
+        {needsSetup ? (
+          <View style={[stylesheet.operation, { paddingHorizontal: rowInsetPx }]}>
+            <RoundButton
+              testID={`notify-setup:${props.sourceId}`}
+              style={stylesheet.button}
+              display="secondary"
+              size="small"
+              title={t('sessionWork.notify.setup')}
+              titleNumberOfLines="complete"
+              onPress={() => {
+                setNeedsSetup(false);
+                router.push('/settings/notifications');
+              }}
+            />
+          </View>
+        ) : null}
+      </View>
+    </NotificationSetupContext.Provider>
+  );
+}
+
 /** One quiet presentation of the canonical trigger owner, shared by Session and Run details. */
 export function WorkNotificationOperation(
   props: Readonly<{
@@ -51,9 +89,8 @@ export function WorkNotificationOperation(
   const [acknowledged, setAcknowledged] =
     React.useState<WorkflowTriggerSetV1 | null>(null);
   const [error, setError] = React.useState(false);
-  const [needsSetup, setNeedsSetup] = React.useState(false);
+  const reportNeedsSetup = React.useContext(NotificationSetupContext);
   const [pending, setPending] = React.useState(false);
-  const router = useRouter();
   React.useEffect(() => {
     setAcknowledged(null);
   }, [props.sets]);
@@ -69,8 +106,6 @@ export function WorkNotificationOperation(
     const triggerId = props.match(set);
     return triggerId ? [{ triggerId, automationId: set.automationId }] : [];
   })[0];
-  const id = (suffix: string) =>
-    `${props.testIDPrefix}${suffix}:${props.sourceId}`;
   const register = async () => {
     setError(false);
     try {
@@ -112,7 +147,7 @@ export function WorkNotificationOperation(
           );
         },
       });
-      setNeedsSetup(!configured);
+      reportNeedsSetup?.(!configured);
       if (!configured) return;
       setAcknowledged((await props.add()).set);
     } catch {
@@ -130,6 +165,11 @@ export function WorkNotificationOperation(
       setError(true);
     }
   };
+  // An armed row says a delivery path exists: a "set up" offer left over from an earlier refusal is stale.
+  const armed = Boolean(registered);
+  React.useEffect(() => {
+    if (armed) reportNeedsSetup?.(false);
+  }, [armed, reportNeedsSetup]);
   const ready = props.status === 'ready';
   const changeRegistration = async (value: boolean) => {
     if (pending || value === Boolean(registered) || (!registered && !ready)) return;
@@ -144,49 +184,51 @@ export function WorkNotificationOperation(
   // A failed owner read offers nothing: never a disabled control that cannot succeed. While the
   // owner is still answering, the row's existence is known, so it holds its place with its switch
   // disabled (no shift when the answer lands). An armed or failed operation keeps its state.
-  if (props.status === 'failed' && !registered && !needsSetup && !error) return null;
+  if (props.status === 'failed' && !registered && !error) return null;
+  return <WorkNotificationOperationView sourceId={props.sourceId} testIDPrefix={props.testIDPrefix}
+    title={props.title} armed={Boolean(registered)} pending={pending} disabled={pending || (!ready && !registered)}
+    error={error} onChange={changeRegistration} />;
+}
+
+/** State-free shared row; Follow and authored Run Habits keep their own owners. */
+export function WorkNotificationOperationView(props: Readonly<{
+  sourceId: string;
+  testIDPrefix: string;
+  title: string;
+  armed: boolean;
+  pending: boolean;
+  disabled: boolean;
+  error: boolean;
+  onChange: (value: boolean) => Promise<void>;
+}>) {
+  const id = (suffix: string) => `${props.testIDPrefix}${suffix}:${props.sourceId}`;
   return (
     <View>
       <Item
-        testID={id(registered ? '-cancel' : '')}
+        testID={id(props.armed ? '-cancel' : '')}
         title={props.title}
         density="compact"
-        subtitle={registered ? (
+        subtitle={props.armed ? (
           <Text testID={id('-armed')} accessibilityLiveRegion="polite" style={stylesheet.status}>
             {t('sessionWork.notify.armed')}
           </Text>
         ) : undefined}
-        disabled={pending || (!ready && !registered)}
+        disabled={props.disabled}
+        loading={props.pending}
         showChevron={false}
-        onPress={() => { void changeRegistration(!registered); }}
+        onPress={() => { void props.onChange(!props.armed); }}
         rightElementOutsidePressable
         rightElement={(
           <Switch
             testID={id('-switch')}
             accessibilityLabel={props.title}
-            value={Boolean(registered)}
-            disabled={pending || (!ready && !registered)}
-            onValueChange={(value) => { void changeRegistration(value); }}
+            value={props.armed}
+            disabled={props.disabled}
+            onValueChange={(value) => { void props.onChange(value); }}
           />
         )}
       />
-      <View style={stylesheet.operation}>
-        {needsSetup ? (
-          <RoundButton
-            testID={id('-setup')}
-            style={stylesheet.button}
-            display="secondary"
-            size="small"
-            title={t('sessionWork.notify.setup')}
-            titleNumberOfLines="complete"
-            onPress={() => {
-              setNeedsSetup(false);
-              router.push('/settings/notifications');
-            }}
-          />
-        ) : null}
-      </View>
-      {error ? (
+      {props.error ? (
         <Text
           testID={id('-error')}
           accessibilityLiveRegion="polite"

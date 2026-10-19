@@ -43,10 +43,11 @@ const permissionModeOptions = [
     { value: 'default', label: 'Default' },
 ] as any;
 
-async function renderOptions() {
+async function renderOptions(choices: readonly unknown[] = backendChoices) {
     const { ExecutionRunLauncherOptions } = await import('./ExecutionRunLauncherOptions');
     return renderScreen(React.createElement(ExecutionRunLauncherOptions, {
-        backendChoices,
+        backendChoices: choices as any,
+        machineName: 'Build box',
         selectedBackendTargetKeys: ['agent:codex'],
         profileChoices: [],
         selectedProfileId: '',
@@ -106,6 +107,19 @@ describe('ExecutionRunLauncherOptions', () => {
             .toMatchObject({ checked: true });
         expect(screen.findByTestId('execution-run-launcher-permission-mode:default')?.props.accessibilityState)
             .toMatchObject({ checked: false });
+        standardCleanup();
+    });
+
+    it('names an Agent the Machine does not have under the "not on this Machine yet" heading, after the ones it has', async () => {
+        const screen = await renderOptions([
+            { ...backendChoices[0] },
+            { backendTarget: { kind: 'backend', backendId: 'opencode' }, targetKey: 'agent:opencode', backendId: 'opencode', agentId: 'opencode', title: 'OpenCode', disabled: true, unavailable: 'notOnMachine' },
+        ]);
+        const text = screen.getTextContent();
+        expect(text.match(/machineAgents\.notOnMachineYet/g)).toHaveLength(1);
+        expect(text.indexOf('Codex')).toBeLessThan(text.indexOf('machineAgents.notOnMachineYet'));
+        expect(text.indexOf('machineAgents.notOnMachineYet')).toBeLessThan(text.indexOf('OpenCode'));
+        expect(screen.findByTestId('execution-run-launcher-target:agent:opencode')?.props.accessibilityState).toMatchObject({ disabled: true });
         standardCleanup();
     });
 });

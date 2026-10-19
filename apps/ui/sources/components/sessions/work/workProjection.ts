@@ -19,7 +19,7 @@ import { canRequestActionOperationStop } from '@/components/inbox/actionOperatio
  * The one Work projection of a Session (ORC R-09, §3.8): every unit of work the Session leads, read from
  * its sources and counted once.
  *
- * - **Sessions** — the `reportsTo` subtree, from the Session rows the store already holds.
+ * - **Sessions** — the `manager` subtree, from the Session rows the store already holds.
  * - **Agent activity** (`useSessionAgentActivity`) — background runs, in-session agents and the
  *   workflow runs an agent reported.
  * - **Workflow activity** (`useSessionWorkflowActivity`) — the live progress of in-session workflow runs.
@@ -76,12 +76,18 @@ export function resolveWorkMachineNotices(input: Readonly<{
     machineReachable: boolean;
     nothingYet: boolean;
     unavailableReason: string | null;
-}>): Readonly<{ offline: boolean; unavailable: boolean }> {
+    /** The first read of the workflow runs failed and nothing was retained to show. */
+    managedUnavailable: boolean;
+    managedStale?: boolean;
+}>): Readonly<{ offline: boolean; unavailable: boolean; runsUnavailable: boolean; runsStale: boolean }> {
     const offline = !input.machineReachable && !input.nothingYet;
     return {
         offline,
         unavailable: input.unavailableReason !== null && !input.nothingYet
             && !(offline && input.unavailableReason === 'machineOffline'),
+        // The offline line already says why runs cannot be read, and its one Retry asks again.
+        runsUnavailable: input.managedUnavailable && !offline,
+        runsStale: input.managedStale === true && !offline,
     };
 }
 
@@ -177,8 +183,8 @@ export type WorkProjection = Readonly<{
 /** A Session in the store, reduced to what the projection reads. */
 export type WorkReportSessionSource = Readonly<{
     sessionId: string;
-    /** The Session it reports to (`reportsTo.sessionId`), or null for a root. */
-    leadSessionId: string | null;
+    /** The Session it reports to (`manager.sessionId`), or null for a root. */
+    managerSessionId: string | null;
     title: string;
     agentId: string | null;
     facts: readonly string[];
@@ -196,6 +202,8 @@ export type WorkManagedRunSource = Readonly<{
     word: string;
     /** The server's attention predicate returned this run. */
     needsAttention: boolean;
+    /** When the run last changed, as the row says it ("10:42"); a Work row never runs a clock of its own. */
+    time?: string;
 }>;
 
 export type WorkProjectionInput = Readonly<{
@@ -261,7 +269,7 @@ function isOutstandingSession(bucket: WorkBucket, stalled: boolean): boolean {
 }
 
 /**
- * The `reportsTo` subtree in depth-first order, each Session under its lead, siblings in source order.
+ * The `manager` subtree in depth-first order, each Session under its lead, siblings in source order.
  *
  * Depth is walked from the root, never read from a Session: a cycle the store transiently holds (an
  * edge seen before its reparent landed) cannot loop, because every Session is visited once. A report's
@@ -271,7 +279,7 @@ function isOutstandingSession(bucket: WorkBucket, stalled: boolean): boolean {
 function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: readonly WorkItem[]; stalledKeys: ReadonlySet<string> }> {
     const childrenByLead = new Map<string, WorkReportSessionSource[]>();
     for (const source of input.reportSessions) {
-        const lead = normalizeId(source.leadSessionId);
+        const lead = normalizeId(source.managerSessionId);
         if (!lead || source.archived || source.sessionId === input.sessionId) continue;
         const siblings = childrenByLead.get(lead);
         if (siblings) siblings.push(source);
@@ -280,10 +288,10 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: re
     const items: WorkItem[] = [];
     const stalledKeys = new Set<string>();
     const visited = new Set<string>([input.sessionId]);
-    /** Places the reports of `leadSessionId` and returns how many in that subtree are still outstanding. */
-    const walk = (leadSessionId: string, parentKey: string | null, level: number): number => {
+    /** Places the reports of `managerSessionId` and returns how many in that subtree are still outstanding. */
+    const walk = (managerSessionId: string, parentKey: string | null, level: number): number => {
         let outstanding = 0;
-        for (const source of childrenByLead.get(leadSessionId) ?? []) {
+        for (const source of childrenByLead.get(managerSessionId) ?? []) {
             if (visited.has(source.sessionId)) continue;
             visited.add(source.sessionId);
             const key = `session:${source.sessionId}`;
@@ -347,7 +355,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
             kind: 'workflow_run',
             title: source.title,
             agentId: null,
-            facts: progressFacts(progress, input.describeProgress),
+            facts: [...(source.time ? [source.time] : []), ...progressFacts(progress, input.describeProgress)],
             parentKey: null,
             level: 0,
             status: classifyManagedRun(source),
@@ -495,22 +503,6 @@ export function areWorkSummariesEqual(a: WorkSummary, b: WorkSummary): boolean {
         && a.stalled === b.stalled
         && a.sessions === b.sessions
         && a.runs === b.runs;
-}
-
-/**
- * Where pressing a Work row or map node goes. A row never answers anything (S-1): a Session or an agent
- * opens its peek, which holds the one set of answer controls; a workflow run has no peek, so a run that
- * needs the person opens the Inbox, where its review waits — and its own page only when this viewer
- * has no Inbox. Everything else opens where it lives.
- */
-export function resolveWorkItemOpenTarget(
-    item: WorkItem,
-    context: Readonly<{ inboxAvailable: boolean }>,
-): WorkOpenTarget | Readonly<{ kind: 'inbox' }> {
-    if (item.open.kind === 'workflow_run' && item.status.bucket === 'needs_you' && context.inboxAvailable) {
-        return { kind: 'inbox' };
-    }
-    return item.open;
 }
 
 /**

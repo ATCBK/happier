@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionAgentActivityRowForTest, installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
@@ -31,7 +30,7 @@ describe('real subagent group stability', () => {
         const before = paints.get('session-subagent-summary:a');
         expect(before).toBeGreaterThan(0);
         const changed = createSessionAgentActivityRowForTest({ ...b.subagent, display: { ...b.subagent.display, title: 'Updated B' } }, { ...b.entry, title: 'Updated B' });
-        await act(async () => screen.tree.update(draw([{ ...a }, changed])));
+        await screen.update(draw([{ ...a }, changed]));
         expect(paints.get('session-subagent-summary:a')).toBe(before);
         expect(screen.getTextContent()).toContain('Updated B');
         await screen.pressByTestIdAsync('session-subagent-row:a');

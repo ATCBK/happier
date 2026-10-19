@@ -7,14 +7,13 @@ import { readSessionRolesV1, type SessionRolesV1 } from '@happier-dev/protocol/p
 import type { RoleInstructionsOverrideV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
 import type { RoleEngineV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { resolveRoleRunsAsKindV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
-import { resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
-import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolvedRoleToArtifact } from '@/sync/domains/roles/roleCatalog';
 import { describeRoleRunsAs } from '@/components/roles/catalog/rolePresentation';
 
 import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleEnginePresentation } from '@/components/roles/catalog/useRoleEnginePresentation';
 import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
+import { buildSessionRoleInventory } from './sessionRoleInventory';
 import { SessionRolePopover, settleSessionRoleWrite, useSessionRoleSelection } from '@/components/roles/session/sessionRole';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { WorkSection } from '@/components/sessions/work/WorkSection';
@@ -30,7 +29,8 @@ import { Popover } from '@/components/ui/popover';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { RoleCatalogEntry } from '@/sync/domains/roles/roleCatalog';
-import { useSessionMetadata } from '@/sync/domains/state/storage';
+import { useSessionSelector } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { t } from '@/text';
@@ -45,7 +45,7 @@ export type SessionRolesSectionProps = Readonly<{
 }>;
 
 function useSessionRolesConfiguration(sessionId: string, serverId?: string | null): SessionRolesV1 {
-    const metadata = useSessionMetadata(sessionId, serverId);
+    const metadata = useSessionSelector(sessionId, serverId, session => session ? readSessionOwnerMetadataView(session) : null);
     return React.useMemo(() => readSessionRolesV1(metadata) ?? EMPTY_SESSION_ROLES, [metadata]);
 }
 
@@ -67,21 +67,11 @@ function SessionRolesContent(props: SessionRolesSectionProps) {
     const catalog = useRoleCatalog(serverId);
     const allRolesRef = React.useRef<View>(null);
     const [rolePopoverOpen, setRolePopoverOpen] = React.useState(false);
-    const inventory = React.useMemo(() => {
-        const catalogById = new Map(catalog.entries.map(entry => [entry.roleId, entry]));
-        const ids = new Set([...Object.keys(sessionRoles.overrides), ...Object.keys(sessionRoles.sessionRoles), ...catalogById.keys()]);
-        return [...ids].map(roleId => {
-            const entry = catalogById.get(roleId);
-            const snapshot = sessionRoles.sessionRoles[roleId];
-            const override = sessionRoles.overrides[roleId];
-            const resolved = resolveRoleSelectionV1({ roleId, settingsRoles: entry ? { [roleId]: entry.role } : {},
-                settingsOverrides: entry?.override ? { [roleId]: entry.override } : {}, sessionRoles });
-            const snapshotDiffers = snapshot && (!entry || !sameStrictJsonValue(resolvedRoleToArtifact(snapshot), resolvedRoleToArtifact(entry.role)));
-            return { roleId, override, snapshot, enabled: resolved.ok,
-                kind: override || (snapshotDiffers && entry) ? 'changed' as const : snapshotDiffers ? 'session' as const : null,
-                reset: override ? 'override' as const : 'snapshot' as const };
-        });
-    }, [catalog.entries, sessionRoles]);
+    const catalogKnown = catalog.status === 'ready' || catalog.entries.length > 0;
+    const inventory = React.useMemo(
+        () => buildSessionRoleInventory({ entries: catalog.entries, catalogKnown, sessionRoles }),
+        [catalog.entries, catalogKnown, sessionRoles],
+    );
     const differences = inventory.filter(role => role.kind !== null);
     const changedCount = differences.filter(role => role.kind === 'changed').length;
     const addedCount = differences.filter(role => role.kind === 'session').length;
@@ -171,6 +161,9 @@ async function setSessionOverride(sessionId: string, override: RoleInstructionsO
     await settleSessionRoleWrite(await roleActions.setSessionOverride(sessionId, fields, { serverId }));
 }
 
+/** The runs-as glyph beside the engine chip; the field keeps its width out of the row's room. */
+const RUNS_AS_GLYPH_PX = 14;
+
 /**
  * One difference: name · "changed" (turns into Reset on hover or keyboard focus) or "this session" ·
  * the engine · the runs-as glyph. Name, engine and runs-as are the one resolver's answer for this
@@ -233,8 +226,12 @@ function SessionRoleDifferenceRow(props: Readonly<{
             title={selection?.name ?? props.roleId}
             titleAccessory={marker}
             showChevron={false}
-            // The engine field is its own control: one activation owner per control.
+            // The engine field is its own control: one activation owner per control. It stays on the
+            // name's line (lab `convo-W9`) and only moves beneath on a phone or a pane too narrow for it.
             rightElementOutsidePressable
+            accessoryLayout="adaptive"
+            fieldAccessory
+            fieldAccessorySiblingPx={RUNS_AS_GLYPH_PX + theme.space.s8}
             onHoverIn={Platform.OS === 'web' ? () => setHovered(true) : undefined}
             onHoverOut={Platform.OS === 'web' ? () => setHovered(false) : undefined}
             rightElement={(
@@ -242,8 +239,11 @@ function SessionRoleDifferenceRow(props: Readonly<{
                     <RoleEngineField
                         serverId={props.serverId}
                         engine={engine}
-                        label={presentation.label}
+                        // The mark names the agent, so the row says only the model and effort.
+                        label={presentation.choiceLabel}
+                        accessibleLabel={presentation.label}
                         leading={presentation.icon}
+                        presentation="chip"
                         onChange={props.onEngineChange}
                     />
                     <View
@@ -252,7 +252,7 @@ function SessionRoleDifferenceRow(props: Readonly<{
                     >
                         <Icon
                             name={resolveHappierRoleRunsAsPresentation(runsAs).glyph}
-                            size={14}
+                            size={RUNS_AS_GLYPH_PX}
                             color={theme.colors.text.tertiary}
                         />
                     </View>

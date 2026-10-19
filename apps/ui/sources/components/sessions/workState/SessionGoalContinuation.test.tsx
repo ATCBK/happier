@@ -233,7 +233,7 @@ describe('the Goal control: one continuation owner (FIN 04 §5.5, 07 S16c)', () 
 
         expect(callsOf('session.trigger.add')).toEqual([]);
         expect(callsOf('session.trigger.remove')).toEqual([]);
-        expect(onSetGoal).toHaveBeenCalledWith({ status: 'paused' });
+        expect(onSetGoal).toHaveBeenCalledWith({ status: 'paused' }, expect.any(AbortSignal));
 
         act(() => tree.unmount());
     });

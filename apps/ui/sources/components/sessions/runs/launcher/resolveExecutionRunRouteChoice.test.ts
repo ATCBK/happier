@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
 import { t } from '@/text';
@@ -6,7 +7,7 @@ import { t } from '@/text';
 import { resolveExecutionRunRouteChoice } from './resolveExecutionRunRouteChoice';
 
 const AGENT = 'agent:happier.agent.codex/codex';
-const applied = { agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' };
+const applied = { agentTargetKey: AGENT, providerConnectionId: ProviderConnectionIdSchema.parse('pc_gateway'), modelId: 'fable-5.1' };
 const presentation = resolveSessionRoutePresentation({
     phase: 'running', selection: null, appliedSelection: applied,
     native: { label: 'Codex pool', authSource: 'connected', connectedCount: 1 },
@@ -23,6 +24,17 @@ describe('resolveExecutionRunRouteChoice', () => {
         });
         expect(resolveExecutionRunRouteChoice({ inherits: true, inheritedSelection: nativeSelection, inheritedRoutePresentation: nativePresentation }))
             .toEqual({ label: `${t('runPage.menu.selectionInherited')} · Work pool · fable-5.1`, inheritDetail: 'Work pool · fable-5.1' });
+    });
+    it('names the parent model by its catalog title in both the chip and what inheriting means', () => {
+        const nativeSelection = { ...applied, providerConnectionId: null, modelId: 'claude-haiku-4-5' };
+        const nativePresentation = resolveSessionRoutePresentation({
+            phase: 'running', selection: null, appliedSelection: nativeSelection,
+            native: { label: 'Work pool', authSource: 'connected', connectedCount: 1 },
+        });
+        const choice = resolveExecutionRunRouteChoice({ inherits: true, inheritedSelection: nativeSelection,
+            inheritedRoutePresentation: nativePresentation, inheritedModelLabel: 'Haiku 4.5' });
+        expect(choice.inheritDetail).toBe('Work pool · Haiku 4.5');
+        expect(choice.label).toBe(`${t('runPage.menu.selectionInherited')} · Work pool · Haiku 4.5`);
     });
     it('names the session route and model a new Run inherits', () => {
         expect(resolveExecutionRunRouteChoice({ inherits: true, inheritedSelection: applied, inheritedRoutePresentation: presentation }))

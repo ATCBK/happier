@@ -32,6 +32,8 @@ export function createExecutionRunStartContentChip(params: Readonly<{
     title: string;
     testID: string;
     disabled?: boolean;
+    /** Shared visible/keyboard/hover/overflow demand signal; never evaluated while closed and untouched. */
+    onIntent?: () => void;
     /** The chip draws its glyph alone (the reviewers' "+"); `title` still names it. */
     iconOnly?: boolean;
     /** The data the popover content reads, so an open popover redraws when it changes. */
@@ -40,6 +42,7 @@ export function createExecutionRunStartContentChip(params: Readonly<{
 }>): AgentInputExtraActionChip {
     return {
         key: params.key,
+        onIntent: params.onIntent,
         stabilityKey: `${params.label}:${params.disabled === true}:${params.revision ?? ''}`,
         collapsedContentPopover: {
             title: params.title,
@@ -59,7 +62,13 @@ export function createExecutionRunStartContentChip(params: Readonly<{
                 accessibilityLabel={params.iconOnly ? params.title : `${params.title}: ${params.label}`}
                 accessibilityState={{ disabled: params.disabled === true }}
                 disabled={params.disabled}
-                onPress={() => ctx.toggleCollapsedPopover?.(params.key)}
+                onFocus={params.disabled ? undefined : params.onIntent}
+                onHoverIn={params.disabled ? undefined : params.onIntent}
+                onPress={() => {
+                    if (params.disabled) return;
+                    params.onIntent?.();
+                    ctx.toggleCollapsedPopover?.(params.key);
+                }}
                 hitSlop={{ top: 8, bottom: 10, left: 4, right: 4 }}
                 style={(state) => ctx.chipStyle(state.pressed)}
             >

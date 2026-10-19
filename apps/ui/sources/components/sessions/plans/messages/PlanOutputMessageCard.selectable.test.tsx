@@ -144,11 +144,9 @@ describe('PlanOutputMessageCard (selection)', () => {
     );
     const retainedOnPress = screen.findByTestId('adopt-plan-button')!.props.onPress;
 
-    await act(async () => {
-      screen.tree.update(
-        <PlanOutputMessageCard payload={payload} sessionId="s1" canSendMessages={false} />,
-      );
-    });
+    await screen.update(
+      <PlanOutputMessageCard payload={payload} sessionId="s1" canSendMessages={false} />,
+    );
     await act(async () => {
       retainedOnPress();
       await Promise.resolve();

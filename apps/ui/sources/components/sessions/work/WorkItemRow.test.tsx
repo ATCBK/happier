@@ -95,7 +95,7 @@ describe('WorkItemRow', () => {
     });
     it('does not repaint unchanged real rows when another projected Session changes', async () => {
         const { WorkItemRow } = await import('./WorkItemRow');
-        const source = (id: string) => ({ sessionId: id, leadSessionId: id === 'a' ? 'b' : 'lead', title: id, agentId: 'claude', facts: [],
+        const source = (id: string) => ({ sessionId: id, managerSessionId: id === 'a' ? 'b' : 'lead', title: id, agentId: 'claude', facts: [],
             statusFacts: readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ id, active: id === 'a', thinking: id === 'a', thinkingAt: 1000, activeAt: 1000 }), 1000), stalled: false, archived: false });
         const a = source('a');
         const b = source('b');
@@ -114,7 +114,7 @@ describe('WorkItemRow', () => {
         expect(before).toBeGreaterThan(0);
         const next = projectWork({ ...input, reportSessions: [a, { ...b, title: 'Updated B' }] }, first);
         const nextGroups = groupWorkByState(next, firstGroups);
-        await act(async () => screen.tree.update(draw([...nextGroups.needsYou, ...nextGroups.working, ...nextGroups.recent])));
+        await screen.update(draw([...nextGroups.needsYou, ...nextGroups.working, ...nextGroups.recent]));
         expect(rowPaints.get('session-work-summary:session:a')).toBe(before);
         expect(screen.getTextContent()).toContain('Updated B');
     });

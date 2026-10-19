@@ -1,5 +1,5 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import * as React from 'react';
-import { View } from 'react-native';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { AutomationRunLifecycleSource } from '@happier-dev/protocol/automations/automationRunLifecycle';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -16,7 +16,7 @@ import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector }
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { t } from '@/text';
-import { WorkNotificationOperation } from './WorkNotificationOperation';
+import { WorkNotificationGroup, WorkNotificationOperation } from './WorkNotificationOperation';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 
 export type RunTriggersRead = Readonly<{
@@ -42,9 +42,9 @@ export function RunWorkNotifyOperation(props: Readonly<{
     selectedOutput?: RunWorkNotificationOutput;
 }>) {
     const conditions = props.source.kind === 'workflow_run' ? ['terminal', 'needs_attention'] as const : ['terminal'] as const;
-    // The two offers sit side by side and wrap when the pane is narrow, so they never stack as two
-    // full-width rows above what the run actually needs.
-    return <View style={{ minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 8 }}>
+    // Each offer is a full-width row with its switch trailing, as in the Session's Work section: a row
+    // that hugged its label would leave the two switches on different edges.
+    return <WorkNotificationGroup sourceId={props.source.runId} style={{ minWidth: 0 }}>
         {conditions.map((condition) => {
             const message = props.selectedOutput?.message ?? (condition === 'terminal' ? t('sessionWork.notify.runFinished') : t('sessionWork.notify.runNeedsYou'));
             const matchesSource = (source: AutomationRunLifecycleSource) => {
@@ -72,7 +72,7 @@ export function RunWorkNotifyOperation(props: Readonly<{
                         context: { executionRunTargetMachineId: source.machineId }, execute: props.execute,
                         parseResult: value => ExecutionRunGetResponseSchema.parse(value) });
                     const output = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).parse(
-                        snapshot.structuredMeta?.kind === 'scm_diff_summary.v1' ? snapshot.structuredMeta.payload : snapshot.latestToolResult);
+                        snapshot.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? snapshot.structuredMeta.payload : snapshot.latestToolResult);
                     const progress = output.outputs?.[props.selectedOutput.output];
                     if (snapshot.run.runId !== source.runId || output.comparison?.id !== props.selectedOutput.comparisonId
                         || !output.resultId || output.revision === undefined || !progress
@@ -95,7 +95,7 @@ export function RunWorkNotifyOperation(props: Readonly<{
                 sets={props.read.sets} status={props.read.status} machineId={props.project.machineId}
                 match={match} add={add} remove={(triggerId, automationId) => props.read.remove(automationId, triggerId)} execute={props.execute} />;
         })}
-    </View>;
+    </WorkNotificationGroup>;
 }
 
 /** Run sources and writes are views of the existing Account-inline Automation projection. */

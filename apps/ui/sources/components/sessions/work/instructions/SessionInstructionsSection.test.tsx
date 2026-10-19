@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { SessionPromptStackV1StoredSchema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -122,7 +123,7 @@ describe('Work › Instructions', () => {
       await loadSyncSingletonForTests();
       await fixture.hydrateAccountSettings();
       const session = createSessionFixture({ id: 'bot', serverId: fixture.home.id, metadataVersion: 1,
-        metadata: { ...createSessionFixture().metadata, work: { promptStack: [{ id: 'neighbor',
+        metadata: { path: '/worktree', host: 'localhost', work: { promptStack: [{ id: 'neighbor',
           ref: { kind: 'doc', artifactId: 'neighbor-doc' }, enabled: true, placement: 'system_append' }] } } });
       storage.setState({ sessions: { ...storage.getState().sessions, bot: session } });
       const screen = await renderScreen(<SessionInstructionsBody session={session} serverId={fixture.home.id} source={source({})} />);
@@ -146,7 +147,9 @@ describe('Work › Instructions', () => {
         expect(created).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledWith(`/settings/prompts/docs/${created[0]!.id}?serverId=${fixture.home.id}`);
         const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
-        expect(readSessionOwnerMetadataView(storage.getState().sessions.bot!)?.work?.promptStack).toMatchObject([
+        const work = readSessionOwnerMetadataView(storage.getState().sessions.bot!)?.work;
+        if (!work || typeof work !== 'object' || !('promptStack' in work)) throw new Error('Expected retained Session prompt stack');
+        expect(SessionPromptStackV1StoredSchema.parse(work.promptStack)).toMatchObject([
           { id: 'neighbor', ref: { artifactId: 'neighbor-doc' } },
           { id: 'session.instructions', ref: { artifactId: created[0]!.id, serverId: fixture.home.id } },
         ]);

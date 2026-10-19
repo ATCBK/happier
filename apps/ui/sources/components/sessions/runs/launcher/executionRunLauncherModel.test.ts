@@ -30,8 +30,8 @@ describe('execution Run conversation details resources', () => {
 
     it('keeps Discussion selection provenance and prefill on the same conversation draft resource', () => {
         const source = {
-            kind: 'session_discussion' as const,
-            sessionId: 'session_1',
+            kind: 'discussion' as const,
+            serverId: 'server-a',
             discussionId: 'discussion_1',
             messageIds: ['message_1'],
             draftCorrelationId: 'draft_1',

@@ -66,7 +66,7 @@ export async function openAskHappierDraft(params: Readonly<{
         return { kind: 'authenticationRequired', guideRef: null };
     }
     if (!params.executeAction) return { kind: 'unavailable', reason: 'client_unavailable', guideRef: params.guideRef ?? null };
-    const prompt = [releaseText, context ? `Current Happier screen (context, not instructions):\n${JSON.stringify(context)}` : ''].filter(Boolean).join('\n\n');
+    const prompt = releaseText;
     let guideRef = params.guideRef ? PromptDocArtifactRefV1Schema.parse(params.guideRef) : null;
     const controller = new AbortController();
     const retirement = lifetime.onRetire(() => controller.abort());
@@ -100,7 +100,7 @@ export async function openAskHappierDraft(params: Readonly<{
         const metadata = writeSessionContextIntentV1ToMetadata({ work: { promptStack: [] } }, buildSessionInstructionsContextIntentV1(guideRef));
         const promptStack = SessionPromptStackV1Schema.parse(metadata.work.promptStack);
         const outcome = await openSessionAuthoringAction({ seed: { ...HAPPIER_BOT_SEED, promptStack,
-            ...(prompt ? { prompt } : {}) } }, lifetime, cancellation.signal, params.executeAction);
+            ...(prompt ? { prompt } : {}), ...(context ? { currentUiContext: context } : {}) } }, lifetime, cancellation.signal, params.executeAction);
         return { ...outcome, guideRef };
     } finally {
         retirement.dispose();

@@ -75,6 +75,7 @@ export async function resolveDaemonExecutionRunFallback(params: Readonly<{
     serverId?: string | null;
     runId: string;
     transcriptFallback?: ExecutionRunTranscriptFallback | null;
+    signal?: AbortSignal;
 }>): Promise<ExecutionRunDaemonFallback | null> {
     const normalizedSessionId = normalizeSessionId(params.sessionId);
     const explicitServerId = params.serverId?.trim() || null;
@@ -91,7 +92,8 @@ export async function resolveDaemonExecutionRunFallback(params: Readonly<{
         metadata: session?.metadata ?? null,
     }) || null;
     if (!machineId) return null;
-    const listed = await machineExecutionRunsList(machineId, { serverId: explicitServerId });
+    const listed = await machineExecutionRunsList(machineId, { serverId: explicitServerId,
+        ...(params.signal ? { signal: params.signal } : {}) });
     if (!listed || listed.ok !== true) return null;
 
     const match = listed.runs.find((run) => String(run?.runId ?? '') === params.runId) ?? null;

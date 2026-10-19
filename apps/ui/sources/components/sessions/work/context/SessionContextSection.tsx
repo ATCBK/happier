@@ -212,6 +212,11 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
                                     canMoveUp: index > 0,
                                     canMoveDown: index < added.length - 1,
                                     onBudgetChange: (maxChars: number | null) => update({ kind: 'set_budget', entryId: row.entry.id, maxChars }),
+                                    // One Doc added here can be this Session's plan; Work shows it as its Plan row.
+                                    ...(row.kind === 'doc' ? { plan: {
+                                        marked: row.entry.plan === true,
+                                        onChange: (marked: boolean) => update({ kind: 'set_plan', entryId: marked ? row.entry.id : null }),
+                                    } } : {}),
                                 })}
                                 switchDisabled={row.kind === 'unknown' || row.off === 'source' || row.off === 'memory'}
                                 onEnabledChange={(enabled) => update(inherited

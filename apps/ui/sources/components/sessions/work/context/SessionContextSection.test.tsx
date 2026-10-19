@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
@@ -60,7 +61,7 @@ afterEach(async () => {
 const { SessionContextSection } = await import('./SessionContextSection');
 const { SessionMemorySection } = await import('../memory/SessionMemorySection');
 
-const entry = (id: string, artifactId: string, enabled = true) => ({
+const entry = (id: string, artifactId: string, enabled = true): PromptStackEntryV1 => ({
     id, ref: { kind: 'doc', artifactId, serverId }, enabled, placement: 'system_append',
 });
 function sessionWith(work: Record<string, unknown>, overrides: Partial<Session> = {}): Session {
@@ -123,6 +124,26 @@ describe('Work › Context', () => {
         expect(screen.findByTestId(`${inherited}.more`)).toBeNull();
         // An entry added here keeps its menu: Move, How much to load and Remove live there.
         expect(screen.findByTestId('session-work-context.entry.session.session.notes.more')).toBeTruthy();
+    });
+
+    it('marks a Doc added here as its plan, and clears the mark from the marked row', async () => {
+        execute.mockResolvedValue({ ok: true, result: { ok: true } });
+        const rowActions = (screen: Awaited<ReturnType<typeof renderScreen>>, id: string) => screen.tree.root.findAll((node) =>
+            node.props.overflowTriggerTestID === `session-work-context.entry.session.${id}.more` && Array.isArray(node.props.actions))[0]
+            ?.props.actions as ReadonlyArray<{ id: string; onPress: () => void }> | undefined;
+        const screen = await renderScreen(<SessionContextSection serverId={serverId}
+            session={sessionWith({ promptStack: [entry('session.notes', 'notes-doc'), { ...entry('session.rollout', 'instructions-doc'), plan: true }] })} />);
+        const mark = rowActions(screen, 'session.notes')?.find((action) => action.id === 'plan');
+        expect(mark).toBeTruthy();
+        await React.act(async () => { mark?.onPress(); });
+        expect(execute).toHaveBeenLastCalledWith('session.context.update', {
+            sessionId: 's1', serverId, expectedMetadataRevision: 9, intent: { kind: 'set_plan', entryId: 'session.notes' },
+        }, expect.objectContaining({ surface: 'ui', serverId }));
+        const clear = rowActions(screen, 'session.rollout')?.find((action) => action.id === 'plan');
+        await React.act(async () => { clear?.onPress(); });
+        expect(execute).toHaveBeenLastCalledWith('session.context.update', {
+            sessionId: 's1', serverId, expectedMetadataRevision: 9, intent: { kind: 'set_plan', entryId: null },
+        }, expect.objectContaining({ surface: 'ui', serverId }));
     });
 
     it('keeps an unresolved document off and without an editor link', async () => {

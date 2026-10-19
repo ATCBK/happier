@@ -1,6 +1,10 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 import { useWorkflowsAvailability } from '@/components/workflows/gating/workflowsAvailability';
+import { isTriggeredWorkflowRun } from '@/components/sessions/work/workflowRunTriggerScope';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import type {
     WorkflowRunInvocationIndexV1,
@@ -14,7 +18,7 @@ import { getStorage, useActiveServerAccountScope, useActiveServerAccountScopeLif
 import { listAllWorkflowRuns } from '@/sync/domains/workflows/workflowRunListActions';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
-import { selectWorkflowRunWindowInvocations, workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { selectWorkflowRunWindowInvocations, sessionWorkflowRunWindowId } from '@/sync/store/domains/workflowRuns';
 import {
     projectWorkflowFlow,
     type WorkflowFlowNodeRunState,
@@ -36,8 +40,9 @@ import {
  *
  * Row bodies land in the one Account-scoped Run row owner and are read back
  * from it, so a control the Run screen settles, or an exact invalidation,
- * reaches a mounted Session row at once. This hook keeps only the ordered
- * membership and attention ids of its own query, and re-asks on the same
+ * reaches a mounted Session row at once. The same store retains the ordered
+ * membership and attention ids for this exact Home/Account/Session/relation,
+ * including across consumer remounts. This hook re-asks on the same
  * Account-change wake the Workflows collection observes. There is no poller,
  * no second store and no local bus.
  *
@@ -62,18 +67,18 @@ export type SessionManagedWorkflowRunsState = Readonly<{
      * nothing known yet is `failed`.
      */
     refreshFailed: boolean;
+    /** Time this window last completed a successful read; refresh attempts never advance it. */
+    lastSuccessfulReadAt?: number | null;
     /** Re-ask this window through its existing read owner, without dropping retained rows. */
     retry: () => void;
 }>;
 
-type SessionManagedWorkflowRunsWindow = Readonly<{
+type SessionManagedWorkflowRunsReadState = Readonly<{
     phase: SessionManagedWorkflowRunsState['phase'];
     /** The Account and Session this window was read for; anything else shows nothing. */
     accountScopeKey: string | null;
     sessionId: string | null;
     relation: 'origin' | 'destination';
-    runIds: readonly string[];
-    attentionRunIds: ReadonlySet<string>;
     refreshFailed: boolean;
 }>;
 
@@ -82,32 +87,13 @@ const EMPTY_ATTENTION: ReadonlySet<string> = new Set<string>();
 const EMPTY_RUNS: readonly WorkflowRunSummaryV1[] = Object.freeze([]);
 const EMPTY_METADATA: Readonly<Record<string, WorkflowRunPrivateMetadataV1>> = Object.freeze({});
 
-const EMPTY_WINDOW: SessionManagedWorkflowRunsWindow = {
+const EMPTY_READ_STATE: SessionManagedWorkflowRunsReadState = {
     phase: 'idle',
     accountScopeKey: null,
     sessionId: null,
     relation: 'origin',
-    runIds: EMPTY_RUN_IDS,
-    attentionRunIds: EMPTY_ATTENTION,
     refreshFailed: false,
 };
-
-/**
- * Membership is the union of both pages, in a deterministic existing order.
- *
- * The two queries are different keysets: `attention: 'required'` is the only
- * owner of "this needs the person", and the Run it names is frequently not on
- * the general page. Taking membership from the general page alone fetched that
- * Run, recorded it as needing attention and then never rendered it — which is
- * exactly the case the server predicate exists for. The general page keeps its
- * server order and the attention-only ids follow in theirs; nothing is
- * re-sorted on the client, so a refresh cannot reshuffle rows under a reader.
- */
-function unionRunIds(general: readonly string[], attention: readonly string[]): readonly string[] {
-    const seen = new Set(general);
-    const additional = attention.filter((runId) => !seen.has(runId));
-    return additional.length === 0 ? general : [...general, ...additional];
-}
 
 export function useSessionManagedWorkflowRuns(params: Readonly<{
     sessionId: string | null;
@@ -124,14 +110,29 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
     // must not read or link a Workflow the Home does not offer.
     const workflows = useWorkflowsAvailability();
     const enabled = (params.enabled ?? true) && workflows.available;
+    const retainWhileResolving = (params.enabled ?? true) && workflows.resolving;
     const accountScope = useActiveServerAccountScope(params.serverId);
     const lifetime = useActiveServerAccountScopeLifetime();
     const accountScopeKey = accountScope === null ? null : serverAccountScopeKeySuffix(accountScope);
-    const [listWindow, setWindow] = React.useState<SessionManagedWorkflowRunsWindow>(EMPTY_WINDOW);
+    const windowId = accountScope !== null && sessionId !== null
+        ? sessionWorkflowRunWindowId(accountScope, sessionId, relation) : null;
+    const listWindow = getStorage()((state) => windowId !== null && (enabled || retainWhileResolving)
+        ? state.workflowRunListWindows[windowId] : undefined);
+    const [readState, setReadState] = React.useState<SessionManagedWorkflowRunsReadState>(EMPTY_READ_STATE);
     const [invalidationToken, setInvalidationToken] = React.useState(0);
-    const retry = React.useCallback(() => setInvalidationToken((token) => token + 1), []);
-    const current = accountScopeKey !== null && listWindow.accountScopeKey === accountScopeKey && listWindow.sessionId === sessionId
-        && listWindow.relation === relation;
+    const retry = React.useCallback(() => {
+        if (retainWhileResolving && lifetime?.isCurrent()) {
+            // The shared capability owner publishes recovery and re-enables this window's read.
+            fireAndForget(getServerFeaturesSnapshot({ serverId: lifetime.scope.serverId, force: true }), {
+                tag: 'useSessionManagedWorkflowRuns.retryCapabilities',
+            });
+            return;
+        }
+        setInvalidationToken((token) => token + 1);
+    }, [lifetime, retainWhileResolving]);
+    const current = listWindow?.loaded === true;
+    const currentRead = accountScopeKey !== null && readState.accountScopeKey === accountScopeKey
+        && readState.sessionId === sessionId && readState.relation === relation;
     // Only this Session's own window, never the Account's whole Run map: an
     // exact refresh of a Run outside this relation must not rerender a
     // mounted transcript section.
@@ -141,23 +142,24 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
 
     React.useEffect(() => {
         if (!enabled || sessionId === null || accountScopeKey === null) {
-            setWindow(EMPTY_WINDOW);
+            // An unresolved capability probe cannot authorize another read, but it also cannot
+            // disprove this Account's already-read membership. Keep that window as stale; an
+            // explicit disable, different Session/Home/Account or retired scope withdraws it here.
+            setReadState(EMPTY_READ_STATE);
             return;
         }
         // Decrypted Account content never survives a scope change: the lifetime
         // retires this read before another Account's rows could be applied.
-        if (lifetime === null
+        if (lifetime === null || windowId === null
             || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         const requestScopeKey = accountScopeKey;
         const controller = new AbortController();
         const retirement = lifetime.onRetire(() => controller.abort());
         let cancelled = false;
         // A re-read keeps last-known-good rows; only a first read is loading.
-        setWindow((current) => (
-            current.accountScopeKey === requestScopeKey && current.sessionId === sessionId && current.relation === relation && current.phase === 'loaded'
-                ? current
-                : { ...EMPTY_WINDOW, phase: 'loading', accountScopeKey: requestScopeKey, sessionId, relation }
-        ));
+        setReadState(previous => ({ phase: 'loading', accountScopeKey: requestScopeKey, sessionId, relation,
+            refreshFailed: previous.accountScopeKey === requestScopeKey && previous.sessionId === sessionId
+                && previous.relation === relation && previous.refreshFailed }));
         void (async () => {
             try {
                 const filter = relation === 'destination' ? { targetSessionId: sessionId } : { originSessionId: sessionId };
@@ -172,53 +174,30 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
                     }),
                 ]);
                 if (cancelled || !lifetime.isCurrent()) return;
-                // A projection that did not read Automation scope cannot establish Work membership.
+                // A trigger Run without retained scope cannot establish Work membership.
                 // Keep the last proven window and its existing failed-read state, rather than infer
                 // ownership from a mutable or not-yet-hydrated client Automation catalog.
-                if ([...all.runs, ...attention.runs].some(run => run.origin.kind === 'automation'
+                if ([...all.runs, ...attention.runs].some(run => isTriggeredWorkflowRun(run)
                     && run.automationScopeSessionId === undefined)) throw new Error('workflow_run_scope_unavailable');
                 // Both pages' bodies land in the one Account-scoped row owner,
                 // so an off-page actionable Run is the same body the exact Run
                 // route resolves rather than a second, thinner copy.
-                getStorage().getState().upsertWorkflowRuns([
-                    ...all.runs.map((run) => workflowRunRowFromSummary(run, all.metadataByRunId[run.id] ?? null)),
-                    ...attention.runs.map((run) => workflowRunRowFromSummary(
-                        run,
-                        attention.metadataByRunId[run.id] ?? null,
-                    )),
-                ]);
-                setWindow({
-                    phase: 'loaded',
-                    relation,
-                    accountScopeKey: requestScopeKey,
-                    sessionId,
-                    runIds: unionRunIds(
-                        all.runs.map((run) => run.id),
-                        attention.runs.map((run) => run.id),
-                    ),
-                    attentionRunIds: new Set(attention.runs.map((run) => run.id)),
-                    refreshFailed: false,
+                // The store unions both keysets in server order and merges every body's revision.
+                getStorage().getState().applyWorkflowRunListPage({
+                    scope: lifetime.scope, windowId,
+                    runs: [...all.runs, ...attention.runs],
+                    metadataByRunId: { ...all.metadataByRunId, ...attention.metadataByRunId },
+                    nextCursor: null, mode: 'replace',
+                    attentionRunIds: attention.runs.map(run => run.id),
+                    lastSuccessfulReadAt: Date.now(),
                 });
+                setReadState({ phase: 'loaded', accountScopeKey: requestScopeKey, sessionId, relation, refreshFailed: false });
             } catch {
                 if (cancelled || !lifetime.isCurrent()) return;
                 // A failed refresh is not evidence that the Session started
                 // nothing: the window keeps the membership it already proved
                 // and reports staleness beside it.
-                setWindow((current) => (
-                    current.accountScopeKey === requestScopeKey
-                        && current.sessionId === sessionId
-                        && current.relation === relation
-                        && current.phase === 'loaded'
-                        ? { ...current, refreshFailed: true }
-                        : {
-                            ...EMPTY_WINDOW,
-                            phase: 'failed',
-                            refreshFailed: true,
-                            accountScopeKey: requestScopeKey,
-                            sessionId,
-                            relation,
-                        }
-                ));
+                setReadState({ phase: 'failed', refreshFailed: true, accountScopeKey: requestScopeKey, sessionId, relation });
             }
         })();
         return () => {
@@ -226,15 +205,14 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
             controller.abort();
             retirement.dispose();
         };
-    }, [accountScopeKey, enabled, invalidationToken, lifetime, relation, sessionId]);
+    }, [accountScopeKey, enabled, invalidationToken, lifetime, relation, retainWhileResolving, sessionId, windowId]);
 
     React.useEffect(() => {
         if (!enabled || sessionId === null || accountScopeKey === null) return;
         if (lifetime === null || serverAccountScopeKeySuffix(lifetime.scope) !== accountScopeKey) return;
         return subscribeVisibleWorkflowRunListInvalidation({
             lifetime,
-            isVisibleWindowLoaded: () => windowRef.current.phase === 'loaded'
-                && windowRef.current.sessionId === sessionId && windowRef.current.relation === relation,
+            isVisibleWindowLoaded: () => windowRef.current?.loaded === true,
             invalidate: () => setInvalidationToken((token) => token + 1),
         });
     }, [accountScopeKey, enabled, lifetime, relation, sessionId]);
@@ -249,15 +227,16 @@ export function useSessionManagedWorkflowRuns(params: Readonly<{
     }, [rows]);
 
     const unavailable = enabled && sessionId !== null && accountScopeKey === null;
-    const phase: SessionManagedWorkflowRunsState['phase'] = unavailable ? 'failed' : current
-        ? listWindow.phase
-        : sessionId === null || !enabled ? 'idle' : 'loading';
-    const attentionRunIds = current ? listWindow.attentionRunIds : EMPTY_ATTENTION;
-    const refreshFailed = unavailable || (current ? listWindow.refreshFailed : false);
+    const phase: SessionManagedWorkflowRunsState['phase'] = unavailable ? 'failed' : current ? 'loaded'
+        : sessionId === null || (!enabled && !retainWhileResolving) ? 'idle' : currentRead ? readState.phase : 'loading';
+    const attentionRunIds = React.useMemo(() => current && listWindow.attentionRunIds
+        ? new Set(listWindow.attentionRunIds) : EMPTY_ATTENTION, [current, listWindow?.attentionRunIds]);
+    const refreshFailed = unavailable || (current && retainWhileResolving) || (currentRead && readState.refreshFailed);
+    const lastSuccessfulReadAt = current ? listWindow.lastSuccessfulReadAt ?? null : null;
     // One stable state object per change, as the consumers that memoize on it expect.
     return React.useMemo(
-        () => ({ phase, runs, metadataByRunId, attentionRunIds, refreshFailed, retry }),
-        [attentionRunIds, metadataByRunId, phase, refreshFailed, retry, runs],
+        () => ({ phase, runs, metadataByRunId, attentionRunIds, refreshFailed, lastSuccessfulReadAt, retry }),
+        [attentionRunIds, lastSuccessfulReadAt, metadataByRunId, phase, refreshFailed, retry, runs],
     );
 }
 
@@ -286,7 +265,7 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
     const [definition, setDefinition] = React.useState<Readonly<{ key: string; value: WorkflowDefinitionV1 }> | null>(null);
     const [invalidationToken, setInvalidationToken] = React.useState(0);
     const invocations = getStorage()((state) => (
-        contentKey === null ? EMPTY_INVOCATIONS : selectWorkflowRunWindowInvocations(state.workflowRunInvocationsByRunId[runId], 'history')
+        contentKey === null ? EMPTY_INVOCATIONS : selectWorkflowRunWindowInvocations(state.workflowRunInvocationsByRunId[workflowRunStoreKey(runId)], 'history')
     ));
 
     React.useEffect(() => {
@@ -326,7 +305,7 @@ export function useSessionManagedWorkflowRunFlow(runId: string, serverId: string
                     invocations: page.invocations,
                     nextCursor: page.nextCursor ?? null,
                     parentRevision: page.parentRevision,
-                    mode: state.workflowRunInvocationsByRunId[runId]?.history.loaded === true ? 'refresh' : 'replace',
+                    mode: state.workflowRunInvocationsByRunId[workflowRunStoreKey(runId)]?.history.loaded === true ? 'refresh' : 'replace',
                 });
             },
             // A failed restatement keeps the last-known lifecycles.

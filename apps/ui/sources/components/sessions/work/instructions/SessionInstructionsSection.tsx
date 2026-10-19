@@ -19,7 +19,7 @@ import { ACTIONS_PROMPT_DOCUMENT_SETTINGS } from '@/components/settings/actions/
 import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { normalizeActionsSettings } from '@/components/settings/actions/normalizeActionsSettings';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
-import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionBlock, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -321,9 +321,9 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           ) : null}
         </>
       ) : status === 'none' ? (
-        <View style={styles.invite}>
+        <WorkSectionBlock style={styles.invite}>
           <Text style={styles.inviteText}>{t('sessionInstructions.none')}</Text>
-          <View style={styles.actions}>
+          <View style={[styles.actions, styles.inviteActions]}>
             <RoundButton
               testID="session-work-instructions.create"
               size="small"
@@ -339,7 +339,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
               onAttach={attach}
             />
           </View>
-        </View>
+        </WorkSectionBlock>
       ) : repairable ? (
         <View style={styles.repair}>
           <Item
@@ -646,8 +646,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.state.warning.foreground,
   },
   invite: {
-    paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
     gap: theme.space.s10,
+  },
+  // Inside the invitation the buttons share its text edge.
+  inviteActions: {
+    paddingHorizontal: 0,
   },
   inviteText: {
     ...Typography.default(),

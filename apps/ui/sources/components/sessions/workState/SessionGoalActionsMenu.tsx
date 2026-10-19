@@ -19,6 +19,9 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
  * changed-files-row `⋯` pattern, rather than a bespoke surface. Ported from remote-dev by intent.
  */
 
+// The held look shared by every Goal action that cannot be pressed while a request is in flight.
+export const BUSY_DIM_OPACITY = 0.42;
+
 export type SessionGoalMenuAction = Readonly<{
     id: string;
     testID: string;
@@ -65,7 +68,7 @@ export function SessionGoalActionsMenu(props: Readonly<{
                 disabled={props.disabled}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 onPress={() => setOpen((current) => !current)}
-                style={styles.trigger}
+                style={[styles.trigger, props.disabled ? { opacity: BUSY_DIM_OPACITY } : null]}
             >
                 <Icon name="dots-three" size={20} color={theme.colors.text.secondary} />
             </Pressable>

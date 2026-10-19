@@ -4,7 +4,7 @@ import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes'
 import { resolveExecutionRunIntentTitle } from '@/components/sessions/runs/resolveExecutionRunIntentTitle';
 import { t } from '@/text';
 import { ExecutionRunIntentSchema } from '@happier-dev/protocol/execution/runs/index';
-import type { SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import type { DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 
 export const EXECUTION_RUN_LAUNCH_INTENTS = ['review', 'plan', 'delegate'] as const;
 
@@ -100,7 +100,7 @@ export function createInteractiveExecutionRunDraftDetailsTab(): DetailsTab {
 }
 
 export function createDiscussionSelectionInteractiveExecutionRunDraftDetailsTab(input: Readonly<{
-    source: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    source: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     initialText: string;
 }>): DetailsTab {
     return {

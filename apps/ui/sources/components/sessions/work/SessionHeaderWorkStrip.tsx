@@ -15,7 +15,7 @@ import { workStatusWordStyle } from '@/components/work/status/workStatusTreatmen
 import { Typography } from '@/constants/Typography';
 import { useWorkTheme, WORK_HOST } from '@/components/work/map/WorkMapView';
 import { t } from '@/text';
-import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionManagedSessionsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { SessionWorkStripPopoverContent } from './SessionWorkStripPopover';
 import { readWorkWorkingCount, type WorkSummary } from './workProjection';
@@ -84,7 +84,7 @@ export const SessionHeaderWorkStrip = React.memo((props: Readonly<{
     if (outstanding <= 0 || workTabOpen) return null;
 
     const workingCount = readWorkWorkingCount(props.summary);
-    const reportsPresentation = readSessionReportsPresentationV1({ working: workingCount, needsYou, stalled: props.summary.stalled });
+    const reportsPresentation = readSessionManagedSessionsPresentationV1({ working: workingCount, needsYou, stalled: props.summary.stalled });
     const working = workingCount > 0 ? t('sessionWork.strip.stillWorking', { count: workingCount }) : null;
     const attention = needsYou > 0 ? t('sessionWork.strip.needsYou', { count: needsYou }) : null;
     const offline = reportsPresentation.bucket === 'offline' ? t('status.offline') : null;

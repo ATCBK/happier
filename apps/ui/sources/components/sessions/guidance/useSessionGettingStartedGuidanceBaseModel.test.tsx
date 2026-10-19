@@ -41,7 +41,8 @@ async function activateHome(serverUrl: string, name: string, serverIdentityId?: 
     storage.getState().activateProfileScope(binding.scope);
     storage.getState().applyProfileForScope(binding.scope, { ...profileDefaults, id: accountId });
     storage.getState().activateSessionLocalStateScope(binding.scope);
-    storage.getState().applyMachines([createMachineFixture({ id: 'machine-' + serverId })], true, { sourceServerId: serverId });
+    // A retained census row is not live daemon presence; publish a current heartbeat.
+    storage.getState().applyMachines([createMachineFixture({ id: 'machine-' + serverId, activeAt: Date.now() })], true, { sourceServerId: serverId });
     storage.getState().applySessions([]);
     return { profile, serverId };
 }

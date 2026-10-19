@@ -4,6 +4,7 @@ import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { RoleOverrideV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
 import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows/workflowPluginSourceContractV1';
 import type { WorkflowRunStartRequestV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import type { WorkflowStartSelection } from '@/components/workflows/run/WorkflowStartPicker';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
@@ -18,8 +19,8 @@ type BuiltinWorkflowEntry = (typeof BUILTIN_WORKFLOW_CATALOG_V1)[number];
 
 /**
  * The built-ins a session's "+" can start: those that run on their own beside it. A built-in that
- * runs inside a session (Keep going, Review & converge) needs that session as its run's origin;
- * the start below carries it, and offering those built-ins here is INT's decision.
+ * runs inside a session (Keep going) needs that session as its run's origin. Declared Session
+ * defaults, including Review & converge's review target, use that exact Session below.
  */
 export const SESSION_STARTABLE_BUILTIN_WORKFLOWS: readonly BuiltinWorkflowEntry[] = BUILTIN_WORKFLOW_CATALOG_V1;
 
@@ -38,10 +39,11 @@ type PendingStart = Readonly<{
 export function useSessionBuiltinWorkflowStart(params: Readonly<{
     sessionId: string;
     serverId?: string | null;
-}>): (workflow: string | WorkflowPluginSourceV1) => void {
+}>): (workflow: string | WorkflowPluginSourceV1 | WorkflowStartSelection, options?: Readonly<{ retainedDraft?: string }>) => void {
     const router = useRouter();
     const target = useSessionMachineTarget(params.sessionId, params.serverId);
     const runNow = useWorkflowRunNowController();
+    const { clearRefusal } = runNow;
     const mounted = useMountedRef();
     const [pending, setPending] = React.useState<PendingStart | null>(null);
     // One press is one admission: a retry after a lost response reuses the same Run id.
@@ -68,6 +70,8 @@ export function useSessionBuiltinWorkflowStart(params: Readonly<{
             project: { machineId, directory },
             originSessionId: params.sessionId,
             isInvocationCurrent: isCurrent,
+            // The start form stays open and says why beside Start, with its inputs and draft kept (lab T4-ST).
+            refusal: 'inline',
         });
         if (admitted === null || !isCurrent()) return;
         pendingRunIdRef.current = null;
@@ -75,7 +79,10 @@ export function useSessionBuiltinWorkflowStart(params: Readonly<{
         router.push({ pathname: '/workflows/runs/[runId]', params: { runId: admitted.run.id } } as never);
     }, [directory, machineId, mounted, params.sessionId, router, runNow]);
 
-    const start = React.useCallback((workflow: string | WorkflowPluginSourceV1) => {
+    const start = React.useCallback((
+        workflow: string | WorkflowPluginSourceV1 | WorkflowStartSelection,
+        options?: Readonly<{ retainedDraft?: string }>,
+    ) => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null || !machineId || !directory) return;
         let entry: PendingStart['entry'];
@@ -84,15 +91,26 @@ export function useSessionBuiltinWorkflowStart(params: Readonly<{
             if (!builtin) return;
             entry = { definition: builtin.definition, title: tLoose(builtin.titleKey), description: tLoose(builtin.descriptionKey),
                 source: { kind: 'catalog', workflow: builtin.id } };
+        } else if ('source' in workflow) {
+            // A Run… picker choice (built-in, saved or plugin) already names its exact start source.
+            entry = { definition: workflow.definition, title: workflow.name, description: workflow.description, source: workflow.source };
         } else {
             entry = { definition: workflow.definition, title: workflow.title, description: workflow.description ?? '',
                 source: { kind: 'catalog', workflow: workflow.workflow, pluginVersion: workflow.version } };
         }
         pendingRunIdRef.current = null;
-        setPending({ entry, lifetime, values: {}, rawTextValues: {} });
-    }, [directory, machineId]);
+        clearRefusal();
+        // The composer's retained draft is the question: it prefills the first text input, as New does.
+        const text = options?.retainedDraft ?? '';
+        const main = text.trim() ? entry.definition.inputs.find((input) => input.valueType === 'string') : undefined;
+        const draft = main ? { [main.name]: text } : {};
+        setPending({ entry, lifetime, values: draft, rawTextValues: draft });
+    }, [clearRefusal, directory, machineId]);
 
-    const cancel = React.useCallback(() => setPending(null), []);
+    const cancel = React.useCallback(() => {
+        clearRefusal();
+        setPending(null);
+    }, [clearRefusal]);
     const changeValues = React.useCallback((values: PendingStart['values']) => {
         setPending((current) => current ? { ...current, values } : current);
     }, []);
@@ -112,11 +130,13 @@ export function useSessionBuiltinWorkflowStart(params: Readonly<{
         preview: pending.entry.description,
         machineId,
         serverId: params.serverId ?? null,
+        originSession: { serverId: params.serverId ?? pending.lifetime.scope.serverId, sessionId: params.sessionId },
         onRun: (inputs, roleOverrides) => { void admit(pending, inputs, roleOverrides); },
         onCancel: cancel,
         pending: runNow.isPending(pendingRunIdRef.current ?? ''),
         reconciling: runNow.stateFor(pendingRunIdRef.current ?? '') === 'reconciling',
-    }, [admit, cancel, changeRawTextValues, changeValues, machineId, params.serverId, pending, runNow]);
+        startProblem: runNow.refusal?.message ?? null,
+    }, [admit, cancel, changeRawTextValues, changeValues, machineId, params.serverId, params.sessionId, pending, runNow]);
     useWorkflowRunComposerModal({ open: pending !== null, props: modalProps });
 
     return start;

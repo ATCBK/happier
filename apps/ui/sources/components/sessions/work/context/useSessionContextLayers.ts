@@ -6,6 +6,7 @@ import {
     readSessionMemoryEnabledV1,
     SessionDisabledInheritedEntryIdsV1Schema,
     SessionPromptStackV1Schema,
+    type SessionPromptStackEntryV1,
 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import * as React from 'react';
@@ -25,7 +26,8 @@ import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatal
 export type SessionContextLayerId = 'account' | 'profile' | 'project' | 'session';
 export type SessionContextRow = Readonly<{
     layer: SessionContextLayerId;
-    entry: PromptStackEntryV1;
+    /** Only Session entries can carry Plan; inherited layers retain their own schemas. */
+    entry: SessionPromptStackEntryV1;
     title: string | null;
     kind: PromptStackEntryPresentation['kind'];
     /** Recheck the same qualified header owner before acting on a rendered row. */

@@ -47,7 +47,7 @@ describe('the Session Work operation source', () => {
         });
         const initial = storage.getState();
         const serverId = connection.home.id;
-        const session = createSessionFixture({ id: 'report', serverId, reportsTo: { sessionId: 'lead' },
+        const session = createSessionFixture({ id: 'report', serverId, manager: { sessionId: 'lead' },
             metadata: { ...createSessionFixture().metadata!, machineId: 'work-mac', host: 'mac.local' } });
         const machine = createMachineFixture({ id: 'work-mac',
             metadata: { ...createMachineFixture().metadata!, displayName: 'Studio Mac' } });
@@ -224,7 +224,7 @@ describe('the Session Work operation source', () => {
 
 describe('the Session Work source owner: own trigger runs (ORC R-09, INT §6 I4)', () => {
     it("leaves the Session's own trigger runs to Triggers, by their Automation's scope, in Work and in the header count", async () => {
-        const { readOwnTriggerRunIds } = await import('./sessionWorkSources');
+        const { readOwnTriggerRunIds } = await import('./workflowRunTriggerScope');
         const { projectWork } = await import('./workProjection');
         const triggerCause = AutomationRunCauseSchema.parse({
             kind: 'trigger', triggerId: 'retired-trigger', triggerRevision: 1,

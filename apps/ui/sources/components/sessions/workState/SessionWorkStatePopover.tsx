@@ -40,8 +40,8 @@ export function SessionWorkStatePopover(props: Readonly<{
     // budget editor stays hidden on providers that don't support it (e.g. Claude). QA-CHIP-2.
     goalActionCapabilityProfile?: GoalActionCapabilities | null;
     onRequestClose: () => void;
-    onSetGoal?: (request: SessionWorkStateGoalSetRequest) => Promise<SessionWorkStateGoalOperationResult>;
-    onClearGoal?: () => Promise<SessionWorkStateGoalOperationResult>;
+    onSetGoal?: (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
+    onClearGoal?: (signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
 }>) {
     const managedWorkflowSection = props.managedWorkflowRuns !== undefined
         && props.onOpenManagedWorkflowRun !== undefined

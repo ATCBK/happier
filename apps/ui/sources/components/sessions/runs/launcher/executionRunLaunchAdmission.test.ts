@@ -1,19 +1,26 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIBackendProfileSchema, buildBackendTargetKeyV2, FeatureGatesSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { TeamCredentialProviderModelSelectionV1Schema, TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
+import nacl from 'tweetnacl';
 
-import { createDeferred, createMachineFixture, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
-import { upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
+import { createDeferred, createMachineFixture, createPlainMachineRowFixture, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
-import type { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { Modal } from '@/modal';
 import { createPluginActionInputSelectionHostApiHandler } from '@/components/plugins/surfaces/pluginActionInputSelectionHostApi';
 import type { SecretRequirementModalResult } from '@/components/secrets/requirements';
@@ -21,13 +28,15 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import { createAccountTokenForTests, createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import '@/sync/syncEngine';
 import { StartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
-import type { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import { resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
@@ -40,45 +49,58 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { admitExecutionRunLaunchTarget } from './executionRunLaunchAdmission';
 import { useExecutionRunLaunchContext } from './useExecutionRunLaunchContext';
 
+type RpcRequest = Readonly<{ method: string; payload: unknown; serverId: string; serverUrl: string;
+    token: string | undefined; machineId?: string; sessionId?: string }>;
 const boundary = vi.hoisted(() => ({
-    rpc: vi.fn<(input: Parameters<typeof machineRpcWithServerScope>[0]) => Promise<unknown>>(),
-    sessionRpc: vi.fn<(input: Parameters<typeof sessionRpcWithServerScope>[0]) => Promise<unknown>>(),
+    rpc: vi.fn<(input: RpcRequest) => Promise<unknown>>(),
+    sessionRpc: vi.fn<(input: RpcRequest) => Promise<unknown>>(),
     accountId: 'launch-account',
-    credentialListeners: new Set<(event: HomeCredentialMutationEvent) => void>(),
+    frames: [] as Array<Readonly<{ event: string; payload: unknown }>>,
 }));
 let restoreExecutorModuleLoader: (() => void) | undefined;
+let homeHarness: ReturnType<typeof createHomeGovernanceHarness> | undefined;
 
 // Secure persistence, Home HTTP/RPC and native styling are replaced boundaries.
 // Admission, exact scope retirement, credential policy, Action execution and resume are real.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-            getCredentialsForServerUrl: async () => ({
-                token: `e30.${Buffer.from(JSON.stringify({ sub: boundary.accountId })).toString('base64url')}.signature`,
-            }),
-        },
-        subscribeHomeCredentialMutations: (listener) => {
-            boundary.credentialListeners.add(listener);
-            return () => { boundary.credentialListeners.delete(listener); };
-        },
-    });
+vi.mock('socket.io-client', async () => {
+    const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
+    return { io: (serverUrl: string, options: { auth?: { token?: string } }) => {
+        const { socket } = createSocketIoBoundaryStub();
+        socket.emit = vi.fn((event: string, payload?: unknown) => { boundary.frames.push({ event, payload }); });
+        socket.emitWithAck = vi.fn(async (event: string, raw?: unknown): Promise<unknown> => {
+            if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+            if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
+                throw new Error('Malformed Socket RPC boundary request');
+            }
+            const separator = raw.method.indexOf(':');
+            const targetId = raw.method.slice(0, separator);
+            const method = raw.method.slice(separator + 1);
+            const { listServerProfiles, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+            const profile = listServerProfiles().find(candidate => candidate.serverUrl === serverUrl);
+            if (!profile) throw new Error('RPC peer has no saved Home');
+            if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return { ok: true, result: { protocolVersion: 1, projection: reviewAgentProjection } };
+            }
+            const request: RpcRequest = { method, payload: raw.params, serverId: resolveServerProfileScopeIdForIdentifier(profile.id),
+                serverUrl, token: options.auth?.token,
+                ...(targetId === 'rejoined-session' ? { sessionId: targetId } : { machineId: targetId }) };
+            return { ok: true, result: await (request.sessionId ? boundary.sessionRpc(request) : boundary.rpc(request)) };
+        });
+        socket.timeout = vi.fn((_timeoutMs: number) => ({ emitWithAck: socket.emitWithAck }));
+        return socket;
+    } };
 });
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: boundary.rpc,
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-    sessionRpcWithServerScope: boundary.sessionRpc,
-    sessionRpcWithServerAccountScope: boundary.sessionRpc,
-}));
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
 
 function capabilityResponse(features: Readonly<{ secretReferenceOverlay: boolean; runScopedAgentBindings: boolean }>) {
-    return { protocolVersion: 1, results: { 'tool.executionRuns': {
+    return { protocolVersion: 1, results: { 'cli.claude': { ok: true, checkedAt: Date.now(), data: MachineAgentInventoryItemSchema.parse({
+        agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: null,
+        update: { supported: false, command: null }, signIn: { status: 'signedIn', loginSupport: 'status_only' },
+        platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [],
+    }) }, 'tool.executionRuns': {
         ok: true, checkedAt: 1, data: { protocolVersion: 2,
             backends: { claude: { available: true, intents: ['review'], supportsVendorResume: true } }, features: {
             detachedScope: true, startAndWait: true, ...features,
@@ -86,18 +108,62 @@ function capabilityResponse(features: Readonly<{ secretReferenceOverlay: boolean
     } } };
 }
 
+const reviewAgentProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+    agentsById: { claude: { id: 'claude', title: 'Claude', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude,
+        capabilities: { surfaces: [], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+    } }, actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
+
 const supportedCapabilities = capabilityResponse({ secretReferenceOverlay: true, runScopedAgentBindings: true });
+
+const launchInstallation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(12));
+
+/** Home HTTP remains below the real requester admission and resume owners. */
+function installLaunchHomeHttpBoundary(request?: RuntimeFetch) {
+    setRuntimeFetch(async (url, init) => {
+        const handled = await request?.(url, init);
+        if (handled && handled.status !== 404) return handled;
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/actions/review.engines.list') {
+            const { ExternalActionRequestEnvelopeSchema } = await import('@happier-dev/protocol/actions/externalActionApi');
+            const request = ExternalActionRequestEnvelopeSchema.parse(JSON.parse(String(init?.body)));
+            return Response.json({ v: 1, actionId: 'review.engines.list', requestId: request.requestId,
+                execution: { ok: true, result: { items: [ReviewEngineListItemSchema.parse({
+                    engineId: 'claude', label: 'Claude', enabled: true, capabilities: { structuredNarration: true },
+                })] } } });
+        }
+        const machine = { ...createPlainMachineRowFixture({ id: 'launch-machine', accountId: boundary.accountId }),
+            installationPublicKey: Buffer.from(launchInstallation.publicKey).toString('base64') };
+        if (path === '/v1/machines') return Response.json([machine]);
+        if (path === '/v1/machines/launch-machine') return Response.json({ machine });
+        if (path === '/v2/sessions/rejoined-session') {
+            const session = storage.getState().sessions['rejoined-session'];
+            return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'rejoined-session',
+                ...(session ? { active: session.active, seq: session.seq, metadata: session.metadata } : {}) }) });
+        }
+        if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
+        if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+        return handled ?? Response.json({}, { status: 404 });
+    });
+}
 
 function activeProfileCatalog(profile: ReturnType<typeof AIBackendProfileSchema.parse>): Extract<ProfileCatalogSnapshotV1, { status: 'ready' }> {
     return { status: 'ready', authority: 'active', source: 'destination', diagnostics: [], referenceGuardRevision: 1,
         records: [{ record: { v: 1, id: profile.id, definition: { kind: 'legacy', profile },
-            enabled: true, secretBindings: {}, promptStack: [] }, revision: 1 }],
+            enabled: true, secretBindings: {}, promptStack: [], skillSeeds: [] }, revision: 1 }],
         controlRevision: 1, control: { revision: 1, record: { v: 1, phase: 'active', sourceSettingsVersion: 0,
             migratedLogicalRevision: 1, inventory: [{ kind: 'account_row', id: profile.id, revision: 1 }] } } };
 }
 
 async function launchFixture() {
-    const home = await upsertServerProfileOnly({ serverUrl: 'https://launch-admission.example.test', name: 'Launch test Home' });
+    homeHarness = createHomeGovernanceHarness();
+    const serverId = await homeHarness.addHome({ serverUrl: 'https://launch-admission.example.test', name: 'Launch test Home',
+        serverIdentityId: 'srv_launch_admission', accountId: boundary.accountId, currentAccount: true, active: false });
+    const profile = getServerProfileById(serverId);
+    if (!profile) throw new Error('Launch fixture Home identity was not admitted');
+    const home = { id: resolveServerProfileScopeIdForIdentifier(serverId), profileId: serverId, serverUrl: profile.serverUrl };
     const requestedServerIds = [home.id];
     const bindingHook = await renderHook(() => useServerCredentialAccountScopeBindings(requestedServerIds));
     const accountLifetime = bindingHook.getCurrent().get(home.id);
@@ -131,6 +197,7 @@ async function launchFixture() {
         requirements: { secretReferenceOverlay: true, teamCredentialModel: true },
         readinessOperationId: 'review-selection',
     } satisfies Parameters<typeof admitExecutionRunLaunchTarget>[0];
+    installLaunchHomeHttpBoundary();
     return { home, bindingHook, input, session, machine };
 }
 
@@ -152,16 +219,19 @@ beforeEach(() => {
     boundary.accountId = 'launch-account';
     boundary.rpc.mockReset();
     boundary.sessionRpc.mockReset();
+    boundary.frames.length = 0;
     storage.setState(storage.getInitialState(), true);
     resetServerFeaturesClientForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
     restoreExecutorModuleLoader?.();
     restoreExecutorModuleLoader = undefined;
     standardCleanup();
+    await homeHarness?.reset();
+    homeHarness = undefined;
     resetRuntimeFetch();
     resetTeamsDirectoryEngineForTests();
     resetTeamsSnapshotsForTests();
@@ -183,9 +253,31 @@ describe('real execution Run launch admission', () => {
     });
     it('starts a detached review through the real launch context without injecting a Session', async () => {
         restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+        const { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema }
+            = await import('@happier-dev/protocol/actions/externalActionApi');
+        const { computeExternalActionRequestEnvelopeDigestV1 }
+            = await import('@happier-dev/protocol/actions/externalActionExecutionAuthorization');
         const { input, home, machine } = await launchFixture();
-        setRuntimeFetch(async url => {
+        const httpStarts: unknown[] = [];
+        installLaunchHomeHttpBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
+            if (path === '/v1/actions/execution.run.start/execution-authorization') {
+                const mint = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-root', binding: {
+                    accountId: boundary.accountId, custodianAccountId: boundary.accountId, authentication: { kind: 'account', tokenEpoch: 0 },
+                    accountEncryptionMode: 'plain', serverIdentityId: 'srv_launch_admission', machineId: machine.id, installationId: 'test-installation',
+                    actionId: 'execution.run.start', requestId: mint.envelope.requestId, target: mint.envelope.target,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(mint.envelope),
+                } }));
+            }
+            if (path === '/v1/actions/execution.run.start') {
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                httpStarts.push(request.envelope);
+                return Response.json({ v: 1, actionId: 'execution.run.start', requestId: request.envelope.requestId,
+                    execution: { ok: true, result: ExecutionRunStartResponseSchema.parse({
+                        runId: 'detached-review-run', callId: 'detached-call', sidechainId: 'detached-sidechain',
+                    }) } });
+            }
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -201,9 +293,6 @@ describe('real execution Run launch admission', () => {
         });
         boundary.rpc.mockImplementation(async request => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
-            if (request.method === 'execution.run.start') return ExecutionRunStartResponseSchema.parse({
-                runId: 'detached-review-run', callId: 'detached-call', sidechainId: 'detached-sidechain',
-            });
             return { error: 'Method not found', errorCode: 'METHOD_NOT_FOUND' };
         });
         const hook = await renderHook(() => useExecutionRunLaunchContext(null, home.id, { machineId: machine.id, cwd: '/work/rejoined' }));
@@ -220,11 +309,12 @@ describe('real execution Run launch admission', () => {
         });
         expect(outcome, JSON.stringify({ outcome, methods: boundary.rpc.mock.calls.map(([request]) => request.method) }))
             .toMatchObject({ ok: true, reviewRunIds: ['detached-review-run'] });
-        expect(boundary.rpc.mock.calls.filter(([request]) => request.method === 'execution.run.start')).toEqual([
-            [expect.objectContaining({ machineId: machine.id, serverId: home.id, payload: expect.objectContaining({
+        expect(httpStarts).toEqual([
+            expect.objectContaining({ target: { kind: 'machine', machineId: machine.id }, input: expect.objectContaining({
                 cwd: '/work/rejoined', intent: 'review', intentInput: expect.objectContaining({ comparisonId: 'detached-evidence' }),
-            }) })],
+            }) }),
         ]);
+        expect(boundary.rpc.mock.calls.filter(([request]) => request.method === 'execution.run.start')).toEqual([]);
         expect(boundary.sessionRpc).not.toHaveBeenCalled();
         expect(storage.getState().sessions).toEqual({});
         await hook.unmount();
@@ -367,7 +457,7 @@ describe('real execution Run launch admission', () => {
         const httpRequests: { path: string; authorization: string | null }[] = [];
         // Actual Home feature, directory and catalog HTTP responses. Exact
         // Account authorization, parsing, snapshot loading and picker policy stay real.
-        setRuntimeFetch(async (url, init) => {
+        installLaunchHomeHttpBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             httpRequests.push({ path, authorization: new Headers(init?.headers).get('Authorization') });
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
@@ -397,7 +487,6 @@ describe('real execution Run launch admission', () => {
         boundary.rpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
             if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
-                request.onIssued?.();
                 const payload = request.payload as { spawnNonce?: string };
                 return { type: 'success', sessionIdStatus: 'pending', spawnNonce: payload.spawnNonce };
             }
@@ -452,7 +541,9 @@ describe('real execution Run launch admission', () => {
         const teamOptionTestId = `model-picker-overlay-option:${sessionModelSelectionKey(teamModel)}`;
         await vi.waitFor(async () => {
             await act(async () => {});
-            expect(screen.findByTestId(teamOptionTestId), JSON.stringify({ httpRequests, text: screen.getTextContent() })).not.toBeNull();
+            expect(screen.findByTestId(teamOptionTestId), JSON.stringify({ httpRequests: httpRequests.map(request => ({
+                path: request.path, authenticated: request.authorization !== null,
+            })), text: screen.getTextContent() })).not.toBeNull();
         });
         await screen.pressByTestIdAsync(teamOptionTestId);
         await vi.waitFor(() => expect(consent).toHaveBeenCalled());
@@ -464,7 +555,8 @@ describe('real execution Run launch admission', () => {
         expect(settled).toBe(false);
         expect(boundary.sessionRpc).not.toHaveBeenCalled();
         expect(boundary.rpc.mock.calls.find(([request]) => request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)?.[0])
-            .toMatchObject({ machineId: machine.id, serverId: home.id, accountId: 'launch-account',
+            .toMatchObject({ machineId: machine.id, serverId: home.id, serverUrl: home.serverUrl,
+                token: createAccountTokenForTests('launch-account', { currentAccount: true }),
                 payload: { sessionId: session.id, resume: 'retained-vendor-session' } });
         await act(async () => {
             storage.setState((state) => ({ sessions: { ...state.sessions, [session.id]: { ...state.sessions[session.id]!, active: true } } }));
@@ -500,7 +592,6 @@ describe('real execution Run launch admission', () => {
         boundary.rpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
             if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
-                request.onIssued?.();
                 return { type: 'success', sessionIdStatus: 'pending', spawnNonce: 'execution-run-host-review-selection' };
             }
             if (request.method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) return readiness.promise;
@@ -518,7 +609,7 @@ describe('real execution Run launch admission', () => {
         ]);
         expect(requests.every((request) => request.machineId === 'launch-machine' && request.serverId === home.id)).toBe(true);
         expect(requests[0].payload).toEqual({ requests: [{ id: 'tool.executionRuns' }] });
-        expect(requests[1]).toMatchObject({ accountId: 'launch-account', preferScoped: true,
+        expect(requests[1]).toMatchObject({ token: createAccountTokenForTests('launch-account', { currentAccount: true }), serverUrl: home.serverUrl,
             payload: { type: 'resume-session', sessionId: input.sessionId, directory: '/work/rejoined',
                 resume: 'retained-vendor-session', spawnNonce: 'execution-run-host-review-selection' } });
         readiness.resolve({ status: 'success', sessionId: input.sessionId });
@@ -541,7 +632,7 @@ describe('real execution Run launch admission', () => {
         const capability = createDeferred<unknown>();
         boundary.rpc.mockReturnValue(capability.promise);
         const admission = admitExecutionRunLaunchTarget(input);
-        expect(boundary.rpc).toHaveBeenCalled();
+        await vi.waitFor(() => expect(boundary.rpc.mock.calls.some(([request]) => request.method === RPC_METHODS.CAPABILITIES_DETECT)).toBe(true));
         const replacement = createMachineFixture({ ...machine, id: 'replacement-machine' });
         storage.setState({
             sessions: { [session.id]: { ...session, metadata: { ...session.metadata!, machineId: replacement.id } } },
@@ -563,29 +654,54 @@ describe('real execution Run launch admission', () => {
     it('aborts pending resume and refuses settlement when the exact Account credential is replaced', async () => {
         const { input, home, bindingHook } = await launchFixture();
         const spawn = createDeferred<unknown>();
-        let spawnSignal: AbortSignal | undefined;
         boundary.rpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
             if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
-                request.onIssued?.();
-                spawnSignal = request.signal;
                 return spawn.promise;
             }
             throw new Error(`Unexpected network method: ${request.method}`);
         });
         const admission = admitExecutionRunLaunchTarget(input);
         const rejection = expect(admission).rejects.toThrow();
-        await vi.waitFor(() => expect(spawnSignal).toBeDefined());
-        boundary.accountId = 'replacement-account';
+        await vi.waitFor(() => expect(boundary.rpc.mock.calls.some(([request]) => request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)).toBe(true));
         await act(async () => {
-            for (const listener of boundary.credentialListeners) listener({
-                serverId: home.id, serverUrl: home.serverUrl, kind: 'credentials_set',
-            });
+            await homeHarness!.switchAccount(home.profileId, 'replacement-account', { currentAccount: true });
         });
         expect(input.accountLifetime.isCurrent()).toBe(false);
         expect(bindingHook.getCurrent().get(home.id)?.accountId).toBe('replacement-account');
-        expect(spawnSignal?.aborted).toBe(true);
+        expect(boundary.frames).toContainEqual({ event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId: expect.any(String) } });
         spawn.resolve({ type: 'success', sessionId: input.sessionId });
         await rejection;
+    });
+
+    it('ends stopped Session readiness when its mounted caller retires', async () => {
+        const { input, session } = await launchFixture();
+        const readiness = createDeferred<unknown>();
+        boundary.rpc.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
+            if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+                return { type: 'success', sessionIdStatus: 'pending', spawnNonce: 'pending-review-resume' };
+            }
+            if (request.method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) {
+                return readiness.promise;
+            }
+            throw new Error(`Unexpected network method: ${request.method}`);
+        });
+        const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+        const hook = await renderHook(() => useMountedActionExecution(input.accountLifetime.scope));
+        const start = admitExecutionRunLaunchTarget({ ...input, signal: hook.getCurrent().getSignal() });
+        let outcome: unknown;
+        const settled = start.then(result => (outcome = { result }), (cause: unknown) => (outcome = { cause }));
+        try {
+            await vi.waitFor(() => expect({ outcome, methods: boundary.rpc.mock.calls.map(([request]) => request.method) })
+                .toMatchObject({ methods: expect.arrayContaining([RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE]) }));
+            await act(async () => hook.getCurrent().cancel());
+            expect(boundary.frames).toContainEqual({ event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId: expect.any(String) } });
+            expect(await settled).toMatchObject({ cause: { name: 'AbortError' } });
+        } finally {
+            readiness.resolve({ status: 'success', sessionId: session.id });
+            await settled;
+        }
+        expect(boundary.sessionRpc).not.toHaveBeenCalled();
     });
 });

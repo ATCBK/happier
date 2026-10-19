@@ -49,6 +49,16 @@ describe('ExecutionRunRow', () => {
         standardCleanup();
     });
 
+    it('names the Run model by its Agent catalog title, not the raw model id', async () => {
+        const screen = await renderScreen(<ExecutionRunRow run={{ ...run,
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resolvedSelection: { source: 'inherited', modelId: 'claude-haiku-4-5', connectedServices: null },
+        }} />);
+        expect(screen.getTextContent()).toContain('Haiku 4.5');
+        expect(screen.getTextContent()).not.toContain('claude-haiku-4-5');
+        standardCleanup();
+    });
+
     it('announces an actionable row as a button with its own title and an open hint', async () => {
         const screen = await renderRow(vi.fn());
 

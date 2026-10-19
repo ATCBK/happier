@@ -1,3 +1,5 @@
+import { z } from 'zod/mini';
+
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { ExecutionRunTeamCredentialSessionBindingConsentV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { SecretReferenceOverlayV1Schema } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
@@ -58,7 +60,7 @@ export function resolveRowlessExecutionRunStartOptions(params: Readonly<{
     const modelId = typeof params.input.modelId === 'string' && params.input.modelId.trim() ? params.input.modelId.trim() : null;
     const modelSelection = params.input.modelSelection === undefined
         ? null
-        : ProviderBoundModelRefSchema.nullable().safeParse(params.input.modelSelection);
+        : z.nullable(ProviderBoundModelRefSchema).safeParse(params.input.modelSelection);
     if (modelSelection && !modelSelection.success) return { ok: false };
     if (modelSelection?.success && modelSelection.data !== null && (
         !backendTargetKeysMatch(modelSelection.data.agentTargetKey, params.choice.backendTarget)

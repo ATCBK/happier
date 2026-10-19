@@ -1,9 +1,11 @@
 import * as React from 'react';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useSessionAgentActivity } from '@/hooks/session/useSessionAgentActivity';
 import { Modal } from '@/modal';
 import { machineStopSession } from '@/sync/ops/machines';
+import { isExecutionRunMutationCancelled } from '@/sync/ops/sessionExecutionRuns';
 import { t } from '@/text';
 
 function resolveStopFailedTitle(intent: unknown): string {
@@ -42,22 +44,24 @@ export const ExecutionRunStopFailedState = React.memo((props: Readonly<{
         ? t('runPage.stopFailed.reasonWithOthers', { machine: props.machineName, count: otherLiveAgents })
         : t('runPage.stopFailed.reasonAlone', { machine: props.machineName });
     const { machineId, sessionId, serverId, onSessionStopped } = props;
+    const { binding, isCurrent, getSignal } = useMountedActionExecution(serverId);
 
     const stopSession = React.useCallback(async () => {
-        if (!machineId) return;
+        if (!machineId || !binding || !isCurrent()) return;
         const confirmed = await Modal.confirm(
             t('runs.stop.stopSession'),
             reason,
             { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
         );
-        if (!confirmed) return;
-        const result = await machineStopSession(machineId, sessionId, { serverId });
+        if (!confirmed || !isCurrent()) return;
+        const result = await machineStopSession(machineId, sessionId, { serverId, scope: binding.scope, signal: getSignal() });
+        if (!isCurrent() || isExecutionRunMutationCancelled(result)) return;
         if (!result.ok) {
             Modal.alert(t('common.error'), result.error || t('runs.stop.failedToStopSession'));
             return;
         }
         onSessionStopped();
-    }, [machineId, onSessionStopped, reason, serverId, sessionId]);
+    }, [binding, getSignal, isCurrent, machineId, onSessionStopped, reason, serverId, sessionId]);
 
     return (
         <SurfaceStateCard

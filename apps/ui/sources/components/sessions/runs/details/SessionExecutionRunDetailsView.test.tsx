@@ -6,6 +6,7 @@ import {
     ExecutionRunCancelTurnRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunGetRequestSchema,
     ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
+    normalizeActionsSettingsV1,
     SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
@@ -21,7 +22,7 @@ import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
@@ -173,6 +174,8 @@ async function refresh() {
 }
 async function menu() {
     await screen.pressByTestIdAsync('session-run-details-actions-menu');
+    // Test Renderer cannot emit the native layout event that reveals measured portal content.
+    await act(async () => reportPopoverContentLayout(screen, { width: 340, height: 300 }));
 }
 async function setActionPolicy(actionsSettingsV1: NonNullable<typeof settingsDefaults.actionsSettingsV1>) {
     const { sync } = await import('@/sync/sync');
@@ -205,7 +208,7 @@ let restorePopoverWebGlobals: (() => void) | undefined;
 const animationFrames = new Set<ReturnType<typeof setTimeout>>();
 beforeEach(async ({ task }) => {
     const commandSuite = task.suite?.name === 'Teammate command Action admission';
-    const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission'
+    const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission' || task.suite?.name === 'Session Stop fallback custody'
         ? 'srv_run_details_' + (sequence + 1) : undefined;
     const stopPolicy = portableIdentity && task.name.startsWith('refuses ')
         ? { actionsSettingsV1: { v: 1 as const, actions: {
@@ -270,7 +273,7 @@ beforeEach(async ({ task }) => {
             if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
             if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({
                 session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: true,
-                    metadata: getStorage().getState().sessions.s1?.metadata ?? {},
+                    metadata: getStorage().getState().sessions.s1?.metadata ?? { path: '/worktree', host: 'localhost' },
                 }),
                     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                         capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
@@ -360,7 +363,10 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         getReply = () => new Promise(resolve => { finishRetarget = resolve; });
         const tab = screen.root.findByType('RunTabTitles').props as { navigation: WorkspaceNavigationContextValue; tabId: string };
         await act(async () => { tab.navigation.openHref(`/session/s1/runs/run_2?serverId=${serverId}`, { tabId: tab.tabId }); });
-        expect(titles()).toEqual([]);
+        const retargeted = screen.root.findByType('RunTabTitles').props;
+        expect(retargeted.navigation.destinationTitles[retargeted.tabId]).toMatchObject({ ref: retargeted.target, title: null });
+        // Unnamed registered destinations use their catalog title after the old page withdraws its identity.
+        expect(titles()).toEqual(['tabs.sessions']);
         if (!finishRetarget) throw new Error('Retarget must start a new exact Run read');
         runState = createRun({ runId: 'run_2', display: { title: 'New exact Run' } });
         await act(async () => { finishRetarget?.(wireResult()); });
@@ -545,6 +551,31 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         await act(async () => resolveOlder({ run: createRun({ status: 'running' }) }));
         expect(info().run.status).toBe('succeeded');
     });
+    it.each([SESSION_RPC_METHODS.EXECUTION_RUN_GET, RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST])(
+        'cancels an unanswered %s when the Run view unmounts', async method => {
+            const original = boundary.call.getMockImplementation()!;
+            let release!: () => void;
+            const pending = new Promise<void>(resolve => { release = resolve; });
+            boundary.call.mockImplementation(async (candidate, input) => {
+                if (candidate === method) await pending;
+                return original(candidate, input);
+            });
+            try {
+                await mount();
+                await vi.waitFor(() => expect(calls(method).length).toBeGreaterThan(0));
+                const frame = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+                    && frame.payload !== null && typeof frame.payload === 'object'
+                    && String(Reflect.get(frame.payload, 'method')).endsWith(`:${method}`));
+                if (!frame || !frame.payload || typeof frame.payload !== 'object') throw new Error('Missing issued Run read');
+                const requestId = Reflect.get(frame.payload, 'requestId');
+                await screen.unmount();
+                expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+                    serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL,
+                    payload: { requestId: requestId ?? expect.any(String) },
+                });
+            } finally { release(); }
+        },
+    );
     it('cancels only the witnessed current turn through the rendered Run menu, not the whole Run', async () => {
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: { turnId: 'turn-1', inputIds: ['input-1'], state: 'active' } } });
         await mount(); await loaded(); await menu();
@@ -589,9 +620,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
     });
     it('refuses Resume through Action policy before issuing its transport', async () => {
         runState = liveRun({ status: 'succeeded', interaction: undefined, lifecycle: { v: 1, state: 'recoverable' } });
-        await setActionPolicy({
+        await setActionPolicy(normalizeActionsSettingsV1({
             v: 1, actions: { 'execution.run.ensure': { disabledSurfaces: ['ui'] } },
-        });
+        }));
         await mount(); await loaded();
         await screen.pressByTestIdAsync('session-run-details-resume');
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
@@ -604,9 +635,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: {
             turnId: 'turn-1', inputIds: ['input-1'], state: 'active',
         } } });
-        await setActionPolicy({
+        await setActionPolicy(normalizeActionsSettingsV1({
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
-        });
+        }));
         await mount(); await loaded(); await menu();
         await screen.pressByTestIdAsync(testId);
         if (actionId === 'execution.run.stop') {
@@ -871,9 +902,9 @@ describe('Neighboring user Run Stop admission', () => {
     }
 
     it.each(['runs', 'machine', 'subagent'] as const)('refuses %s Stop through Action policy before transport or Session fallback', async surface => {
-        await setActionPolicy({ v: 1, actions: {
+        await setActionPolicy(normalizeActionsSettingsV1({ v: 1, actions: {
             'execution.run.stop': { enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [] },
-        } });
+        } }));
         const stop = await mountStopSurface(surface);
         const listsBeforeStop = calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).length;
         await stop();
@@ -948,6 +979,60 @@ describe('Neighboring user Run Stop admission', () => {
         await act(async () => settle({ ok: false, error: 'The retired Run Stop was not confirmed', errorCode: 'rpc_timeout' }));
         expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
         expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+    });
+});
+
+describe('Session Stop fallback custody', () => {
+    it.each(['runs', 'details'] as const)('retires the %s fallback observer without retracting its issued Session Stop', async surface => {
+        stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        let settle!: (result: unknown) => void;
+        const original = boundary.call.getMockImplementation()!;
+        boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.STOP_SESSION
+            ? new Promise(resolve => { settle = resolve; }) : method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
+                ? { runs: [{ ...runState, happyHomeDir: '/tmp/happier', happySessionId: 's1', pid: 123 }] }
+                : original(method, input));
+        if (surface === 'runs') {
+            const { router } = await import('expo-router');
+            router.setParams({});
+            const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+            const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
+            const Runs = (await import('@/app/(app)/runs')).default;
+            screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Runs /></AppPaneProvider></InjectedAuthProvider>);
+            await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
+        } else {
+            await mount(); await loaded(); await menu(); await screen.pressByTestIdAsync('session-run-details-stop');
+            await vi.waitFor(() => expect(screen.findByTestId('session-run-details-stop-failed')).not.toBeNull());
+        }
+        let settled = false;
+        let operation!: Promise<void>;
+        const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+        await act(async () => {
+            const onPress = surface === 'runs'
+                ? screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress
+                : screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'session-run-details-stop-failed')!.props.secondaryAction.onPress;
+            operation = Promise.resolve(onPress()).finally(() => { settled = true; });
+        });
+        await vi.waitFor(() => expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1));
+        const issued = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+            && frame.payload !== null && typeof frame.payload === 'object'
+            && Reflect.get(frame.payload, 'method') === `m1:${RPC_METHODS.STOP_SESSION}`);
+        if (!issued?.payload || typeof issued.payload !== 'object') throw new Error('Missing issued Session Stop');
+        try {
+            await screen.unmount();
+            await vi.waitFor(() => expect(settled).toBe(true));
+            const requestId = SocketRpcRequestIdSchema.parse(Reflect.get(issued.payload, 'requestId'));
+            expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)
+                .some(frame => frame.payload && typeof frame.payload === 'object' && Reflect.get(frame.payload, 'requestId') === requestId)).toBe(false);
+            await home.switchAccount('home', 'account-2');
+            await vi.waitFor(() => expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+                serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId },
+            }));
+            expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+            expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1);
+            expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
+        } finally { await act(async () => settle({ status: 'stopped' })); await operation; }
     });
 });
 

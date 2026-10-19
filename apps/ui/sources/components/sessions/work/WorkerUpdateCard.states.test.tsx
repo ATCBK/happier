@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerUpdateV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import {
-    createSessionFixture, createSessionMessagesFixture, createTestSessionTranscriptSource,
-    renderWithSessionTranscriptSource, renderScreen, type RenderScreenResult,
-} from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
+import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -64,6 +64,18 @@ function workerMessage(id: string, update: WorkerUpdateV1): WorkerMessage {
 }
 
 describe('WorkerUpdateCard states (lab cards-T1/T2)', () => {
+    it.each([1_800_000_000_000, null])('shows the carried failure and only a provider-reported reset (%s)', async resetAtMs => {
+        const update: WorkerUpdateV1 = { v: 1, workerKind: 'execution_run', workerId: 'failed-child', ownerState: 'failed',
+            wake: 'needs_you', headline: 'Background run failed', canInspect: true,
+            runtimeIssueV1: { v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit',
+                occurredAt: 1000, sanitizedPreview: 'Account quota exhausted', usageLimit: { v: 1, resetAtMs,
+                    retryAfterMs: null, quotaScope: 'provider', recoverability: 'wait' } } };
+        const card = await renderCard(update, getActiveServerSnapshot().serverId);
+        expect(card.getTextContent()).toContain('Account quota exhausted');
+        expect(card.getTextContent()).toContain(t('sessionWork.workerUpdate.state.failed'));
+        expect(card.findAllHostsByTestId('worker-update-reset')).toHaveLength(resetAtMs === null ? 0 : 1);
+        if (resetAtMs !== null) expect(card.getTextContent()).toContain(new Date(resetAtMs).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+    });
     it('keeps historical results while only the latest update for each worker answers its current request', async () => {
         const serverId = getActiveServerSnapshot().serverId;
         const lead = createSessionFixture({ id: 'lead', serverId, active: true });
@@ -120,6 +132,11 @@ describe('WorkerUpdateCard states (lab cards-T1/T2)', () => {
         expect(answersIn(cards[0])).toHaveLength(0);
         expect(answersIn(cards[1])).toHaveLength(1);
         expect(answersIn(cards[2])).toHaveLength(1);
+        // A request the worker has moved past is told in the past tense, not as a live ask.
+        const stateWord = (card: typeof cards[number]) => card.findAll(node => node.props.testID === 'worker-update-state' && typeof node.type === 'string')[0]?.props.children;
+        expect(stateWord(cards[0])).toBe(t('sessionWork.workerUpdate.state.neededYou'));
+        expect(stateWord(cards[1])).toBe(t('sessionWork.workerUpdate.state.needsYou'));
+        expect(stateWord(cards[2])).toBe(t('sessionWork.workerUpdate.state.needsYou'));
         expect(screen.getTextContent()).toContain('First result');
         expect(screen.getTextContent()).toContain('Later result');
         expect(screen.getTextContent()).toContain('different command');

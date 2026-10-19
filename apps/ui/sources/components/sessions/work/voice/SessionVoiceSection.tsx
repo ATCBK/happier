@@ -13,7 +13,7 @@ import { happierPageTextMetrics, joinHappierFacts } from '@happier-dev/plugin-ui
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionDescription, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import {
   DropdownMenu,
   type DropdownMenuItem,
@@ -278,6 +278,7 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     canPreview: Boolean(props.preview),
     inUseId: inUse?.providerContributionId === providerId ? inUseId : null,
     category: t('sessionVoice.voicesHeading', { provider: providerLabel }),
+    onRetry: requestCatalog,
   });
   const accountVoiceName = nameOf(accountVoiceId);
   const items = React.useMemo(
@@ -324,10 +325,13 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const searchPlaceholder =
     typeof props.searchPlaceholderKey === 'string'
       ? tLoose(props.searchPlaceholderKey)
-      : undefined;
+      : t('sessionVoice.searchVoices', { provider: providerLabel });
 
   return (
     <>
+      {/* The line says whose voice the conversation uses, right under the heading like every section's
+          description; the field beneath it shows the choice. */}
+      <WorkSectionDescription testID="session-work-voice.line">{line}</WorkSectionDescription>
       <DropdownMenu
         testID="session-work-voice.picker"
         open={open}
@@ -346,19 +350,22 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
         // A phone gets the shared bottom sheet, named by the section (lab `b-work Vp`).
         popoverPhonePresentation="sheet"
         popoverAccessibilityLabel={t('sessionVoice.title')}
+        popoverSheetSubtitle={selectedName
+          ? t('sessionVoice.sheetSubtitle', { session: getSessionName(session, serverId), voice: selectedName })
+          : t('sessionVoice.pickerA11y', { name: getSessionName(session, serverId) })}
         rowKind="item"
         itemRowProps={{ rightElementOutsidePressable: true }}
         footer={
           <Text style={styles.footer}>{t('sessionVoice.preferenceHint')}</Text>
         }
         itemTrigger={{
-          title: line,
+          // The field alone: "Sage · OpenAI", "Follow account settings · Marin", or just "Follow account
+          // settings" while the account's own voice has no name to show.
+          title: '',
           showSelectedSubtitle: false,
-          // One value, as it is said: "Sage · OpenAI".
-          detailFormatter: () =>
-            selectedName
-              ? joinHappierFacts(selectedName, providerLabel)
-              : t('sessionVoice.chooseVoice'),
+          detailFormatter: () => !selectedName ? null
+            : chosenId ? joinHappierFacts(selectedName, providerLabel)
+              : joinHappierFacts(t('sessionVoice.followAccount'), selectedName),
           field: {
             leading: (
               <Icon
