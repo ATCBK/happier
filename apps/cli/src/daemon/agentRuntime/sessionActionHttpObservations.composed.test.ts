@@ -137,6 +137,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
   const members = new Set([childId]);
   let currentnessRefused = false;
   let subtreeRefused: false | true | 'active' | 'archived' = false;
+  const nextSubtreeStatuses = new Map<'active' | 'archived', number>();
   let callerWorkspaceMissing = false;
   let inactive = false;
   let childArchived = false;
@@ -174,6 +175,11 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     const query = SessionListQueryV1Schema.parse(request.body);
     expect(query.underSessionId).toBe(sessionId);
     await observeSubtreeQuery?.();
+    const nextStatus = nextSubtreeStatuses.get(query.storage);
+    if (nextStatus !== undefined) {
+      nextSubtreeStatuses.delete(query.storage);
+      return reply.code(nextStatus).send({ error: 'private-error-body' });
+    }
     if (subtreeRefused === true) return reply.code(401).send({ error: 'private-error-body' });
     if (subtreeRefused === query.storage) return reply.code(503).send({ error: 'private-error-body' });
     return SessionListQueryResponseV1Schema.parse({ sessions: query.storage === (childArchived ? 'archived' : 'active') ? [...members].map(row) : [],
@@ -241,6 +247,7 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     refuseCurrentness: () => { currentnessRefused = true; },
     refuseSubtree: (storage?: 'active' | 'archived') => { subtreeRefused = storage ?? true; },
     allowSubtree: () => { subtreeRefused = false; },
+    failNextSubtree: (storage: 'active' | 'archived', status: number) => { nextSubtreeStatuses.set(storage, status); },
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
@@ -631,6 +638,46 @@ it.each(['session.stop', 'session.archive', 'session.unarchive'] as const)(
     else process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE = previousAuthorityPath;
     await f.close();
   }
+});
+
+it.each(['active', 'archived'] as const)(
+  'retains the native status Action through a transient %s subtree read inside its admitted lifetime', async storage => {
+  const f = await fixture();
+  const controller = new AbortController();
+  f.failNextSubtree(storage, 503);
+  try {
+    const run = () => f.execute(f.operation('session.status.get', { sessionId: childId }),
+      { sessionId, isCurrent: async () => true, signal: controller.signal });
+    expect(await run()).toMatchObject({ ok: true, result: { session: { id: childId } } });
+    const queries = f.observations.filter(row => row.path === '/v2/sessions/query');
+    expect(queries.some(row => row.status === 503)).toBe(true);
+    expect(queries.some(row => row.status === 200)).toBe(true);
+    expect(queries.every(row => row.signed && !row.bearer)).toBe(true);
+    // Recovery observes membership again; an earlier successful read is not a grant.
+    f.members.clear();
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'target_outside_led_subtree' } });
+  } finally { controller.abort(); await f.close(); }
+});
+
+it('keeps definitive subtree denial terminal and honours cancellation during observation', async () => {
+  const controller = new AbortController();
+  const f = await fixture(1, async () => { if (cancelRead) controller.abort(); });
+  let cancelRead = false;
+  const run = () => f.execute(f.operation('session.status.get', { sessionId: childId }),
+    { sessionId, isCurrent: async () => true, signal: controller.signal });
+  try {
+    f.failNextSubtree('active', 403);
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'unsupported_action',
+      details: { cause: 'subtree_observation_unavailable' } });
+    const denied = f.observations.filter(row => row.path === '/v2/sessions/query');
+    expect(denied).toHaveLength(2);
+    expect(denied.some(row => row.status === 403)).toBe(true);
+    cancelRead = true;
+    f.failNextSubtree('active', 503);
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(f.lifecycleEffects).toEqual([]);
+  } finally { controller.abort(); await f.close(); }
 });
 
 it.each([false, true])('resolves one lifecycle caller snapshot per Action while reobserving led membership (direct=%s)', async direct => {
