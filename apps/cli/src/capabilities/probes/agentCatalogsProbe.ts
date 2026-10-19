@@ -1,5 +1,5 @@
 import { PreflightSessionCatalogsV1Schema, SessionSkillCatalogListResponseV1Schema, type PreflightSessionCatalogsV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { normalizeAvailableCommands } from '@/agent/acp/commands/publishSlashCommands';
 import { AGENTS } from '@/agent/catalog/registry';
@@ -9,9 +9,9 @@ import { withPreflightSessionControlsProbeEnvironment } from './preflightSession
 import type { PreflightSessionControlsProbeParams } from './preflightSessionControlsProbeAdapterTypes';
 
 const RawCatalogsSchema = z.object({
-  commands: z.array(z.unknown()).nullable(),
-  skills: z.array(z.unknown()).nullable(),
-  diagnostic: z.string().optional(),
+  commands: z.nullable(z.array(z.unknown())),
+  skills: z.nullable(z.array(z.unknown())),
+  diagnostic: z.optional(z.string()),
 });
 
 type AgentCatalogsProbeParams = PreflightSessionControlsProbeParams & Readonly<{

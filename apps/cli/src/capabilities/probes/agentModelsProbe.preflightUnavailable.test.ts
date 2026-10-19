@@ -17,8 +17,13 @@ vi.mock('node:child_process', async () => {
 vi.mock('@/agent/catalog/registry', () => ({
   AGENTS: {
     ohMyPi: {},
+    codex: {},
     'acme-agent': {},
   },
+}));
+
+vi.mock('@/packagedRuntime/managedTools/requireAgentCliLaunchSpec', () => ({
+  resolveAgentCliLaunchSpec: vi.fn(() => ({})),
 }));
 
 const { createConfiguredAcpProbeBackendMock } = vi.hoisted(() => ({
@@ -103,6 +108,24 @@ describe('probeAgentModelsBestEffort (authoritative preflight unavailable)', () 
       timeoutMs: 100,
     })).resolves.toEqual({
       agentId: 'acme-agent',
+      availableModels: [],
+      supportsFreeform: false,
+      source: 'unavailable',
+      cacheable: false,
+      refreshError: true,
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('does not publish Codex\'s compatibility Default placeholder when its probe throws', async () => {
+    resolvePreflightSessionControlsProbeAdapterMock.mockRejectedValueOnce(new Error('transient probe failure'));
+
+    await expect(probeAgentModelsBestEffort({
+      agentId: 'codex',
+      cwd: '/repo',
+      timeoutMs: 100,
+    })).resolves.toEqual({
+      agentId: 'codex',
       availableModels: [],
       supportsFreeform: false,
       source: 'unavailable',

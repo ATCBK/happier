@@ -19,7 +19,7 @@ import { resolvePreflightSessionControlsProbeAdapter } from './resolvePreflightS
 import { runPreflightSessionControlsProbe } from './runPreflightSessionControlsProbe';
 import { withPreflightSessionControlsProbeEnvironment } from './preflightSessionControlsProbeEnvironment';
 import { resolveAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type ProbedAgentMode = Readonly<AgentProbeMode>;
 
@@ -36,22 +36,22 @@ const agentModesProbeCache = new AsyncTtlCache<ProbedAgentModesResult>({
   successTtlMs: PROBE_MODES_SUCCESS_TTL_MS,
   errorTtlMs: PROBE_MODES_FAILURE_TTL_MS,
 });
-const ProbeNonEmptyStringSchema = z.string().trim().min(1);
+const ProbeNonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const ProbeDescriptionSchema = z.string();
 const ProbeModeInputSchema = z.object({
   id: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
 });
 const ProbeModeConfigCandidateSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  options: z.array(z.unknown()).optional(),
+  id: z.optional(z.string()),
+  name: z.optional(z.string()),
+  options: z.optional(z.array(z.unknown())),
 });
 const ProbeModeChoiceInputSchema = z.object({
   value: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
 });
 
 function buildStatic(agentId: CatalogAgentLookupId): ProbedAgentModesResult {

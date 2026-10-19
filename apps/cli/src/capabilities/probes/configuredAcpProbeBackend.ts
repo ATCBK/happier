@@ -12,12 +12,9 @@ import type { StoredCredentials } from '@/persistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import {
-  refreshSavedSecretCatalogForOperation,
-  SavedSecretOperationAdmissionError,
-  savedSecretOperationAdmissionStatus,
-  type SavedSecretOperationContextV1,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { savedSecretOperationAdmissionStatus } from '@/settings/secrets/savedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 
 import { isConfiguredAcpProbeTarget } from './isConfiguredAcpProbeTarget';
@@ -87,6 +84,7 @@ export async function createConfiguredAcpProbeBackend(params: Readonly<{
   if (references.length > 0) {
     if (!credentials) throw new AcpCatalogUnavailableError('credentials-unavailable');
     try {
+      const { refreshSavedSecretCatalogForOperation } = await import('@/settings/secrets/hydrateSavedSecretCatalog');
       const refresh = () => refreshSavedSecretCatalogForOperation({
         expectedScopeKey: scopeKey,
         references,

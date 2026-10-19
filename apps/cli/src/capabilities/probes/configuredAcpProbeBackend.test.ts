@@ -7,13 +7,16 @@ import { accountSettingsParse, formatSharedSavedSecretRefV1, FeaturesResponseSch
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot,
-  resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+  resetActiveAccountSettingsSnapshotForTests, commitActiveAcpCatalog,
+  getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createConfiguredAcpProbeBackend } from './configuredAcpProbeBackend';
+import { probeAgentModelsBestEffort, resetAgentModelsProbeCacheForTests } from './agentModelsProbe';
+import { probeAgentModesBestEffort } from './agentModesProbe';
 
 // Exercise the real constructor without charging cold module loading to a probe test.
 await import('@/agent/acp/catalog/configured/createConfiguredAcpBackend');
@@ -63,6 +66,56 @@ function probeSnapshot(command: string, args: string[], home: string) {
 }
 
 describe('createConfiguredAcpProbeBackend', () => {
+  it.each(['models', 'modes'] as const)('probes configured %s through the current catalog and refreshes after its launch environment changes', async kind => {
+    await withTempDir('happier-configured-controls-', async directory => {
+      const script = writeAcpTestAgentScript({ dir: directory, fileName: 'controls-agent.mjs', source: `
+        let buffer = '';
+        process.stdin.on('data', chunk => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\\n'); buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const request = JSON.parse(line);
+            const second = process.env.PROBE_VARIANT === 'second';
+            const result = request.method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {}, authMethods: [] }
+              : request.method === 'session/new' ? { sessionId: 'catalog-controls',
+                models: { currentModelId: second ? 'model-b' : 'model-a', availableModels: [
+                  { modelId: second ? 'model-b' : 'model-a', name: second ? 'Model B' : 'Model A' }] },
+                modes: { currentModeId: second ? 'plan' : 'chat', availableModes: [
+                  { id: second ? 'plan' : 'chat', name: second ? 'Plan' : 'Chat' }] } } : null;
+            if (result) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
+          }
+        });
+      ` });
+      resetAgentModelsProbeCacheForTests();
+      const settings = accountSettingsParse({});
+      setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
+        settingsSecretsReadKeys: [], scopeKey });
+      const publish = (variant: 'first' | 'second') => expect(commitActiveAcpCatalog({ scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+        catalog: { status: 'ready', revision: variant === 'first' ? 1 : 2,
+          record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
+            id: 'review-bot', name: 'review-bot', title: 'Review bot',
+            launch: { kind: 'command', command: process.execPath, args: [script] },
+            env: { PROBE_VARIANT: { t: 'literal', v: variant } }, createdAt: 1, updatedAt: 1,
+          }] }) },
+      })).toBe(true);
+      const params = { agentId: 'customAcp' as const,
+        backendTarget: { kind: 'configuredAcpBackend' as const, backendId: 'review-bot' }, cwd: directory, accountSettings: settings };
+      const probe = async () => kind === 'models' ? probeAgentModelsBestEffort(params) : probeAgentModesBestEffort(params);
+      publish('first');
+      const first = await probe();
+      expect(first.source).toBe('dynamic');
+      expect('availableModels' in first ? first.availableModels.map(row => row.id) : first.availableModes.map(row => row.id))
+        .toContain(kind === 'models' ? 'model-a' : 'chat');
+      expect(await probe()).toEqual(first);
+      publish('second');
+      const second = await probe();
+      expect(second.source).toBe('dynamic');
+      expect('availableModels' in second ? second.availableModels.map(row => row.id) : second.availableModes.map(row => row.id))
+        .toContain(kind === 'models' ? 'model-b' : 'plan');
+    });
+  });
   it('expands machine values through the canonical resolver in a credentialless probe', async () => {
     await withTempDir('happier-configured-probe-literal-', async directory => {
       const outputPath = join(directory, 'probe-env.json');
@@ -156,13 +209,13 @@ describe('createConfiguredAcpProbeBackend', () => {
     const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
       serverHttpBaseUrl: home, isCurrent: async () => true });
     admitProbeSecret(home, true);
-    let produced: Awaited<ReturnType<typeof createConfiguredAcpProbeBackend>> = null;
+    const produced: { backend: Awaited<ReturnType<typeof createConfiguredAcpProbeBackend>> } = { backend: null };
     const creating = createConfiguredAcpProbeBackend({ agentId: 'customAcp',
       backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' }, cwd: process.cwd(),
       credentials, accountSettings: snapshot.settings, savedSecretOperationContext: operationContext,
-    }).then(backend => { produced = backend; return backend; });
+    }).then(backend => { produced.backend = backend; return backend; });
     try { await expect(creating).rejects.toMatchObject({ code: 'saved_secret_resolution_failed', status: 'forbidden' }); }
-    finally { await produced?.dispose(); }
+    finally { await produced.backend?.dispose(); }
   });
 
   it('launches the actual probe with material admitted through its captured foreign Home', async () => {

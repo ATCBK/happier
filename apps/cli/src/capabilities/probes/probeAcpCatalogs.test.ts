@@ -19,6 +19,7 @@ import { createStablePluginManagedDependenciesHost } from '@/plugins/runtime/inv
 import { CURSOR_PLUGIN } from '@happier-dev/plugins-cursor';
 import { OH_MY_PI_PLUGIN } from '@happier-dev/plugins-ohmypi';
 import { GEMINI_PLUGIN } from '@happier-dev/plugins-gemini';
+import { CODEX_PREFLIGHT_SESSION_CONTROLS } from '../../../../../packages/plugins/codex/src/agent/lifecycle/preflight/sessionControls';
 
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { projectManifestAgentAcpCatalogPreflight } from '@/plugins/projection/registry/projectManifestAgentContribution';
@@ -35,7 +36,30 @@ import { probeAgentConfigOptionsBestEffort } from './agentConfigOptionsProbe';
 
 const commands = [{ name: 'review', description: 'Review the project', input: { hint: 'target' } }];
 
-function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'absent' | 'auth' | 'authMissing' | 'exit' | 'ohmypi' | 'cursor' | 'antigravity' | 'authRequired' | 'cursorModels' | 'controlsWithoutCatalog' | 'configControls') {
+it.each(['controlsWithoutCatalog', 'emptyControls'] as const)('reads the Codex ACP native model catalog (%s) without probing app-server or waiting for commands', async scenario => {
+  await withTempDir('codex-acp-native-models-', async dir => {
+    const fixture = writeFixture(dir, scenario);
+    const ref = { kind: 'managedDependency' as const, id: 'codex-acp' };
+    const projected = projectAgentPreflightSessionControlsCatalogEntry({
+      agentId: 'codex', preflightSessionControls: CODEX_PREFLIGHT_SESSION_CONTROLS, systemTools: [],
+      managedExecutableRefs: [ref], resolveReadyManagedExecutable: async () => ({ command: process.execPath,
+        args: [fixture.script], release() {} }),
+      retirementSignal: new AbortController().signal, isCurrent: () => true,
+    });
+    const adapter = await projected.getPreflightSessionControlsProbeAdapter!();
+    expect(await adapter?.probeModelsRaw?.({ cwd: dir, timeoutMs: 10_000, accountSettings: { codexBackendMode: 'acp' } }))
+      .toEqual(scenario === 'emptyControls' ? [] : expect.arrayContaining([expect.objectContaining({ id: 'selected-model', name: 'Selected native model' })]));
+    if (scenario === 'emptyControls') {
+      expect(await adapter?.probeModesRaw?.({ cwd: dir, timeoutMs: 10_000, accountSettings: { codexBackendMode: 'acp' } })).toEqual([]);
+    }
+    const evidence = readFileSync(fixture.evidencePath, 'utf8');
+    expect(evidence).toContain('session/close');
+    expect(evidence).not.toContain('session/prompt');
+    expect(evidence).not.toContain('model/list');
+  });
+});
+
+function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'absent' | 'auth' | 'authMissing' | 'exit' | 'ohmypi' | 'cursor' | 'antigravity' | 'authRequired' | 'cursorModels' | 'controlsWithoutCatalog' | 'emptyControls' | 'configControls') {
   const evidencePath = join(dir, 'requests.jsonl');
   const script = writeAcpTestAgentScript({ dir, fileName: 'catalog-agent.mjs', source: `
     import { appendFileSync } from 'node:fs';
@@ -76,7 +100,7 @@ function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'abs
           send({ id: request.id, result: { sessionId: 'native-session', ...(scenario === 'controlsWithoutCatalog' ? {
             models: { currentModelId: 'selected-model', availableModels: [{ modelId: 'selected-model', name: 'Selected native model' }] },
             modes: { currentModeId: 'plan', availableModes: [{ id: 'plan', name: 'Plan', description: 'Native planning mode' }] },
-          } : scenario === 'configControls' ? {
+          } : scenario === 'emptyControls' ? { models: { availableModels: [] }, modes: { availableModes: [] } } : scenario === 'configControls' ? {
             models: { availableModels: [] }, modes: { availableModes: [] },
             configOptions: [
               { id: 'model', name: 'Model', type: 'select', currentValue: 'config-model', options: [{ value: 'config-model', name: 'Config native model' }] },
@@ -277,7 +301,7 @@ describe('Antigravity declared ready native ACP catalog', () => {
         expect(await adapter?.probeModesRaw?.({ cwd: dir, timeoutMs: 10_000 })).toEqual([
           { id: 'plan', name: 'Plan', description: 'Native planning mode' },
         ]);
-        const catalogEntry = { id: 'antigravity', cliSubcommand: 'antigravity', ...project(true) } as const;
+        const catalogEntry = { id: 'antigravity', cliSubcommand: 'antigravity', vendorResumeSupport: 'unsupported', ...project(true) } as const;
         const modelDiscovery = await probeAgentModelsBestEffort({
           agentId: 'antigravity', catalogEntry, cwd: dir, timeoutMs: 10_000, bypassCache: true,
         });

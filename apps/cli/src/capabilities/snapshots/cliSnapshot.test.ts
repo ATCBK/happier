@@ -237,7 +237,8 @@ describe('detectCliSnapshotOnDaemonPath', () => {
       expect(snapshot.clis.claude.available).toBe(true);
       expect(snapshot.clis.claude.resolvedPath).toBe(claudePath);
       expect(snapshot.clis.claude.version).toBe('2.0.69');
-      expect(snapshot.clis['custom-acp']).toMatchObject({ available: false, installed: false,
+      // Native runtime readiness is independent of an Agent CLI executable.
+      expect(snapshot.clis['custom-acp']).toMatchObject({ available: true, installed: true,
         signIn: { status: 'unknown', loginSupport: 'unsupported' } });
       expect(snapshot.clis['custom-acp'].detectionError).toBeUndefined();
       const requested = await detectCliSnapshotOnDaemonPath({ requestedCliNames: ['custom-acp', 'claude'], bypassCache: true });
@@ -980,12 +981,11 @@ describe('detectCliSnapshotOnDaemonPath', () => {
       processEnv: { ...process.env, CODEX_API_KEY: 'fixture-api-key' },
     });
     expect(status).toMatchObject({ state: 'unknown', reason: 'probe_failed' });
-    // Without applied executable authority, the canonical declaration-only
-    // environment observation remains available; it cannot revive that callback.
+    // Without an admitted occurrence, native auth cannot borrow a disposed callback.
     expect(await detectNativeAgentCliAuthStatus({ agentId: 'codex',
       resolvedPath: 'unused-for-declaration-only-auth',
       processEnv: { ...process.env, CODEX_API_KEY: 'fixture-api-key' },
-    })).toMatchObject({ state: 'logged_in', method: 'api_key_env', source: 'env' });
+    })).toBeNull();
     expect(await detectNativeAgentCliAuthStatus({ agentId: 'missing-fixture-agent', resolvedPath: 'unused-without-authority' })).toBeNull();
   });
 });

@@ -73,6 +73,10 @@ vi.mock('@happier-dev/cli-common/ssh', async (importOriginal) => {
     runOpenSshRemoteCommand: async (params: Parameters<typeof actual.runOpenSshRemoteCommand>[0]) => {
       lastOpenSshParams.current = params as unknown as Record<string, unknown>;
       openSshParamsCalls.push(params as unknown as Record<string, unknown>);
+      const remoteCommand = params.remoteCommand.join(' ');
+      if (remoteCommand.includes('current_target##*/') && remoteCommand.includes('version_path##*/')) {
+        return { status: 0, stdout: 'current=test-version\nprevious=\nversion=test-version\n', stderr: '' };
+      }
       if (String(params.remoteCommand).includes('enroll-remote')) {
         if (enrollmentResponse.current) {
           const response = enrollmentResponse.current;

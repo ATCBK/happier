@@ -1,27 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { preflightCatalogEntryFixture } from './preflightSessionControlsProbeAdapter.testkit';
 
 const {
-  resolvePreflightSessionControlsProbeAdapterMock,
   probeConfigOptionsRawMock,
 } = vi.hoisted(() => ({
-  resolvePreflightSessionControlsProbeAdapterMock: vi.fn(),
   probeConfigOptionsRawMock: vi.fn(),
 }));
 
-vi.mock('./resolvePreflightSessionControlsProbeAdapter', () => ({
-  resolvePreflightSessionControlsProbeAdapter: resolvePreflightSessionControlsProbeAdapterMock,
-}));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+  return createBundledPluginPublicationFsFixture(actual);
+});
 
-import { probeAgentConfigOptionsBestEffort } from './agentConfigOptionsProbe';
+import { probeAgentConfigOptionsBestEffort as probeConfigOptions } from './agentConfigOptionsProbe';
+
+let failureCacheStrategy: 'retry' | 'cooldown' = 'retry';
+function probeAgentConfigOptionsBestEffort(params: Parameters<typeof probeConfigOptions>[0]) {
+  return probeConfigOptions({ ...params, catalogEntry: preflightCatalogEntryFixture('codex', {
+    failureCacheStrategy, probeConfigOptionsRaw: probeConfigOptionsRawMock,
+  }) });
+}
 
 describe('probeAgentConfigOptionsBestEffort (codex app-server)', () => {
   beforeEach(() => {
-    resolvePreflightSessionControlsProbeAdapterMock.mockReset();
     probeConfigOptionsRawMock.mockReset();
-    resolvePreflightSessionControlsProbeAdapterMock.mockResolvedValue({
-      failureCacheStrategy: 'retry',
-      probeConfigOptionsRaw: probeConfigOptionsRawMock,
-    });
+    failureCacheStrategy = 'retry';
   });
 
   it('retries a transient Codex app-server preflight failure within the same probe so the first result is rich', async () => {
@@ -62,7 +66,6 @@ describe('probeAgentConfigOptionsBestEffort (codex app-server)', () => {
       ],
       source: 'dynamic',
     });
-    expect(resolvePreflightSessionControlsProbeAdapterMock).toHaveBeenCalledWith('codex');
     expect(probeConfigOptionsRawMock).toHaveBeenCalledTimes(2);
     expect(probeConfigOptionsRawMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
       cwd: '/repo-transient',
@@ -150,10 +153,7 @@ describe('probeAgentConfigOptionsBestEffort (codex app-server)', () => {
   });
 
   it('surfaces provider-owned config-option probe unavailability instead of a static fallback', async () => {
-    resolvePreflightSessionControlsProbeAdapterMock.mockResolvedValueOnce({
-      failureCacheStrategy: 'cooldown',
-      probeConfigOptionsRaw: probeConfigOptionsRawMock,
-    });
+    failureCacheStrategy = 'cooldown';
     probeConfigOptionsRawMock.mockResolvedValueOnce(null);
 
     const result = await probeAgentConfigOptionsBestEffort({

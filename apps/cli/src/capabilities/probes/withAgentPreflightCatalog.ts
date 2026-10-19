@@ -5,10 +5,12 @@ import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/run
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { ProviderProbeCancelledError } from '@/providers/probe/client';
 import type { PreflightCatalogCleanupScope } from './preflightCatalogCleanupScope';
+import type { CreateAgentInvocationServices } from '@/plugins/runtime/invocation/services/types';
 
 type AgentPreflightCatalogContext = Readonly<{
   catalogEntry?: AgentCatalogEntry | null;
   runtimeCacheKey?: string;
+  createAgentInvocationServices?: CreateAgentInvocationServices;
   registrySnapshot?: ResolvedContributionRegistry;
   isCurrent: () => boolean;
 }>;
@@ -44,7 +46,8 @@ export async function withAgentPreflightCatalog<T>(
       && (!lease || pluginReloadController.isRuntimeRegistryCurrent(lease.registry));
     if (!isCurrent()) throw new ProviderProbeCancelledError();
     const result = await Promise.race([run({
-      ...(lease ? { catalogEntry, runtimeCacheKey, registrySnapshot: lease.registry.contributes } : {}),
+      ...(lease ? { catalogEntry, runtimeCacheKey, registrySnapshot: lease.registry.contributes,
+        createAgentInvocationServices: lease.registry.createAgentInvocationServices } : {}),
       isCurrent,
     }), aborted]);
     if (!isCurrent()) throw new ProviderProbeCancelledError();

@@ -7,13 +7,11 @@ import type { DetectCliSnapshot } from '../snapshots/cliSnapshot';
 import { createEnvKeyScope } from '../../testkit/env/envScope';
 import { createTempDir, removeTempDir, withTempDir } from '../../testkit/fs/tempDir';
 import { configuration, reloadConfiguration } from '../../configuration';
-import { createAdmittedPluginRuntimeFixture } from '../../plugins/testkit/admittedRuntime';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '../../plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '../../plugins/testkit/manifestV2Fixture';
 import { pluginReloadController } from '../../plugins/runtime/reload/singleton';
 import { AccountSettingsSchema, ExecutionRunIntentSchema } from '@happier-dev/protocol';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import * as engineRegistry from '../../agent/runtime/registry/engineRegistry';
-import type { ResolvedAgentContribution } from '../../plugins/projection/registry/types';
-import { buildExecutionRunProfileCatalog, type ExecutionRunProfileContributionCatalogInput } from '../../agent/executionRuns/profiles/intentRegistry';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '../../settings/accountSettings/activeAccountSettingsSnapshot';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -33,50 +31,10 @@ function makeCliSnapshot(overrides: Partial<DetectCliSnapshot['clis']>, path = '
   };
 }
 
-function makeCliEngineRegistryMock(
-  contributions: Partial<Awaited<ReturnType<typeof engineRegistry.resolveCliEngineRegistry>>['contributions']>,
-  options?: Readonly<{
-    currentPluginSourceCustodyById?: ReadonlyMap<string, import('@happier-dev/protocol').PluginSourceCustodyV1>;
-  }>,
-): Awaited<ReturnType<typeof engineRegistry.resolveCliEngineRegistry>> {
-  const resolvedContributions = {
-      agents: Object.freeze([]),
-            actions: Object.freeze([]),
-      resources: Object.freeze([]),
-      executionRunProfiles: Object.freeze([]),
-      activationTargets: Object.freeze([]),
-            catalogEntriesById: {},
-      agentDefinitionsById: new Map(),
-            executionRunProfilesById: new Map(),
-      pluginDiagnosticsByPluginId: {},
-      ...contributions,
-    } as Awaited<ReturnType<typeof engineRegistry.resolveCliEngineRegistry>>['contributions'];
-  return {
-    contributions: resolvedContributions,
-    resolveExecutionRunProfileCatalog: async (catalogOptions) => buildExecutionRunProfileCatalog(
-      (resolvedContributions.executionRunProfiles ?? []).flatMap<ExecutionRunProfileContributionCatalogInput>((profile) => {
-        if (!profile.pluginId) return [profile.definition];
-        const sourceCustody = options?.currentPluginSourceCustodyById?.get(profile.pluginId) ?? null;
-        return sourceCustody ? [{ pluginId: profile.pluginId, sourceCustody, definition: profile.definition }] : [];
-      }),
-      catalogOptions,
-    ),
-    resolveForBackendId: async () => null,
-    resolveExecutionSurfaces: async () => ({
-      terminalRuntime: null,
-      externalSession: null,
-      attach: null,
-      handoff: null,
-      fork: null,
-      checkpoint: null,
-    }),
-  };
-}
-
 describe('executionRunsCapability', () => {
   const homeScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
   let home = '';
-  let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+  let runtimeFixture: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
   const envScope = createEnvKeyScope([
     'PATH',
     'HAPPIER_CODERABBIT_REVIEW_CMD',
@@ -89,13 +47,27 @@ describe('executionRunsCapability', () => {
     home = await createTempDir('happier-execution-capability-runtime-');
     homeScope.patch({ HAPPIER_HOME_DIR: home });
     reloadConfiguration();
-    runtimeFixture = await createAdmittedPluginRuntimeFixture({
+    const agent = (id: string) => ({ id, title: 'External review Agent', runtime: { kind: 'custom' },
+      primary: 'executionRuns', capabilities: { executionRuns: { open: ['create'], checkpoint: false, stop: true } } });
+    const daemon = (id: string) => `export function activate(api) {
+      api.agents.register('${id}', () => { throw new Error('Capability observation must not start an Agent'); });
+    }`;
+    runtimeFixture = await createAuthoredAdmittedPluginRuntimeFixture({
       happyHomeDir: configuration.happyHomeDir,
       controller: pluginReloadController,
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: 'acme.review', contributes: { agents: [agent('review-agent')] } }),
+        files: { 'daemon.mjs': daemon('review-agent') } },
+      { manifest: createPluginManifestV2Fixture({ id: 'acme.execution-runs', contributes: {
+        agents: [agent('acme-review')],
+        executionRunProfiles: [{ id: 'review-profile', intent: 'review', title: 'Acme review', promptAsset: 'review-prompt',
+          compatibleAgents: ['acme-review'], defaults: { retention: 'ephemeral', runClass: 'bounded', io: 'requestResponse' } }],
+        resources: [{ id: 'review-prompt-resource', kind: 'prompt', path: './review.md', contentType: 'text/markdown' }],
+        promptAssets: [{ id: 'review-prompt', kind: 'systemPrompt', resource: 'review-prompt-resource', target: { kind: 'agent', agent: 'acme-review' } }],
+      } }), files: { 'daemon.mjs': daemon('acme-review'), 'review.md': 'Review the current change.' } }],
       runtimeOptions: { pluginIds: [
         'happier.agent.claude', 'happier.agent.codex', 'happier.agent.custom-acp',
         'happier.agent.pi', 'happier.agent.kiro', 'happier.agent.copilot',
-        'happier.agent.qwen', 'happier.agent.ohmypi', 'happier.review.coderabbit',
+        'happier.agent.qwen', 'happier.agent.ohmypi', 'happier.review.coderabbit', 'acme.review', 'acme.execution-runs',
       ] },
     });
     await runtimeFixture.registry.activateContributionsOnDemand([
@@ -129,46 +101,13 @@ describe('executionRunsCapability', () => {
   });
 
   it('marks a canonical execution-run Agent available without a legacy runtime getter', async () => {
-    const agent: ResolvedAgentContribution = {
-      id: 'plugin.review',
-      provenance: 'external' as const,
-      source: { kind: 'path' as const },
-      pluginId: 'acme.review',
-      identity: { pluginId: 'acme.review', localId: 'review-agent' },
-      definition: {
-        kindVersion: 1 as const,
-        id: 'plugin.review',
-        ownedBackendIds: ['plugin.review'],
-      },
-      richDefinition: {
-        provenance: 'external' as const,
-        definition: {
-          id: 'plugin.review',
-          title: 'Plugin review',
-          runtime: { kind: 'custom' },
-          primary: 'executionRuns' as const,
-          capabilities: {
-            executionRuns: {
-              open: ['create'],
-              checkpoint: false,
-              stop: true,
-            },
-          },
-        },
-      },
-    };
-    vi.spyOn(engineRegistry, 'resolveCliEngineRegistry').mockResolvedValue(makeCliEngineRegistryMock({
-      agents: [agent],
-      agentDefinitionsById: new Map([[agent.id, agent]]),
-    }));
-
     const result = await executionRunsCapability.detect({
       context: { cliSnapshot: makeCliSnapshot({}) },
       request: { id: 'tool.executionRuns' },
     }) as { backends: Record<string, { available?: boolean; intents?: readonly string[] }> };
 
-    expect(result.backends['plugin.review']).toMatchObject({ available: true });
-    expect(result.backends['plugin.review']?.intents).toContain('review');
+    expect(result.backends['acme.review/review-agent']).toMatchObject({ available: true });
+    expect(result.backends['acme.review/review-agent']?.intents).toContain('review');
   });
 
   it('projects a configured ACP review target from the active catalog row and current preferences', async () => {
@@ -452,36 +391,6 @@ describe('executionRunsCapability', () => {
   });
 
   it('projects contributed execution-run profile descriptors from the contribution registry', async () => {
-    const profile = {
-      provenance: 'external' as const,
-      source: { kind: 'path' as const },
-      pluginId: 'acme.execution-runs',
-      definition: {
-        id: 'review-profile',
-        intent: 'review' as const,
-        title: 'Acme review',
-        promptAsset: 'review-prompt',
-        compatibleAgents: ['acme-review'],
-        available: true,
-        defaults: {
-          retention: 'ephemeral' as const,
-          runClass: 'bounded' as const,
-          io: 'requestResponse' as const,
-        },
-      },
-    };
-    vi.spyOn(engineRegistry, 'resolveCliEngineRegistry').mockResolvedValue(makeCliEngineRegistryMock({
-      executionRunProfiles: [profile],
-      executionRunProfilesById: new Map([
-        ['acme.execution-runs/review-profile', profile],
-      ]),
-    }, {
-      currentPluginSourceCustodyById: new Map([[
-        'acme.execution-runs',
-        { kind: 'managed', immutableGenerationId: 'immutable-profile-1', installSource: 'archive' },
-      ]]),
-    }));
-
     const res = await executionRunsCapability.detect({
       context: {
         cliSnapshot: makeCliSnapshot({ claude: { available: true } }),
@@ -500,7 +409,10 @@ describe('executionRunsCapability', () => {
       }[];
     };
 
-    expect(res.executionRunProfiles).toEqual([
+    const profiles = res.executionRunProfiles.filter(profile => profile.id === 'acme.execution-runs/review-profile');
+    const generation = runtimeFixture?.committed.generations.get('acme.execution-runs');
+    if (!generation) throw new Error('Expected admitted external profile generation');
+    expect(profiles).toEqual([
       {
         id: 'acme.execution-runs/review-profile',
         intent: 'review',
@@ -508,7 +420,7 @@ describe('executionRunsCapability', () => {
         promptAsset: 'review-prompt',
         compatibleAgents: ['acme-review'],
         sourceCustody: {
-          kind: 'managed', immutableGenerationId: 'immutable-profile-1', installSource: 'archive',
+          kind: 'managed', immutableGenerationId: generation.immutableGenerationId, installSource: 'localPath',
         },
         available: true,
         defaults: {
