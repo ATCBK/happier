@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { clearSessionStateFieldFromMetadata, readSessionStateFieldFromMetadata, writeSessionStateFieldToMetadata } from './publishField.js';
+import { clearSessionStateFieldFromMetadata, createSessionStateFieldMetadataUpdater, readSessionStateFieldFromMetadata, writeSessionStateFieldToMetadata } from './publishField.js';
 
 describe('readSessionStateFieldFromMetadata', () => {
+  it('compares semantic field values independently of JSON key order and snapshots an in-place competing change', () => {
+    const preference = { providerContributionId: 'example.voice/speech', settingFieldPath: 'voice', value: { id: 'original', language: 'en' } };
+    const update = createSessionStateFieldMetadataUpdater('intent.voicePreference', null);
+    update({ work: { voicePreference: preference } });
+    expect(update({ work: { memoryEnabled: true, voicePreference: { ...preference, value: { language: 'en', id: 'original' } } } }))
+      .toEqual({ work: { memoryEnabled: true } });
+    preference.value.id = 'competing';
+    expect(() => update({ work: { voicePreference: preference } })).toThrowError(expect.objectContaining({ code: 'conflict' }));
+  });
+  it('annotates and clears an explanation without rewriting work or runtime facts', () => {
+    const metadata = { work: { memoryEnabled: true }, runtimeActivityState: 'running' };
+    const updated = writeSessionStateFieldToMetadata(metadata, 'display.statusReason', 'Waiting for build');
+    expect(updated).toEqual({ ...metadata, work: { memoryEnabled: true, statusReason: 'Waiting for build' } });
+    expect(readSessionStateFieldFromMetadata(updated, 'display.statusReason')).toBe('Waiting for build');
+    expect(writeSessionStateFieldToMetadata(updated, 'display.statusReason', 'Waiting for build')).toBe(updated);
+    expect(clearSessionStateFieldFromMetadata(updated, 'display.statusReason')).toEqual(metadata);
+  });
   it('reads a bound field through the canonical binding', () => {
     expect(readSessionStateFieldFromMetadata({
       summary: { text: 'Canonical title', updatedAt: 12 },

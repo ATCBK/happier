@@ -1,4 +1,5 @@
 import { SESSION_RUNNER_RUNTIME_METADATA_KEY } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { SessionMetadata, SessionStateFieldId, SessionStateFieldValue } from '@happier-dev/protocol';
 
 import type {
@@ -23,6 +24,7 @@ import { sessionRoleBinding, sessionRoleConfigurationBinding } from './role.js';
 import { sessionUsageLimitRecoveryBinding } from './usageLimitRecovery.js';
 import { summaryTextBinding } from './summaryText.js';
 import { sessionBotBinding } from './sessionIdentity.js';
+import { sessionStatusReasonBinding } from './statusReason.js';
 import { sessionMemoryEnabledBinding, sessionContextBinding, sessionVoicePreferenceBinding } from './context.js';
 import { transcriptToolCallsBinding } from './transcriptToolCalls.js';
 import {
@@ -45,6 +47,7 @@ const SESSION_STATE_METADATA_BINDINGS = {
   'intent.acpConfigOption': acpConfigOptionIntentBinding,
   'display.title': summaryTextBinding,
   'display.bot': sessionBotBinding,
+  'display.statusReason': sessionStatusReasonBinding,
   'view.transcriptToolCalls': transcriptToolCallsBinding,
   'runtime.workState': sessionWorkStateBinding,
   'runtime.activity': runtimeActivityBinding,
@@ -136,6 +139,8 @@ export function clearSessionStateFieldFromMetadata(
       break;
     case 'display.bot':
       return sessionBotBinding.write(metadata, { value: null });
+    case 'display.statusReason':
+      return sessionStatusReasonBinding.write(metadata, { value: null });
     case 'view.transcriptToolCalls':
       return transcriptToolCallsBinding.write(metadata, { value: null });
     case 'runtime.workState':
@@ -171,7 +176,18 @@ export function createSessionStateFieldMetadataUpdater<F extends SessionStateFie
   fieldId: F,
   value: SessionStateFieldWriteValue<F>,
 ): (metadata: SessionMetadata) => SessionMetadata {
-  return (metadata) => writeSessionStateFieldToMetadata(metadata, fieldId, value);
+  const binding = getBinding(fieldId);
+  let basis: JsonValue | undefined;
+  return (metadata) => {
+    if (binding?.readMutationBasis) {
+      const current = projectNativeJsonValueForTransport(binding.readMutationBasis(metadata));
+      if (basis !== undefined && !sameStrictJsonValue(basis, current)) {
+        throw Object.assign(new Error('Session field changed during metadata update'), { code: 'conflict', retryable: false });
+      }
+      basis ??= current;
+    }
+    return writeSessionStateFieldToMetadata(metadata, fieldId, value);
+  };
 }
 
 export function applySessionStateFieldMetadataPatch<F extends SessionStateFieldId>(

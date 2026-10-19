@@ -66,6 +66,9 @@ export const SESSION_STATE_FIELD_REGISTRY = {
     conflictPolicy: 'timestampedFieldUpdate',
     deliveryClass: 'durable_best_effort',
   },
+  'display.statusReason': {
+    id: 'display.statusReason', class: 'display', conflictPolicy: 'bindingOwned', deliveryClass: 'durable_best_effort',
+  },
   'runtime.workState': {
     id: 'runtime.workState',
     class: 'runtime',
