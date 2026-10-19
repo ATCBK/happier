@@ -54,7 +54,7 @@ describe('workspace browser demanded history', () => {
             expect(request.payload).toMatchObject({ cwd: windowsScope.rootPath, folder: 'Sub Dir/Nested', paths: ['Sub Dir/Nested/Name '] });
             return { success: true, headOid: newHead, entries: [{ path: 'Sub Dir/Nested/Name ', kind: 'none' }] };
         });
-        const hook = await renderHook((repoRootPath: string | null) => useWorkspaceEntryHistory({ scope: windowsScope,
+        const hook = await renderHook<ReturnType<typeof useWorkspaceEntryHistory>, string | null>((repoRootPath) => useWorkspaceEntryHistory({ scope: windowsScope,
             repoRootPath, folder: 'Nested', paths: ['Nested/Name '], headOid: newHead, enabled: true }),
         { initialProps: 'C:/repo' });
         await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
@@ -116,7 +116,7 @@ describe('workspace browser demanded history', () => {
             return { success: true, headOid: oldHead, entries: [{ path: 'LICENSE', kind: 'none' }] };
         });
         const renders: Array<{ demandedHead: string | null; stale: boolean; known: boolean }> = [];
-        const hook = await renderHook((headOid: string | null) => {
+        const hook = await renderHook<ReturnType<typeof useWorkspaceEntryHistory>, string | null>((headOid) => {
             const history = useWorkspaceEntryHistory({ scope, repoRootPath: scope.rootPath, folder: '', paths: ['LICENSE'], headOid, enabled: true });
             renders.push({ demandedHead: headOid, stale: history.stale, known: history.entries.has('LICENSE') });
             return history;

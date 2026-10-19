@@ -77,7 +77,8 @@ describe('desktop window title transport', () => {
         expect(nativeTitle).toBe('');
 
         const failure = new Error('native window closed');
-        const closedWindow = { setTitle: () => { throw failure; } } as NonNullable<CommandContext['window']>;
+        // Electron is the OS boundary; this failure fixture exposes only the consumed title method.
+        const closedWindow = { setTitle: () => { throw failure; } } as unknown as NonNullable<CommandContext['window']>;
         await expect(runCommand(registry, 'desktop_set_window_title', { title: 'Workspace' }, { ...context, window: closedWindow })).rejects.toBe(failure);
     });
 
