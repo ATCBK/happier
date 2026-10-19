@@ -694,7 +694,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       .toMatchObject({ ok: false, errorCode: 'VOICE_TELEPORT_UNAVAILABLE' });
     const unavailable = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => null) });
     expect(await unavailable.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
-      .toMatchObject({ ok: false, errorCode: 'unavailable' });
+      .toMatchObject({ ok: false, errorCode: 'machine_transport_unavailable' });
     expect(homes.requests.some(request => request.path.startsWith('/v2/sessions/unbound-root'))).toBe(false);
   });
 

@@ -637,7 +637,7 @@ describe('current UI context Voice tool port', () => {
         }));
         await fixture.composition.unload();
         await fixture.composition.reconcile([fixture.activation]);
-        const machine = createMachineFixture({ id: machineId, storageMode: 'plain' });
+        const machine = createMachineFixture({ id: machineId, activeAt: Date.now(), storageMode: 'plain' });
         getStorage().setState(state => ({ ...state, profile: { ...state.profile!, id: 'current-ui-account' },
             machines: { [machineId]: machine }, machineListByServerId: {} }));
         const socket = transportSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
@@ -687,6 +687,14 @@ describe('current UI context Voice tool port', () => {
                     expectedContributorOccurrenceId: fixture.action.occurrenceId }, {}))
                     .toEqual({ ok: true, result: { surface } });
             }
+            await act(async () => {
+                getStorage().setState({ machines: { [machineId]: { ...machine, active: false, activeAt: 1 } } });
+            });
+            expect(methods.has(`${machineId}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(false);
+            await act(async () => {
+                getStorage().setState({ machines: { [machineId]: { ...machine, activeAt: Date.now() } } });
+            });
+            expect(methods.has(`${machineId}:${RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE}`)).toBe(true);
             await fixture.composition.unload();
             const dangerousHandler = vi.fn(async () => ({ applied: true }));
             fixture = createCurrentUiClientActionFixture({ serverId: answeringServerId,
