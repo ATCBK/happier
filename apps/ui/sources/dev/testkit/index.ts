@@ -36,6 +36,7 @@ export * from './fixtures/pluginImageFixtures';
 export * from './fixtures/reviewComments';
 export * from "../../../../../packages/session-core/src/testkit/sessionAgentTransitionFixtures.js";
 export * from './fixtures/sessionFixtures';
+export * from './fixtures/sessionDraftFixtures';
 export * from './fixtures/sessionWorkflowActivityFixtures';
 export * from './fixtures/themeFixtures';
 export * from './fixtures/transcriptFixtures';
