@@ -57,6 +57,9 @@ const configs = [
 test('ordinary source test pools share the bounded default and honor an explicit override', async () => {
   const previous = process.env.HAPPIER_VITEST_MAX_WORKERS;
   const previousUi = process.env.VITEST_UI_MAX_FORKS;
+  const externalKeys = ['HAPPIER_VITEST_GOVERNOR_MAX_WORKERS', 'VITEST_MAX_FORKS', 'VITEST_MIN_FORKS', 'VITEST_MAX_THREADS', 'VITEST_MIN_THREADS'];
+  const externalValues = externalKeys.map(key => [key, process.env[key]]);
+  for (const key of externalKeys) delete process.env[key];
   delete process.env.VITEST_UI_MAX_FORKS;
   try {
     for (const override of [undefined, '2']) {
@@ -91,6 +94,10 @@ test('ordinary source test pools share the bounded default and honor an explicit
     else process.env.HAPPIER_VITEST_MAX_WORKERS = previous;
     if (previousUi === undefined) delete process.env.VITEST_UI_MAX_FORKS;
     else process.env.VITEST_UI_MAX_FORKS = previousUi;
+    for (const [key, value] of externalValues) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 
@@ -104,6 +111,42 @@ test('worker overrides are explicit and the legacy UI ceiling remains UI-only', 
   assert.equal(resolveVitestWorkers({ env }).maxWorkers, expected);
   assert.equal(resolveVitestWorkers({ env, legacyUiOverride: true }).maxWorkers, 6);
   assert.equal(resolveVitestWorkers({ env: { ...env, HAPPIER_VITEST_MAX_WORKERS: '2' }, legacyUiOverride: true }).maxWorkers, 2);
+  assert.equal(resolveVitestWorkers({ env: { ...env, HAPPIER_VITEST_GOVERNOR_MAX_WORKERS: '1' }, legacyUiOverride: true }).maxWorkers, 6);
+  assert.equal(resolveVitestWorkers({ env: { HAPPIER_VITEST_GOVERNOR_MAX_WORKERS: 'invalid' } }).maxWorkers, expected);
+});
+
+test('the governor can reduce package workers without widening policy or explicit overrides', async () => {
+  const keys = ['HAPPIER_VITEST_GOVERNOR_MAX_WORKERS', 'HAPPIER_VITEST_MAX_WORKERS', 'VITEST_UI_MAX_FORKS',
+    'VITEST_MAX_FORKS', 'VITEST_MIN_FORKS', 'VITEST_MAX_THREADS', 'VITEST_MIN_THREADS'];
+  const previous = keys.map(key => [key, process.env[key]]);
+  try {
+    for (const key of keys) delete process.env[key];
+    for (const [budget, override, expected] of [
+      ['2', undefined, Math.min(2, Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))))],
+      ['13', undefined, Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)))],
+      ['13', '2', 2],
+      ['2', '6', 6],
+    ]) {
+      process.env.HAPPIER_VITEST_GOVERNOR_MAX_WORKERS = budget;
+      if (override === undefined) delete process.env.HAPPIER_VITEST_MAX_WORKERS;
+      else process.env.HAPPIER_VITEST_MAX_WORKERS = override;
+      const ctx = await createVitest('test', {
+        config: resolve(repoRoot, 'apps/ui/vitest.config.ts'),
+        root: resolve(repoRoot, 'apps/ui'), watch: false, include: [],
+      });
+      try {
+        assert.equal(ctx.config.poolOptions?.forks?.maxForks ?? ctx.config.maxWorkers, expected,
+          `effective UI workers for governor=${budget}, override=${override}`);
+      } finally {
+        await ctx.close();
+      }
+    }
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('explicitly serial lanes remain serial even with a larger worker override', async () => {

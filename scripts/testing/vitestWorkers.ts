@@ -19,11 +19,15 @@ export function resolveVitestWorkers(options: {
     const legacy = options.legacyUiOverride
         ? positiveInteger(env.VITEST_UI_MAX_FORKS)
         : undefined;
+    // The execution governor may reduce the package default. Keep this budget
+    // separate from Vitest's pool env/argv, which override package policy.
+    const governor = positiveInteger(env.HAPPIER_VITEST_GOVERNOR_MAX_WORKERS);
+    const defaultWorkers = Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2)));
     return {
         minWorkers: 1,
         maxWorkers: override
             ?? (legacy === undefined ? undefined : Math.min(legacy, 6))
-            ?? Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))),
+            ?? Math.min(defaultWorkers, governor ?? defaultWorkers),
     };
 }
 
