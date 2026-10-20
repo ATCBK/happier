@@ -6,6 +6,7 @@ import { renderScreen } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 
 const os = vi.hoisted(() => ({ send: vi.fn(async () => true) }));
 // The desktop OS notification is the boundary; selection, wording and once-only delivery run for real.
@@ -14,7 +15,7 @@ vi.mock('../channels/sendTauriLocalNotification', () => ({ sendTauriLocalNotific
 const { GuardStopWarningDesktopBanners } = await import('./GuardStopWarningDesktopBanners');
 
 const before = storage.getState();
-afterEach(() => { storage.setState(before); os.send.mockClear(); });
+afterEach(() => { storage.setState(before); os.send.mockClear(); retirePresentationNotice(); });
 
 function stopping(stopAt: number): Session {
     return createSessionFixture({ id: 'tidy', active: true, serverId: 'home-a',
@@ -29,6 +30,17 @@ function stoppingNamed(stopAt: number): Session {
 }
 
 describe('GuardStopWarningDesktopBanners', () => {
+    it('offers Keep running through the existing notice and withdraws it when another device clears the warning', async () => {
+        storage.setState({ sessions: { tidy: stopping(Date.now() + 11 * 60_000) } } as never);
+        const screen = await renderScreen(<GuardStopWarningDesktopBanners />);
+        await act(async () => { await Promise.resolve(); });
+        expect(readPresentationNotice()).toMatchObject({ undo: { label: 'Keep running', run: expect.any(Function) } });
+        await act(async () => {
+            storage.setState({ sessions: { tidy: createSessionFixture({ ...stopping(Date.now()), metadata: { path: '/w', host: 'host', homeDir: '/u', machineId: 'm' } }) } } as never);
+        });
+        expect(readPresentationNotice()).toBeNull();
+        await screen.unmount?.();
+    });
     it('names a Session the way the list and header do, not only by its summary', async () => {
         storage.setState({ sessions: { named: stoppingNamed(Date.now() + 5 * 60_000) } } as never);
         const screen = await renderScreen(<GuardStopWarningDesktopBanners />);

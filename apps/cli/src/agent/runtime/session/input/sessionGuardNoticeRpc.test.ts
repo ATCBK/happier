@@ -133,11 +133,11 @@ describe('runner guard notice receipt', () => {
     const owner = setup();
     await owner.notice({ kind: 'stopping', stopAt: 300_000, rule: 'idle_sessions' });
     const before = owner.metadata().sessionGuardStateV1;
-    await expect(owner.notice({ kind: 'notify_ceiling', notice: 'ceiling_near' })).resolves.toEqual({ ok: true });
+    await expect(owner.notice({ kind: 'notify_ceiling', notice: 'ceiling_near', memory: { usedBytes: 950, limitBytes: 1000 } })).resolves.toEqual({ ok: true });
     expect(owner.metadata().sessionGuardStateV1).toEqual(before);
     expect(owner.notifications).toMatchObject([
       { topic: 'guard_stop_warning' },
-      { topic: 'guard_attention', kind: 'ceiling_near', machineId: 'machine-1', sessionId: 'session-1' },
+      { topic: 'guard_attention', kind: 'ceiling_near', machineId: 'machine-1', sessionId: 'session-1', memory: { usedBytes: 950, limitBytes: 1000 } },
     ]);
     owner.retire();
     await expect(owner.notice({ kind: 'notify_ceiling', notice: 'ceiling_reached' })).resolves.toEqual({ ok: false });

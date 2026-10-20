@@ -58,7 +58,7 @@ export function registerSessionGuardNoticeRpc(params: SessionGuardNoticeOwner & 
         phase = 'notification';
         if (!params.machineId) { logRefusal('machine_unavailable'); return { ok: false }; }
         await params.notify({ topic: 'guard_attention', machineId: params.machineId,
-          sessionId: session.sessionId, kind: state.notice });
+          sessionId: session.sessionId, kind: state.notice, ...(state.memory ? { memory: state.memory } : {}) });
         return { ok: await isCurrent() };
       }
       if (state.kind === 'notify_terminal_warning') {

@@ -22,4 +22,5 @@ export type ParsedActivityInteraction = Readonly<{
     serverUrl: string | null;
     permissionAction: ActivityPermissionAction | null;
     workflowRun: ActivityWorkflowRunTarget | null;
+    guardAction?: 'keepRunning' | 'stopNow';
 }>;

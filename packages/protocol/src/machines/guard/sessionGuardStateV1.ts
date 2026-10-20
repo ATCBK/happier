@@ -4,6 +4,11 @@ import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 const Timestamp = z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER));
 const CeilingBytes = z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER));
+/** One native observation, paired with the ceiling that was actually applied. */
+export const SessionGuardMemoryObservationV1Schema = lazyZodSchema(() => z.strictObject({
+  usedBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), limitBytes: CeilingBytes,
+}));
+export type SessionGuardMemoryObservationV1 = z.infer<typeof SessionGuardMemoryObservationV1Schema>;
 const WarningRule = z.enum(['idle_sessions', 'memory_guard']);
 const StopRule = z.enum(['idle_sessions', 'memory_guard', 'ceiling']);
 const stopping = { kind: z.literal('stopping'), stopAt: Timestamp, rule: WarningRule };
@@ -45,7 +50,8 @@ export const SessionGuardNoticeStateV1Schema = lazyZodSchema(() => z.discriminat
   z.strictObject({ ...stopped, ceilingBytes: z.optional(CeilingBytes) }),
   z.strictObject({ kind: z.literal('clear') }),
   z.strictObject({ kind: z.literal('ceiling'), bytes: z.nullable(CeilingBytes) }),
-  z.strictObject({ kind: z.literal('notify_ceiling'), notice: z.enum(['ceiling_near', 'ceiling_reached']) }),
+  z.strictObject({ kind: z.literal('notify_ceiling'), notice: z.enum(['ceiling_near', 'ceiling_reached']),
+    memory: z.optional(SessionGuardMemoryObservationV1Schema) }),
   z.strictObject({ kind: z.literal('notify_terminal_warning'), terminalId: z.string().check(z.minLength(1)),
     terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)), stopAt: Timestamp, idleMs: z.optional(Timestamp) }),
 ]));

@@ -30,10 +30,17 @@ export type PresentationNotice = Readonly<{
     /** The part of `message` that names its subject; the host sets it in the stronger weight. */
     emphasis?: string;
     undo?: PresentationNoticeUndo;
+    /** Stays until dismissed, retired by its publisher, or replaced by a newer notice. */
+    sticky?: boolean;
 }>;
 
+/** Whether the notice host schedules its ordinary presentation lifetime. */
+export function shouldSchedulePresentationNoticeRetirement(notice: PresentationNotice | null, controlEngaged: boolean): boolean {
+    return notice !== null && notice.sticky !== true && !controlEngaged;
+}
+
 /**
- * The app's transient presentation notice owner.
+ * The app's presentation notice owner.
  *
  * `CurrentSessionPresentationRuntime` renders it and is mounted app-globally by
  * `AuthenticatedAppRuntimeMounts`. Until now the notice lived in that
@@ -47,7 +54,7 @@ export type PresentationNotice = Readonly<{
  * It follows the presentation domain's existing module-store idiom
  * (`sessionComposerPresentationTargets.ts`): a single current value plus
  * listeners, no queue and no scheduler. A newer notice replaces an older one,
- * which is what a single transient notice host can show.
+ * which is what the single notice host can show.
  */
 let current: PresentationNotice | null = null;
 const listeners = new Set<() => void>();
