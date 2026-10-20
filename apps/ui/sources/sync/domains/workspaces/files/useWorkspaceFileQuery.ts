@@ -8,6 +8,7 @@ import {
     type WorkspaceFileSearchInput,
     type WorkspaceFileSearchPage,
 } from './workspaceFileSearch';
+import { resolveWorkspaceFileQueryLimit, resolveWorkspaceFileSearchPageAvailability, type WorkspaceFileQueryPaging } from './workspaceFileSearchPaging';
 
 const EMPTY_ITEMS: FileSearchItem[] = [];
 
@@ -17,6 +18,8 @@ export function useWorkspaceFileQuery(input: Omit<WorkspaceFileSearchInput, 'sco
     enabled?: boolean;
     reloadToken?: number;
     contextKey?: string;
+    /** Progressive visible rows; the shared search owner retains its source resource bounds. */
+    pageSize?: number;
 }>) {
     const query = input.query.trim();
     const enabled = input.enabled !== false && query.length > 0;
@@ -32,6 +35,8 @@ export function useWorkspaceFileQuery(input: Omit<WorkspaceFileSearchInput, 'sco
     } : null, [input.scope?.serverId, input.scope?.machineId, input.scope?.rootPath, input.contextKey,
         input.mode, input.includeHidden, input.resultType]);
     const [retryToken, setRetryToken] = React.useState(0);
+    const [paging, setPaging] = React.useState<WorkspaceFileQueryPaging | null>(null);
+    const requestedLimit = resolveWorkspaceFileQueryLimit({ scope, query, pageSize: input.pageSize, limit: input.limit, paging });
     const retry = React.useCallback(() => setRetryToken((value) => value + 1), []);
     const [state, setState] = React.useState<Readonly<{
         scope: typeof scope;
@@ -65,7 +70,7 @@ export function useWorkspaceFileQuery(input: Omit<WorkspaceFileSearchInput, 'sco
                 try {
                     if (!scope) throw new WorkspaceFileSearchUnavailableError();
                     const page = await searchWorkspaceFiles({
-                        scope, query, limit: input.limit, threshold: input.threshold, resultType: input.resultType,
+                        scope, query, limit: requestedLimit, threshold: input.threshold, resultType: input.resultType,
                         mode: input.mode, includeHidden: input.includeHidden, accountLifetime,
                         signal: controller.signal, includeCoverage: true,
                     });
@@ -81,11 +86,16 @@ export function useWorkspaceFileQuery(input: Omit<WorkspaceFileSearchInput, 'sco
             })();
         }, input.mode === 'glob' ? 200 : 120);
         return () => { controller.abort(); clearTimeout(handle); retirement?.dispose(); };
-    }, [scope, query, enabled, accountLifetime, credentialsResolving, input.limit, input.threshold, input.resultType, input.mode,
+    }, [scope, query, enabled, accountLifetime, credentialsResolving, requestedLimit, input.threshold, input.resultType, input.mode,
         input.includeHidden, input.reloadToken, retryToken]);
 
     const current = enabled && state?.scope === scope && state.lifetime === accountLifetime ? state : null;
     const items = React.useMemo(() => current?.page ? [...current.page.items] : EMPTY_ITEMS, [current?.page]);
+    const availability = resolveWorkspaceFileSearchPageAvailability(current?.page ?? null, requestedLimit);
+    const loadMore = React.useCallback(() => {
+        if (input.pageSize === undefined || !availability.canLoadMore || current?.isSearching || current?.query !== query) return;
+        setPaging(previous => ({ scope, query, pages: previous?.scope === scope && previous.query === query ? previous.pages + 1 : 2 }));
+    }, [availability.canLoadMore, current?.isSearching, current?.query, input.pageSize, query, scope]);
     return {
         items,
         resultQuery: current?.query,
@@ -93,7 +103,8 @@ export function useWorkspaceFileQuery(input: Omit<WorkspaceFileSearchInput, 'sco
         error: current?.error ?? null,
         coverage: current?.error ? 'unavailable' as const : current?.page?.corpusTruncated ? 'partial' as const
             : current?.page ? 'complete' as const : 'unavailable' as const,
-        hasMore: current?.page?.hasMore ?? false,
+        ...availability,
+        loadMore,
         retry,
     };
 }
