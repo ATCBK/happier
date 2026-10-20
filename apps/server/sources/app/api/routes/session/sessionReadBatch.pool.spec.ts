@@ -42,7 +42,8 @@ describe('Session batch database pool admission', () => {
             const { results } = SessionReadBatchResponseV1Schema.parse(response.json());
             expect(results.map(result => result.sessionId)).toEqual(sessionIds);
             expect(results.map(result => result.detail?.status)).toEqual(sessionIds.map(() => 404));
-            expect(pool.peak).toBe(limit);
+            expect(pool.peak).toBeGreaterThan(0);
+            expect(pool.peak).toBeLessThan(limit);
             expect(pool.active).toBe(0);
         });
     });

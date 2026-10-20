@@ -1556,7 +1556,10 @@ Agent-state and Activity writes, transcript/message commits, Pending
 materialization/admission and Follow/Discussion publication in development
 source. Socket connect convergence and credential admission occur before a
 handler's own deadline, so a bounded transaction phase does not bound the full
-ACK wait. Connected shutdown retains the ordinary write lifetime while draining;
+ACK wait. The trusted Discussion post/create handler likewise does not impose
+a shorter timer on the publisher's serialized admission queue; current-publisher
+checks and the transaction owner's resource budgets still apply after admission.
+Connected shutdown retains the ordinary write lifetime while draining;
 offline shutdown cancels it, and accepted-input settlement keeps its separate
 early retirement. Durable transcript delivery follows the selected Session
 handle and its existing outbox custody. Released `session-end` handlers that

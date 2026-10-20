@@ -2,7 +2,8 @@ import { readDatabaseTransactionConfigFromEnv, resolveTransactionRetryDelayMs, t
 import { recordDatabaseTransactionRetry } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { delay } from "@/utils/runtime/delay";
 import { db } from "@/storage/db";
-import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
+import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, resolvePrismaConnectionLimitFromEnv, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
+import { AsyncLock, isLockAdmissionDeadlineExceededError, LockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
@@ -10,6 +11,20 @@ import { flushAccountChangesInTx } from '@/app/changes/markAccountChanged';
 
 export type Tx = TransactionClient;
 const transactionResultSymbol = Symbol('transaction-result');
+let pooledTransactionAdmission: { connectionLimit: number; lock: AsyncLock } | undefined;
+
+function getPooledTransactionAdmission(): AsyncLock | undefined {
+    const connectionLimit = resolvePrismaConnectionLimitFromEnv(process.env);
+    // Keep one slot in the existing pool available for Machine validation,
+    // presence and RPC discovery. Do not invent a pool size for implicit or
+    // single-connection configurations. Both write and read snapshots can hold
+    // connections, so they share this admission owner.
+    if (connectionLimit === null || connectionLimit <= 1) return undefined;
+    if (pooledTransactionAdmission?.connectionLimit !== connectionLimit) {
+        pooledTransactionAdmission = { connectionLimit, lock: new AsyncLock(connectionLimit - 1) };
+    }
+    return pooledTransactionAdmission.lock;
+}
 
 /** Explicit projection of values that are allocated by terminal publication. */
 export interface TransactionResult<T> {
@@ -342,6 +357,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
         return await withSqliteReadSnapshot(async tx => resolveTransactionResult(await fn(tx)), { deadlineAtMs: options.deadlineAtMs });
     }
     const transactionConfig = readDatabaseTransactionConfigFromEnv(process.env, provider);
+    const admission = provider === "postgres" ? getPooledTransactionAdmission() : undefined;
     let counter = 0;
     const startedAtMs = Date.now();
     let ambiguousAttemptFailure: { error: unknown } | undefined;
@@ -388,37 +404,49 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             const fence = options?.prepare
                 ? await prepareTransactionAttempt(options.prepare, options.deadlineAtMs, options.transactionClass)
                 : undefined;
-            const remainingMs = options?.deadlineAtMs === undefined
-                ? null
-                : Math.floor(options.deadlineAtMs - Date.now());
-            if (remainingMs !== null && remainingMs < 2) {
-                throw new TransactionDeadlineExceededError(null, options?.transactionClass);
-            }
             const configuredMaxWaitMs = options?.maxWaitMs ?? transactionConfig.maxWaitMs;
-            const configuredTimeoutMs = options?.timeoutMs ?? transactionConfig.timeoutMs;
-            const boundedMaxWaitMs = remainingMs === null
-                ? configuredMaxWaitMs
-                : Math.max(1, Math.min(configuredMaxWaitMs, Math.floor(remainingMs / 3)));
-            const boundedTimeoutMs = remainingMs === null
-                ? configuredTimeoutMs
-                : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
-            // Admission stability precedes domain reads; resource locks/CAS
-            // protect domain writes and Account publication flushes last.
-            // Keep Serializable opt-in for predicates not protected by those
-            // locks/CAS. Isolation cannot change after a caller has read rows.
-            // Coherent readers use inReadSnapshot rather than joining SSI.
-            const txOpts =
-                provider === "sqlite"
-                    ? {
-                          timeout: boundedTimeoutMs,
-                          maxWait: boundedMaxWaitMs,
-                      }
-                    : {
-                          isolationLevel: options?.isolationLevel ?? "ReadCommitted",
-                          timeout: boundedTimeoutMs,
-                          maxWait: boundedMaxWaitMs,
-                      };
-            let result = await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, fence), txOpts), options?.transactionClass);
+            const acquisitionStartedAtMs = Date.now();
+            const acquisitionDeadlineAtMs = Math.min(acquisitionStartedAtMs + configuredMaxWaitMs, options?.deadlineAtMs ?? Infinity);
+            const attempt = async () => {
+                const remainingMs = options?.deadlineAtMs === undefined
+                    ? null
+                    : Math.floor(options.deadlineAtMs - Date.now());
+                if (remainingMs !== null && remainingMs < 2) {
+                    throw new TransactionDeadlineExceededError(null, options?.transactionClass);
+                }
+                // Local admission and Prisma acquisition consume the same budget.
+                // Recompute after queueing, before opening any pooled transaction.
+                const remainingMaxWaitMs = admission
+                    ? configuredMaxWaitMs - (Date.now() - acquisitionStartedAtMs) : configuredMaxWaitMs;
+                if (remainingMaxWaitMs < 1) throw new LockAdmissionDeadlineExceededError();
+                const configuredTimeoutMs = options?.timeoutMs ?? transactionConfig.timeoutMs;
+                const boundedMaxWaitMs = remainingMs === null
+                    ? remainingMaxWaitMs
+                    : Math.max(1, Math.min(remainingMaxWaitMs, Math.floor(remainingMs / 3)));
+                const boundedTimeoutMs = remainingMs === null
+                    ? configuredTimeoutMs
+                    : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
+                // Admission stability precedes domain reads; resource locks/CAS
+                // protect domain writes and Account publication flushes last.
+                // Keep Serializable opt-in for predicates not protected by those
+                // locks/CAS. Isolation cannot change after a caller has read rows.
+                // Coherent readers use inReadSnapshot rather than joining SSI.
+                const txOpts =
+                    provider === "sqlite"
+                        ? {
+                              timeout: boundedTimeoutMs,
+                              maxWait: boundedMaxWaitMs,
+                          }
+                        : {
+                              isolationLevel: options?.isolationLevel ?? "ReadCommitted",
+                              timeout: boundedTimeoutMs,
+                              maxWait: boundedMaxWaitMs,
+                          };
+                return await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, fence), txOpts), options?.transactionClass);
+            };
+            const result = admission
+                ? await admission.inLock(attempt, { deadlineAtMs: acquisitionDeadlineAtMs })
+                : await attempt();
             for (let callback of result.callbacks) {
                 try {
                     callback();
@@ -441,7 +469,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             // failure. Reuse this owner's recovery budget and no-effect result;
             // a failure after callback entry must retain its outcome certainty.
             const acquisitionTimeout = !transactionCallbackEntered
-                && (isTransactionAcquisitionTimeout(e) || isPrismaErrorCode(e, "P2024"));
+                && (isLockAdmissionDeadlineExceededError(e) || isTransactionAcquisitionTimeout(e) || isPrismaErrorCode(e, "P2024"));
             const sqlState = provider === "postgres" ? readPostgresTransactionSqlState(e) : undefined;
             // Prisma evicts old closed-transaction diagnostics under churn. A
             // missing native transaction before our callback completes cannot

@@ -627,7 +627,10 @@ export function sessionUpdateHandler(
                 ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) } : null;
             const publish = () => publisher.presence.runAsCurrentPublisherInTx({
                 socket,
-                deadlineAtMs: Date.now() + 5_000,
+                // The Session publisher ACK is lifetime-bound. Waiting behind
+                // its current neighbor must not create a shorter publication
+                // deadline; authority is rechecked below and inTx owns its
+                // resource acquisition/execution budgets.
                 ...(append ? { prepare: () => prepareDiscussionPostMutationAccounts(append) }
                     : { isolationLevel: "Serializable" as const }), // Creation retains its identity-race transaction.
                 operation: async (authority, tx) => {

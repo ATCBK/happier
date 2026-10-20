@@ -51,6 +51,18 @@ No database schema, migration, content format or client wire contract changes.
 
 ## PostgreSQL transaction deadlines (0.3 development)
 
+For an explicitly configured Prisma pool with at least two connections, `inTx`
+admits at most the pool size minus one interactive transactions at a time.
+Read snapshots and writes share this process-local admission through the existing
+`AsyncLock`. Excess attempts queue before acquiring a connection, leaving capacity
+for direct Machine validation, RPC availability and presence queries. Queueing
+consumes the existing acquisition budget and respects the request deadline;
+retry backoff starts after the attempt releases its admission permit. This does
+not change pool size, Account lock ordering or isolation. An implicit pool size,
+a single-connection pool and other database providers keep their existing paths.
+Direct queries can still contend with one another; this reservation prevents
+interactive transactions alone from occupying the entire configured pool.
+
 `inTx` charges SQL operations to the existing transaction-attempt budget. When
 its statement-budget guard expires inside the callback, that attempt rolls back
 and may replay under the existing retry/backoff policy. This is distinct from

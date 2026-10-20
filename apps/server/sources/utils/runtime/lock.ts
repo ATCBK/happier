@@ -19,8 +19,13 @@ type LockWaiter = Readonly<{
 }>;
 
 export class AsyncLock {
-    private permits: number = 1;
+    private permits: number;
     private promiseResolverQueue: LockWaiter[] = [];
+
+    constructor(private readonly capacity: number = 1) {
+        if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error("Lock capacity must be a positive integer");
+        this.permits = capacity;
+    }
 
     async inLock<T>(
         func: () => Promise<T> | T,
@@ -60,9 +65,10 @@ export class AsyncLock {
 
     private unlock() {
         this.permits += 1;
-        if (this.permits > 1 && this.promiseResolverQueue.length > 0) {
-            throw new Error('this.permits should never be > 0 when there is someone waiting.');
-        } else if (this.permits === 1) {
+        if (this.permits > this.capacity) {
+            throw new Error('Lock released without an acquired permit.');
+        }
+        if (this.permits > 0) {
             while (this.promiseResolverQueue.length > 0) {
                 const nextWaiter = this.promiseResolverQueue.shift();
                 if (nextWaiter) {
