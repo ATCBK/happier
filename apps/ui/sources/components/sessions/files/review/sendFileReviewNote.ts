@@ -2,7 +2,7 @@ import {
     FILE_REVIEW_NOTE_KIND,
     FileReviewNoteV1Schema,
     formatFileReviewNoteV1,
-    type FileReviewNoteV1,
+    type FileReviewNoteOperationV1,
 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 import {
     sendSessionMessageWithServerScope,
@@ -12,7 +12,7 @@ import {
 /** The successful Undo owner calls once; Discard/Restore are emitted by their Action executor. */
 export async function sendFileReviewNote(input: Readonly<{
     target: Readonly<{ sessionId: string; serverId?: string | null }>;
-    action: FileReviewNoteV1['action'];
+    action: FileReviewNoteOperationV1['action'];
     paths: readonly string[];
     changeCount?: number;
     turnId?: string;

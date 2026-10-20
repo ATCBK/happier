@@ -4,13 +4,22 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 export const FILE_REVIEW_NOTE_KIND = 'file_review_note.v1' as const;
 
 /** Content stays in the Session's ordinary encrypted/plain transcript envelope. */
-export const FileReviewNoteV1Schema = lazyZodSchema(() => z.strictObject({
+export const FileReviewNoteOperationV1Schema = lazyZodSchema(() => z.strictObject({
   action: z.enum(['discard', 'restore', 'undo']),
   paths: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
   changeCount: z.optional(z.number().check(z.int(), z.positive())),
   turnId: z.optional(z.string().check(z.minLength(1))),
   undoes: z.optional(z.enum(['discard', 'restore'])),
 }));
+export type FileReviewNoteOperationV1 = z.infer<typeof FileReviewNoteOperationV1Schema>;
+
+export const FileReviewNoteV1Schema = lazyZodSchema(() => z.union([
+  FileReviewNoteOperationV1Schema,
+  z.strictObject({
+    action: z.literal('mixed'),
+    operations: z.array(FileReviewNoteOperationV1Schema).check(z.minLength(2)),
+  }),
+]));
 export type FileReviewNoteV1 = z.infer<typeof FileReviewNoteV1Schema>;
 
 /** A content-free, non-ignorable admission operand, stamped into the receipt. */
@@ -27,12 +36,14 @@ export function readFileReviewNoteV1(meta: unknown): FileReviewNoteV1 | null {
 
 /** Agent-facing facts; rendering/localization is owned by the transcript surface. */
 export function formatFileReviewNoteV1(note: FileReviewNoteV1): string {
+  if (note.action === 'mixed') return note.operations.map(formatFileReviewNoteV1).join(' ');
   const paths = note.paths.map(path => JSON.stringify(path)).join(', ');
   const turn = note.turnId ? ` (turn ${JSON.stringify(note.turnId)})` : '';
   if (note.action === 'undo') {
     return `You undid ${note.undoes ? `the ${note.undoes}` : 'the file review action'} in ${paths}${turn}.`;
   }
-  if (note.action === 'restore') return `You restored ${paths} to its before state${turn}.`;
+  if (note.action === 'restore') return `You restored ${paths}${note.turnId
+    ? ` to before turn ${JSON.stringify(note.turnId)}` : ' to the previous state'}.`;
   const count = note.changeCount;
   return `You discarded ${count === undefined ? 'changes' : `${count} ${count === 1 ? 'change' : 'changes'}`} in ${paths}${turn}.`;
 }
