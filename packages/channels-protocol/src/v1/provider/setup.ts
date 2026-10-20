@@ -98,6 +98,10 @@ export const ConversationOutboundTextLimitV1ProtocolSchema = defineProtocolObjec
         defineProtocolLiteral(CONVERSATION_OUTBOUND_TEXT_UNITS_V1[1]),
         defineProtocolLiteral(CONVERSATION_OUTBOUND_TEXT_UNITS_V1[2]),
     ]),
+    // Rendering/escaping/mention suppression must preserve this unit's count.
+    // Thus the core's pre-send measure is also the post-format native measure.
+    // Omission retains the existing requirement; it never permits expansion.
+    formatting: defineProtocolLiteral('preservesNativeUnits').optional(),
 }, { policy: 'closed' });
 
 /** A declared provider-native ceiling; omission in setup means no text ceiling. */

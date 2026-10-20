@@ -325,7 +325,7 @@ export async function setupGithubChannels(
     // This provider's recommendation is policy, not a GitHub retention guarantee.
     recommendedMaximumObservationAgeMs: 30 * 86_400_000,
     // GitHub's native REST comment limit; Channels owns lossless chunking.
-    outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+    outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
   });
 }
 

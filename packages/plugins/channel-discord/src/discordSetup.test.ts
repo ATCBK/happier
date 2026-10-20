@@ -58,7 +58,7 @@ describe('Discord setup facts', () => {
       overlapSafety: 'safe',
       replayContinuity: 'sessionBound',
       recommendedMaximumObservationAgeMs: 30 * 86_400_000,
-      outboundTextLimit: { maximum: 2_000, unit: 'unicodeCodePoints' },
+      outboundTextLimit: { maximum: 2_000, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
       setupGuidance: {
         externalUrl: buildDiscordInviteUrl('application-123'),
         requiredPermissionsLabel: 'View Channels, Send Messages, Send Messages in Threads, Read Message History',

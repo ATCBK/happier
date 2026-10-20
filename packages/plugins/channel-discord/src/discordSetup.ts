@@ -181,7 +181,7 @@ export function createDiscordSetupResult(
     // https://docs.discord.com/developers/events/gateway#resuming
     // Recommend the supported freshness range without promising durable replay.
     recommendedMaximumObservationAgeMs: 30 * 86_400_000,
-    outboundTextLimit: { maximum: DISCORD_MESSAGE_MAXIMUM_CODE_POINTS, unit: 'unicodeCodePoints' },
+    outboundTextLimit: { maximum: DISCORD_MESSAGE_MAXIMUM_CODE_POINTS, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
     setupGuidance: {
       externalUrl: buildDiscordInviteUrl(applicationId),
       requiredPermissionsLabel: DISCORD_REQUIRED_PERMISSIONS

@@ -220,7 +220,7 @@ describe('GitHub Channel Actions', () => {
       : jsonResponse({ id: 77, name: 'widgets', full_name: 'acme/widgets', owner: { login: 'acme' } })) };
     await expect(setupGithubChannels({ repository: 'acme/widgets' }, coreContext({ connectedAccounts, http })))
       .resolves.toMatchObject({ credentialRef: GITHUB_ACCOUNT, providerConnectionKey: 'github:repository:77',
-        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
       });
     expect(connectedAccounts.materialize).toHaveBeenCalledWith('github-connected-account', expect.any(Object), expect.objectContaining({ expectedAccount: GITHUB_ACCOUNT }));
   });
@@ -389,7 +389,7 @@ describe('GitHub Channel Actions', () => {
       overlapSafety: 'safe',
       replayContinuity: 'checkpointed',
       recommendedMaximumObservationAgeMs: 30 * 86_400_000,
-      outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+      outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
     });
 
     const connection = createCurrentConversationConnectionFixture({
@@ -422,7 +422,7 @@ describe('GitHub Channel Actions', () => {
       row: { rowId: connection.id, revision: 1, value: connection },
       connectionId: connection.id,
     });
-    expect(facts?.outboundTextLimit).toEqual({ maximum: 65_536, unit: 'unicodeCodePoints' });
+    expect(facts?.outboundTextLimit).toEqual({ maximum: 65_536, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' });
     expect(facts?.providerAction).toMatchObject({
       providerConnectionKey: setup.providerConnectionKey, providerConfig: setup.providerConfig,
     });

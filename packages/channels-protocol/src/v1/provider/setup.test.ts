@@ -40,9 +40,13 @@ describe('Channels V1 provider setup outcomes', () => {
             { maximum: 0, unit: 'unicodeCodePoints' },
             { maximum: 1.5, unit: 'unicodeCodePoints' },
             { maximum: 4_000, unit: 'unknown' },
+            { maximum: 4_000, unit: 'unicodeCodePoints', formatting: 'mayExpand' },
         ]) {
             expect(ConversationProviderSetupResultV1Schema.safeParse({ ...unlimited, outboundTextLimit }).success).toBe(false);
         }
+        expect(ConversationProviderSetupResultV1Schema.parse({ ...durablePush,
+            outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
+        })).toMatchObject({ outboundTextLimit: { formatting: 'preservesNativeUnits' } });
         expect(ConversationProviderSetupResultV1Schema.safeParse({
             ...durablePush,
             supportedTransports: ['checkpointedPull'],
