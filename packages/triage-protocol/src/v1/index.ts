@@ -9,6 +9,7 @@
 // projection a source mount asserts against. Everything else reads
 // `Schema.jsonSchema`.
 export * from './bounds.js';
+export { TriageSourceScopeUnitIdV1Schema, type TriageSourceScopeUnitIdV1 } from './identity.js';
 export {
     TriageSourceScopeSelectionV1Schema,
     TriageSourceScopeUnitV1Schema,

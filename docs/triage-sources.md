@@ -90,7 +90,8 @@ presentation; an optional `collisionScope` is the source-authored join to its
 entry identity. Consumers never derive that join from names or ids.
 
 Snapshots can independently carry `scopeUnitId`, the source's native unit id
-under the existing identifier boundary. Filters join it to the selected unit's
+under the same `TriageSourceScopeUnitIdV1Schema` boundary as selection ids.
+Filters join it to the selected unit's
 id within the configured source. This is essential when issue identity is
 site-, workspace- or organization-wide: Jira projects, Linear teams and Sentry
 projects must not change entry collision identity to become filterable.
@@ -115,6 +116,9 @@ factory. Its source-owned `readSelection` and `writeSelection` adapters translat
 the token; the shared
 [`editor`](../packages/triage-sources/src/settings/scopeSelectionEditor.tsx)
 owns All/Selected, search, multiple selection, paging, counts and read states.
+Retained selected editors seed unit labels through the same configuration-only
+Action before provider discovery, preserving selected labels when access is lost
+or a selected unit is absent from the first provider page.
 Optional `DraftFields` keeps other source settings inside that editor's single
 Save/Cancel flow. A source without this capability retains its existing editor.
 No source id selects the control, so an independently installed plugin uses the
@@ -327,7 +331,7 @@ For agent-authored repository scope, use `action.invoke` with Action reference
 and input `{ v: 1 }`. Retain
 the chosen candidate's binding, local instance key, stability and locator, and
 replace only its configuration. GitHub's current source-owned token is the JSON
-encoding of `{ v: 1, selection: { kind: 'selected', unitIds: ['123'] }, units: [{ id: '123', label: 'owner/repository', collisionScope: 'github:123' }] }`;
+encoding of `{ v: 1, selection: { kind: 'selected', unitIds: ['owner/repository'] }, units: [{ id: 'owner/repository', label: 'owner/repository', collisionScope: 'github:123' }] }`;
 the outer configuration remains `{ v: 1, token }`. Submit the resulting draft to
 the Action reference `{ pluginId: 'happier.triage', localId: 'sources/administer-v1' }`
 with `kind: 'create'` and source
@@ -336,7 +340,9 @@ uses the same draft and its existing `sourceInstanceId`. The Settings editor and
 agent inputs share GitHub's [configuration encoder/decoder](../packages/plugins/scm-github/src/triage/configuration.ts);
 this is a development source shape, not a generic host repository-scope schema.
 Call `triage/list-github-scope-units` with `{ v: 1, draft, query?, cursor? }`
-to obtain immutable repository ids and display metadata. GitLab's corresponding
+to obtain its existing repository-path selection ids and display metadata. Entry
+identity remains numeric and immutable; selection paths retain their established
+locator-derived rename/move behavior. GitLab's corresponding
 Action is `triage/list-gitlab-scope-units`, with numeric project ids and the same
 public input/result contract. Both are ordinary safe agent/UI/plugin/MCP/CLI reads.
 `mode: 'configured'` projects retained selection metadata without provider access.

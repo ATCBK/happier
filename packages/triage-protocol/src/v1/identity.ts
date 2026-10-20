@@ -9,6 +9,7 @@ import {
 import { PluginContributionIdentityV1Schema } from '@happier-dev/plugin-sdk/manifest';
 
 import {
+    MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
     MAX_TRIAGE_LOCATION_UTF8_BYTES_V1,
     MAX_TRIAGE_ROUTING_TOKEN_UTF8_BYTES_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
@@ -46,6 +47,12 @@ export type TriageSourceInstanceIdV1 = ReturnType<typeof TriageSourceInstanceIdV
 export const TriageTextV1ProtocolSchema = defineTriageSingleLineStringV1(
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
 );
+
+/** Selection and snapshot joins share one opaque source-native key, including retained repository paths. */
+export const TriageSourceScopeUnitIdV1Schema = defineTriageSingleLineStringV1(
+    MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
+);
+export type TriageSourceScopeUnitIdV1 = ReturnType<typeof TriageSourceScopeUnitIdV1Schema.parse>;
 
 /**
  * @internal Relative-only bounded location string: a URL or an absolute local

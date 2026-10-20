@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createTriageSourceV1Fixture } from '../testing/v1/fixtures.js';
+import { TriageSourceInstanceDraftV1Schema } from './instances.js';
+import { TriageSourceEntrySnapshotV1Schema } from './observations.js';
 import {
     TriageListScopeUnitsInputV1Schema,
     TriageListScopeUnitsResultV1Schema,
@@ -14,6 +16,9 @@ describe('shared source scope selection', () => {
         const retainedPath = `${'o'.repeat(100)}/${'r'.repeat(100)}`;
         expect(TriageSourceScopeSelectionV1Schema.parse({ kind: 'selected', unitIds: [retainedPath] }))
             .toEqual({ kind: 'selected', unitIds: [retainedPath] });
+        expect(TriageSourceEntrySnapshotV1Schema.parse({
+            ...createTriageSourceV1Fixture().getResult.snapshot, scopeUnitId: retainedPath,
+        }).scopeUnitId).toBe(retainedPath);
         for (const invalid of [
             { kind: 'selected', unitIds: [] }, { kind: 'selected', unitIds: ['11', '11'] },
             { kind: 'selected', unitIds: [''] }, { kind: 'all', unitIds: ['11'] },
@@ -29,6 +34,7 @@ describe('shared source scope selection', () => {
         const context = { v: 1, binding: retained.binding, localInstanceKey: retained.localInstanceKey, configuration: retained.configuration };
         expect(TriageListScopeUnitsInputV1Schema.parse({ v: 1, draft: context, mode: 'configured' }))
             .toMatchObject({ draft: context, mode: 'configured' });
+        expect(TriageSourceInstanceDraftV1Schema.safeParse(context).success).toBe(false);
         const page = TriageListScopeUnitsResultV1Schema.parse({
             kind: 'page', status: 'partial', selection: { kind: 'selected', unitIds: ['11'] },
             units: [{ id: '11', label: 'Selected project', secondaryText: 'Workspace', collisionScope: fixture.getInput.localRef.collisionScope }],

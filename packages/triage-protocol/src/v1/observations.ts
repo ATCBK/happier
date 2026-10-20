@@ -30,6 +30,7 @@ import {
     TriageEntryRefV1Schema,
     TriageIdentifierV1ProtocolSchema,
     TriageSourceEntryLocalRefV1Schema,
+    TriageSourceScopeUnitIdV1Schema,
     TriageTextV1ProtocolSchema,
 } from './identity.js';
 import { defineTriageSingleLineStringV1 } from './strings.js';
@@ -217,7 +218,7 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
      * environment). Independent of immutable entry collision identity; sources
      * with deployment-wide entry ids must not rekey them to supply this fact.
      */
-    scopeUnitId: TriageIdentifierV1ProtocolSchema.optional(),
+    scopeUnitId: TriageSourceScopeUnitIdV1Schema.optional(),
     /**
      * Who opened the entry, as the provider names them ("Mara Oduya", a login).
      * Presentation only: never an identity, a viewer match or a filter key. A

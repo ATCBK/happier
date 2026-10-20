@@ -7,21 +7,19 @@ import {
     type ProtocolComposableSchema,
 } from '@happier-dev/plugin-sdk/protocol';
 
-import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from './bounds.js';
 import { TriageSourceFailureV1Schema } from './diagnostics.js';
-import { TriageCollisionScopeV1ProtocolSchema, TriageTextV1ProtocolSchema } from './identity.js';
+import { TriageCollisionScopeV1ProtocolSchema, TriageTextV1ProtocolSchema, TriageSourceScopeUnitIdV1Schema } from './identity.js';
 import {
     TriageSourceScopeContextV1Schema,
     TriageSourceConnectedAccountScopeContextV1Schema,
     TriageSourceCredentialScopeContextV1Schema,
 } from './instances.js';
 import { TriageScanContinuationV1Schema } from './observations.js';
-import { defineTriageSingleLineStringV1 } from './strings.js';
 
 /** Source-native selection ids are opaque to the aggregate; they are not entry identities. */
 // Retained source ids can be repository paths, longer than entry identifiers.
 // The source configuration carrier is the actual boundary for a selected id.
-const scopeUnitId = defineTriageSingleLineStringV1(MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1);
+const scopeUnitId = TriageSourceScopeUnitIdV1Schema;
 
 export const TriageSourceScopeSelectionV1Schema = defineProtocolUnion([
     defineProtocolObject({ kind: defineProtocolLiteral('all') }, { policy: 'closed' }),
