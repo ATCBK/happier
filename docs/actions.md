@@ -141,6 +141,16 @@ This includes refresh, retry and paging through that same read owner. It does
 not permit a raw write or effect through the read transport. Public pre-auth
 reads and signed-out draft bootstrap retain their existing authority boundaries.
 
+In 0.3 development, `ui.pet.choose` is the shared UI, Agent and MCP pet-selection
+Action, executed by the answering client through the existing reverse dispatcher.
+Empty input opens pet settings. `petRef` selects a built-in or Account-library
+reference and clears this device's override only after the Account write succeeds;
+`deviceOverride` selects a known local source or returns to inheritance. The
+effect owner validates the current pet catalog and feature availability. Off,
+Ask first and Allowed use ordinary per-Action policy; rejected or failed choices
+leave selection unchanged. Account settings and device settings retain their
+existing storage shapes.
+
 In 0.3 development, Machine-placed `browser.view.openExternal` keeps its strict
 `{ browserSessionId, viewId, commandId }` input. The daemon forwards it through
 the existing exact-view client channel. The mounted answering client selects

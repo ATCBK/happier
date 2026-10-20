@@ -157,12 +157,11 @@ describe('executeSessionComposerResolution', () => {
     expect(modalAlert).not.toHaveBeenCalledWith('Goal unavailable', 'This backend does not support editable session goals yet.');
   });
 
-  it('handles ui.pet.choose locally by clearing the composer and opening pet settings', async () => {
+  it('submits empty pet chooser navigation through its Action and clears the accepted composer', async () => {
     const executeSessionComposerResolution = await loadSubject();
     const actionExecutor = { execute: vi.fn(async () => ({ ok: true as const, result: { ok: true } })) };
     const setMessage = vi.fn();
     const clearDraft = vi.fn();
-    const navigateToPetSettings = vi.fn();
     const clearSemanticDraftValues = vi.fn();
 
     const handled = await executeSessionComposerResolution({
@@ -177,16 +176,14 @@ describe('executeSessionComposerResolution', () => {
       clearSemanticDraftValues,
       trackMessageSent: vi.fn(),
       navigateToRuns: vi.fn(),
-      navigateToPetSettings,
       modalAlert: vi.fn(),
     });
 
     expect(handled).toBe(true);
-    expect(actionExecutor.execute).not.toHaveBeenCalled();
+    expect(actionExecutor.execute).toHaveBeenCalledWith('ui.pet.choose', {}, expect.objectContaining({ surface: 'ui' }));
     expect(setMessage).toHaveBeenCalledWith('');
     expect(clearDraft).toHaveBeenCalled();
     expect(clearSemanticDraftValues).toHaveBeenCalledTimes(1);
-    expect(navigateToPetSettings).toHaveBeenCalledTimes(1);
   });
 
   it('inserts a review.start action draft when /h.review has no instructions', async () => {

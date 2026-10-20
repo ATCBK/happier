@@ -113,7 +113,6 @@ export async function executeSessionComposerResolution(args: Readonly<{
   restoreComposerSnapshot?: (snapshot: SessionComposerTextSnapshot) => void;
   trackMessageSent: () => void;
   navigateToRuns: () => void;
-  navigateToPetSettings?: () => void;
   openGoalControls?: () => void;
   setSessionGoal?: SetSessionGoal;
   clearSessionGoal?: ClearSessionGoal;
@@ -235,8 +234,10 @@ export async function executeSessionComposerResolution(args: Readonly<{
   }
 
   if (actionId === 'ui.pet.choose') {
+    const result = await args.actionExecutor.execute('ui.pet.choose', {}, ctx);
+    const error = resolveActionExecutionFailureMessage(result, t('common.error'));
+    if (error) { args.modalAlert(t('common.error'), error); return true; }
     clearAcceptedComposer(args);
-    args.navigateToPetSettings?.();
     return true;
   }
 

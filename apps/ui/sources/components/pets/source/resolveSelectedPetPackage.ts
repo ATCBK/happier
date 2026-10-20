@@ -1,14 +1,6 @@
 import type { FeatureDecision, PetAssetMediaTypeV1, PetPackageSourceV1 } from '@happier-dev/protocol';
+import type { PetAccountReferenceV1, PetDeviceOverrideV1 } from '@happier-dev/protocol/pets/selection';
 import type { LocalPetDaemonTarget } from '@/sync/domains/pets/localPetSourceTypes';
-
-type AccountPetReference =
-    | Extract<PetPackageSourceV1, { kind: 'builtIn' }>
-    | Pick<Extract<PetPackageSourceV1, { kind: 'accountPet' }>, 'kind' | 'accountPetId'>;
-
-type LocalPetReferenceOverride =
-    | Readonly<{ kind: 'inherit' }>
-    | Pick<Extract<PetPackageSourceV1, { kind: 'detectedCodexHome' }>, 'kind' | 'sourceKey'>
-    | Pick<Extract<PetPackageSourceV1, { kind: 'happierManagedLocal' }>, 'kind' | 'sourceKey'>;
 
 type PetEnabledOverride = 'inherit' | 'enabled' | 'disabled';
 
@@ -41,11 +33,11 @@ export type ResolveSelectedPetPackageInput = Readonly<{
     syncDecision: Pick<FeatureDecision, 'state'> | null;
     accountSettings: Readonly<{
         petsEnabled: boolean;
-        petsSelectedPetRef: AccountPetReference;
+        petsSelectedPetRef: PetAccountReferenceV1;
     }>;
     localSettings: Readonly<{
         petsEnabledOverride: PetEnabledOverride;
-        petsSelectedPetOverride: LocalPetReferenceOverride;
+        petsSelectedPetOverride: PetDeviceOverrideV1;
     }>;
     sources: Readonly<{
         accountPetsById: ReadonlyMap<string, SelectedPetPackageSource>;
@@ -61,7 +53,7 @@ export type ResolveSelectedPetPackageResult = Readonly<{
     source: SelectedPetPackageSource | null;
     fallback: null | Readonly<{
         reason: 'companion_feature_disabled' | 'account_pet_sync_unavailable' | 'unknown_pet_source' | 'pet_disabled';
-        originalRef?: AccountPetReference | LocalPetReferenceOverride;
+        originalRef?: PetAccountReferenceV1 | PetDeviceOverrideV1;
         shouldPersist: false;
     }>;
 }>;

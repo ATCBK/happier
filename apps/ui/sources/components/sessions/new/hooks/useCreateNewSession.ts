@@ -1994,6 +1994,9 @@ export function useCreateNewSession(params: Readonly<{
                                             : resolveServerIdForSessionIdFromLocalCache(sessionId)),
                                 });
                             },
+                            openRoute: (route) => {
+                                postSpawnReplacementHref = route;
+                            },
                         });
 
                         await executeSessionComposerResolution({
@@ -2010,9 +2013,6 @@ export function useCreateNewSession(params: Readonly<{
                             trackMessageSent: () => {},
                             navigateToRuns: () => {
                                 postSpawnSessionRouteSuffix = '/runs';
-                            },
-                            navigateToPetSettings: () => {
-                                postSpawnReplacementHref = '/settings/pets';
                             },
                             modalAlert: (title, message) => Modal.alert(title, message),
                         });

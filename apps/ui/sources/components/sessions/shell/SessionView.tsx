@@ -10499,7 +10499,6 @@ function SessionViewLoadedContent({
                             restoreComposerSnapshot,
                             trackMessageSent,
                             navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
-                            navigateToPetSettings: () => router.push('/settings/pets' as any),
                             openGoalControls: () => setActiveStatusBadgeKey(SESSION_WORK_STATE_STATUS_BADGE_KEY),
                             setSessionGoal: canEditSessionGoals
                                 ? (_targetSessionId, request) => setSessionGoalForView(request)

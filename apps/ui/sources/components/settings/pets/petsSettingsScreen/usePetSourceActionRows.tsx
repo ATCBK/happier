@@ -3,6 +3,9 @@ import * as React from 'react';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { t } from '@/text';
+import type { PetChooseInputV1 } from '@happier-dev/protocol/pets/selection';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import type {
     DetectedDevicePetSelectorItem,
@@ -27,7 +30,7 @@ import type {
 } from './types';
 
 type UsePetSourceActionRowsParams = Readonly<{
-    applyLocalSettings: (patch: { petsSelectedPetOverride: PetSelectedPetOverride }) => void;
+    selectPet: (input: PetChooseInputV1) => Promise<ActionExecuteResult>;
     detectedPetRows: readonly DetectedPet[];
     importAccountPet: (pet: PetImportCandidate) => void | Promise<void>;
     importLocalPet: (pet: PetImportCandidate) => void | Promise<void>;
@@ -103,12 +106,12 @@ export function usePetSourceActionRows(params: UsePetSourceActionRowsParams): Re
             && params.petsSelectedPetOverride.sourceKey === pet.sourceKey,
         sourceTestID: sourceRowTestId('local', pet.petId),
         actions: renderLocalPetActions(pet),
-        onPress: () => params.applyLocalSettings({
-            petsSelectedPetOverride: {
+        onPress: () => fireAndForget(params.selectPet({
+            deviceOverride: {
                 kind: 'happierManagedLocal',
                 sourceKey: pet.sourceKey,
             },
-        }),
+        }), { tag: 'PetsSettingsScreen.selectLocalPet' }),
     })), [params, renderLocalPetActions]);
 
     const detectedPetTileRows = React.useMemo(() => {

@@ -109,7 +109,7 @@ type BuildCommandPaletteCommandsBaseParams = Readonly<{
     navigateToSession: (sessionId: string, opts?: Readonly<{ serverId?: string }>) => void;
   }>;
   actions: Readonly<{
-    execute: (actionId: ActionId, parameters: unknown, ctx?: { defaultSessionId?: string | null }) => Promise<unknown>;
+    execute: (actionId: ActionId, parameters: unknown, ctx?: { defaultSessionId?: string | null; surface?: 'ui' }) => Promise<unknown>;
   }>;
   alert: (title: string, message: string) => void | Promise<void>;
 }>;
@@ -316,7 +316,7 @@ export function buildCommandPaletteCommands(
       title: t('commandPalette.pets.chooseTitle'),
       icon: 'palette',
       category: petCategory,
-      action: () => nav.push('/settings/pets'),
+      action: async () => { await params.actions.execute('ui.pet.choose', {}, { surface: 'ui' }); },
     });
   }
 

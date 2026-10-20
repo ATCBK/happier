@@ -16,6 +16,8 @@ import { readFoundSkillBundle } from '@/sync/domains/transfers/runtime/transferR
 import { SKILL_MACHINE_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { createUiProjectContextAction } from './projectContextAction';
 import { createUiSessionStatusGet } from './sessionStatusAction';
+import { createUiPetChooseAction } from './petChooseAction';
+import { setClientEncryptionRequirement } from '@/sync/ops/settings/setClientEncryptionRequirement';
 import { readSessionTranscriptForAction } from '@/sync/api/session/sessionTranscriptActions';
 import { readUiMemoryInheritedContext, readUiMemoryScopeContext } from './readUiMemoryInheritedContext';
 import { createWidgetRefreshActionDepsV1 } from './widgetRefreshActionDeps';
@@ -1536,6 +1538,7 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return await runtimeActionExecute(args);
     },
     uiCommandPaletteAction: executeCommandPaletteAction,
+    uiPetChooseAction: createUiPetChooseAction(accountContext ?? null, opts?.openRoute),
     voiceConversationAction: async ({ actionId, input, context }) => {
       throwIfAborted(context.signal);
       if (!accountContext?.readLiveSettings()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };

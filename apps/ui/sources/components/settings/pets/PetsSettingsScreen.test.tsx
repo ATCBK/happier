@@ -516,11 +516,6 @@ describe('PetsSettingsScreen', () => {
             checked: true,
         });
 
-        await screen.pressByTestIdAsync('settings-pets-built-in-source-milo');
-
-        expect(applySettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetRef: { kind: 'builtIn', petId: 'milo' },
-        });
     });
 
     it('lets this device choose one companion size for pet surfaces and previews', async () => {
@@ -585,28 +580,6 @@ describe('PetsSettingsScreen', () => {
                 'width',
             )).toBeLessThanOrEqual(180);
         }
-    });
-
-    it('selects a built-in pet as the effective device pet when a local override was active', async () => {
-        localPetSourcesState.current = {
-            [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata,
-        };
-        localSettingsState.petsSelectedPetOverride = {
-            kind: 'happierManagedLocal',
-            sourceKey: importedLocalPetMetadata.sourceKey,
-        };
-
-        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
-        const screen = await renderScreen(<PetsSettingsScreen />);
-
-        await screen.pressByTestIdAsync('settings-pets-built-in-source-fury');
-
-        expect(applySettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetRef: { kind: 'builtIn', petId: 'fury' },
-        });
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetOverride: { kind: 'inherit' },
-        });
     });
 
     it('hides desktop overlay controls outside the Tauri desktop shell', async () => {
@@ -1097,38 +1070,6 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId('settings-pets-account-preview-blink-e2e-fixture-skeleton')).not.toBeNull();
         expect(findSettingsItemByTestId(screen, 'settings-pets-select-source-account-blink-e2e-fixture')).toBeNull();
         expect(screen.findByTestId('settings-pets-select-source-account-blink-e2e-fixture')).not.toBeNull();
-        await screen.pressByTestIdAsync('settings-pets-select-source-account-blink-e2e-fixture');
-
-        expect(applySettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetRef: { kind: 'accountPet', accountPetId: accountPet.accountPetId },
-        });
-    });
-
-    it('selects an account pet as the effective device pet when a local override was active', async () => {
-        featureState.companionEnabled = true;
-        featureState.syncEnabled = true;
-        accountPetsState.current = {
-            [accountPet.accountPetId]: accountPet,
-        };
-        localPetSourcesState.current = {
-            [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata,
-        };
-        localSettingsState.petsSelectedPetOverride = {
-            kind: 'happierManagedLocal',
-            sourceKey: importedLocalPetMetadata.sourceKey,
-        };
-
-        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
-        const screen = await renderScreen(<PetsSettingsScreen />);
-
-        await screen.pressByTestIdAsync('settings-pets-select-source-account-blink-e2e-fixture');
-
-        expect(applySettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetRef: { kind: 'accountPet', accountPetId: accountPet.accountPetId },
-        });
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetOverride: { kind: 'inherit' },
-        });
     });
 
     it('detects daemon pets from the selected Administration machine and server scope', async () => {
@@ -1222,12 +1163,6 @@ describe('PetsSettingsScreen', () => {
             method: PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE,
             payload: { sourceKey: alternateDetectedPet.sourceKey },
             signal: expect.any(AbortSignal),
-        });
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetOverride: {
-                kind: 'happierManagedLocal',
-                sourceKey: alternateImportedLocalPet.sourceKey,
-            },
         });
         expect(upsertLocalPetSourcesSpy).toHaveBeenCalledWith([
             expect.objectContaining({
@@ -1340,11 +1275,6 @@ describe('PetsSettingsScreen', () => {
 
         expect(screen.findByTestId('settings-pets-import-local-daemon-error')).not.toBeNull();
         expect(screen.findByTestId('settings-pets-detected-source-blink-e2e-fixture')).not.toBeNull();
-        expect(applyLocalSettingsSpy).not.toHaveBeenCalledWith(expect.objectContaining({
-            petsSelectedPetOverride: expect.objectContaining({
-                kind: 'happierManagedLocal',
-            }),
-        }));
     });
 
     it('renders persisted imported Codex pets without running detection', async () => {
@@ -1371,7 +1301,7 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId('settings-pets-remove-from-device-blink-e2e-fixture')).not.toBeNull();
     });
 
-    it('removes a persisted imported Codex pet through its stored daemon target, not the Administration target', async () => {
+    it('removes an unselected imported pet through its stored daemon target, not the Administration target', async () => {
         localPetSourcesState.current = {
             [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata,
         };
@@ -1385,10 +1315,6 @@ describe('PetsSettingsScreen', () => {
             target: { serverIdentityId: 'identity-admin', machineId: 'machine-admin' },
             serverId: 'server-admin',
             machine: { id: 'machine-admin' },
-        };
-        localSettingsState.petsSelectedPetOverride = {
-            kind: 'happierManagedLocal',
-            sourceKey: importedLocalPetMetadata.sourceKey,
         };
         machineRpcWithServerScopeMock.mockImplementation(async (params: { method?: string }) => {
             if (params.method === PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET) {
@@ -1422,9 +1348,6 @@ describe('PetsSettingsScreen', () => {
             signal: expect.any(AbortSignal),
         });
         expect(removeLocalPetSourceSpy).toHaveBeenCalledWith(importedLocalPetMetadata.sourceKey);
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsSelectedPetOverride: { kind: 'inherit' },
-        });
     });
 
     it('honors local removal while daemon cleanup is unanswered and cancels cleanup on unmount', async () => {
