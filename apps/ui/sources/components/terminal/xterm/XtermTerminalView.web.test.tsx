@@ -275,6 +275,24 @@ describe('XtermTerminalView.web', () => {
         container.remove();
     });
 
+    it('fits a visible terminal and submits retained replay without a readiness timer or animation frame', async () => {
+        const ref = React.createRef<XtermTerminalHandle>();
+        const { XtermTerminalView } = await import('./XtermTerminalView.web');
+        let readyAtCommit = false;
+        let replaySubmittedAtCommit = false;
+        function ReturnedOutput() {
+            React.useLayoutEffect(() => {
+                readyAtCommit = terminalInstances.length === 1 && fitSpy.mock.calls.length > 0;
+                requireTerminalHandle(ref).write('retained output', { intent: 'replay' });
+                replaySubmittedAtCommit = terminalInstances[0]?.write.mock.calls.some(([data]) => data === 'retained output') ?? false;
+            }, []);
+            return <XtermTerminalView ref={ref} fontSize={14} onInput={() => {}} onResize={() => {}} onReady={() => {}} />;
+        }
+        await act(async () => { root.render(<ReturnedOutput />); });
+        expect(readyAtCommit).toBe(true);
+        expect(replaySubmittedAtCommit).toBe(true);
+    });
+
     it('retains output, focus and its renderer handle across pane updates after loading', async () => {
         const ref = React.createRef<XtermTerminalHandle>();
         const onInput = vi.fn();

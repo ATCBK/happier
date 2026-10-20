@@ -60,6 +60,7 @@ import { machineTerminalClose } from '@/sync/ops/machineTerminal';
 import { buildMachineTerminalSessionRequest } from './machineTerminalSessionRequest';
 import { useMachineTerminalActionAdmission } from './useMachineTerminalActionAdmission';
 import { delay } from '@/utils/timing/time';
+import { useTerminalActionOperationState } from '@/sync/domains/actionOperations/useActionOperations';
 
 export type TerminalStatus = EmbeddedTerminalPaneStatus;
 
@@ -117,6 +118,12 @@ export function useMachineTerminalSession(params: Readonly<{
     const retainedExit = params.readOnly && params.attachedTerminalId === initialSurfaceState.terminalId
         && admission.lifetime?.isCurrent() && areServerAccountScopesEqual(initialSurfaceState.exit?.scope, admission.lifetime.scope)
         ? initialSurfaceState.exit : undefined;
+    const operationState = useTerminalActionOperationState({
+        serverId: admission.lifetime?.isCurrent() ? admission.lifetime.scope.serverId : null,
+        accountId: admission.lifetime?.isCurrent() ? admission.lifetime.scope.accountId : null,
+        machineId: params.machineId,
+        terminalId: params.readOnly ? params.attachedTerminalId ?? null : null,
+    });
     const [status, setStatus] = React.useState<TerminalStatus>(() => retainedExit ? 'exited'
         : params.attachedTerminalId !== undefined || initialSurfaceState.terminalId ? 'connecting' : 'not-open');
     const [error, setError] = React.useState<string | null>(null);
@@ -1003,6 +1010,7 @@ export function useMachineTerminalSession(params: Readonly<{
         // until admission returns its PTY. Existing attachments keep their state.
         status,
         readOnly: params.readOnly === true,
+        operationState,
         terminalId: terminalIdRef.current,
         error,
         exitCode,

@@ -55,7 +55,8 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 // AppPane member, Action executor and human confirmation remain composed.
 vi.mock('@/components/terminal/xterm/XtermTerminalView.web', () => ({
     XtermTerminalView: React.forwardRef<EmbeddedTerminalRendererHandle, { onReady(cols: number, rows: number): void }>((props, ref) => {
-        React.useImperativeHandle(ref, () => ({ write: () => {}, clear: () => {} }), []);
+        React.useImperativeHandle(ref, () => ({ write: () => {}, clear: () => {},
+            hasSelection: () => false, getSelectionText: () => '' }), []);
         React.useEffect(() => { props.onReady(80, 24); }, []);
         return React.createElement('xterm-boundary');
     }),

@@ -54,7 +54,9 @@ type ReadOk = Readonly<{ ok: true; terminalId: string; events: readonly DaemonTe
 type SimpleOk = Readonly<{ ok: true }>;
 
 export type TerminalProcessExitObservation =
-  | Readonly<{ kind: 'exited'; exit: Readonly<{ exitCode: number | null; signal: number | null }> }>
+  | Readonly<{ kind: 'exited'; exit: Readonly<{ exitCode: number | null; signal: number | null }>;
+      /** Host-private cause; native code/signal remain unmodified on both stream transports. */
+      terminationCause?: 'stop_requested' }>
   | Readonly<{ kind: 'unavailable' }>;
 
 export type TerminalProcessStopObservation = Readonly<{ kind: 'requested' | 'unconfirmed' | 'exited' | 'unavailable' }>;
@@ -304,6 +306,7 @@ type PtySession = {
   finiteHold: boolean;
   stopPending: boolean;
   stopUnconfirmed: boolean;
+  stopRequested: boolean;
   exitObservers: Set<(observation: TerminalProcessExitEvent) => void>;
   outputObservers: Set<() => void>;
   cols: number;
@@ -685,6 +688,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
       finiteHold: input.holdUntilExit === true,
       stopPending: false,
       stopUnconfirmed: false,
+      stopRequested: false,
       exitObservers: new Set(),
       outputObservers: new Set(),
       cols,
@@ -1203,7 +1207,8 @@ export function createTerminalPtySessionManager(params: Readonly<{
     const session = sessionsById.get(input.terminalId);
     if (!session || input.signal?.aborted) return Promise.resolve({ kind: 'unavailable' });
     if (session.exit && !session.stopPending && !session.stopUnconfirmed) {
-      return Promise.resolve({ kind: 'exited', exit: session.exit });
+      return Promise.resolve({ kind: 'exited', exit: session.exit,
+        ...(session.stopRequested ? { terminationCause: 'stop_requested' as const } : {}) });
     }
     return new Promise((resolve) => {
       const finish = (observation: TerminalProcessExitEvent) => {
@@ -1213,7 +1218,8 @@ export function createTerminalPtySessionManager(params: Readonly<{
         }
         session.exitObservers.delete(finish);
         input.signal?.removeEventListener('abort', abort);
-        resolve(observation);
+        resolve(observation.kind === 'exited' && session.stopRequested
+          ? { ...observation, terminationCause: 'stop_requested' } : observation);
       };
       const abort = () => finish({ kind: 'unavailable' });
       session.exitObservers.add(finish);
@@ -1229,6 +1235,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
     if (session.stopPending) return { kind: 'requested' };
     const windowsCustody = session.pty.windowsJobCustody;
     if (windowsCustody) {
+      session.stopRequested = true;
       session.stopPending = true;
       notifyLiveWorkChanged();
       try {
@@ -1278,6 +1285,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
       notifyLiveWorkChanged();
       return { kind: 'unconfirmed' };
     }
+    session.stopRequested = true;
     session.stopPending = true;
     notifyLiveWorkChanged();
     try {

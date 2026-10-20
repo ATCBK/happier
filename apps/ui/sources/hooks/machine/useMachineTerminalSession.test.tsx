@@ -73,6 +73,8 @@ vi.mock('@/components/terminal/xterm/XtermTerminalView.web', async () => {
             write: text => { setOutput(previous => previous + text); return true; },
             writeBytes: input => { setOutput(previous => previous + new TextDecoder().decode(input.bytes)); return true; },
             clear: () => setOutput(''),
+            hasSelection: () => false,
+            getSelectionText: () => '',
         }), []);
         React.useEffect(() => props.onReady(80, 24), [props.onReady]);
         return React.createElement('TerminalRenderer', { testID: props.testID }, output);
@@ -242,9 +244,10 @@ describe('useMachineTerminalSession', () => {
         { exitCode: 0, signal: 15, outcome: 'Stopped' },
         { exitCode: null, signal: 15, outcome: 'Stopped' },
         { exitCode: null, signal: null, outcome: null },
-    ])('renders a finished worker Script with native outcome $exitCode / $signal through the real output pane', async ({ exitCode, signal, outcome }) => {
+        { exitCode: 0, signal: 0, outcome: 'Stopped', cancelled: true },
+    ])('renders a finished worker Script with native outcome $exitCode / $signal / $cancelled through the real output pane', async ({ exitCode, signal, outcome, cancelled }) => {
         vi.useRealTimers();
-        const terminalId = `finished-worker-${exitCode}-${signal}`;
+        const terminalId = `finished-worker-${exitCode}-${signal}-${cancelled ?? false}`;
         const { storage } = await import('@/sync/domains/state/storage');
         storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })]);
         storage.setState({ projectAccountRows: {
@@ -255,8 +258,8 @@ describe('useMachineTerminalSession', () => {
             ], relationships: [], organizations: [], revisionsByPhysicalKey: {},
         } });
         const snapshot = ActionOperationSnapshotV1Schema.parse({
-            version: 1, operationId: `worker-output-${exitCode}`, revision: 2, actionId: 'projects.script.run',
-            state: exitCode === 0 ? 'succeeded' : 'failed', scope: { accountId: 'terminal-account', machineId: 'machine' },
+            version: 1, operationId: `worker-output-${exitCode}-${signal}-${cancelled ?? false}`, revision: 2, actionId: 'projects.script.run',
+            state: cancelled ? 'cancelled' : exitCode === 0 ? 'succeeded' : 'failed', scope: { accountId: 'terminal-account', machineId: 'machine' },
             title: 'Script', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'supported',
             ...(exitCode === 0 ? {} : { error: { errorCode: 'project_command_step_failed', error: 'project_command_step_failed' } }),
             domainRef: { kind: 'projectCommand', purpose: 'script', serverId: homeIds.primary,
@@ -265,6 +268,8 @@ describe('useMachineTerminalSession', () => {
                 script: { name: 'fail', source: { kind: 'command', command: 'printf QA_FAIL' } },
                 ...(exitCode === null ? {} : { exitCode }) },
         });
+        const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+        actionOperationStore.mergeSnapshots({ serverId: homeIds.primary, snapshots: [snapshot] });
         terminalOps.streamReadBytes.mockResolvedValue(TerminalStreamReadResponseSchema.parse({ ok: true, terminalId, frames: [
             { t: 'bytes', terminalId, seq: 1, byteOffset: 0, byteLength: 9, encoding: 'base64', data: 'UUFfRkFJTA0K' },
             { t: 'exit', terminalId, byteOffset: 9, exitCode, signal },
@@ -279,7 +284,7 @@ describe('useMachineTerminalSession', () => {
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('QA_FAIL'));
         expect(screen.findByTestId('workspace-embedded-terminal-state-card')).toBeNull();
         if (outcome) expect(screen.getTextContent()).toContain(outcome);
-        if (exitCode === null || signal) expect(screen.getTextContent()).not.toContain('Exit code:');
+        if (exitCode === null || signal || cancelled) expect(screen.getTextContent()).not.toContain('Exit code:');
         expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId }), expect.objectContaining({ serverId: homeIds.primary }));
         await screen.unmount();
         // Returning from phone width remounts the inline pane. Its retained bytes

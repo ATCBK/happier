@@ -274,8 +274,14 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
             return false;
         }
         appendOutputPreview(data);
+        // Retained hydration is already available. Submit it now rather than waiting
+        // for the live-output batching frame before xterm's own asynchronous parser.
+        if (options?.intent === 'replay') {
+            applyOutputPreviewAttribute();
+            ensureWriteQueue().flush();
+        }
         return true;
-    }, [appendOutputPreview, ensureWriteQueue]);
+    }, [appendOutputPreview, applyOutputPreviewAttribute, ensureWriteQueue]);
 
     const enqueueWriteBytes = React.useCallback((input: XtermWriteBytesInput) => {
         if (input.bytes.byteLength === 0) {
@@ -377,7 +383,7 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
         },
     }), [enqueueWrite, enqueueWriteBytes, resetWriteState]);
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         const container = containerRef.current;
         if (!container) {
             return;
@@ -559,15 +565,9 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
             }, READY_FIT_RETRY_DELAY_MS);
         };
 
-        const initTimer = typeof window !== 'undefined'
-            ? window.setTimeout(() => {
-                if (!fitTerminal('ready')) {
-                    scheduleReadyFitRetry();
-                }
-                term.focus();
-                scheduleFlushWrites();
-            }, 20)
-            : null;
+        if (!fitTerminal('ready')) scheduleReadyFitRetry();
+        term.focus();
+        scheduleFlushWrites();
 
         const resizeObserver = typeof ResizeObserver !== 'undefined'
             ? new ResizeObserver(() => {
@@ -603,9 +603,6 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
             container.removeEventListener('paste', handlePaste, true);
             container.removeEventListener('pointerdown', focusFromPointer, true);
 
-            if (initTimer !== null && typeof window !== 'undefined') {
-                window.clearTimeout(initTimer);
-            }
             if (resizeTimeoutRef.current !== null && typeof window !== 'undefined') {
                 window.clearTimeout(resizeTimeoutRef.current);
                 resizeTimeoutRef.current = null;

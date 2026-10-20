@@ -1,5 +1,6 @@
 import type { EmbeddedTerminalWriteCompleteEvent } from './embeddedTerminalRendererHandle';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
+import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 
 export type EmbeddedTerminalPaneStatus = 'idle' | 'connecting' | 'connected' | 'not-open' | 'error' | 'exited';
 
@@ -18,6 +19,8 @@ export type EmbeddedTerminalPaneController = Readonly<{
     exitCode?: number | null;
     /** Native termination signal; zero means the process was not signalled. */
     exitSignal?: number | null;
+    /** Canonical operation outcome, when this borrowed PTY belongs to an operation. */
+    operationState?: ActionOperationSnapshotV1['state'] | null;
     /** `error` that followed a connected stream: the terminal started, then its connection dropped. */
     connectionLost?: boolean;
     detectedUrl: EmbeddedTerminalDetectedUrl;

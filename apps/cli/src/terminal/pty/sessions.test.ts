@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 
@@ -24,6 +24,39 @@ import { configuration } from '@/configuration';
 import { terminateProcessCustodyByJob, waitForProcessCustodyHandshake } from '@/subprocess/supervision/processCustody';
 import { authorizeResolvedProjectExecLaunchForHost } from '@/plugins/runtime/invocation/services/exec';
 import type { Disposable, PtyExitEvent, PtyProcess, PtyProvider, PtySpawnParams } from './provider';
+import { executeHostFiniteTerminalProcess } from './finiteProcess';
+import { createPythonPtyRelayProvider, resolvePythonPtyRelayExecutable } from './pythonRelay';
+
+// Supplemental OS evidence; ordinary owner regressions below need neither Bash nor Python.
+describe.skipIf(process.platform === 'win32' || !existsSync('/bin/bash')
+  || !resolvePythonPtyRelayExecutable({ env: process.env, platform: process.platform }))('finite PTY native stop observation', () => {
+  it('records a requested stop separately from the real shell wait status', async () => {
+    const native = createPythonPtyRelayProvider({ env: process.env, platform: process.platform });
+    if (!native) throw new Error('POSIX PTY relay is unavailable');
+    let markReady!: () => void;
+    const ready = new Promise<void>(resolve => { markReady = resolve; });
+    let output = '';
+    const manager = createRealTerminalPtySessionManager({ config: defaultConfig(), ptyProvider: { spawn(input) {
+      const pty = native.spawn(input);
+      pty.onData(data => { output += data; if (output.includes('QA_HOLD_READY')) markReady(); });
+      return pty;
+    } } });
+    try {
+      const accepted = manager.ensure({ terminalKey: 'stop-zero-native', cwd: process.cwd(), holdUntilExit: true,
+        launchProcess: { file: '/bin/bash', args: ['-c', `printf "QA_HOLD_READY\\n"; sleep ${process.platform === 'darwin' ? '86400' : 'infinity'} & wait`], env: process.env } });
+      if (!accepted.ok) throw new Error(accepted.errorCode);
+      await ready;
+      const exited = manager.waitForExit({ terminalId: accepted.terminalId });
+      await manager.requestStop({ terminalId: accepted.terminalId });
+      const observed = await exited;
+      expect(observed).toMatchObject({ kind: 'exited', terminationCause: 'stop_requested' });
+      // Only this fixture's native result is recorded; no application state or secrets.
+      console.info('stop-zero-native', JSON.stringify(observed));
+      expect(manager.read({ terminalId: accepted.terminalId, cursor: 0, maxBytes: 1000, maxEvents: 10 }))
+        .toMatchObject({ ok: true, done: true });
+    } finally { manager.dispose(); }
+  });
+});
 
 describe('PTY spawn failures', () => {
   it('keeps the terminal error code and conveys the actual resource reason to the caller', () => {
@@ -671,6 +704,45 @@ describe('TerminalPtySessionManager', () => {
       expect(actual.options.cwd).toBe('C:\\native project root');
     } finally { manager.dispose(); }
   });
+  it('retains a stop request beside a native clean exit without fabricating a signal', async () => {
+    const provider = new FakePtyProvider();
+    const manager = createTerminalPtySessionManager({ ptyProvider: provider, config: defaultConfig(), env: BASH_ENV,
+      stopProcessTree: async () => { provider.spawned[0]!.pty.emitExit({ exitCode: 0, signal: 0 }); },
+    });
+    try {
+      const command = manager.ensure({ terminalKey: 'stopped-zero', cwd: '/project', holdUntilExit: true,
+        launchProcess: { file: '/bin/bash', args: ['-c', 'printf ready; sleep infinity & wait'], env: {} } });
+      if (!command.ok) throw new Error(command.errorCode);
+      const observed = manager.waitForExit({ terminalId: command.terminalId });
+      expect(await manager.requestStop({ terminalId: command.terminalId })).toEqual({ kind: 'exited' });
+      expect(await observed).toEqual({ kind: 'exited', exit: { exitCode: 0, signal: 0 }, terminationCause: 'stop_requested' });
+      expect(await manager.waitForExit({ terminalId: command.terminalId })).toEqual(await observed);
+      expect(manager.read({ terminalId: command.terminalId, cursor: 0, maxBytes: 1000, maxEvents: 10 }))
+        .toMatchObject({ ok: true, events: [{ t: 'exit', exitCode: 0, signal: 0 }] });
+    } finally { manager.dispose(); }
+  });
+
+  it('settles the real finite-operation composition as cancelled after a manager stop with native zero/zero', async () => {
+    const provider = new FakePtyProvider();
+    const manager = createTerminalPtySessionManager({ ptyProvider: provider, config: defaultConfig(), env: BASH_ENV,
+      stopProcessTree: async () => { provider.spawned[0]!.pty.emitExit({ exitCode: 0, signal: 0 }); },
+    });
+    try {
+      const running = executeHostFiniteTerminalProcess({ operation: { signal: new AbortController().signal },
+        terminalSessions: manager, requesterAccountId: 'alice', terminalKey: 'stopped-composition',
+        launch: { command: '/bin/bash', args: ['-c', 'printf ready; sleep infinity & wait'], cwd: '/project', env: {} },
+        progress: { phase: 'running', label: 'Running command' }, failureCode: 'project_command_step_failed',
+        attachment: ({ terminalId }) => ({ kind: 'projectCommand', purpose: 'script', serverId: 'home',
+          machineId: 'machine', workspaceRefId: 'workspace', cwd: '/project', terminalId }),
+      });
+      await vi.waitFor(() => expect(provider.spawned).toHaveLength(1));
+      const terminalId = manager.list()[0]!.terminalId;
+      await manager.requestStop({ terminalId });
+      expect(await running).toMatchObject({ kind: 'process_settled', terminalId,
+        result: { ok: false, errorCode: 'cancelled' } });
+    } finally { manager.dispose(); }
+  });
+
   it('retains a finite direct process and its observer independently of another shell admission', async () => {
     const provider = new FakePtyProvider();
     let clock = 0;

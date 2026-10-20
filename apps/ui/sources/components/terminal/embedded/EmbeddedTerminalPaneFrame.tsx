@@ -78,7 +78,7 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
             kind: 'line',
             // Native PTYs may pair a signal with a placeholder zero exit code. A signal
             // establishes termination; it must not be presented as a successful exit.
-            reason: controller.exitSignal != null && controller.exitSignal !== 0
+            reason: controller.operationState === 'cancelled' || controller.exitSignal != null && controller.exitSignal !== 0
                 ? joinHappierFacts(props.title, t('localServices.rowStatus.stopped'))
                 : joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
                     controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),

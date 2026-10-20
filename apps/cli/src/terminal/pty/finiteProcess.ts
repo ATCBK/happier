@@ -78,7 +78,7 @@ export async function executeHostFiniteTerminalProcess(input: Readonly<{
   if (observation.kind === 'unavailable') return failure('outcome_uncertain', signal.aborted ? 'stop_unconfirmed' : 'outcome_uncertain', terminal.terminalId);
   input.operation.operationOwnerUpdate?.update({ domainRef: input.attachment({ terminalId: terminal.terminalId,
     ...(observation.exit.exitCode !== null ? { exitCode: observation.exit.exitCode } : {}) }) });
-  if (signal.aborted) return failure('process_settled', 'cancelled', terminal.terminalId);
+  if (signal.aborted || observation.terminationCause === 'stop_requested') return failure('process_settled', 'cancelled', terminal.terminalId);
   if (observation.exit.exitCode !== 0 || observation.exit.signal !== null && observation.exit.signal !== 0) {
     return failure('process_settled', input.failureCode, terminal.terminalId, { ...input.failureDetails, ...observation.exit });
   }
