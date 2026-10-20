@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readMcpRequestAuthDispatchCause, type McpRequestAuthPort } from '@/mcp/runtime/mcpRequestAuth';
+import { createRunnerPluginMcpPort } from './runnerPluginMcp';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import { bindPluginExecProcessOwnerForHost } from '@/plugins/runtime/invocation/services/exec';
 import { join } from 'node:path';
@@ -226,6 +227,13 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
     const requireClaimed = () => requireClaimedRunnerSource(claimed);
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge = Object.freeze({
+            pluginMcp: {
+                async prepare(input: Parameters<import('@/mcp/runtime/pluginMcpPort').PluginMcpPort['prepare']>[0]) {
+                    const port = requireClaimed().daemonTurnContributionsBridge?.pluginMcp;
+                    if (!port) throw new Error('plugin_mcp_projection_unavailable');
+                    return await port.prepare(input);
+                },
+            },
             mcpRequestAuth: {
                 async open(input: Parameters<McpRequestAuthPort['open']>[0]) {
                     const port = requireClaimed().daemonTurnContributionsBridge?.mcpRequestAuth;
@@ -1034,6 +1042,14 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             },
         });
     let retirePromise: Promise<void> | null = null;
+    const pluginMcp = createRunnerPluginMcpPort({ sessionId: expectedAuthority.sessionId, signal: lifetime.signal,
+        dispatch: (operation, signal) => dispatchCurrentAgentRuntimeDaemonServiceRequest({
+            authority: expectedAuthority,
+            createRequest: token => ({ v: 1, context: { token, sessionId: expectedAuthority.sessionId,
+                ...(input.executionRunSnapshot ? { executionRunSnapshotId: input.executionRunSnapshot.snapshotId } : {}) }, operation }),
+            ...(signal ? { signal } : {}),
+        }),
+    });
     const mcpMaterializations = new Set<string>();
     const mcpRequestAuth: McpRequestAuthPort = {
         async open(input) {
@@ -1067,6 +1083,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         if (retirePromise) return retirePromise;
         const attempt = (async () => {
             const results = await Promise.allSettled([
+                pluginMcp.dispose(),
                 ...[...mcpMaterializations].map(materializationId => mcpRequestAuth.close({ materializationId })),
                 daemonFacets.dispose(),
                 managedServicesCustodyOwner.dispose(),
@@ -1098,6 +1115,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge =
             Object.freeze({
+                pluginMcp: pluginMcp.port,
                 mcpRequestAuth,
                 async admitSessionInput(params) {
                     if (

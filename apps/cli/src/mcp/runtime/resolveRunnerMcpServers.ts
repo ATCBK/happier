@@ -94,6 +94,7 @@ function createRunScopedMcpSessionView(
     ...(session.getCurrentSessionSkillItems
       ? { getCurrentSessionSkillItems: () => session.getCurrentSessionSkillItems!() } : {}),
     getMcpRequestAuthPort: () => session.getMcpRequestAuthPort?.(),
+    getPluginMcpPort: () => session.getPluginMcpPort?.() ?? null,
     ...(session.getEphemeralStreamConnectionEpoch
       ? { getEphemeralStreamConnectionEpoch: () => session.getEphemeralStreamConnectionEpoch!() } : {}),
     ...(session.isDaemonPluginCatalogSignalReady
@@ -205,6 +206,7 @@ export type RunnerMcpRuleObservation = Readonly<{
   context: ReachContextV1;
   settings: McpServersSettingsV1;
   mcpPluginItems: readonly McpPluginItemV1[];
+  catalog?: Readonly<{ revision: number | 'absent'; authority: 'active' | 'inactive' }>;
 }>;
 
 type RunnerMcpServersResult<Bridge extends { stop: () => void }> = Readonly<{
@@ -229,6 +231,15 @@ export function resolveRunnerMcpServers(params: RunnerMcpServersParams & { inclu
 export function resolveRunnerMcpServers(params: RunnerMcpServersParams & { includeHappierMcpServer: false }): Promise<RunnerMcpServersResult<{ stop: () => void }>>;
 export function resolveRunnerMcpServers(params: RunnerMcpServersParams): Promise<RunnerMcpServersResult<{ stop: () => void }>>;
 export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): Promise<RunnerMcpServersResult<{ stop: () => void }>> {
+  const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
+  const disposePluginAttachments = () => {
+    for (const attachment of pluginAttachments.splice(0)) void Promise.resolve(attachment.dispose()).catch(error => {
+      logger.debug('[mcp] Plugin attachment cleanup failed', { error });
+    });
+  };
+  // A daemon preparation may already hold a registry before selection or native
+  // bridge construction. Every failed preparation phase retires that lease.
+  try {
   const startedAt = performance.now();
   let phaseStartedAt = startedAt;
   const recordStartupPhase = (phase: string) => {
@@ -300,22 +311,26 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   recordStartupPhase('catalog_admission');
   let mcpCatalog = accountSnapshot?.mcpServerCatalog;
   const pluginRegistry = params.pluginMcpRuntimeRegistry ?? params.pluginRuntimeRegistryLease?.registry ?? params.session.getPluginMcpRuntimeRegistry?.();
+  const pluginPort = params.session.getPluginMcpPort?.();
+  let daemonPluginPreparation: import('./pluginMcpPort').PluginMcpPreparation | null = null;
   let mcpPluginItems: readonly McpPluginItemV1[] = [];
-  if (mcpSettings && pluginRegistry?.projectMcpServerItems && mcpCatalog?.status === 'ready') {
-    mcpPluginItems = await pluginRegistry.projectMcpServerItems(mcpCatalog.catalog);
+  if (mcpSettings && mcpCatalog?.status === 'ready') {
+    if (pluginPort) {
+      daemonPluginPreparation = await pluginPort.prepare({ catalog: mcpCatalog.catalog, directory: params.directory,
+        signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.() ?? undefined });
+      pluginAttachments.push(daemonPluginPreparation);
+      mcpPluginItems = daemonPluginPreparation.items;
+    } else if (pluginRegistry?.projectMcpServerItems) {
+      // Daemonless runtimes retain their explicitly supplied executable owner.
+      mcpPluginItems = await pluginRegistry.projectMcpServerItems(mcpCatalog.catalog);
+    }
   }
   recordStartupPhase('plugin_projection');
-  const detected = params.detectedMcpServers ?? (pluginRegistry?.discoverMcpServersForDetection && params.agentId
+  const detected = params.detectedMcpServers ?? daemonPluginPreparation?.detectedServers ?? (pluginRegistry?.discoverMcpServersForDetection && params.agentId
     ? (await detectProviderMcpServers({ directory: params.directory, providers: [params.agentId], env,
       runtimeRegistry: pluginRegistry })).servers : []);
   const nativeServerNames = readLoadedMcpNativeServerNames({ servers: detected, agentId: params.agentId });
   recordStartupPhase('native_discovery');
-  const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
-  const disposePluginAttachments = () => {
-    for (const attachment of pluginAttachments.splice(0)) void Promise.resolve(attachment.dispose()).catch(error => {
-      logger.debug('[mcp] Plugin attachment cleanup failed', { error });
-    });
-  };
   let resolvedSelection: Awaited<ReturnType<typeof resolveSessionCapabilitiesForDirectory>> | null = null;
   if (mcpSettings && accountCredentials) {
     const initialSettings = mcpSettings;
@@ -412,11 +427,13 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   recordStartupPhase('account_currentness');
 
   if (!accountSettings || !accountCredentials) {
+    disposePluginAttachments();
     recordStartupPhase('completed');
     return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: params.resolvedMcpServers ? mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra: params.resolvedMcpServers }) : builtIn.mcpServers };
   }
 
   if (!mcpSettings || !resolvedSelection) {
+    disposePluginAttachments();
     recordStartupPhase('completed');
     return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: builtIn.mcpServers };
   }
@@ -455,13 +472,14 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   };
   let materialized: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>;
   try {
-    if (pluginRegistry?.materializePluginMcpServers) {
+    if (daemonPluginPreparation || pluginRegistry?.materializePluginMcpServers) {
       const selected = Object.values(resolvedSelection.selectedServersByName).map(server => ({
         id: server.serverId, name: server.name, title: server.config.title,
         transport: server.config.remote ? { kind: server.config.transport === 'sse' ? 'sse' as const : 'http' as const, url: server.config.remote.url }
           : { kind: 'stdio' as const }, scope: { sessionId: params.session.sessionId, directory: params.directory },
       }));
-      const attached = await pluginRegistry.materializePluginMcpServers({ scope: { kind: 'session', sessionId: params.session.sessionId }, directory: params.directory,
+      const attached = daemonPluginPreparation ? await daemonPluginPreparation.materialize(selected)
+        : await pluginRegistry!.materializePluginMcpServers!({ scope: { kind: 'session', sessionId: params.session.sessionId }, directory: params.directory,
         permissionHandler: params.mcpPermissionHandler,
         servers: selected, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.() ?? undefined,
         addDisposable: attachment => pluginAttachments.push(attachment) });
@@ -591,9 +609,14 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     mcpServersStrictMode: mcpSettings.strictMode,
     mcpServerIdentities,
     ...(!params.resolvedMcpServers ? { reach: { context: resolvedSelection.context, settings: mcpSettings, mcpPluginItems,
+      ...(mcpCatalog?.status === 'ready' ? { catalog: { revision: mcpCatalog.revision, authority: mcpCatalog.authority } } : {}),
       selectedServerIds: resolvedSelection.mcp.items.filter(item => item.selected).map(item => item.id) } } : {}),
     resolvedServers: projectResolvedMcpServers({ mcpServers: merged, identities: mcpServerIdentities,
       scope: { sessionId: params.session.sessionId, directory: params.directory } }),
     ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
   };
+  } catch (error) {
+    disposePluginAttachments();
+    throw error;
+  }
 }

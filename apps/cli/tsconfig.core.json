@@ -19,6 +19,8 @@
   "compileOnSave": false,
   "exclude": [],
   "files": [
+    "src/agent/runtime/session/process/runnerPluginMcp.ts",
+    "src/daemon/agentRuntime/runnerPluginMcp.ts",
     "src/agent/acp/AcpBackend.ts",
     "src/agent/acp/authenticateAcpAgent.ts",
     "src/agent/acp/authenticateDeclaredAcpAgent.ts",

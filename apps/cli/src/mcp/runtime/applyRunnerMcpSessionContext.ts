@@ -12,6 +12,7 @@ type WorkspaceWritesPolicyPreparation = (workspaceWrites: 'allow' | 'deny', cont
 export type RunnerMcpSessionContextAccessors = Readonly<{
   getSessionRoleContext?: () => import('@/session/roles/sessionRoleContext').SessionRoleContext;
   getPluginMcpRuntimeRegistry?: () => import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').ResolvedExecutablePluginRuntimeRegistry | null;
+  getPluginMcpPort?: () => import('./pluginMcpPort').PluginMcpPort | null;
   getCurrentSessionSkillItems?: () => readonly SessionSkillReadItemV1[] | null;
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
   readRoleSources?: RoleSourceReader;
@@ -34,6 +35,7 @@ export type RunnerMcpSessionContextAccessors = Readonly<{
 export type RunnerMcpSessionWithContext<TSession> = TSession & {
   getSessionRoleContext?: RunnerMcpSessionContextAccessors['getSessionRoleContext'];
   getPluginMcpRuntimeRegistry?: RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
+  getPluginMcpPort?: RunnerMcpSessionContextAccessors['getPluginMcpPort'];
   getCurrentSessionSkillItems?: RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
   readRoleSources?: RoleSourceReader;
@@ -62,6 +64,7 @@ export function applyRunnerMcpSessionContext<TSession extends object>(
   if (accessors.getSessionRoleContext) target.getSessionRoleContext = accessors.getSessionRoleContext;
   if (accessors.getCurrentSessionSkillItems) target.getCurrentSessionSkillItems = accessors.getCurrentSessionSkillItems;
   if (accessors.getPluginMcpRuntimeRegistry) target.getPluginMcpRuntimeRegistry = accessors.getPluginMcpRuntimeRegistry;
+  if (accessors.getPluginMcpPort) target.getPluginMcpPort = accessors.getPluginMcpPort;
   if (accessors.getCurrentResolvedRoles) target.getCurrentResolvedRoles = accessors.getCurrentResolvedRoles;
   if (accessors.readRoleSources) target.readRoleSources = accessors.readRoleSources;
   if (accessors.getCurrentWorkspaceWrites) target.getCurrentWorkspaceWrites = accessors.getCurrentWorkspaceWrites;

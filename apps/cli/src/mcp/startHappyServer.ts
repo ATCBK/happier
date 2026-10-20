@@ -59,6 +59,7 @@ export type HappyMcpSessionClient = {
     getSessionRoleContext?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getSessionRoleContext'];
     getCurrentSessionSkillItems?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
     getPluginMcpRuntimeRegistry?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
+    getPluginMcpPort?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getPluginMcpPort'];
     getCurrentResolvedRoles?(): import('@happier-dev/protocol').ResolvedRolesSnapshotV1;
     readRoleSources?: import('@/session/roles/roleSources').RoleSourceReader;
     getCurrentWorkspaceWrites?(): 'allow' | 'deny' | undefined;

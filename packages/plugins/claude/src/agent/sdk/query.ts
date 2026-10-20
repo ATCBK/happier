@@ -1,4 +1,5 @@
-import { PluginError, redactBugReportSensitiveText } from '@happier-dev/plugin-sdk';
+import { redactBugReportSensitiveText } from '@happier-dev/plugin-sdk';
+import { createClaudeManagedMcpPolicyConflictError } from '../mcp/managedPolicy.js';
 
 import type {
     CanCallToolCallback,
@@ -279,8 +280,7 @@ export function createClaudeSdkNoResultError(result: ClaudeSdkExecResult | null 
         || result?.stderr.includes('You cannot dynamically configure MCP servers when an enterprise MCP config is present')) {
         // Managed policy can retain its own servers and exceptions, so it cannot replace
         // the caller's strict server selection. Keep the restriction and report the conflict.
-        return new PluginError({ code: 'claude_managed_mcp_policy_conflict', retryable: false,
-            message: 'Claude organization policy prevents the requested MCP configuration or isolation. Ask your administrator to provide a compatible policy; Happier will not weaken the requested restriction.' });
+        return createClaudeManagedMcpPolicyConflictError();
     }
     const status = result ? ` (${formatExitStatus(result)})` : '';
     const stderr = result ? sanitizeStderrPreview(result.stderr) : '';

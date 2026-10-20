@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./mcp/remoteUrlV1": {
+      "happier-source": "./src/mcp/remoteUrlV1.ts",
+      "types": "./dist/mcp/remoteUrlV1.d.ts",
+      "default": "./dist/mcp/remoteUrlV1.js"
+    },
     "./machines/codeIntelligenceFallback": {
       "happier-source": "./src/machines/codeIntelligenceFallback.ts",
       "types": "./dist/machines/codeIntelligenceFallback.d.ts",

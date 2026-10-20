@@ -14,6 +14,7 @@ import { HappierStructuredInputV1Schema } from '@happier-dev/plugin-sdk/sessions
 import type { AgentSessionInputFilesService } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeMcpUsageWitness } from './mcpUsage.js';
 import { createClaudeSkillUsageWitness } from './skillUsage.js';
+import { readClaudeManagedMcpPolicyFailure } from '../../../mcp/managedPolicy.js';
 import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import {
@@ -47,7 +48,7 @@ import {
     queryWithContext,
     type ClaudeSdkQueryContext,
 } from '../../../sdk/query.js';
-import { ClaudeSdkQuery } from '../../../sdk/query.js';
+import { ClaudeSdkQuery, type ClaudeSdkPromptTransportOutcome } from '../../../sdk/query.js';
 import type {
     PermissionResult,
     SDKAssistantMessage,
@@ -293,6 +294,14 @@ function createDeferred(publishTurnTerminal = true): Readonly<{
 type DeferredCompletion = ReturnType<typeof createDeferred>;
 
 const PROVIDER_ERROR_PREVIEW_MAX_LENGTH = 800;
+
+function projectPromptTransportOutcome(outcome: ClaudeSdkPromptTransportOutcome): ClaudeRuntimePromptSubmissionOutcome {
+    if (outcome.kind === 'accepted') return outcome;
+    const reason = sanitizeProviderErrorPreview(outcome.error.message) ?? 'Claude SDK prompt transport failed.';
+    return outcome.kind === 'rejected_before_effect'
+        ? { kind: outcome.kind, reason, ...readClaudeManagedMcpPolicyFailure(outcome.error) }
+        : { kind: outcome.kind, reason };
+}
 
 function sanitizeProviderErrorPreview(value: unknown): string | null {
     const raw = readString(value);
@@ -2368,11 +2377,11 @@ export function createClaudeAgentSdkTurnOperations(
                             type: 'input-rejected',
                             ...identity,
                             diagnostic: {
-                                code: 'claude_sdk_prompt_rejected_before_transport',
+                                code: outcome.code ?? 'claude_sdk_prompt_rejected_before_transport',
                                 severity: 'error',
                                 ...(message ? { message } : {}),
                             },
-                            retryable: true,
+                            retryable: outcome.retryable ?? true,
                         });
                     } else if (outcome.kind === 'effect_may_have_occurred') {
                         const message = sanitizeProviderErrorPreview(outcome.reason);
@@ -2406,13 +2415,7 @@ export function createClaudeAgentSdkTurnOperations(
                 const interruptedQuery = retainedInterruptedQuery;
                 if (interruptedQuery) {
                     const transportOutcome = await interruptedQuery.sendUserMessage(promptContent, nativeUserMessageId);
-                    const outcome: ClaudeRuntimePromptSubmissionOutcome = transportOutcome.kind === 'accepted'
-                        ? transportOutcome
-                        : {
-                            kind: transportOutcome.kind,
-                            reason: sanitizeProviderErrorPreview(transportOutcome.error.message)
-                                ?? 'Claude SDK prompt transport failed.',
-                        };
+                    const outcome = projectPromptTransportOutcome(transportOutcome);
                     publishTransportOutcome(outcome);
                     if (outcome.kind === 'rejected_before_effect') {
                         turnInFlight = false;
@@ -2501,13 +2504,7 @@ export function createClaudeAgentSdkTurnOperations(
                 disposeQuery = turnQuery;
                 void consumeTurnMessages(turnQuery, completion, submittedTurnId, launchEffort);
                 const transportOutcome = await turnQuery.promptTransportOutcome;
-                const outcome: ClaudeRuntimePromptSubmissionOutcome = transportOutcome.kind === 'accepted'
-                    ? transportOutcome
-                    : {
-                        kind: transportOutcome.kind,
-                        reason: sanitizeProviderErrorPreview(transportOutcome.error.message)
-                            ?? 'Claude SDK prompt transport failed.',
-                    };
+                const outcome = projectPromptTransportOutcome(transportOutcome);
                 publishTransportOutcome(outcome);
                 return outcome;
             } catch (error) {
@@ -2516,6 +2513,7 @@ export function createClaudeAgentSdkTurnOperations(
                 const outcome: ClaudeRuntimePromptSubmissionOutcome = {
                     kind: 'rejected_before_effect',
                     ...(error instanceof ClaudeBrowserImageUnavailableError ? { code: error.code } : {}),
+                    ...readClaudeManagedMcpPolicyFailure(error),
                     reason: sanitizeProviderErrorPreview(
                         error instanceof Error ? error.message : String(error),
                     ) ?? 'Claude SDK prompt setup failed.',
@@ -2548,12 +2546,7 @@ export function createClaudeAgentSdkTurnOperations(
                 return { kind: 'rejected_before_effect', reason: 'Claude Agent SDK turn settled before steer submission.' };
             }
             const outcome = await turnQuery.sendUserMessage(content, uuid);
-            if (outcome.kind === 'accepted') return outcome;
-            return {
-                kind: outcome.kind,
-                reason: sanitizeProviderErrorPreview(outcome.error.message)
-                    ?? 'Claude SDK steer transport failed.',
-            };
+            return projectPromptTransportOutcome(outcome);
         },
         async waitForProviderTurnCompletion(opts) {
             const timeoutMs = readTimeoutMs(opts);

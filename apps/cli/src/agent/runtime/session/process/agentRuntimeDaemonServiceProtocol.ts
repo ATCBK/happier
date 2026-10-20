@@ -22,6 +22,7 @@ import { TeamCredentialRouteV1Schema } from '@happier-dev/protocol/teams/credent
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { McpRequestAuthOpenV1Schema, McpRequestAuthCloseV1Schema, McpRequestAuthResultV1Schema, McpRequestAuthClosedV1Schema } from '@/mcp/runtime/mcpRequestAuth';
+import { RUNNER_PLUGIN_MCP_OPERATIONS, RUNNER_PLUGIN_MCP_RESULTS } from './runnerPluginMcpProtocol';
 
 import {
   AgentRuntimeDaemonModelTransitionAuthorizationResultV1Schema,
@@ -158,6 +159,7 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.strictObject({
     ...RUNNER_EXECUTION_RUN_SNAPSHOT_OPERATIONS,
     McpRequestAuthOpenV1Schema,
     McpRequestAuthCloseV1Schema,
+    ...RUNNER_PLUGIN_MCP_OPERATIONS,
     ...RUNNER_AGENT_DAEMON_FACET_OPERATION_SCHEMAS,
     ...RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS,
     z.strictObject({
@@ -324,6 +326,7 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
         ...RUNNER_EXECUTION_RUN_SNAPSHOT_RESULTS,
         McpRequestAuthResultV1Schema,
         McpRequestAuthClosedV1Schema,
+        ...RUNNER_PLUGIN_MCP_RESULTS,
         z.strictObject({
           kind: z.literal('action.execution'),
           requestId: OpaqueIdSchema,
