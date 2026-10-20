@@ -16,7 +16,7 @@ import {
     uiBrowserAutomationDispatchMethod,
 } from "@happier-dev/protocol";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
-import type { Server, Socket } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSha256SecretDigest } from "@/app/auth/secretDigest";
 import { auth } from "@/app/auth/auth";
@@ -2788,6 +2788,50 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
 
         await triggerSocketHandler(firstCaller, SOCKET_RPC_EVENTS.CANCEL, { requestId: "caller-request" });
         expect(targetCancelEmit).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([false, true])("retains an opted-in cancelled call's own ACK unless its caller disconnects (%s)", async (disconnect) => {
+        const io = new Server();
+        let acknowledge!: (value: unknown) => void;
+        // Socket.IO's real ACK lifecycle remains in the path; only its network
+        // adapter and the authenticated calling socket are boundaries here.
+        const dispatch = vi.spyOn(io.of('/').adapter, 'broadcastWithAck').mockImplementation(
+            (_packet, _options, clientCount, response) => {
+                acknowledge = response;
+                clientCount(1);
+            },
+        );
+        const target = {
+            id: 'cooperative-target',
+            timeout: (ms: number, lifetime?: Readonly<{ rejectOnDisconnect?: boolean; signal?: AbortSignal }>) =>
+                (io.to('cooperative-target') as unknown as import('./_types').RpcAckResponseEmitter).timeout(ms, lifetime),
+        };
+        vi.spyOn(io, 'in').mockReturnValue({
+            timeout: () => ({ fetchSockets: async () => [target] }),
+            fetchSockets: async () => [target],
+        } as unknown as ReturnType<Server['in']>);
+        const caller = createFakeSocket({ id: 'cooperative-caller' });
+        const callback = vi.fn();
+        registerSocketRpcHandlers({ userId: 'user-1', socket: caller as unknown as Socket, io });
+        const call = triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, {
+            method: 'agent.run', params: {}, requestId: 'cooperative-request',
+            timeoutMs: null, waitForResultOnCancel: true,
+        }, callback);
+        try {
+            await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+            await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CANCEL, { requestId: 'cooperative-request' });
+            if (disconnect) await triggerSocketHandler(caller, 'disconnect');
+            acknowledge('opaque-partial-result-with-undo');
+            await call;
+            expect(callback).toHaveBeenCalledWith(disconnect
+                ? expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN })
+                : { ok: true, result: ['opaque-partial-result-with-undo'] });
+            expect(dispatch).toHaveBeenCalledOnce();
+        } finally {
+            acknowledge?.('cleanup');
+            await call;
+            vi.restoreAllMocks();
+        }
     });
 
     it("cancels an in-flight target request when its issuing socket disconnects", async () => {

@@ -291,6 +291,8 @@ export async function callExactMachineRpc(params: Readonly<{
   requiredMachineKind?: 'persistent' | 'ephemeral_session_runner';
   /** Null delegates acknowledgement lifetime to the caller signal/server lifecycle. */
   timeoutMs?: number | null;
+  /** Cooperative cancellation retains this call's acknowledgement after emission. */
+  waitForResultOnCancel?: boolean;
   /** Only read-only observations may be repeated after transport reconnect. */
   reattachOnReconnect?: true | RpcObservationOptions;
   signal?: AbortSignal;
@@ -458,6 +460,7 @@ export async function callExactMachineRpc(params: Readonly<{
             timeoutMs: remainingTimeoutMs(),
             onIssued: () => { issued = true; },
             signal: attemptSignal,
+            ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
             authorization: params.authorization,
             ...(createExternalActionExecution ? { createExternalActionExecution } : {}),
             ...((params.method === RPC_METHODS.PROJECTS_OPEN || params.method === RPC_METHODS.DAEMON_PROJECTS_SCRIPT_RUN
@@ -467,7 +470,7 @@ export async function callExactMachineRpc(params: Readonly<{
         },
       });
     });
-    return await raceSocketIoAckTimeout(operation, timeoutMs ?? undefined, signal);
+    return await raceSocketIoAckTimeout(operation, timeoutMs ?? undefined, params.waitForResultOnCancel ? undefined : signal);
   } catch (error) {
     if (isSocketIoAckTimeoutError(error)) {
       throw markRpcRequestDisposition(Object.assign(new Error('Machine RPC call timeout'), { code: 'MACHINE_RPC_TIMEOUT' }), issued ? 'outcomeUnknown' : 'notSent');

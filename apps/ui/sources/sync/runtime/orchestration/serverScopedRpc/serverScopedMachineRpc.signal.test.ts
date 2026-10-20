@@ -7,6 +7,7 @@ import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { machineRpcWithServerScope } from './serverScopedMachineRpc';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from './serverScopedRpcSocketPool';
+import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 
 const HOME_URL = 'https://signal-home.example.test';
 const TOKEN = `hdr.${btoa(JSON.stringify({ sub: 'signal-account' }))}.sig`;
@@ -112,6 +113,27 @@ describe('machineRpcWithServerScope signal', () => {
         expect(boundary.socket.emitWithAck).not.toHaveBeenCalled();
         expect(boundary.socket.emit).not.toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CANCEL, expect.anything());
         expect(runtimeFetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns replace apply inverse edits after sending cooperative cancellation', async () => {
+        let acknowledge!: (value: unknown) => void;
+        boundary.socket.emitWithAck.mockImplementation(() => new Promise(resolve => { acknowledge = resolve; }));
+        const controller = new AbortController();
+        const pending = machineWorkspaceFileReplaceApply('machine-1', {
+            rootPath: '/workspace', operation: { kind: 'replace', matcher: {
+                query: 'old', replacement: 'new', matchCase: true, regex: false,
+            }, files: [{ path: 'a.txt', expectedHash: 'a'.repeat(64) }, { path: 'b.txt', expectedHash: 'b'.repeat(64) }] },
+        }, { serverId, signal: controller.signal });
+        await vi.waitFor(() => expect(boundary.socket.emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL,
+            expect.objectContaining({ waitForResultOnCancel: true })));
+        const request = boundary.socket.emitWithAck.mock.calls[0][1];
+        if (!request || typeof request !== 'object' || !('requestId' in request)) throw new Error('Missing issued request');
+        controller.abort();
+        expect(boundary.socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CANCEL, { requestId: request.requestId });
+        const result = { ok: true, results: [{ path: 'a.txt', status: 'replaced', hash: 'c'.repeat(64), matchCount: 1,
+            edits: [{ startUtf16: 0, deleteLength: 3, insertText: 'new', originalText: 'old' }] }], cancelled: ['b.txt'] };
+        acknowledge({ ok: true, result });
+        await expect(pending).resolves.toEqual(result);
     });
 
     it('resolves normally when no signal is provided', async () => {

@@ -278,6 +278,50 @@ it('cancels an issued call and marks the unresolved outcome', async () => {
   expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
   expect((await cancelled).requestId).toMatch(/^rpc_/);
 });
+it.each([null, 10_000])('retains the issued acknowledgement after opt-in cancellation (%s)', async timeoutMs => {
+  const socket = await setup();
+  const controller = new AbortController();
+  const partial = { ok: true, results: [{ path: 'a.txt', status: 'replaced', edits: [{ startUtf16: 0, deleteLength: 3, insertText: 'new', originalText: 'old' }] }], cancelled: ['b.txt'] };
+  const cancelled = new Promise<void>(resolve => server.sockets.sockets.forEach(remote => remote.once('rpc-call', (payload, ack) => {
+    expect(payload.waitForResultOnCancel).toBe(true);
+    remote.once('rpc-cancel', cancel => {
+      expect(cancel.requestId).toBe(payload.requestId);
+      ack({ ok: true, result: partial });
+      resolve();
+    });
+    controller.abort();
+  })));
+  await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY,
+    params: {}, content: { mode: 'plain' }, signal: controller.signal, timeoutMs, waitForResultOnCancel: true }))
+    .resolves.toEqual(partial);
+  await cancelled;
+});
+it.each(['deadline', 'disconnect'] as const)('retains the original %s after cooperative cancellation', async failure => {
+  const socket = await setup();
+  const controller = new AbortController();
+  server.sockets.sockets.forEach(remote => remote.once('rpc-call', payload => {
+    remote.once('rpc-cancel', cancel => {
+      expect(cancel.requestId).toBe(payload.requestId);
+      if (failure === 'disconnect') remote.disconnect(true);
+    });
+    controller.abort();
+  }));
+  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'replace',
+    params: {}, content: { mode: 'plain' }, signal: controller.signal, timeoutMs: failure === 'deadline' ? 100 : null,
+    waitForResultOnCancel: true }).catch((error: unknown) => error);
+  expect(error).toMatchObject(failure === 'deadline' ? { message: 'operation has timed out' } : { rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+  expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+});
+it('does not issue an opted-in call when already aborted', async () => {
+  const controller = new AbortController(); controller.abort();
+  const events: string[] = [];
+  const socket = { emit: (event: string) => { events.push(event); }, emitWithAck: async () => { events.push('rpc-call'); return {}; } };
+  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'replace',
+    params: {}, content: { mode: 'plain' }, signal: controller.signal, waitForResultOnCancel: true }).catch((error: unknown) => error);
+  expect(error).toMatchObject({ name: 'AbortError' });
+  expect(readRpcRequestDisposition(error)).toBe('notSent');
+  expect(events).toEqual([]);
+});
 it('rejects before issue as notSent and exposes ack timeout after issue', async () => {
   const socket = await setup();
   const controller = new AbortController();
