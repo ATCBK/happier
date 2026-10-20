@@ -1,6 +1,14 @@
-import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
+import {
+  MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
+  TriageSourceScopeSelectionV1Schema,
+  TriageSourceScopeUnitV1Schema,
+  type TriageSourceScopeSelectionV1,
+  type TriageSourceScopeUnitV1,
+} from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 
-import { buildGithubRepositoryKey } from './locator.js';
+import { buildGithubRepositoryKey, parseGithubRoutingToken } from './locator.js';
+import { buildGithubCollisionScope } from './identity.js';
 import type { GithubTriageFailureV1 } from './types.js';
 
 /**
@@ -26,8 +34,15 @@ export type GithubTriageInstanceScopeV1 =
 
 export type GithubTriageConfigurationV1 = Readonly<{
   v: 1;
-  scope: GithubTriageInstanceScopeV1;
+  selection: TriageSourceScopeSelectionV1;
+  units?: readonly TriageSourceScopeUnitV1[];
 }>;
+
+const configurationSchema = createProtocolStoredReadSchema(defineProtocolObject({
+  v: defineProtocolLiteral(1),
+  selection: TriageSourceScopeSelectionV1Schema,
+  units: defineProtocolArray(TriageSourceScopeUnitV1Schema).optional(),
+}, { policy: 'closed' }));
 
 export type GithubTriageConfigurationDecodeV1 =
   | Readonly<{ ok: true; configuration: GithubTriageConfigurationV1 }>
@@ -73,18 +88,52 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 /** The account-wide GitHub scope every discovery candidate proposes. */
 export const GITHUB_TRIAGE_ACCOUNT_SCOPE_V1: GithubTriageConfigurationV1 = Object.freeze({
   v: 1,
-  scope: Object.freeze({ kind: 'account' }),
+  selection: Object.freeze({ kind: 'all' }),
 });
 
 export function encodeGithubTriageConfiguration(
-  configuration: GithubTriageConfigurationV1,
+  configuration: GithubTriageConfigurationV1 | Readonly<{ v: 1; scope: GithubTriageInstanceScopeV1 }>,
 ): string | null {
-  const token = JSON.stringify(
-    configuration.scope.kind === 'account'
-      ? { v: 1, scope: { kind: 'account' } }
-      : { v: 1, scope: { kind: 'repository', repositoryKey: configuration.scope.repositoryKey } },
-  );
+  const normalized = readConfiguration(configuration);
+  if (normalized === null) return null;
+  const token = JSON.stringify(normalized);
   return utf8ByteLength(token) <= MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 ? token : null;
+}
+
+function normalizeUnitId(id: string): string | null {
+  const trimmed = id.trim();
+  if (buildGithubCollisionScope(trimmed) !== null) return trimmed;
+  const route = parseGithubRoutingToken(trimmed);
+  return route === null ? null : buildGithubRepositoryKey(route);
+}
+
+function readConfiguration(value: unknown): GithubTriageConfigurationV1 | null {
+  if (!isRecord(value) || value.v !== 1) return null;
+  let current = value;
+  // Only the old token reader translates the retired single-repository shape.
+  // A malformed known selection never falls back to account-wide inclusion.
+  if (!Object.hasOwn(value, 'selection')) {
+    if (!isRecord(value.scope)) return null;
+    if (value.scope.kind === 'account') return GITHUB_TRIAGE_ACCOUNT_SCOPE_V1;
+    if (value.scope.kind !== 'repository' || typeof value.scope.repositoryKey !== 'string') return null;
+    current = { v: 1, selection: { kind: 'selected', unitIds: [value.scope.repositoryKey] } };
+  }
+  const parsed = configurationSchema.safeParse(current);
+  if (!parsed.success) return null;
+  if (parsed.data.selection.kind === 'all') return GITHUB_TRIAGE_ACCOUNT_SCOPE_V1;
+  const ids = parsed.data.selection.unitIds.map(normalizeUnitId);
+  if (ids.some((id) => id === null)) return null;
+  const selection = TriageSourceScopeSelectionV1Schema.safeParse({ kind: 'selected', unitIds: ids });
+  if (!selection.success) return null;
+  const units: TriageSourceScopeUnitV1[] = [];
+  for (const unit of parsed.data.units ?? []) {
+    const id = normalizeUnitId(unit.id);
+    if (id === null) return null;
+    if (!ids.includes(id)) continue;
+    const collisionScope = buildGithubCollisionScope(id);
+    units.push({ ...unit, id, ...(collisionScope === null ? {} : { collisionScope }) });
+  }
+  return { v: 1, selection: selection.data, ...(parsed.data.units === undefined ? {} : { units }) };
 }
 
 export function decodeGithubTriageConfiguration(token: unknown): GithubTriageConfigurationDecodeV1 {
@@ -98,29 +147,14 @@ export function decodeGithubTriageConfiguration(token: unknown): GithubTriageCon
   } catch {
     return failure;
   }
-  if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.scope)) return failure;
-  const scope = parsed.scope;
-  if (scope.kind === 'account') {
-    return Object.freeze({ ok: true as const, configuration: GITHUB_TRIAGE_ACCOUNT_SCOPE_V1 });
-  }
-  if (scope.kind !== 'repository' || typeof scope.repositoryKey !== 'string') return failure;
-  const segments = scope.repositoryKey.split('/');
-  const repositoryKey = segments.length === 2
-    ? buildGithubRepositoryKey({ owner: segments[0], name: segments[1] })
-    : null;
-  if (repositoryKey === null) return failure;
-  return Object.freeze({
-    ok: true as const,
-    configuration: Object.freeze({
-      v: 1 as const,
-      scope: Object.freeze({ kind: 'repository' as const, repositoryKey }),
-    }),
-  });
+  const configuration = readConfiguration(parsed);
+  return configuration === null ? failure : { ok: true, configuration };
 }
 
 /** The lane-query scope: `owner/name` for a repository instance, `null` account-wide. */
 export function readGithubScanRepositoryKey(
   configuration: GithubTriageConfigurationV1,
 ): string | null {
-  return configuration.scope.kind === 'repository' ? configuration.scope.repositoryKey : null;
+  return configuration.selection.kind === 'selected' && configuration.selection.unitIds.length === 1
+    ? configuration.selection.unitIds[0] ?? null : null;
 }

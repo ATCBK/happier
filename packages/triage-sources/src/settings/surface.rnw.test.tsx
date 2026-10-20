@@ -106,7 +106,7 @@ type Recorded = Readonly<{ action: unknown; input: unknown }>;
 
 function createHarness(options: Readonly<{
   discovery: JsonValue | ((signal: AbortSignal) => Promise<JsonValue>);
-  scopeUnits?: JsonValue;
+  scopeUnits?: JsonValue | ((input: unknown) => JsonValue);
   /**
    * What the target says this source has already configured. Defaults to nothing
    * configured, which is the state a first visit is in.
@@ -132,7 +132,7 @@ function createHarness(options: Readonly<{
   ): Promise<JsonValue> {
     recorded.push({ action, input });
     const ref = action as Readonly<{ pluginId?: string; localId?: string }>;
-    if (ref.localId === 'author/list-units') return options.scopeUnits ?? {
+    if (ref.localId === 'author/list-units') return (typeof options.scopeUnits === 'function' ? options.scopeUnits(input) : options.scopeUnits) ?? {
       kind: 'page', status: 'complete', selection: { kind: 'all' },
       units: [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }],
     };
@@ -236,13 +236,22 @@ describe('the mounted PRs & Issues source settings page', () => {
       pluginId: PLUGIN_ID, listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
       connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
       connectedAccountPurpose: PURPOSE, sourceDisplayName: SOURCE_DISPLAY_NAME,
+      DraftFields: ({ draft, busy, onChange }) => <Button title="Choose another workspace" disabled={busy}
+        onPress={() => onChange({ ...draft, localInstanceKey: 'Other workspace', configuration: { v: 1, token: 'source:Other workspace' } })} />,
       scopeSelection: {
         unitLabel: 'Teams', listScopeUnitsLocalActionId: 'author/list-units',
         readSelection: () => ({ kind: 'all' }),
         writeSelection: (draft, selection) => ({ ...draft, configuration: { v: 1, token: JSON.stringify({ v: 1, selection }) } }),
       },
     });
-    const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] } });
+    const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] },
+      scopeUnits: (input) => {
+        const key = Reflect.get(Reflect.get(input as object, 'draft') as object, 'localInstanceKey');
+        return { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: key === 'Other workspace'
+          ? [{ id: 'unit-3', label: 'Third team' }, { id: 'unit-4', label: 'Fourth team' }]
+          : [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }] };
+      },
+    });
     const page = await mountSettings(harness, {}, surface);
     await pressControl(page, 'Add Workspace to PRs & Issues');
     expect(harness.administrations()).toEqual([]);
@@ -250,10 +259,16 @@ describe('the mounted PRs & Issues source settings page', () => {
     await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
     await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'First team' })); });
     await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Second team' })); });
+    await pressControl(page, 'Choose another workspace');
+    await act(async () => { await page.press(await page.getByRole('radio', { name: 'Selected…' })); });
+    await expect(page.queryByRole('checkbox', { name: 'First team' })).resolves.toBeUndefined();
+    await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Third team' })); });
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Fourth team' })); });
     await pressControl(page, 'Save selection');
     expect(harness.administrations()).toMatchObject([{ kind: 'create', draft: {
-      configuration: { token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: ['unit-1', 'unit-2'] } }) },
-      localInstanceKey: 'Workspace', binding: binding('account-1'),
+      configuration: { token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: ['unit-3', 'unit-4'] } }) },
+      localInstanceKey: 'Other workspace', binding: binding('account-1'),
     } }]);
   });
   it('configures the native login with source-owned translated copy and no connected-account editor', async () => {

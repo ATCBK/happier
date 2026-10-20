@@ -69,6 +69,11 @@ describe('Triage entry repository identity', () => {
 });
 
 describe('Triage source observation union', () => {
+    it('carries a source-authored selection-unit join without changing immutable entry identity', () => {
+        const snapshot = TriageSourceEntrySnapshotV1Schema.parse({ ...present.snapshot, scopeUnitId: 'team-11' });
+        expect(snapshot).toMatchObject({ scopeUnitId: 'team-11' });
+        expect(TriageSourceObservationV1Schema.parse({ ...present, snapshot }).localRef).toEqual(present.localRef);
+    });
     it('serializes absence as exactly kind and localRef', () => {
         expect(TriageSourceObservationV1Schema.parse({ kind: 'absent', localRef }))
             .toEqual({ kind: 'absent', localRef });

@@ -52,6 +52,8 @@ export type GitlabListInstancesInput = Readonly<{
 export async function listGitlabTriageInstances(
   input: GitlabListInstancesInput,
 ): Promise<TriageListInstancesResultV1> {
+  const configuration = encodeGitlabConfiguration(GITLAB_CONFIGURATION_RECORD_V1);
+  if (configuration === null) throw new TypeError('gitlab_default_configuration_invalid');
   const outcome = await readTriageSourceAccountListingV1({
     connectedAccounts: input.connectedAccounts,
     purpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE,
@@ -134,7 +136,7 @@ export async function listGitlabTriageInstances(
         // would create a second account-identity carrier.
         localInstanceKey: admission.origin.normalized,
         keyStability: 'locatorDerived',
-        configuration: encodeGitlabConfiguration(GITLAB_CONFIGURATION_RECORD_V1),
+        configuration,
         locator: {
           v: 1,
           displayLabel: listed.displayName.trim() === ''

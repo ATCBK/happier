@@ -15,22 +15,32 @@
 
 import {
   MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
+  TriageSourceScopeSelectionV1Schema,
+  TriageSourceScopeUnitV1Schema,
+  type TriageSourceScopeSelectionV1,
+  type TriageSourceScopeUnitV1,
   type TriageSourceInstanceConfigurationV1,
 } from '@happier-dev/triage-protocol/v1';
-import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+import { createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 
-const GitlabConfigurationRecordV1Schema = defineProtocolObject({ v: defineProtocolLiteral(1) }, { policy: 'closed' });
+const GitlabConfigurationRecordV1Schema = defineProtocolObject({
+  v: defineProtocolLiteral(1), selection: TriageSourceScopeSelectionV1Schema.optional(),
+  units: defineProtocolArray(TriageSourceScopeUnitV1Schema).optional(),
+}, { policy: 'closed' });
 const storedConfiguration = createProtocolStoredReadSchema(GitlabConfigurationRecordV1Schema);
 
 /** The closed source-owned configured-instance record. */
-export type GitlabConfigurationRecord = Readonly<{ v: 1 }>;
+export type GitlabConfigurationRecord = Readonly<{ v: 1; selection: TriageSourceScopeSelectionV1; units?: readonly TriageSourceScopeUnitV1[] }>;
 
-export const GITLAB_CONFIGURATION_RECORD_V1: GitlabConfigurationRecord = Object.freeze({ v: 1 });
+export const GITLAB_CONFIGURATION_RECORD_V1: GitlabConfigurationRecord = Object.freeze({ v: 1, selection: { kind: 'all' } });
 
 export function encodeGitlabConfiguration(
-  record: GitlabConfigurationRecord,
-): TriageSourceInstanceConfigurationV1 {
-  return { v: 1, token: JSON.stringify({ v: record.v }) };
+  record: GitlabConfigurationRecord | Readonly<{ v: 1 }>,
+): TriageSourceInstanceConfigurationV1 | null {
+  const configuration = { v: 1 as const, token: JSON.stringify(record) };
+  const normalized = decodeGitlabConfiguration(configuration);
+  if (normalized === null) return null;
+  return { v: 1, token: JSON.stringify(normalized) };
 }
 
 /**
@@ -54,6 +64,12 @@ export function decodeGitlabConfiguration(
   } catch {
     return null;
   }
-  if (!storedConfiguration.safeParse(parsed).success) return null;
-  return GITLAB_CONFIGURATION_RECORD_V1;
+  const read = storedConfiguration.safeParse(parsed);
+  if (!read.success) return null;
+  const selection = read.data.selection ?? { kind: 'all' as const };
+  if (selection.kind === 'all') return GITLAB_CONFIGURATION_RECORD_V1;
+  if (!selection.unitIds.every((id) => /^[1-9][0-9]*$/u.test(id))) return null;
+  return { v: 1, selection, ...(read.data.units === undefined ? {} : {
+    units: read.data.units.filter((unit) => selection.unitIds.includes(unit.id)),
+  }) };
 }
