@@ -1,4 +1,4 @@
-import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1, parseTeamCredentialDirectMaterialStoredV1, parseTeamCredentialSourceVersionV1, type TeamCredentialDirectMaterialUseV1, type TeamCredentialDirectMaterialStoredV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
+import { computeTeamCredentialSourceMemberKeyV1, matchesTeamCredentialSourceVersionBasisV1, parseTeamCredentialDirectMaterialStoredV1, parseTeamCredentialSourceVersionV1, type TeamCredentialDirectMaterialUseV1, type TeamCredentialDirectMaterialStoredV1, type TeamCredentialDirectMaterialMineResponseV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import { type TeamCredentialPreparationOutputV1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
 
@@ -538,7 +538,17 @@ export async function readTeamCredentialRecipientMaterialInTx(
 }
 
 export type CurrentTeamCredentialRecipientMaterialResult =
-    | Readonly<{ ok: true; resourceId: string; resourceRevision: number; sourceMemberKey: string; sourceVersion: string; recipientMode: RecipientMode; stored: TeamCredentialDirectMaterialStoredV1; recipientContentPublicKeyFingerprint: string | null }>
+    | Readonly<{
+        ok: true;
+        admittedResource: NonNullable<Extract<TeamCredentialDirectMaterialMineResponseV1, { status: "ready" }>["admittedResource"]>;
+        resourceId: string;
+        resourceRevision: number;
+        sourceMemberKey: string;
+        sourceVersion: string;
+        recipientMode: RecipientMode;
+        stored: TeamCredentialDirectMaterialStoredV1;
+        recipientContentPublicKeyFingerprint: string | null;
+    }>
     | Readonly<{ ok: false; outcome: "unavailable"; reason: "access_removed" | "disabled" | "preparing" | "source_changed" | "recipient_binding_changed" | "resource_corrupt" }>
     | Readonly<{ ok: false; outcome: "operation_error"; error: "team_authentication_required" | "team_authentication_policy_unavailable" }>;
 
