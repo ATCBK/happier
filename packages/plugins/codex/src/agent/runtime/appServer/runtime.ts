@@ -909,16 +909,29 @@ export function createCodexAppServerRuntime(
   let goalObservationState: 'reading' | 'unobserved' | 'observed' = 'reading';
   const readAndPublishGoalSnapshot = async (goalClient: DisposableCodexAppServerClient, observedThreadId: string): Promise<void> => {
     goalObservationState = 'reading';
+    // Requested launch scope is distinct from this plugin process's scope; the host
+    // Exec boundary can still apply its admitted environment. Keep Goal and
+    // credential contents out of this local diagnostic.
+    const goalReadScope = {
+      threadId: observedThreadId,
+      initialThreadId: readExactCodexProviderSessionId(params.initialProviderSessionId),
+      requestedCodexHome: resolveCodexHome(readRuntimeProcessEnv()),
+      requestedSqliteHome: readRuntimeProcessEnv().CODEX_SQLITE_HOME ?? null,
+      pluginProcessCodexHome: resolveCodexHome(process.env),
+      transport: params.appServerTransport ?? (params.appServerEndpoint ? 'unixWebSocket' : 'stdio'),
+    };
     try {
       // ThreadResumeResponse has no Goal field. An explicit native read,
       // including goal:null, establishes the reopened source's initial state.
       const goal = readCodexGoalPayload(await goalClient.request('thread/goal/get', { threadId: observedThreadId }));
       goalObservationState = goal.kind === 'malformed' ? 'unobserved' : 'observed';
-      params.host.logger.debug('Codex app-server initial goal read', { threadId: observedThreadId, kind: goal.kind });
+      params.host.logger.debug('Codex app-server initial goal read', { ...goalReadScope, kind: goal.kind,
+        goalThreadId: goal.kind === 'present' ? readExactCodexProviderSessionId(goal.goal.threadId) : null });
       if (goal.kind !== 'malformed') await params.observeGoal?.(goal);
     } catch (error) {
       goalObservationState = 'unobserved';
       params.host.logger.debug('Codex app-server initial goal read failed', {
+        ...goalReadScope,
         errorName: error instanceof Error ? error.name : typeof error,
       });
     }
