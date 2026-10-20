@@ -18,6 +18,14 @@ function deferred<T>() {
 }
 
 describe.skipIf(process.platform !== 'linux')('computer source status projection', () => {
+  it('keeps retired status readable without starting a native process or claiming fresh grants', async () => {
+    native.call.mockResolvedValue({ structuredContent: { x11: true, xsend_event: true } });
+    const source = createComputerCaptureSource({ sessionId: 'retired-status', target, executablePath: '/managed/cua-driver' });
+    await source.close();
+    expect(await source.readStatus()).toEqual(source.status());
+    expect(native.instances).toHaveLength(0);
+  });
+
   it('delivers admitted viewer keys and text without screenshot or accessibility work and still requires a fresh agent observation after hand-back', async () => {
     native.call.mockImplementation(async ({ name }) => name === 'get_window_state' ? observation()
       : name === 'check_permissions' ? { structuredContent: { x11: true, xsend_event: true } }

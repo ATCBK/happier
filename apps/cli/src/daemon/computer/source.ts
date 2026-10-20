@@ -233,9 +233,9 @@ export function createComputerCaptureSource(input: Readonly<{
     input: (captureId: string, operation: ComputerInputOperationV1, requestedBy: 'agent' | 'human', signal?: AbortSignal) => execute(captureId, operation, requestedBy, signal),
     status,
     async readStatus(): Promise<ComputerControlStatusResponseV1> {
-      // Quarantine cannot read fresh OS grants, but its unsettled-input fact
-      // must remain readable so the existing recovery can retire the source.
-      if (control.getStatus().uncertain) return status();
+      // Retired/quarantined sources cannot read fresh OS grants. Their control
+      // fact remains readable without starting or reviving a native process.
+      if (closed || control.getStatus().uncertain) return status();
       try {
         const grants = await (await getDriver()).checkPermissions();
         return { ...status(), grants };
