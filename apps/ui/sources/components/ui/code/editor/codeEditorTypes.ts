@@ -19,6 +19,17 @@ export type CodeEditorFindHandle = Readonly<{
     isInputFocused: () => boolean;
 }>;
 
+export type CodeEditorCommand = 'indent' | 'outdent' | 'undo' | 'redo' | 'moveLeft' | 'moveRight' | 'nextChange' | 'prevChange' | 'find'
+    | Readonly<{ insert: string }> | Readonly<{ replaceDocument: string }>;
+export type CodeEditorHistory = Readonly<{ canUndo: boolean; canRedo: boolean }>;
+export type Rect = Readonly<{ x: number; y: number; width: number; height: number }>;
+export type EditorDecorationLayer = 'change' | 'diagnostic' | 'blame';
+/** Lines are 1-based; characters are 0-based UTF-16 offsets. */
+export type EditorDecoration =
+    | Readonly<{ layer?: 'change'; id: string; key: string; kind: 'added' | 'modified' | 'deleted'; startLine: number; endLine: number; removedLines?: readonly string[]; anchor?: 'before' | 'after' }>
+    | Readonly<{ layer?: 'diagnostic'; id: string; severity: 'error' | 'warning' | 'information' | 'hint'; startLine: number; startCharacter: number; endLine: number; endCharacter: number; message: string; code?: string | number; source?: string }>
+    | Readonly<{ layer?: 'blame'; id: string; startLine: number; lineCount: number; runId: string }>;
+
 export type CodeEditorProps = Readonly<{
     resetKey: string;
     value: string;
@@ -30,6 +41,10 @@ export type CodeEditorProps = Readonly<{
     showLineNumbers?: boolean;
     changeDebounceMs?: number;
     bridgeMaxChunkBytes?: number;
+    onReady?: () => void;
+    initialLine?: number;
+    lineNumberDigits?: number;
+    reviewLaneWidth?: number;
     /**
      * `framed` (default): a bordered inset box, as an editor inside a section. `canvas`: a whole document's
      * source that is the page itself (an Artifact's Markdown): no frame, on the page's own surface.
@@ -43,7 +58,21 @@ export type CodeEditorHandle = Readonly<{
     /** Move editing focus into the incumbent platform surface. */
     focus?: () => void;
     find?: CodeEditorFindHandle;
+    revealLine: (line: number, opts?: { focus?: boolean; select?: boolean; behavior?: 'smooth' | 'instant' }) => void;
+    runCommand: (command: CodeEditorCommand) => void;
+    subscribeHistory: (listener: (state: CodeEditorHistory) => void) => () => void;
+    setDecorations: (layer: EditorDecorationLayer, items: readonly EditorDecoration[]) => void;
+    onDecorationPress: (cb: (layer: EditorDecorationLayer, item: EditorDecoration) => void) => () => void;
+    getSelection?: () => { startLine: number; endLine: number; text: string; rect: Rect | null } | null;
+    subscribeSelection?: (listener: () => void) => () => void;
+    getLineRect?: (line: number) => Rect | null;
+    onPointerPosition?: (cb: (position: { line: number; character: number; rect: Rect } | null) => void) => () => void;
+    onActivatePosition?: (cb: (position: { line: number; character: number }) => void) => () => void;
+    getCursorPosition?: () => { line: number; character: number } | null;
 }>;
+
+/** Shared text-buffer capability for hosts that can also render a rich editor. */
+export type TextEditorHandle = Pick<CodeEditorHandle, 'getValue' | 'flushPendingChange' | 'focus' | 'find'> & Partial<CodeEditorHandle>;
 
 export function resolveMonacoLanguageId(language: string | null): string {
     const raw = normalizeCodeLanguageId(language);

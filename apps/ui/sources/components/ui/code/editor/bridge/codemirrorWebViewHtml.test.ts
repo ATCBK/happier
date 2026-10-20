@@ -49,7 +49,7 @@ describe('buildCodeMirrorWebViewHtml', () => {
         });
 
         expect(html).toContain('font-size: 26px;');
-        expect(html).toContain('line-height: 40px;');
+        expect(html).toContain('line-height: 44px;');
     });
 
     it('embeds the CodeMirror bundle when available and avoids CDN imports', async () => {

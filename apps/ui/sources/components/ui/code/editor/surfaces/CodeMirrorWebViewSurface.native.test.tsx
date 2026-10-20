@@ -58,6 +58,7 @@ vi.mock('react-native-unistyles', async () => {
 import { CodeMirrorWebViewSurface } from './CodeMirrorWebViewSurface.native';
 import { renderScreen } from '@/dev/testkit';
 import type { CodeEditorHandle } from '../codeEditorTypes';
+import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
 
 
 function emitEnvelope(envelope: any) {
@@ -100,6 +101,99 @@ function findPostedInitPayload(callStartIndex: number): any {
 }
 
 describe('CodeMirrorWebViewSurface (native)', () => {
+    it('forwards the configured editor save chord through the canonical host dispatcher', async () => {
+        postMessageSpy.mockClear();
+        const save = vi.fn();
+        await renderScreen(<KeyboardShortcutProvider handlers={{ 'files.editor.save': save }}>
+            <CodeMirrorWebViewSurface resetKey="save-shortcut" value="one" language="text" onChange={vi.fn()} />
+        </KeyboardShortcutProvider>);
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        const configs = postMessageSpy.mock.calls.map(([raw]) => JSON.parse(String(raw))).filter(message => message.type === 'keyboard.config');
+        expect(configs.at(-1)?.payload.signatures).toContain('s|shift=false|ctrl=false|meta=false|alt=true');
+        emitEnvelope({ v: 1, type: 'keyboard.shortcut', payload: { key: 's', code: 'KeyS', modifiers: { shift: false, ctrl: false, meta: false, alt: true }, repeat: false } });
+        expect(save).toHaveBeenCalledOnce();
+    });
+    it('consumes pointer, activation and cursor bridge events through the canonical handle and ignores malformed positions', async () => {
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="intelligence" value="one" language="text" onChange={vi.fn()} />);
+        expect(ref.current!.getCursorPosition!()).toBeNull();
+        const pointer = vi.fn();
+        const activate = vi.fn();
+        const stopPointer = ref.current!.onPointerPosition!(pointer);
+        const stopActivate = ref.current!.onActivatePosition!(activate);
+        emitEnvelope({ v: 1, type: 'cursor', payload: { line: 2, character: 3 } });
+        expect(ref.current!.getCursorPosition!()).toEqual({ line: 2, character: 3 });
+        emitEnvelope({ v: 1, type: 'pointer', payload: { line: 2, character: 3, rect: { x: 10, y: 20, width: 0, height: 22 } } });
+        expect(pointer).toHaveBeenLastCalledWith({ line: 2, character: 3, rect: { x: 10, y: 20, width: 0, height: 22 } });
+        emitEnvelope({ v: 1, type: 'activate', payload: { line: 2, character: 3 } });
+        expect(activate).toHaveBeenLastCalledWith({ line: 2, character: 3 });
+        emitEnvelope({ v: 1, type: 'cursor', payload: { line: 0, character: -1 } });
+        expect(ref.current!.getCursorPosition!()).toEqual({ line: 2, character: 3 });
+        emitEnvelope({ v: 1, type: 'pointer', payload: null });
+        expect(pointer).toHaveBeenLastCalledWith(null);
+        stopPointer(); stopActivate();
+        pointer.mockClear(); activate.mockClear();
+        emitEnvelope({ v: 1, type: 'activate', payload: { line: 2, character: 3 } });
+        emitEnvelope({ v: 1, type: 'pointer', payload: null });
+        expect(pointer).not.toHaveBeenCalled();
+        expect(activate).not.toHaveBeenCalled();
+    });
+    it('exposes bridge selection changes and clears the snapshot when its document is replaced', async () => {
+        const ref = React.createRef<CodeEditorHandle>();
+        const screen = await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="selection" value="one\ntwo" language="text" onChange={vi.fn()} />);
+        expect(ref.current?.getSelection?.()).toBeNull();
+        const listener = vi.fn();
+        const unsubscribe = ref.current!.subscribeSelection!(listener);
+        const selection = { startLine: 1, endLine: 2, text: 'ne\ntw', rect: { x: 5, y: 8, width: 0, height: 18 } };
+        emitEnvelope({ v: 1, type: 'selection', payload: selection });
+        expect(ref.current!.getSelection!()).toEqual(selection);
+        expect(listener).toHaveBeenCalledTimes(1);
+        await screen.update(<CodeMirrorWebViewSurface ref={ref} resetKey="new-file" value="elsewhere" language="text" onChange={vi.fn()} />);
+        expect(ref.current!.getSelection!()).toBeNull();
+        unsubscribe();
+        listener.mockClear();
+        emitEnvelope({ v: 1, type: 'selection', payload: selection });
+        expect(listener).not.toHaveBeenCalled();
+    });
+    it('reveals after document initialization and publishes engine history without rerendering its host', async () => {
+        postMessageSpy.mockClear();
+        const ref = React.createRef<CodeEditorHandle>();
+        const onReady = vi.fn();
+        await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="commands" value="one\ntwo" language="text" onChange={vi.fn()} initialLine={2} onReady={onReady} />);
+        const listener = vi.fn();
+        const unsubscribe = ref.current!.subscribeHistory(listener);
+        expect(listener).toHaveBeenLastCalledWith({ canUndo: false, canRedo: false });
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        expect(findPostedInitPayload(0)).toMatchObject({ reveal: { line: 2, behavior: 'instant' } });
+        emitEnvelope({ v: 1, type: 'editor.ready', payload: {} });
+        expect(onReady).toHaveBeenCalled();
+        ref.current!.runCommand({ insert: '{}' });
+        expect(JSON.parse(postMessageSpy.mock.calls.at(-1)![0])).toEqual({ v: 1, type: 'command', payload: { command: { insert: '{}' } } });
+        emitEnvelope({ v: 1, type: 'history.state', payload: { canUndo: true, canRedo: false } });
+        expect(listener).toHaveBeenLastCalledWith({ canUndo: true, canRedo: false });
+        unsubscribe();
+        listener.mockClear();
+        emitEnvelope({ v: 1, type: 'history.state', payload: { canUndo: false, canRedo: true } });
+        expect(listener).not.toHaveBeenCalled();
+    });
+    it('queues decoration layers until ready and reports the engine-tracked pressed range', async () => {
+        postMessageSpy.mockClear();
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="markers" value="one\ntwo" language="text" onChange={vi.fn()} />);
+        expect(ref.current).toHaveProperty('setDecorations', expect.any(Function));
+        const marker = { id: 'unit', key: 'content', kind: 'modified' as const, startLine: 2, endLine: 2, removedLines: ['before'] };
+        ref.current!.setDecorations!('change', [marker]);
+        const pressed = vi.fn();
+        const unsubscribe = ref.current!.onDecorationPress!(pressed);
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        expect(postMessageSpy.mock.calls.map(([raw]) => JSON.parse(String(raw)))).toContainEqual({ v: 1, type: 'decorations.set', payload: { layer: 'change', items: [marker] } });
+        emitEnvelope({ v: 1, type: 'decorations.press', payload: { layer: 'change', item: { ...marker, startLine: 3, endLine: 3 } } });
+        expect(pressed).toHaveBeenLastCalledWith('change', { ...marker, startLine: 3, endLine: 3 });
+        unsubscribe();
+        pressed.mockClear();
+        emitEnvelope({ v: 1, type: 'decorations.press', payload: { layer: 'change', item: marker } });
+        expect(pressed).not.toHaveBeenCalled();
+    });
     it('queues a travelling query until ready and publishes engine status through the existing handle', async () => {
         postMessageSpy.mockClear();
         const ref = React.createRef<CodeEditorHandle>();
