@@ -1,4 +1,5 @@
 import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
+import type { PluginLanguageServerContributionV1 } from '@happier-dev/protocol/plugins/contributions/languageServers';
 import type {
   ActionDefinitionV1,
   PluginAgentContributionV2,
@@ -179,6 +180,7 @@ export type PluginContributionRegistry = Readonly<{
   inputTypes: readonly PluginOwnedContribution<PluginInputTypeContributionV1>[];
   atmospherePictures: readonly PluginOwnedContribution<PluginAtmospherePictureContributionV1>[];
   registrySources: readonly PluginOwnedContribution<PluginRegistrySourceContributionV1>[];
+  languageServers: readonly PluginOwnedContribution<PluginLanguageServerContributionV1>[];
   skills: readonly PluginOwnedContribution<PluginSkillContributionV1>[];
   machineProvisioners: readonly PluginOwnedContribution<MachineProvisionerContributionV1>[];
   dragSources: readonly PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[];
@@ -436,6 +438,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
   const inputTypes: PluginOwnedContribution<PluginInputTypeContributionV1>[] = [];
   const atmospherePictures: PluginOwnedContribution<PluginAtmospherePictureContributionV1>[] = [];
   const registrySources: PluginOwnedContribution<PluginRegistrySourceContributionV1>[] = [];
+  const languageServers: PluginOwnedContribution<PluginLanguageServerContributionV1>[] = [];
   const skills: PluginOwnedContribution<PluginSkillContributionV1>[] = [];
   const machineProvisioners: PluginOwnedContribution<MachineProvisionerContributionV1>[] = [];
   const dragSources: PluginOwnedClientExecutableContribution<PluginDragSourceContributionV1>[] = [];
@@ -1101,6 +1104,15 @@ export function buildPluginContributionRegistry(params: Readonly<{
         sourceSpec: plugin.sourceSpec, definition,
       });
     }
+    for (const definition of readSemanticDefinitions<PluginLanguageServerContributionV1>('languageServers')) {
+      languageServers.push({
+        pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
+        identity: createPluginContributionIdentity({ pluginId: plugin.pluginId, localId: definition.id }),
+        pluginRootPath: plugin.pluginRootPath, manifestPath: plugin.manifestPath,
+        daemonEntryPath: plugin.daemonEntryPath, devDaemonEntryPath: plugin.devDaemonEntryPath,
+        sourceSpec: plugin.sourceSpec, definition,
+      });
+    }
     for (const definition of readSemanticDefinitions<PluginSkillContributionV1>('skills')) {
       skills.push({
         pluginId: plugin.pluginId, pluginVersion: plugin.manifest.version,
@@ -1231,6 +1243,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
     inputTypes: Object.freeze(inputTypes),
     atmospherePictures: Object.freeze(atmospherePictures),
     registrySources: Object.freeze(registrySources),
+    languageServers: Object.freeze(languageServers),
     skills: Object.freeze(skills),
     machineProvisioners: Object.freeze(machineProvisioners),
     dragSources: Object.freeze(dragSources),

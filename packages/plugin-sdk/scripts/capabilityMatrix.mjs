@@ -33,6 +33,10 @@ export const CAPABILITY_HOST_BINDING_OWNERS_V1 = Object.freeze({
   composerFamilyProjection: 'apps/cli/src/plugins/projection/registry/composer.ts',
   /** Projects declared managed dependencies into the client projection. */
   managedDependencyFamilyProjection: 'apps/cli/src/plugins/projection/registry/managedDependencies.ts',
+  /** Reads admitted language-server declarations on the workspace Machine. */
+  languageServerDefinitions: 'apps/cli/src/lsp/languageServerDefinitions.ts',
+  /** Owns on-demand server processes and open-document lifetime. */
+  languageServerHost: 'apps/cli/src/lsp/languageServerHost.ts',
   /** Projects cold machine-provisioner descriptors; executable roles remain ordinary Actions. */
   machineProvisionerFamilyProjection: 'apps/cli/src/plugins/projection/registry/machineProvisioners.ts',
   /** Projects declared Account collections into the client projection. */
@@ -173,6 +177,10 @@ export const MANIFEST_FAMILY_REALM_OWNERS_V1 = Object.freeze({
   composerRegions: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.composerFamilyProjection),
   managedDependencies: declarativeFamilyOwners(
     CAPABILITY_HOST_BINDING_OWNERS_V1.managedDependencyFamilyProjection,
+  ),
+  languageServers: realmOwners(
+    CAPABILITY_HOST_BINDING_OWNERS_V1.languageServerDefinitions,
+    CAPABILITY_HOST_BINDING_OWNERS_V1.languageServerHost,
   ),
   machineProvisioners: declarativeFamilyOwners(
     CAPABILITY_HOST_BINDING_OWNERS_V1.machineProvisionerFamilyProjection,

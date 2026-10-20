@@ -1,4 +1,5 @@
 import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
+import type { PluginLanguageServerContributionV1 } from '@happier-dev/protocol/plugins/contributions/languageServers';
 import type {
     BackendCatalogDefinition,
     BackendDefinitionContractV1,
@@ -127,6 +128,7 @@ export type ResolvedWorkflowContribution = ResolvedTargetUiContribution<PluginWo
 export type ResolvedInputTypeContribution = ResolvedTargetUiContribution<PluginInputTypeContributionV1>;
 export type ResolvedAtmospherePictureContribution = ResolvedTargetUiContribution<PluginAtmospherePictureContributionV1>;
 export type ResolvedRegistrySourceContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginRegistrySourceContributionV1>;
+export type ResolvedLanguageServerContribution = ResolvedTargetUiContribution<PluginLanguageServerContributionV1>;
 export type ResolvedSkillContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginSkillContributionV1> & Readonly<{
     pluginRootPath: string;
     pluginName?: string;
@@ -870,6 +872,7 @@ export type ResolvedContributionInputs = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    languageServers?: readonly ResolvedLanguageServerContribution[];
     skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
@@ -936,6 +939,7 @@ export type ResolvedContributionRegistry = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    languageServers?: readonly ResolvedLanguageServerContribution[];
     skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];

@@ -24,6 +24,7 @@ description: Contribution families that a plugin can declare for projection and 
 | `settings` | Typed settings descriptors | `context.services.settings` in invoked handlers |
 | `workflows` | Reusable, read-only Workflow definitions shown under From plugins | `workflows.<id>`: `title`, optional `description`, and `definition` |
 | `registrySources` | Data-only catalogs shown alongside built-in and personal sources | `registrySources.<id>`: `title`, `format`, `kinds`, `url`, optional `path` and `ref` |
+| `languageServers` | Machine-side language-server declarations | `languageServers.<id>`: static language mapping, declared executable and initialization/configuration data |
 | `skills` | Packaged, read-only skills in the Skills library | `skills.<id>`: `directory` |
 | `openableContentViewers` | Declarative matching for host-opened content and its plugin-owned viewer | direct same-plugin `contributes.ui.views` destination |
 | MCP servers | Hosted or managed MCP server descriptors | `mcp.servers.<id>.runtime` when dynamic |
@@ -47,6 +48,73 @@ Do not infer availability from this shape catalog. Consult the generated matrix
 for each family's source availability, optional maintained consumer evidence,
 unblock condition, loaded-platform evidence, and release availability. This keeps
 mutable support status in one generated owner rather than duplicating it here.
+
+## Language servers in development
+
+In **unreleased 0.3 development source**, `definePlugin.languageServers` adds
+language intelligence on the Machine where your plugin is installed and enabled.
+It is a declaration, with no `api.languageServers.register` call or activation
+callback. Happier starts the server on an explicit language request rather than
+when someone merely opens a file. Check your SDK artifact's generated
+[availability matrix](/plugins/manifest/availability) before targeting a published
+host; a source declaration does not establish released support.
+
+This example declares the native TypeScript server for Linux x64. A plugin
+supporting other Machines supplies their corresponding pinned assets too.
+
+```ts
+import { definePlugin } from '@happier-dev/plugin-sdk';
+
+export const { manifest, activate } = definePlugin({
+  id: 'com.example.typescript-language',
+  version: '1.0.0',
+  languageServers: {
+    typescript: {
+      title: 'TypeScript',
+      languageIds: { typescript: 'typescript', tsx: 'typescriptreact' },
+      executable: { kind: 'managedDependency', id: 'typescript-native' },
+      args: ['--lsp', '--stdio'],
+      initializationOptions: {
+        userPreferences: { tsserver: { automaticTypeAcquisition: { enabled: false } } },
+        disablePushDiagnostics: true,
+      },
+    },
+  },
+  managedDependencies: {
+    'typescript-native': {
+      title: 'TypeScript language server',
+      executable: 'tsc',
+      platforms: ['linux'],
+      architectures: ['x64'],
+      sources: [{
+        kind: 'pinnedArchive', installId: 'dep.example-typescript-native', version: '7.0.2',
+        assetsByPlatform: {
+          'linux-x64': {
+            archiveUrl: 'https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.0.2.tgz',
+            sha256: '7ecad6f67377e831856367ab062ef394f21506a611405bf8ac0ff039348637d3',
+            executableSubpath: 'package/lib/tsc',
+          },
+        },
+      }],
+    },
+  },
+});
+```
+
+`languageIds` maps the app's language name to the server's LSP language id; they
+can differ, as `tsx` and `typescriptreact` do here. Optional `filePatterns` add
+matching fallbacks. Leave `rootMarkers` absent to use the workspace root; declare
+markers only when your server needs root selection. `initializationOptions` go
+to the server once during initialization. Use optional `settings` for JSON
+configuration that the server requests by a dotted section name.
+
+The executable must reference a declared managed dependency or system tool.
+Use a checksummed managed archive when your plugin supplies the binary, keeping
+any companion files the server requires. A free command string, project-local
+binary, resolver callback, environment override and custom timeout are rejected.
+Installing a plugin on a different Machine does not supply a server to this
+workspace. Disabling or removing it retires its declarations through the normal
+plugin lifecycle.
 
 ## Entity drag sources and drop targets
 

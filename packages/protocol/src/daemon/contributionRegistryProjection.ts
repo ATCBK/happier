@@ -83,6 +83,7 @@ import {
   PluginInputTypeContributionV1Schema,
   PluginAtmospherePictureContributionV1Schema,
   PluginRegistrySourceContributionV1Schema,
+  PluginLanguageServerContributionV1Schema,
   PluginSkillContributionV1Schema,
   PluginDragSourceContributionV1Schema,
   PluginDropTargetContributionV1Schema,
@@ -2466,6 +2467,18 @@ export const PluginProjectedRegistrySourceEntryV1Schema = lazyZodSchema(() => z.
 })));
 export type PluginProjectedRegistrySourceEntryV1 = z.infer<typeof PluginProjectedRegistrySourceEntryV1Schema>;
 
+export const PluginProjectedLanguageServerEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), pluginId: PluginIdSchema, pluginVersion: z.string().check(z.minLength(1)),
+  occurrenceId: zMini.optional(PluginUiRuntimeOccurrenceIdV1Schema),
+  executionOrigin: zMini.optional(PluginMachineExecutionOriginV1Schema),
+  definition: PluginLanguageServerContributionV1Schema,
+}).check(z.superRefine((entry, context) => {
+  if (entry.id !== `${entry.pluginId}/${entry.definition.id}`) context.addIssue({ code: 'custom', path: ['id'], message: 'Language server identity must match its declaration' });
+  if (entry.executionOrigin && !entry.occurrenceId) context.addIssue({ code: 'custom', path: ['occurrenceId'], message: 'Language server origin requires its serving occurrence' });
+  validateProjectedExecutionOrigin(entry.executionOrigin, entry, context);
+})));
+export type PluginProjectedLanguageServerEntryV1 = z.infer<typeof PluginProjectedLanguageServerEntryV1Schema>;
+
 export const PluginProjectedSkillEntryV1Schema = lazyZodSchema(() => z.strictObject({
   id: z.string().check(z.minLength(1)), pluginId: PluginIdSchema,
   pluginName: z.optional(z.string()), pluginVersion: z.string().check(z.minLength(1)),
@@ -2573,6 +2586,7 @@ export const PluginProjectedFamilyEntryV2Schema: z.ZodMiniUnion<readonly [
   typeof PluginProjectedInputTypeEntryV1Schema,
   typeof PluginProjectedAtmospherePictureEntryV1Schema,
   typeof PluginProjectedRegistrySourceEntryV1Schema,
+  typeof PluginProjectedLanguageServerEntryV1Schema,
   typeof PluginProjectedSkillEntryV1Schema,
   typeof PluginProjectedDefinitionEntryV2Schema,
   typeof PluginProjectedWorkflowEntryV1Schema,
@@ -2596,6 +2610,7 @@ export const PluginProjectedFamilyEntryV2Schema: z.ZodMiniUnion<readonly [
   PluginProjectedInputTypeEntryV1Schema,
   PluginProjectedAtmospherePictureEntryV1Schema,
   PluginProjectedRegistrySourceEntryV1Schema,
+  PluginProjectedLanguageServerEntryV1Schema,
   PluginProjectedSkillEntryV1Schema,
   PluginProjectedDefinitionEntryV2Schema,
   PluginProjectedWorkflowEntryV1Schema,
@@ -2642,6 +2657,7 @@ const PluginProjectedWorkflowsFamilyV1Schema = lazyZodSchema(() => projectedFami
 const PluginProjectedInputTypesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('inputTypes', PluginProjectedInputTypeEntryV1Schema));
 const PluginProjectedAtmospherePicturesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('atmospherePictures', PluginProjectedAtmospherePictureEntryV1Schema));
 const PluginProjectedRegistrySourcesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('registrySources', PluginProjectedRegistrySourceEntryV1Schema));
+const PluginProjectedLanguageServersFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('languageServers', PluginProjectedLanguageServerEntryV1Schema));
 const PluginProjectedSkillsFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('skills', PluginProjectedSkillEntryV1Schema));
 const PluginProjectedMachineProvisionersFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('machineProvisioners', PluginProjectedMachineProvisionerEntryV1Schema));
 const PluginProjectedDragSourcesFamilyV1Schema = lazyZodSchema(() => projectedFamilySchema('dragSources', PluginProjectedDragSourceEntryV1Schema));
@@ -2668,6 +2684,7 @@ type PluginProjectedFamiliesByIdV2Shape = {
   inputTypes: z.ZodMiniOptional<typeof PluginProjectedInputTypesFamilyV1Schema>;
   atmospherePictures: z.ZodMiniOptional<typeof PluginProjectedAtmospherePicturesFamilyV1Schema>;
   registrySources: z.ZodMiniOptional<typeof PluginProjectedRegistrySourcesFamilyV1Schema>;
+  languageServers: z.ZodMiniOptional<typeof PluginProjectedLanguageServersFamilyV1Schema>;
   skills: z.ZodMiniOptional<typeof PluginProjectedSkillsFamilyV1Schema>;
   machineProvisioners: z.ZodMiniOptional<typeof PluginProjectedMachineProvisionersFamilyV1Schema>;
   dragSources: z.ZodMiniOptional<typeof PluginProjectedDragSourcesFamilyV1Schema>;
@@ -2697,6 +2714,7 @@ const PluginProjectedFamiliesByIdV2Schema: z.ZodMiniDefault<
   inputTypes: z.optional(PluginProjectedInputTypesFamilyV1Schema),
   atmospherePictures: z.optional(PluginProjectedAtmospherePicturesFamilyV1Schema),
   registrySources: z.optional(PluginProjectedRegistrySourcesFamilyV1Schema),
+  languageServers: z.optional(PluginProjectedLanguageServersFamilyV1Schema),
   skills: z.optional(PluginProjectedSkillsFamilyV1Schema),
   machineProvisioners: z.optional(PluginProjectedMachineProvisionersFamilyV1Schema),
   dragSources: z.optional(PluginProjectedDragSourcesFamilyV1Schema),
@@ -2726,6 +2744,7 @@ export const PluginProjectedFamilyV2Schema: z.ZodMiniUnion<readonly [
   typeof PluginProjectedInputTypesFamilyV1Schema,
   typeof PluginProjectedAtmospherePicturesFamilyV1Schema,
   typeof PluginProjectedRegistrySourcesFamilyV1Schema,
+  typeof PluginProjectedLanguageServersFamilyV1Schema,
   typeof PluginProjectedSkillsFamilyV1Schema,
   typeof PluginProjectedMachineProvisionersFamilyV1Schema,
   typeof PluginProjectedDragSourcesFamilyV1Schema,
@@ -2751,6 +2770,7 @@ export const PluginProjectedFamilyV2Schema: z.ZodMiniUnion<readonly [
   PluginProjectedInputTypesFamilyV1Schema,
   PluginProjectedAtmospherePicturesFamilyV1Schema,
   PluginProjectedRegistrySourcesFamilyV1Schema,
+  PluginProjectedLanguageServersFamilyV1Schema,
   PluginProjectedSkillsFamilyV1Schema,
   PluginProjectedMachineProvisionersFamilyV1Schema,
   PluginProjectedDragSourcesFamilyV1Schema,

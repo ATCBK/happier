@@ -4630,6 +4630,11 @@
       "types": "./dist/ssh/sshTarget.d.ts",
       "default": "./dist/ssh/sshTarget.js"
     },
+    "./plugins/contributions/languageServers": {
+      "happier-source": "./src/plugins/contributions/languageServers.ts",
+      "types": "./dist/plugins/contributions/languageServers.d.ts",
+      "default": "./dist/plugins/contributions/languageServers.js"
+    },
     "./plugins/contributions/managedDependencies": {
       "happier-source": "./src/plugins/contributions/managedDependencies.ts",
       "types": "./dist/plugins/contributions/managedDependencies.d.ts",
@@ -6948,6 +6953,16 @@
       "happier-source": "./src/workspace/favicon/v1.ts",
       "types": "./dist/workspace/favicon/v1.d.ts",
       "default": "./dist/workspace/favicon/v1.js"
+    },
+    "./machines/fileLanguage": {
+      "happier-source": "./src/machines/fileLanguage.ts",
+      "types": "./dist/machines/fileLanguage.d.ts",
+      "default": "./dist/machines/fileLanguage.js"
+    },
+    "./machines/languageIntelligence": {
+      "happier-source": "./src/machines/languageIntelligence.ts",
+      "types": "./dist/machines/languageIntelligence.d.ts",
+      "default": "./dist/machines/languageIntelligence.js"
     },
     "./machines/workspaceFiles": {
       "happier-source": "./src/machines/workspaceFiles.ts",

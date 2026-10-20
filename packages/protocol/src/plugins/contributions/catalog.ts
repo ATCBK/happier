@@ -200,6 +200,7 @@ const FAMILY_POLICIES = {
   inputTypes: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'inputTypes', allowedRuntimeRegistration: null, consumer: 'input-fields', platforms: ALL_PLATFORMS },
   atmospherePictures: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'atmospherePictures', allowedRuntimeRegistration: null, consumer: 'atmosphere-picture-catalog', platforms: ALL_PLATFORMS },
   registrySources: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'registrySources', allowedRuntimeRegistration: null, consumer: 'registry-source-list', platforms: ALL_PLATFORMS },
+  languageServers: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'languageServers', allowedRuntimeRegistration: null, consumer: 'language-server-host', platforms: CLI_PLATFORMS },
   skills: { identityField: 'id', disposition: 'retained', activationDemand: 'none', projectionFamily: 'skills', allowedRuntimeRegistration: null, consumer: 'skill-library', platforms: ALL_PLATFORMS },
   dragSources: { identityField: 'id', disposition: 'retained', activationDemand: 'registration', projectionFamily: 'dragSources', allowedRuntimeRegistration: 'dragSources', registrationHost: 'client', consumer: 'entity-drag-drop', platforms: ALL_PLATFORMS },
   workItems: { identityField: 'id', disposition: 'retained', activationDemand: 'registration', projectionFamily: 'workItems', allowedRuntimeRegistration: 'workItems', registrationHost: 'client', consumer: 'work-board', platforms: ALL_PLATFORMS },
@@ -508,6 +509,13 @@ function extractNestedReferences(family: string, value: Readonly<Record<string, 
           }]
         : []),
     ];
+  }
+  if (family === 'languageServers') {
+    const executable = value.executable && typeof value.executable === 'object'
+      ? value.executable as Readonly<Record<string, unknown>> : null;
+    if (!executable || executable.id === undefined) return [];
+    return [{ targetFamily: executable.kind === 'managedDependency' ? 'managedDependencies' : 'systemTools',
+      reference: executable.id, path: ['executable', 'id'] }];
   }
   if (family === 'mcp.servers') {
     const transport = value.transport && typeof value.transport === 'object' ? value.transport as Record<string, unknown> : null;

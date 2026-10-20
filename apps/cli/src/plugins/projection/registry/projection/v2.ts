@@ -49,6 +49,7 @@ import { workflowsProjectionFamily } from '../workflows';
 import { inputTypesProjectionFamily } from '../inputTypes';
 import { atmospherePicturesProjectionFamily } from '../atmospherePictures';
 import { registrySourcesProjectionFamily } from '../registrySources';
+import { languageServersProjectionFamily } from '../languageServers';
 import { skillsProjectionFamily } from '../skills';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
@@ -424,6 +425,9 @@ function collectPluginContributionMetadata(
     }
     for (const source of registry.registrySources ?? []) {
         upsert(source);
+    }
+    for (const server of registry.languageServers ?? []) {
+        upsert(server);
     }
     for (const skill of registry.skills ?? []) {
         upsert(skill);
@@ -979,6 +983,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         inputTypesProjectionFamily,
         atmospherePicturesProjectionFamily,
         registrySourcesProjectionFamily,
+        languageServersProjectionFamily,
         skillsProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,

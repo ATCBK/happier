@@ -245,6 +245,7 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
     const atmospherePictures = Object.freeze([...(inputs.atmospherePictures ?? [])].sort((left, right) =>
         buildQualifiedPluginContributionKey(left.identity).localeCompare(buildQualifiedPluginContributionKey(right.identity))));
     const registrySources = freezeQualifiedContributions(inputs.registrySources ?? []);
+    const languageServers = freezeQualifiedContributions(inputs.languageServers ?? []);
     const skills = freezeQualifiedContributions(inputs.skills ?? []);
     const dragSources = freezeQualifiedContributions(inputs.dragSources ?? []);
     const workItems = freezeQualifiedContributions(inputs.workItems ?? []);
@@ -533,6 +534,7 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
         inputTypes,
         atmospherePictures,
         registrySources,
+        languageServers,
         skills,
         machineProvisioners,
         machineProvisionersByContributionKey: Object.freeze(machineProvisionersByContributionKey),
@@ -1058,6 +1060,7 @@ export function createMergedContributionRegistry(
         inputTypes: Object.freeze([...(builtIn.inputTypes ?? []), ...(plugin.inputTypes ?? [])]),
         atmospherePictures: Object.freeze([...(builtIn.atmospherePictures ?? []), ...(plugin.atmospherePictures ?? [])]),
         registrySources: Object.freeze([...(builtIn.registrySources ?? []), ...(plugin.registrySources ?? [])]),
+        languageServers: Object.freeze([...(builtIn.languageServers ?? []), ...(plugin.languageServers ?? [])]),
         skills: Object.freeze([...(builtIn.skills ?? []), ...(plugin.skills ?? [])]),
         machineProvisioners: Object.freeze([...(builtIn.machineProvisioners ?? []), ...(plugin.machineProvisioners ?? [])]),
         dragSources: Object.freeze([...(builtIn.dragSources ?? []), ...(plugin.dragSources ?? [])]),

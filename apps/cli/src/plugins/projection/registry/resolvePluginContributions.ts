@@ -21,6 +21,7 @@ import type {
     ResolvedInputTypeContribution,
     ResolvedAtmospherePictureContribution,
     ResolvedRegistrySourceContribution,
+    ResolvedLanguageServerContribution,
     ResolvedSkillContribution,
     ResolvedMachineProvisionerContribution,
     ResolvedDragSourceContribution,
@@ -316,6 +317,7 @@ export function projectLoadedPluginContributes(
     const inputTypeCandidates: ResolvedInputTypeContribution[] = [];
     const atmospherePictureCandidates: ResolvedAtmospherePictureContribution[] = [];
     const registrySourceCandidates: ResolvedRegistrySourceContribution[] = [];
+    const languageServerCandidates: ResolvedLanguageServerContribution[] = [];
     const skillCandidates: ResolvedSkillContribution[] = [];
     const machineProvisionerCandidates: ResolvedMachineProvisionerContribution[] = [];
     const dragSourceCandidates: ResolvedDragSourceContribution[] = [];
@@ -898,6 +900,11 @@ export function projectLoadedPluginContributes(
             pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
             manifestPath: contribution.manifestPath, definition: contribution.definition });
     }
+    for (const contribution of pluginRegistry.languageServers) {
+        languageServerCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
+            pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion, identity: contribution.identity!,
+            manifestPath: contribution.manifestPath, definition: contribution.definition });
+    }
     for (const contribution of pluginRegistry.skills) {
         const pluginName = params.loadResult.loadedPlugins.find(plugin => plugin.manifest.id === contribution.pluginId)?.manifest.displayName;
         skillCandidates.push({ provenance: params.provenance, source: { kind: contribution.sourceSpec.kind },
@@ -1042,6 +1049,7 @@ export function projectLoadedPluginContributes(
         inputTypes: Object.freeze(inputTypeCandidates),
         atmospherePictures: Object.freeze(atmospherePictureCandidates),
         registrySources: Object.freeze(registrySourceCandidates),
+        languageServers: Object.freeze(languageServerCandidates),
         skills: Object.freeze(skillCandidates),
         machineProvisioners: Object.freeze(machineProvisionerCandidates),
         dragSources: Object.freeze(dragSourceCandidates),

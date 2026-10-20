@@ -13,7 +13,7 @@ import type {
   ComposerContentMediaKindV1,
   ComposerContentMimeTypeV1,
 } from './composer.js';
-import type { JsonValue, PluginContributionLocalId, PluginJsonSchema, PluginJsonValueV2 } from './identity.js';
+import type { JsonValue, PluginContributionLocalId, PluginJsonSchema, PluginJsonValueV2, PluginReference } from './identity.js';
 import type { ProtocolComposableSchema } from './protocol/protocolFacade.js';
 import { projectProtocolValue } from './protocol/projectProtocolValue.js';
 import type {
@@ -63,6 +63,22 @@ export type PluginRegistrySourceContributionV1 = Readonly<{
   url: string;
   path?: string;
   ref?: string;
+}>;
+
+/** Static Machine-side server declaration; Protocol owns strict admission. */
+export type PluginLanguageServerContributionV1 = Readonly<{
+  id: PluginContributionLocalId;
+  title: string;
+  languageIds: Readonly<Record<string, string>>;
+  filePatterns?: readonly string[];
+  rootMarkers?: readonly string[];
+  executable: Readonly<{
+    kind: 'managedDependency' | 'systemTool';
+    id: PluginReference;
+  }>;
+  args: readonly string[];
+  initializationOptions?: JsonValue;
+  settings?: JsonValue;
 }>;
 
 /** Read-only packaged skill; metadata is derived from its SKILL.md. */
@@ -604,6 +620,7 @@ export interface PluginManifest {
     inputTypes?: readonly PluginInputTypeContributionV1[];
     atmospherePictures?: readonly PluginAtmospherePictureContributionV1[];
     registrySources?: readonly PluginRegistrySourceContributionV1[];
+    languageServers?: readonly PluginLanguageServerContributionV1[];
     skills?: readonly PluginSkillContributionV1[];
     dragSources?: readonly PluginDragSourceContributionV1[];
     workItems?: readonly PluginWorkItemsContributionV1[];
@@ -726,6 +743,7 @@ export type PluginContributes = Readonly<{
   inputTypes: NonNullable<NonNullable<PluginManifest['contributes']>['inputTypes']>;
   atmospherePictures: NonNullable<NonNullable<PluginManifest['contributes']>['atmospherePictures']>;
   registrySources: NonNullable<NonNullable<PluginManifest['contributes']>['registrySources']>;
+  languageServers: NonNullable<NonNullable<PluginManifest['contributes']>['languageServers']>;
   skills: NonNullable<NonNullable<PluginManifest['contributes']>['skills']>;
   dragSources: NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>;
   workItems: NonNullable<NonNullable<PluginManifest['contributes']>['workItems']>;

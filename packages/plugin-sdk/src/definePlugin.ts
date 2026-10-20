@@ -897,6 +897,10 @@ export type DefinePluginInput<
             PluginContributionLocalId,
             Omit<NonNullable<NonNullable<PluginManifest['contributes']>['managedDependencies']>[number], 'id'>
         >>;
+        languageServers?: Readonly<Record<
+            PluginContributionLocalId,
+            Omit<ContributionRow<'languageServers'>, 'id'>
+        >>;
         machineProvisioners?: Readonly<Record<PluginContributionLocalId, MachineProvisionerAuthorDefinitionV1>>;
         systemTools?: Readonly<Record<
             PluginContributionLocalId,
@@ -2438,6 +2442,7 @@ const WORK_ITEMS_ADAPTER = descriptorFamilyAdapter('workItems');
 const DROP_TARGETS_ADAPTER = descriptorFamilyAdapter('dropTargets');
 const NOTIFICATIONS_ADAPTER = descriptorFamilyAdapter('notifications');
 const MANAGED_DEPENDENCIES_ADAPTER = descriptorFamilyAdapter('managedDependencies');
+const LANGUAGE_SERVERS_ADAPTER = descriptorFamilyAdapter('languageServers');
 const MACHINE_PROVISIONERS_ADAPTER = descriptorFamilyAdapter('machineProvisioners');
 const SYSTEM_TOOLS_ADAPTER = descriptorFamilyAdapter('systemTools');
 const VOICE_MODEL_PACKS_ADAPTER = descriptorFamilyAdapter('voiceModelPacks');
@@ -2639,6 +2644,7 @@ export const DEFINE_PLUGIN_FAMILY_POLICY_V2 = Object.freeze({
     dropTargets: { classification: 'adapter', authorKey: 'dropTargets', inputShape: 'descriptor', adapter: DROP_TARGETS_ADAPTER },
     notifications: { classification: 'descriptor-only', authorKey: 'notifications', inputShape: 'descriptor', adapter: NOTIFICATIONS_ADAPTER },
     managedDependencies: { classification: 'descriptor-only', authorKey: 'managedDependencies', inputShape: 'descriptor', adapter: MANAGED_DEPENDENCIES_ADAPTER },
+    languageServers: { classification: 'descriptor-only', authorKey: 'languageServers', inputShape: 'descriptor', adapter: LANGUAGE_SERVERS_ADAPTER },
     machineProvisioners: { classification: 'descriptor-only', authorKey: 'machineProvisioners', inputShape: 'descriptor', adapter: MACHINE_PROVISIONERS_ADAPTER },
     systemTools: { classification: 'descriptor-only', authorKey: 'systemTools', inputShape: 'descriptor', adapter: SYSTEM_TOOLS_ADAPTER },
     voiceModelPacks: { classification: 'descriptor-only', authorKey: 'voiceModelPacks', inputShape: 'descriptor', adapter: VOICE_MODEL_PACKS_ADAPTER },

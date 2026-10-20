@@ -69,6 +69,7 @@ export const CAPABILITY_MATRIX_DECLARATIONS_V1 = Object.freeze({
     scmBackends: available('packages/plugins/scm-git/src/manifest.ts'),
     connectedAccountDescriptors: available('packages/plugins/gemini/src/manifest.ts'),
     managedDependencies: available('packages/plugins/codex/src/manifest.ts'),
+    languageServers: available('packages/plugins/lang-typescript/src/manifest.ts'),
     systemTools: available('packages/plugins/antigravity/src/manifest.ts'),
     promptAssets: available('packages/plugins/review-deepsec/src/manifest.ts'),
     hooks: available('packages/plugins/gemini/src/manifest.ts'),

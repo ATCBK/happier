@@ -98,6 +98,8 @@ const HOST_BINDING_OWNER_EVIDENCE = Object.freeze({
   'apps/cli/src/plugins/projection/registry/browser.ts': 'export const pluginBrowserProjectionFamily',
   'apps/cli/src/plugins/projection/registry/composer.ts': 'export const composerControlsProjectionFamily',
   'apps/cli/src/plugins/projection/registry/managedDependencies.ts': 'export const managedDependenciesProjectionFamily',
+  'apps/cli/src/lsp/languageServerDefinitions.ts': 'export function createLanguageServerDefinitions',
+  'apps/cli/src/lsp/languageServerHost.ts': 'export function createLanguageServerHost',
   'apps/cli/src/plugins/projection/registry/machineProvisioners.ts': 'export const machineProvisionersProjectionFamily',
   'apps/cli/src/plugins/projection/registry/accountCollections.ts': 'export const accountCollectionsProjectionFamily',
   'apps/cli/src/plugins/projection/registry/voiceDeclarations.ts': 'export const voiceModelPackProjectionFamily',
@@ -212,6 +214,61 @@ test('rejects an omitted canonical manifest-family metadata row', () => {
     (error) => error instanceof CapabilityMatrixValidationError
       && error.diagnostics.includes('missing manifest-family metadata: actions'),
   );
+});
+
+test('language servers expose descriptor authoring with Machine-side definition and lifecycle owners', async () => {
+  const contributionCatalog = [{
+    manifestKey: 'languageServers',
+    allowedRuntimeRegistration: null,
+    registrationHost: null,
+    consumer: 'language-server-host',
+    lifecycleStages: ['declared', 'normalized', 'projected', 'bound', 'active', 'unavailable', 'invalid'],
+    disposition: 'retained',
+  }];
+  const apiInventory = {
+    entrypoints: [API_INVENTORY.entrypoints[0]],
+    symbols: [API_INVENTORY.symbols[0]],
+  };
+  const declarations = {
+    manifestFamilies: { languageServers: CAPABILITY_MATRIX_DECLARATIONS_V1.manifestFamilies.languageServers },
+    services: {},
+    hostAccess: {},
+    subpaths: { '.': CAPABILITY_MATRIX_DECLARATIONS_V1.subpaths['.'] },
+  };
+  const definePluginSource = await readFile(new URL('../src/definePlugin.ts', import.meta.url), 'utf8');
+  const policy = readDefinePluginCapabilityPolicy(definePluginSource);
+  const matrix = projectCapabilityMatrix({
+    contributionCatalog,
+    hostAccessCatalog: [],
+    apiInventory,
+    services: [],
+    definePluginPolicy: { languageServers: policy.languageServers },
+    metadata: deriveCapabilityMatrixMetadata({
+      contributionCatalog, hostAccessCatalog: [], apiInventory, services: [], declarations,
+    }),
+  });
+  assert.deepEqual(matrix.manifestFamilies[0], {
+    manifestFamily: 'languageServers',
+    pluginApiRegistrationFamily: null,
+    registrationHost: null,
+    definePluginAuthorKey: 'languageServers',
+    definePluginInputShape: 'descriptor',
+    definePluginClassification: 'descriptor-only',
+    authorEntrypoint: '.',
+    realm: 'any',
+    lifecycle: contributionCatalog[0].lifecycleStages,
+    catalogDisposition: 'retained',
+    producer: 'packages/protocol/src/plugins/contributions/catalog.ts#languageServers',
+    provingConsumer: 'packages/plugins/lang-typescript/src/manifest.ts',
+    specialistOwner: 'apps/cli/src/lsp/languageServerDefinitions.ts',
+    lifecycleOwner: 'apps/cli/src/lsp/languageServerHost.ts',
+    predecessorRemoval: 'catalog-disposition:retained',
+    sourceApiAvailability: 'present',
+    sourceConsumer: null,
+    loadedPlatformProof: 'not-recorded',
+    releaseAvailability: 'not-published',
+    availabilityDisposition: 'available',
+  });
 });
 
 test('rejects a contribution catalog family that carries its own availability posture', () => {
