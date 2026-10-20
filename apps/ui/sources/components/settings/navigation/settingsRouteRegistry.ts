@@ -9,6 +9,7 @@ import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { LEGACY_PROMPT_STACKS_ROUTE, PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextNavigation';
 import { MACHINE_RETENTION_CATEGORIES_V1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 
 type Translate = (key: TranslationKeyNoParams) => string;
@@ -171,7 +172,14 @@ export function resolveSettingsRouteParentPathname(
     const segments = normalizedPathname.slice('/settings/'.length).split('/');
     for (let length = segments.length - 1; length > 0; length -= 1) {
         const ancestor = segments.slice(0, length);
-        if (isMountedSettingsRoute(ancestor)) return `/settings/${ancestor.join('/')}`;
+        const parentPathname = `/settings/${ancestor.join('/')}`;
+        // Stacks is a redirect to Context, not a parent page. Context itself returns to
+        // Prompts & Skills; its Voice/Profile children return to the retained Context page.
+        if (parentPathname === LEGACY_PROMPT_STACKS_ROUTE) {
+            if (normalizedPathname === PROMPTS_CONTEXT_ROUTE) continue;
+            return PROMPTS_CONTEXT_ROUTE;
+        }
+        if (isMountedSettingsRoute(ancestor)) return parentPathname;
     }
     return '/settings';
 }

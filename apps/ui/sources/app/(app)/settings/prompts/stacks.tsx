@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { Redirect } from '@/components/appShell/workspace/destinationRoute';
-import { PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextSettings';
+import { PROMPTS_CONTEXT_ROUTE } from '@/components/settings/prompts/context/promptsContextNavigation';
 
 /**
  * `/settings/prompts/stacks`: the former hub that listed Context, Voice and Profile additions. Context is

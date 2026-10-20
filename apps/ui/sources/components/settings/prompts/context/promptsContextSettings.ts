@@ -1,8 +1,7 @@
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
 import { ACCOUNT_SETTING_DECLARATIONS_V1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
-/** `/settings/prompts/stacks/coding`: the Account layer of Context, reached from Prompts & Skills. */
-export const PROMPTS_CONTEXT_ROUTE = '/settings/prompts/stacks/coding';
+import { PROMPTS_CONTEXT_ROUTE } from './promptsContextNavigation';
 
 /**
  * The searchable settings of Settings → Prompts & Skills → Context: the three Account memory

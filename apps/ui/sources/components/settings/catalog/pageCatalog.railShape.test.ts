@@ -3,7 +3,7 @@ import { isFeatureId } from '@happier-dev/protocol/features/catalog';
 
 // Match the app's runtime-first composition before inspecting the catalog projection.
 await import('./runtime/useResolvedSettingsPageCatalog');
-const { PROMPTS_CONTEXT_ROUTE } = await import('@/components/settings/prompts/context/promptsContextSettings');
+const { PROMPTS_CONTEXT_ROUTE } = await import('@/components/settings/prompts/context/promptsContextNavigation');
 const { SETTINGS_PAGE_CATALOG, readSettingsPageGate } = await import('./pageCatalog');
 
 type CatalogNode = Readonly<{
