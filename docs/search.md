@@ -568,13 +568,73 @@ It prefilters source files with host-provided packaged ripgrep where safe, then
 re-matches decoded transcript text through Protocol's `contentSearchMatch`.
 Unicode/escaped/process-unsafe queries retain decoded fallback. OpenCode
 searches decoded client messages through the same helper without ripgrep.
+Copilot event-v1 logs and Droid schema-2 transcripts use the same SDK search
+and source-observation owners. Copilot excludes transient deltas and model-only
+compaction data; Droid follows the visible active parent chain. Native rewrites
+replace indexed history, while unknown formats and failed reads remain explicit.
+CodeBuddy reads the native JSONL dialect characterized from CLI 2.170.0,
+preserving its replay/rewind rules and typed text through the same owners.
+Kilo's plugin reads the characterized CLI 1.0.25 JSON-file dialect directly
+from XDG data `kilo/storage`, joining ordered message parts without starting
+a vendor server or importing its migrating Storage module. It uses the same
+SDK matcher, with source-wide observation of session, message and part files.
+Same-message edits and native rewind replace the indexed projection; unknown
+versions or content remain partial/unsupported. Other Kilo storage dialects
+are not inferred from OpenCode compatibility.
+Kimi's plugin reads current Kimi Code 0.18.0 / protocol 1.4 history from
+`KIMI_CODE_HOME` (default `~/.kimi-code`), joining session state and index
+metadata with the main Agent's wire log. One decoder serves direct search,
+paging and read-after, retaining compacted history and applying undo/clear
+boundaries. Injected user context and tool-input metadata are excluded from
+matches. State, index and wire changes use the existing source observer;
+unreadable stores cannot prove deletion. Other wire versions are unsupported;
+unknown records or fields keep coverage incomplete. No resume, migration,
+export or vendor process is needed to read this history.
+Auggie's plugin reads the native JSON snapshots written by CLI 0.36.0 under
+`~/.augment/sessions` (or the admitted `augmentHome` cache root). One exchange
+projection serves content search, pages and read-after; native node identities
+carry Open/Find locators. Text fragments are joined in order, fallback text is
+used only without text nodes, and tool-input/usage metadata is excluded. Backups
+and temporary files are not independent conversations. Unknown envelopes or
+material nodes remain unsupported/partial; summary replacement does not recover
+discarded history. Source-wide observation drives the existing Memory worker:
+append advances, rewrite resets, confirmed deletion retires rows, and a failed
+read retains the prior projection. No vendor process, export or second watcher
+is involved.
+
+FX's plugin reads the schema-4 conversation store written by CLI v0.0.14
+under `~/.fx/sessions`, replaying committed turns, steering and referenced tool
+results through one projection for content search, pages and read-after.
+Context checkpoints do not erase archived history or expose model-only summaries.
+Source observation includes metadata, event logs and result files; rewrite and
+removal retire abandoned indexed text. Legacy metadata dialects, opt-in sessions-v2
+and unknown frames remain partial/unsupported, as do incomplete recorded tool
+results. The native id agrees with ACP
+`session/list`; the plugin reader replaces the old resume-only declaration.
+
+Devin's schema-16 native database contains conversation bodies, but its reader
+remains disabled: the available SQLite read-only boundary can modify SHM or
+create WAL sidecars, including on an unsuccessful open. A non-mutating live-WAL
+boundary is required before activation. Custom ACP history is definition-specific;
+list/resume alone does not provide a native content reader or indexing source.
 Codex shares root-family discovery across each requested candidate page and
 projects JSONL records as they are read, retaining identities and possible
 snippets rather than every decoded body. Rollback selection still completes
 before a match becomes authoritative. Searched discovery uses the requested
 page size; its continuation preserves remaining candidates, including empty
 partial pages.
-All six bundled source declarations advertise `contentSearch: true`.
+These bundled source declarations advertise `contentSearch: true`.
+
+The 0.3 development readers also cover Grok's paired `summary.json` and
+`chat_history.jsonl`, Cursor CLI's `agent-transcripts` JSONL with v1 chat
+metadata, and Kiro's v1 paired CLI chat store. Each plugin owns one decoder
+shared by content search, transcript paging and native indexing. Observation
+includes transcript and identity/semantic sidecars; rewrites retire abandoned
+indexed text. Unrecognised records or versions remain partial/unsupported.
+These dialects are characterised from pinned Orca fixtures and vendor docs,
+with producing CLI versions unknown; installed-CLI capture remains release
+validation. Kiro ACP V3 is a distinct, uncharacterised store outside the v1
+source and resume claim.
 No transcript body is written into the persistent candidate metadata index;
 optional content indexing belongs only to Memory. Codex
 app-server-only threads have no searchable file corpus; unsupported sources,
