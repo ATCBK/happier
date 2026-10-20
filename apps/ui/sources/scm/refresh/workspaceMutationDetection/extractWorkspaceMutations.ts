@@ -1,9 +1,21 @@
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
+import { deriveCanonicalPatchFileDiffs } from '@happier-dev/protocol/tools/v2';
 import { resolveToolMutationClassification } from '@/sync/domains/tools/toolMutationClassification';
 
 export type WorkspaceMutationExtractionResult = Readonly<{
     paths: ReadonlySet<string>;
     hasUnknownMutations: boolean;
+}>;
+
+export type ToolCallFileMutation = Readonly<{
+    kind: 'create' | 'modify' | 'delete' | 'rename';
+    region?: Readonly<{ startLine: number; endLine: number }>;
+    /** The canonical hunk parser, rather than a second header parser, reads this at projection. */
+    unifiedDiff?: string;
+}>;
+
+export type ToolCallMutationPaths = WorkspaceMutationExtractionResult & Readonly<{
+    mutations: ReadonlyMap<string, ToolCallFileMutation>;
 }>;
 
 type MutationToolKind =
@@ -179,12 +191,20 @@ function collectPathsFromDiffFiles(input: unknown): string[] {
 }
 
 /** Shared per-call path owner for SCM invalidation and transient file-write projections. */
-export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; input: unknown }>): WorkspaceMutationExtractionResult {
+export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; input: unknown }>): ToolCallMutationPaths {
     const paths = new Set<string>();
     let hasUnknownMutations = false;
     const { name, input: toolInput } = toolPart;
     const toolKind = resolveMutationToolKindFromToolCall(name, toolInput);
-    if (resolveNormalizedMutationToolNameFromToolCall(name, toolInput) === 'diff' && hasWorkspaceMutationSignal(toolInput)) {
+    const normalizedName = resolveNormalizedMutationToolNameFromToolCall(name, toolInput);
+    const mutations = new Map<string, ToolCallFileMutation>();
+    const defaultKind: ToolCallFileMutation['kind'] = normalizedName === 'rename' || normalizedName === 'move'
+        ? 'rename'
+        : normalizedName === 'delete' || normalizedName === 'delete_file' || normalizedName === 'rm' || normalizedName === 'unlink'
+            ? 'delete'
+            : normalizedName === 'write' || normalizedName === 'write_file' || normalizedName === 'create_file' || normalizedName === 'mkdir'
+                ? 'create' : 'modify';
+    if (normalizedName === 'diff' && hasWorkspaceMutationSignal(toolInput)) {
         const diffPaths = collectPathsFromDiffFiles(toolInput);
         for (const path of diffPaths) paths.add(path);
         hasUnknownMutations = diffPaths.length === 0;
@@ -206,7 +226,33 @@ export function readToolCallMutationPaths(toolPart: Readonly<{ name: string; inp
     } else if (toolKind !== 'container') {
         hasUnknownMutations = readStringField(toolInput, ['command', 'cmd']) !== null;
     }
-    return { paths, hasUnknownMutations };
+    const region = readInputRegion(toolInput);
+    for (const path of paths) mutations.set(path, { kind: defaultKind, ...(region ? { region } : {}) });
+    if (toolKind === 'patch') {
+        // This normalizer owns ACP arrays, Codex apply_patch text and canonical change maps.
+        for (const file of deriveCanonicalPatchFileDiffs(toolInput)) {
+            const kind: ToolCallFileMutation['kind'] = file.changeKind === 'added' || file.changeKind === 'copied'
+                ? 'create' : file.changeKind === 'deleted' ? 'delete' : file.changeKind === 'renamed' ? 'rename' : 'modify';
+            const mutation: ToolCallFileMutation = { kind, ...(file.unifiedDiff ? { unifiedDiff: file.unifiedDiff } : {}) };
+            paths.add(file.filePath);
+            mutations.set(file.filePath, mutation);
+            if (file.previousFilePath) {
+                paths.add(file.previousFilePath);
+                mutations.set(file.previousFilePath, mutation);
+            }
+        }
+    }
+    return { paths, hasUnknownMutations, mutations };
+}
+
+function readInputRegion(input: unknown): ToolCallFileMutation['region'] {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const record = input as Record<string, unknown>;
+    const startLine = record.start_line ?? record.startLine ?? record.line_number;
+    const endLine = record.end_line ?? record.endLine ?? startLine;
+    return typeof startLine === 'number' && Number.isInteger(startLine) && startLine > 0
+        && typeof endLine === 'number' && Number.isInteger(endLine) && endLine >= startLine
+        ? Object.freeze({ startLine, endLine }) : undefined;
 }
 
 export function extractWorkspaceMutationsFromNormalizedMessages(input: Readonly<{

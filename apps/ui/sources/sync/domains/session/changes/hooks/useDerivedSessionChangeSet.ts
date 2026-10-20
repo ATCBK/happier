@@ -33,7 +33,6 @@ type UseDerivedSessionChangeSetResult = Readonly<{
     latestTurnCheckpointDiffByPath: ReadonlyMap<string, string | null> | null;
     providerDiffByPath: ReadonlyMap<string, string | null> | null;
     turnRequestersById: ReadonlyMap<string, TranscriptAccountActor | null>;
-    hasOtherNamedCollaborator: boolean;
 }>;
 
 function buildDiffByPath(changeSet: SessionChangeSet | null): ReadonlyMap<string, string | null> | null {
@@ -168,6 +167,5 @@ export function useDerivedSessionChangeSet(
         latestTurnCheckpointDiffByPath,
         providerDiffByPath,
         turnRequestersById,
-        hasOtherNamedCollaborator: exactSession?.hasOtherNamedCollaborator === true,
     };
 }

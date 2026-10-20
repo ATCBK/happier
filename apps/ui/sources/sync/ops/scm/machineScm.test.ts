@@ -6,6 +6,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { SCM_OPERATION_ERROR_CODES, SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN } from '@happier-dev/protocol/scm';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { createHash } from 'node:crypto';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const harness = createHomeGovernanceHarness();
@@ -42,6 +43,93 @@ describe('machineScm', () => {
     afterEach(() => {
         machineRpcWithServerScopeMock.mockReset();
         standardCleanup();
+    });
+
+    it('keeps blame alignment failures and validates commit indexes at the Machine transport boundary', async () => {
+        const { machineScmBlameFile } = await import('../machineScmBlame');
+        const request = { cwd: '/repo', path: 'file', expectedHash: '1'.repeat(64) };
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: false, errorCode: 'stale_file' });
+        expect(await machineScmBlameFile('machine', request)).toEqual({ success: false, errorCode: 'stale_file' });
+        expect(machineRpcWithServerScopeMock).toHaveBeenLastCalledWith(expect.objectContaining({
+            machineId: 'machine', method: 'scm.blame.file', payload: { ...request, outcomeVersion: 1 },
+        }));
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: true, ranges: [{ startLine: 1, lineCount: 1, commitIndex: 0 }], commits: [] });
+        expect(await machineScmBlameFile('machine', request)).toMatchObject({ success: false, errorCode: 'COMMAND_FAILED' });
+    });
+
+    it('delivers exact revision bytes through the scoped SCM read and rejects altered content', async () => {
+        const { fetchWorkspaceFileAtRevision } = await import('@/scm/files/fetchWorkspaceFileAtRevision');
+        const bytes = Buffer.from([0, 255, 128, 13, 10]);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        const response = { success: true, contentBase64: bytes.toString('base64'), sizeBytes: bytes.length, sha256 };
+        machineRpcWithServerScopeMock.mockResolvedValue(response);
+        const request = { scope: { serverId, machineId: 'machine-1', rootPath: '/repo' }, path: 'picture.png',
+            selector: { blobId: 'a'.repeat(40) }, maxBytes: 16 * 1024 * 1024 };
+        const read = await fetchWorkspaceFileAtRevision(request);
+        expect(read).toEqual({ success: true, bytes: new Uint8Array(bytes), sizeBytes: bytes.length, sha256 });
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-1', serverId, method: RPC_METHODS.SCM_FILE_READ,
+            payload: expect.objectContaining({ cwd: '/repo', path: request.path, selector: request.selector, maxBytes: request.maxBytes }),
+        }));
+        machineRpcWithServerScopeMock.mockResolvedValue({ ...response, contentBase64: Buffer.from([0, 254, 128, 13, 10]).toString('base64') });
+        expect(await fetchWorkspaceFileAtRevision(request)).toMatchObject({ success: false, errorCode: 'blob_unavailable' });
+        machineRpcWithServerScopeMock.mockResolvedValue({ success: false, errorCode: 'not_found' });
+        expect(await fetchWorkspaceFileAtRevision(request)).toEqual({ success: false, errorCode: 'not_found' });
+    });
+
+    it('turns a revision read into the shared preview source and clears it when the selection changes', async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { createTestGitRpcManager, runGit } = await import('../../../../../cli/src/scm/rpc/__tests__/testRpcHarness');
+        const { Platform } = await import('react-native');
+        const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+        const { flushHookEffects } = await import('@/dev/testkit/hooks/flushHookEffects');
+        const { useFileAtRevisionPreview } = await import('@/components/ui/media/useFileAtRevisionPreview');
+        const previousPlatform = Platform.OS;
+        const bytes = Buffer.from([0, 255, 128, 13, 10]);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        const root = await mkdtemp(join(tmpdir(), 'happier-revision-preview-'));
+        try {
+            runGit(root, ['init']);
+            runGit(root, ['config', 'user.name', 'Revision Preview']);
+            runGit(root, ['config', 'user.email', 'revision-preview@example.test']);
+            await writeFile(join(root, 'committed.png'), bytes);
+            runGit(root, ['add', '--', 'committed.png']);
+            runGit(root, ['commit', '-m', 'preview']);
+            const blobId = runGit(root, ['rev-parse', 'HEAD:committed.png']);
+            await writeFile(join(root, 'committed.png'), Buffer.from([1, 2, 3]));
+            const rpc = createTestGitRpcManager({ workingDirectory: root });
+            // Replace only the encrypted network transport, not the Action/backend/preview owners.
+            machineRpcWithServerScopeMock.mockImplementation(({ method, payload }) => rpc.call(method, payload));
+            setScmSettings({ settings: { filesImagePreviewMaxBytes: 1024, filesImagePreviewCacheMaxEntries: 0 } });
+            const input: Parameters<typeof useFileAtRevisionPreview>[0] = {
+                enabled: true, scope: { serverId, machineId: 'machine-preview', rootPath: root },
+                path: 'committed.png', selector: { blobId }, mimeType: 'image/png',
+            };
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+            const hook = await renderHook(props => useFileAtRevisionPreview(props), { initialProps: input });
+            try {
+                await vi.waitFor(async () => {
+                    await flushHookEffects();
+                    expect(hook.getCurrent().status).toBe('loaded');
+                });
+                const loaded = hook.getCurrent();
+                if (loaded.status !== 'loaded') throw new Error('Expected committed preview');
+                expect(loaded.sha256).toBe(sha256);
+                expect(new Uint8Array(await (await fetch(loaded.uri)).arrayBuffer())).toEqual(new Uint8Array(bytes));
+                await hook.rerender({ ...input, path: 'removed.png', selector: { side: 'before', area: 'both' } });
+                await vi.waitFor(async () => {
+                    await flushHookEffects();
+                    expect(hook.getCurrent()).toMatchObject({ status: 'error', uri: null, errorCode: 'not_found' });
+                });
+            } finally {
+                await hook.unmount();
+            }
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: previousPlatform });
+            await rm(root, { recursive: true, force: true });
+        }
     });
 
     it('runs SCM status snapshot through server-scoped machine RPC with the requested cwd and backend preference', async () => {

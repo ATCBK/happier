@@ -43,7 +43,7 @@ function toolCallMessage(toolName: string, toolInput: unknown): NormalizedMessag
                 type: 'tool-call',
                 id: `tool-${toolName}`,
                 name: toolName,
-                input: toolInput as any,
+                input: toolInput,
                 description: null,
                 uuid: `uuid-${toolName}`,
                 parentUUID: null,

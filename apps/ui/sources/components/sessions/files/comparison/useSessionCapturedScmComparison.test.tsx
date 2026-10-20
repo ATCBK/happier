@@ -30,6 +30,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     const rpc = async (request: { method: string; payload: unknown; accountId?: string | null }) => {
         boundary.calls.push(request);
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE) return boundary.response;
+        if (request.method === RPC_METHODS.SCM_CHANGE_DISCARD) return boundary.response;
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) return boundary.savedInventory ?? { success: true,
             results: [], count: 0, bytes: 0, sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 0 } };
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ && boundary.savedResponses) return boundary.savedResponses[(request.payload as { resultId: string }).resultId];
@@ -41,6 +42,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 const { renderHook, renderScreen, standardCleanup, createSessionFixture, createMachineFixture } = await import('@/dev/testkit');
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { useSessionCapturedScmComparison } = await import('./useSessionCapturedScmComparison');
+const { useFileChangesScope } = await import('@/components/workspaces/files/file/changes/useFileChangesScope');
+const { useFileChangesActions } = await import('@/components/workspaces/files/file/changes/useFileChangesActions');
 // Router mounts after the app entry publishes the real sync runtime; reproduce that bootstrap.
 await import('@/sync/syncEngine');
 const { SessionScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
@@ -81,6 +84,127 @@ const changedFile = { path: 'src/changed.ts', changeKind: 'modified', binary: fa
     evidence: { state: 'available', unifiedDiff: 'diff --git a/src/changed.ts b/src/changed.ts\n--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] } as const;
 
 describe('Files reads the canonical captured comparison through authenticated RPC', () => {
+    it('offers restore-before-turn only for the turn scope while session keeps whole-file discard', async () => {
+        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
+            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
+        const hook = await renderHook((selector: SessionScmReviewComparison) => useFileChangesActions({
+            target: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo/exact' }, filePath: 'src/a.ts', selector,
+            comparison: ScmComparisonSchema.parse({ id: 'a'.repeat(64),
+                source: selector.kind === 'session' ? { kind: 'session', sessionId: 'session-a' } : selector,
+                repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } }),
+            messages, readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
+            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' },
+        }), { initialProps: { kind: 'session' } });
+        expect(hook.getCurrent().changes.discardAll).toBeTypeOf('function');
+        expect(hook.getCurrent().changes.restoreBeforeTurn).toBeUndefined();
+        await hook.rerender({ kind: 'turnCheckpoint', turnId: 'turn-4' });
+        expect(hook.getCurrent().changes.discardAll).toBeTypeOf('function');
+        expect(hook.getCurrent().changes.restoreBeforeTurn).toBeTypeOf('function');
+    });
+    it('keeps a rendered restore callback bound to its original file, turn and expected hash', async () => {
+        const prior = await mount({ kind: 'session' });
+        await prior.unmount();
+        boundary.calls = [];
+        const sessionId = 'capture-session';
+        const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
+        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
+            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
+        const first = { path: 'src/a.ts', turnId: 'turn-4', hash: 'b'.repeat(64), comparisonId: 'a'.repeat(64) };
+        const second = { path: 'src/b.ts', turnId: 'turn-8', hash: 'd'.repeat(64), comparisonId: 'c'.repeat(64) };
+        const hook = await renderHook((selected: typeof first) => useFileChangesActions({
+            target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
+            filePath: selected.path, selector: { kind: 'turnCheckpoint', turnId: selected.turnId }, expectedHash: selected.hash,
+            comparison: ScmComparisonSchema.parse({ id: selected.comparisonId, source: { kind: 'turnCheckpoint', turnId: selected.turnId },
+                repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } }),
+            messages, readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
+            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' },
+        }), { initialProps: first });
+        const renderedRestore = hook.getCurrent().changes.restoreBeforeTurn!;
+        await hook.rerender(second);
+        boundary.response = { success: true, entries: [{ path: first.path, status: 'restored', hashBefore: first.hash, hashAfter: 'e'.repeat(64) }] };
+        await act(async () => renderedRestore());
+        expect(boundary.calls.find(call => call.method === RPC_METHODS.SCM_CHANGE_DISCARD)?.payload).toMatchObject({ entries: [{
+            path: first.path, expectedHash: first.hash, against: { comparisonId: first.comparisonId, source: { kind: 'turnCheckpoint', turnId: first.turnId } },
+        }] });
+    });
+    it('confirms whole-file restore only for unsaved editor content and retains it on cancellation', async () => {
+        const prior = await mount({ kind: 'session' });
+        await prior.unmount();
+        boundary.calls = [];
+        boundary.response = { success: true, entries: [{ path: 'src/a.ts', status: 'restored', hashBefore: 'b'.repeat(64), hashAfter: 'a'.repeat(64) }] };
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const onReplacedUnsavedEdits = vi.fn();
+        const sessionId = 'capture-session';
+        const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
+        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
+            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
+        const hook = await renderHook((dirty: boolean) => useFileChangesActions({
+            target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
+            filePath: 'src/a.ts', selector: { kind: 'workingTree' }, comparison: null, messages,
+            readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => dirty,
+            onReplacedUnsavedEdits, confirmUnsaved: { title: 'Replace draft' },
+        }), { initialProps: false });
+        await act(async () => hook.getCurrent().changes.discardAll!());
+        expect(boundary.calls.filter(call => call.method === RPC_METHODS.SCM_CHANGE_DISCARD)).toHaveLength(1);
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        await hook.rerender(true);
+        await act(async () => hook.getCurrent().changes.discardAll!());
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        expect(onReplacedUnsavedEdits).not.toHaveBeenCalled();
+        expect(boundary.calls.filter(call => call.method === RPC_METHODS.SCM_CHANGE_DISCARD)).toHaveLength(1);
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
+        await act(async () => hook.getCurrent().changes.discardAll!());
+        expect(onReplacedUnsavedEdits).toHaveBeenCalledOnce();
+    });
+    it('offers the existing whole-turn rollback when a restore is unsupported or has moved on', async () => {
+        const prior = await mount({ kind: 'session' });
+        await prior.unmount();
+        boundary.calls = [];
+        const sessionId = 'capture-session';
+        const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
+        const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'turnCheckpoint', turnId: 'turn-4' },
+            repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
+        const offerWholeTurnRollback = vi.fn();
+        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
+            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
+        const hook = await renderHook(() => useFileChangesActions({
+            target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
+            filePath: 'src/a.ts', selector: { kind: 'turnCheckpoint', turnId: 'turn-4' }, comparison, messages,
+            readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
+            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' }, offerWholeTurnRollback,
+        }));
+        for (const errorCode of ['DISCARD_UNSUPPORTED', 'CHANGE_MOVED_ON']) {
+            boundary.response = { success: false, errorCode, error: errorCode };
+            await act(async () => hook.getCurrent().changes.restoreBeforeTurn!());
+        }
+        expect(offerWholeTurnRollback.mock.calls).toEqual([['turn-4'], ['turn-4']]);
+    });
+    it('keeps Uncommitted live without captures while tab state changes and agent writes arrive', async () => {
+        const prior = await mount({ kind: 'session' });
+        await prior.unmount();
+        boundary.calls = [];
+        const sessionId = 'capture-session';
+        const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
+        const hook = await renderHook((revision: number) => useFileChangesScope({
+            host: { sessionId }, serverId, machine: { machineId: 'machine:capture-session', basePath: '/repo/exact' },
+            identity: { machineId: 'machine:capture-session', basePath: '/repo/exact' },
+            view: { changesScope: { kind: 'workingTree' } }, onChangesScopeChange: () => {}, latestTurnId: 'turn-4',
+        }), { initialProps: 0 });
+        for (const revision of [1, 2, 3]) await hook.rerender(revision);
+        expect(hook.getCurrent().current).toEqual({ kind: 'workingTree' });
+        expect(hook.getCurrent().comparison).toBeNull();
+        expect(comparisonCalls()).toEqual([]);
+        expect(hook.getCurrent().options.map(option => option.sourceKind).sort()).toEqual(['session', 'turnCheckpoint', 'workingTree']);
+        const pinned = await renderHook(() => useFileChangesScope({
+            host: { sessionId }, serverId, machine: { machineId: 'machine:capture-session', basePath: '/repo/exact' },
+            identity: { machineId: 'machine:capture-session', basePath: '/repo/exact' }, active: false,
+            onChangesScopeChange: () => {}, initialChanges: { kind: 'turnCheckpoint', turnId: 'turn-3', comparisonId: 'a'.repeat(64) }, latestTurnId: 'turn-4',
+        }));
+        expect(pinned.getCurrent().options.map(option => option.sourceKind).sort()).toEqual(['session', 'turnCheckpoint', 'workingTree']);
+        expect(pinned.getCurrent().selector).toMatchObject({ turnId: 'turn-3', comparisonId: 'a'.repeat(64) });
+    });
     it('restores a published walkthrough for Files Explain without first opening Walkthrough', async () => {
         const source = { kind: 'commit' as const, commit: 'saved-head' };
         const comparison = ScmComparisonSchema.parse({ id: 'published-comparison', source, repository: { rootPath: '/repo/exact' },

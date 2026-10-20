@@ -144,11 +144,9 @@ describe('useDerivedSessionChangeSet', () => {
         const { useDerivedSessionChangeSet } = await import('./useDerivedSessionChangeSet');
         const hook = await renderHook(() => useDerivedSessionChangeSet({ serverId: 'home-b', sessionId: 'session_1' }));
         expect(hook.getCurrent().turnRequestersById.get('turn_1')).toEqual(actor);
-        expect(hook.getCurrent().hasOtherNamedCollaborator).toBe(true);
         session = { ...session, serverId: 'other-home' };
         await hook.rerender();
         expect(hook.getCurrent().turnRequestersById.size).toBe(0);
-        expect(hook.getCurrent().hasOtherNamedCollaborator).toBe(false);
     });
 
     it.each([
