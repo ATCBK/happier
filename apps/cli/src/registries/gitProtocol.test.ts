@@ -1,14 +1,65 @@
-import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {randomBytes} from 'node:crypto';
 import {createServer} from 'node:https';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
+import * as scm from '@/scm/runtime';
 import {runScmCommand} from '@/scm/runtime';
 import {createRegistryGitProtocolV1} from './gitProtocol';
 import type {RegistryFetchContextV1,RegistrySourceV1} from '@happier-dev/protocol/registries';
+import {createRegistryHostV1} from '@happier-dev/protocol/registries';
 import {createEphemeralTlsServerFixture} from '../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
 
 describe('Node Git registry transport',()=>{
+  it.each([true,false])('acquires one filtered repository for a selected-content operation and retires it afterwards (filter supported: %s)',async filterSupported=>{
+    const cwd=await mkdtemp(join(process.platform==='win32'?tmpdir():'/tmp','happier-registry-selected-'));
+    const command=async(args:string[])=>{const result=await runScmCommand({bin:'git',cwd,args});if(!result.success)throw new Error(result.stderr);return result.stdout.trim();};
+    let restore=()=>{};
+    try{
+      await command(['init']);await command(['config','user.name','Registry fixture']);await command(['config','user.email','registry-fixture@example.invalid']);
+      await command(['config','uploadpack.allowFilter',String(filterSupported)]);
+      await mkdir(join(cwd,'selected'));await mkdir(join(cwd,'unrelated'));
+      const markdown='---\nname: selected\n---\nReviewed content';
+      await writeFile(join(cwd,'selected','SKILL.md'),markdown);
+      const binary=randomBytes(4096);await writeFile(join(cwd,'selected','asset.bin'),binary);
+      for(let index=0;index<24;index++)await writeFile(join(cwd,'unrelated',`${index}.bin`),randomBytes(16384));
+      await command(['add','.']);await command(['commit','-m','fixture']);
+      const commit=await command(['rev-parse','HEAD']);
+      const gitVersion=await command(['--version']);
+      const allObjects=(await command(['rev-list','--objects','HEAD'])).split('\n').length;
+      const source={id:'selected',title:'Selected',format:'git' as const,kinds:['skill' as const],url:cwd,enabled:true,addedAt:0,
+        origin:{kind:'user' as const},removable:true};
+      const realRun=scm.runScmCommand;
+      const acquired:string[]=[];
+      const objectCounts=new Map<string,number>();
+      // Observe the real OS adapter, including its temporary object store. No Git/domain logic is replaced.
+      const observer=vi.spyOn(scm,'runScmCommand').mockImplementation(async input=>{
+        const result=await realRun(input);
+        if(input.args.includes('clone')&&result.success)acquired.push(input.args.at(-1)!);
+        if(acquired.includes(input.cwd)&&result.success){
+          const stats=await realRun({bin:'git',cwd:input.cwd,args:['count-objects','-v']});
+          const fields=new Map(stats.stdout.trim().split('\n').map(line=>{const [key,value]=line.split(': ');return [key!,value!] as const;}));
+          objectCounts.set(input.cwd,Number(fields.get('count'))+Number(fields.get('in-pack')));
+        }
+        return result;
+      });
+      restore=()=>observer.mockRestore();
+      const forbidden=async()=>{throw new Error('Git fixture must not use HTTP');};
+      const host=createRegistryHostV1({host:'node',git:createRegistryGitProtocolV1({}),
+        http:{getJson:forbidden,getText:forbidden,getBytes:forbidden},readSources:async()=>[source]});
+      const downloaded=await host.filesForPointer({sourceId:source.id,itemId:'selected',version:commit});
+      expect(downloaded.map(file=>file.path).sort()).toEqual(['SKILL.md','asset.bin']);
+      expect(downloaded.find(file=>file.path==='asset.bin')!.bytes).toEqual(new Uint8Array(binary));
+      const objects=[...objectCounts.values()].reduce((sum,count)=>sum+count,0);
+      console.info('selected Git acquisition',{gitVersion,filterSupported,acquisitions:acquired.length,objects,fullRepositoryObjects:allObjects});
+      expect(acquired).toHaveLength(1);
+      if(filterSupported)expect(objects).toBeLessThan(allObjects);
+      await Promise.all(acquired.map(path=>expect(readFile(join(path,'.git','config'))).rejects.toMatchObject({code:'ENOENT'})));
+      await host.filesForPointer({sourceId:source.id,itemId:'selected',version:commit});
+      expect(acquired).toHaveLength(2);
+    }finally{restore();await rm(cwd,{recursive:true,force:true});}
+  });
   it('sends a custom token header only to the configured HTTPS destination, never a redirect',async()=>{
     const tls=await createEphemeralTlsServerFixture();
     const options={key:await readFile(tls.privateKeyPath),cert:await readFile(tls.leafCertificatePath)};
