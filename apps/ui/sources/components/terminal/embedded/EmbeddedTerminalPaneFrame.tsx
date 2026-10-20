@@ -108,8 +108,10 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
  * Typing keys belong to a terminal that is live or on its way; not-open, exited and failed terminals
  * have no process to receive them, so the phone key rail and arrow pad stay away.
  */
-export function terminalStatusAcceptsKeys(status: EmbeddedTerminalPaneController['status']): boolean {
-    return status === 'idle' || status === 'connecting' || status === 'connected';
+/** Whether the phone key rail and arrow pad are offered: a writable terminal that is open or opening. */
+export function terminalAcceptsKeys(controller: Pick<EmbeddedTerminalPaneController, 'status' | 'readOnly'>): boolean {
+    if (controller.readOnly) return false;
+    return controller.status === 'idle' || controller.status === 'connecting' || controller.status === 'connected';
 }
 
 function resolveKeyboardBottomInset(value: number | undefined): number {

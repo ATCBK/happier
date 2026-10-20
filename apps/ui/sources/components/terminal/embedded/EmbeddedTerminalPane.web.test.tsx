@@ -15,14 +15,14 @@ vi.mock('@/components/sessions/panes/SessionPaneLazyLoader', () => ({ SessionPan
 
 const { EmbeddedTerminalPane } = await import('./EmbeddedTerminalPane.web');
 
-function controller(status: EmbeddedTerminalPaneStatus): EmbeddedTerminalPaneController {
-    return { status, error: null, detectedUrl: null, onInput: () => {}, onPaste: () => {}, onResize: () => {}, onReady: () => {},
+function controller(status: EmbeddedTerminalPaneStatus, readOnly = false): EmbeddedTerminalPaneController {
+    return { status, readOnly, error: null, detectedUrl: null, onInput: () => {}, onPaste: () => {}, onResize: () => {}, onReady: () => {},
         onWriteComplete: () => {}, clearTerminal: () => {}, requestRestart: () => {}, retryConnect: () => {}, dismissDetectedUrl: () => {} };
 }
 
-async function renderPane(status: EmbeddedTerminalPaneStatus) {
+async function renderPane(status: EmbeddedTerminalPaneStatus, readOnly = false) {
     return renderScreen(<KeyboardShortcutProvider handlers={{}}><PluginSurfaceFocusEligibilityProvider active>
-        <EmbeddedTerminalPane title="Shell" controller={controller(status)} terminalRef={{ current: null }} chrome="none"
+        <EmbeddedTerminalPane title="Shell" controller={controller(status, readOnly)} terminalRef={{ current: null }} chrome="none"
             showQuickKeys testIdPrefix="term" />
     </PluginSurfaceFocusEligibilityProvider></KeyboardShortcutProvider>);
 }
@@ -37,6 +37,13 @@ describe('phone terminal keys', () => {
     it.each<EmbeddedTerminalPaneStatus>(['not-open', 'exited', 'error'])('stay away while no terminal is open or being opened (%s)', async (status) => {
         const screen = await renderPane(status);
         expect(screen.findByTestId('term-key-rail')).toBeNull();
+        await screen.unmount();
+    });
+
+    it('stay away from a borrowed read-only output view, which takes no input', async () => {
+        const screen = await renderPane('connected', true);
+        expect(screen.findByTestId('term-key-rail')).toBeNull();
+        expect(screen.findByTestId('term-arrow-pad')).toBeNull();
         await screen.unmount();
     });
 });

@@ -8,7 +8,7 @@ import type { XtermTerminalHandle } from '@/components/terminal/xterm/XtermTermi
 import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
 import type { EmbeddedTerminalRendererHandle, EmbeddedTerminalCursorRow } from './embeddedTerminalRendererHandle';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { EmbeddedTerminalPaneFrame, terminalStatusAcceptsKeys } from './EmbeddedTerminalPaneFrame';
+import { EmbeddedTerminalPaneFrame, terminalAcceptsKeys } from './EmbeddedTerminalPaneFrame';
 import { TerminalKeyRail } from './keys/TerminalKeyRail';
 import { TerminalKeysSurface } from './keys/TerminalKeysSurface';
 import { useTerminalKeys } from './keys/useTerminalKeys';
@@ -41,7 +41,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneWeb(
     const deviceType = useDeviceType();
     const showKeys = props.showQuickKeys ?? deviceType === 'phone';
     const find = useTerminalFind(props, showKeys);
-    const keysOffered = showKeys && terminalStatusAcceptsKeys(props.controller.status);
+    const keysOffered = showKeys && terminalAcceptsKeys(props.controller);
     const [cursorRow, setCursorRow] = React.useState<EmbeddedTerminalCursorRow | null>(null);
     const onCursorRowChange = React.useCallback((next: EmbeddedTerminalCursorRow | null) => {
         setCursorRow((current) => current?.top === next?.top && current?.height === next?.height ? current : next);

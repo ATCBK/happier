@@ -29,7 +29,7 @@ import { resolveTermuxRendererSelection, type TermuxRendererSelectionOptions } f
 import { TermuxTerminalSurface } from '@/components/terminal/termux/surface.native';
 import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { EmbeddedTerminalPaneFrame, terminalStatusAcceptsKeys } from './EmbeddedTerminalPaneFrame';
+import { EmbeddedTerminalPaneFrame, terminalAcceptsKeys } from './EmbeddedTerminalPaneFrame';
 import { TerminalKeyRail } from './keys/TerminalKeyRail';
 import { TerminalKeysSurface } from './keys/TerminalKeysSurface';
 import { useTerminalKeys } from './keys/useTerminalKeys';
@@ -170,7 +170,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
     const deviceType = useDeviceType();
     const showKeys = props.showQuickKeys ?? deviceType === 'phone';
     const find = useTerminalFind(props, showKeys);
-    const keysOffered = showKeys && terminalStatusAcceptsKeys(props.controller.status);
+    const keysOffered = showKeys && terminalAcceptsKeys(props.controller);
     const keys = useTerminalKeys({
         onInput: props.controller.onInput,
         focusRenderer: React.useCallback(() => props.terminalRef.current?.focus?.(), [props.terminalRef]),
