@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import type { WorkspaceFileOpen } from '@/components/workspaces/files/useWorkspaceFileOpener';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -40,7 +41,7 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-const routerPushSpy = vi.fn();
+const openFile = vi.fn<WorkspaceFileOpen>(async () => true);
 const resolveReviewCommentDraftAnchorsForPromptSpy = vi.fn(async (input: {
     drafts: readonly ReviewCommentDraft[];
 }) => [...input.drafts]);
@@ -55,7 +56,7 @@ vi.mock('@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchors
 }));
 
 afterEach(() => {
-    routerPushSpy.mockReset();
+    openFile.mockClear();
     resolveReviewCommentDraftAnchorsForPromptSpy.mockReset();
     resolveReviewCommentDraftAnchorsForPromptSpy.mockImplementation(async (input: {
         drafts: readonly ReviewCommentDraft[];
@@ -91,7 +92,7 @@ describe('ReviewCommentsDraftsModal', () => {
             <ReviewCommentsDraftsModal
                 onClose={() => {}}
                 sessionId="session-1"
-                navigation={{ push: routerPushSpy }}
+                openFile={openFile}
                 reviewScope={{ serverId: 'home-b', machineId: 'machine-1', rootPath: '/repo' }}
                 reviewCommentDrafts={[draft]}
                 onUpdateDraft={() => {}}
@@ -101,7 +102,8 @@ describe('ReviewCommentsDraftsModal', () => {
 
         screen.findByTestId('review-comment-draft-jump:draft-1')!.props.onPress();
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/file?path=src%2Fmiddleware%2FrequestId.test.ts&serverId=home-b&source=diff&anchor=diffLine&startLine=8&side=after&newLine=8&lineHash=lh1%3A868452fa92233a56');
+        expect(openFile).toHaveBeenCalledWith({ kind: 'session', sessionId: 'session-1', serverId: 'home-b', path: draft.filePath },
+            { view: 'changes', anchor: draft.anchor, anchorSource: 'diff' });
     });
 
     it('places the editable comment at the anchored line inside the context preview', async () => {

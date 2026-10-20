@@ -10,17 +10,14 @@ export function hasReviewCommentDraftBody(draft: Pick<ReviewCommentDraftMessageV
   return normalizeReviewCommentDraftBody(draft.body).length > 0;
 }
 
-export function normalizeReviewCommentDraft(draft: ReviewCommentDraftMessageV1): ReviewCommentDraftMessageV1 | null {
+export function normalizeReviewCommentDraft(draft: ReviewCommentDraftMessageV1): ReviewCommentDraftMessageV1 {
   const body = normalizeReviewCommentDraftBody(draft.body);
-  if (!body) return null;
+  // Ask quotes carry their evidence in the anchor/snapshot even without a comment body.
   return body === draft.body ? draft : { ...draft, body };
 }
 
 export function normalizeReviewCommentDrafts(drafts: readonly ReviewCommentDraftMessageV1[]): ReviewCommentDraftMessageV1[] {
-  return drafts.flatMap((draft) => {
-    const normalized = normalizeReviewCommentDraft(draft);
-    return normalized ? [normalized] : [];
-  });
+  return drafts.map(normalizeReviewCommentDraft);
 }
 
 export function getReviewCommentDraftAnchorPrimaryLine(anchor: WorkspaceAnchorV1): number | null {

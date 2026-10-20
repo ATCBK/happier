@@ -1,6 +1,6 @@
 import { createSessionAccessActionChip } from '@/components/sessions/agentInput/definitions/createSessionAccessActionChip';
 import * as React from 'react';
-import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import type { BackendTargetRefV2Input } from '@happier-dev/protocol';
 
 import type {
@@ -51,7 +51,7 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
     actionChips: readonly AgentInputExtraActionChip[];
     attachmentRowItems: readonly AgentInputAttachmentsRowItem[];
 }> {
-    const navigation = useDestinationRouter();
+    const { open: openFile, canOpen: canOpenFile } = useWorkspaceFileOpener();
     const reviewWorkspaceCacheKey = React.useMemo(() => (
         params.reviewScope ? tryBuildWorkspaceCacheKey(params.reviewScope) : null
     ), [params.reviewScope]);
@@ -91,7 +91,7 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
         if (params.reviewCommentsEnabled) {
             const reviewCommentsPresentation = createReviewCommentsActionChip({
                 sessionId: params.sessionId,
-                navigation,
+                openFile: canOpenFile ? openFile : undefined,
                 reviewScope: params.reviewScope,
                 reviewCommentDrafts: params.reviewCommentDrafts,
                 onSetDraftIncluded: (draftId, included) => {
@@ -142,7 +142,8 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
 
         return { actionChips: chips, attachmentRowItems };
     }, [
-        navigation,
+        canOpenFile,
+        openFile,
         params.sessionAccess,
         params.attachmentsUploadsEnabled,
         params.defaultBackendId,

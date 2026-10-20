@@ -19,6 +19,7 @@ import { PluginContextualResourceStoreProvider } from '@/components/plugins/surf
 import { resolveSessionComposerSuggestions } from '@/components/sessions/agentInput/sessionComposerSuggestions';
 import { AgentInput } from '@/components/sessions/agentInput';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import {
     projectAgentInputAttachmentRowItems,
     type AgentInputAttachmentsRowItem,
@@ -103,6 +104,7 @@ export class ParticipantComposerSubmissionHeld extends Error {}
 
 export type ParticipantComposerPreparedSubmission = Readonly<{
     text: string;
+    localId: string;
     displayText?: string;
     metaOverrides?: Record<string, unknown>;
     recipient?: ParticipantRecipientV1;
@@ -148,7 +150,8 @@ export type ParticipantComposerDocument = Readonly<{
 }>;
 
 type SessionParticipantComposerProps = Readonly<{
-    sessionId: string;
+    sessionId: string | null;
+    workspace?: Readonly<{ machineId: string; cwd: string }>;
     /** Exact Home route scope when the parent already owns qualified navigation. */
     serverId?: string | null;
     /** The parent Session's input grant, independent of transient launch readiness. */
@@ -171,7 +174,7 @@ type SessionParticipantComposerProps = Readonly<{
     launcherDraftKey?: string;
     onDraftDocumentEdit?: () => void;
     /** Reports this mounted composer's exact presentation ref to its host. */
-    onComposerRefAvailable?: (ref: Extract<ComposerRefV1, { kind: 'participantMessage' }> | null) => void;
+    onComposerRefAvailable?: (ref: Extract<ComposerRefV1, { kind: 'participantMessage' | 'newSession' }> | null) => void;
     /**
      * Optional orchestration port for a destination that must be created before
      * canonical Session input admission. The composer still owns capture,
@@ -184,7 +187,9 @@ type SessionParticipantComposerProps = Readonly<{
     placeholder?: string;
 }>;
 
-export const SessionParticipantComposer = React.memo((props: SessionParticipantComposerProps) => (
+export const SessionParticipantComposer = React.memo((props: SessionParticipantComposerProps) => props.sessionId === null
+    ? <SessionTranscriptSourceProvider source={null}><SessionParticipantComposerContent {...props} /></SessionTranscriptSourceProvider>
+    : (
     <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.serverId}>
         <SessionParticipantComposerContent {...props} />
     </AppSessionTranscriptSourceProvider>
@@ -193,14 +198,17 @@ export const SessionParticipantComposer = React.memo((props: SessionParticipantC
 function SessionParticipantComposerContent(props: SessionParticipantComposerProps) {
     const preferredServerId = usePreferredServerIdForSession({
         serverId: props.serverId,
-        sessionId: props.sessionId,
+        sessionId: props.sessionId ?? '',
     });
     const participantServerId = props.serverId?.trim() || preferredServerId;
     const participantSessionAddress = React.useMemo(
         () => normalizeSessionAddress(participantServerId, props.sessionId),
         [participantServerId, props.sessionId],
     );
-    const participantMachineTarget = useSessionMachineTarget(props.sessionId, participantServerId);
+    const sessionMachineTarget = useSessionMachineTarget(props.sessionId, participantServerId);
+    const participantMachineTarget = React.useMemo(() => props.sessionId === null
+        ? props.workspace ? { machineId: props.workspace.machineId, basePath: props.workspace.cwd } : null
+        : sessionMachineTarget, [props.sessionId, props.workspace?.machineId, props.workspace?.cwd, sessionMachineTarget]);
     const participantServerIds = React.useMemo(() => [participantServerId], [participantServerId]);
     const participantAccountBindings = useServerCredentialAccountScopeBindings(participantServerIds);
     const participantAccountBinding = React.useMemo(
@@ -222,11 +230,9 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         enabled: participantMachineTarget !== null,
     });
     const [composerInstanceId] = React.useState(randomUUID);
-    const composerRef = React.useMemo<Extract<ComposerRefV1, { kind: 'participantMessage' }>>(() => ({
-        kind: 'participantMessage',
-        sessionId: props.sessionId,
-        instanceId: composerInstanceId,
-    }), [composerInstanceId, props.sessionId]);
+    const composerRef = React.useMemo<Extract<ComposerRefV1, { kind: 'participantMessage' | 'newSession' }>>(() => props.sessionId === null
+        ? { kind: 'newSession', instanceId: composerInstanceId }
+        : { kind: 'participantMessage', sessionId: props.sessionId, instanceId: composerInstanceId }, [composerInstanceId, props.sessionId]);
     const composerRefRef = React.useRef<ComposerRefV1>(composerRef);
     const layoutPresented = useLayoutPresentationActive();
     const layoutPresentedRef = React.useRef(layoutPresented);
@@ -248,7 +254,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         && composerRefsV1Equal(composerRefRef.current, composerRef)
         && (composerAccountLifetime === null || composerAccountLifetime.isCurrent())
     ), [composerAccountLifetime, composerRef]);
-    const runDraftAddress = React.useMemo(() => props.recipient?.kind === 'execution_run'
+    const runDraftAddress = React.useMemo(() => props.sessionId === null ? null : props.recipient?.kind === 'execution_run'
         ? { kind: 'run' as const, sessionId: props.sessionId, runId: props.recipient.runId }
         : props.launcherDraftKey ? { kind: 'session' as const, sessionId: props.sessionId } : null,
     [props.launcherDraftKey, props.recipient, props.sessionId]);
@@ -261,7 +267,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         address: runDraftAddress,
         launcherDraftKey: props.launcherDraftKey,
         onDocumentEdit: props.onDraftDocumentEdit,
-        capabilities: { text: true, references: true, attachments: true, submit: true },
+        capabilities: { text: true, references: props.sessionId !== null, attachments: props.sessionId !== null, submit: true },
         isCurrent: isParticipantComposerCurrent,
         onDocumentChange: () => notifyComposerPresentationTargetChanged(composerRef),
     });
@@ -355,16 +361,16 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     ), [isParticipantComposerCurrent, layoutPresented, participantComposerReferenceHost]);
     const participantComposerPresentation = useComposerScopePluginPresentation({
         composer: composerRef,
-        physicalTarget: { kind: 'session', sessionId: props.sessionId },
-        resourceContext: { kind: 'session', sessionId: props.sessionId },
+        physicalTarget: props.sessionId === null ? { kind: 'app' } : { kind: 'session', sessionId: props.sessionId },
+        resourceContext: props.sessionId === null ? { kind: 'global' } : { kind: 'session', sessionId: props.sessionId },
         machineId: participantMachineTarget?.machineId ?? null,
         serverId: participantServerId,
         projectionPhase: participantDaemonProjection.phase,
         projectionInputs: participantDaemonProjection.inputs,
         accountLifetime: composerAccountLifetime,
         isScopeCurrent: isParticipantComposerCurrent,
-        attachmentsEnabled: true,
-        includeSessionActions: true,
+        attachmentsEnabled: props.sessionId !== null,
+        includeSessionActions: props.sessionId !== null,
     });
     // The daemon catalog remains the only availability owner. Persisted
     // drafts contain semantic attachment data only, and this exact current
@@ -372,8 +378,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     const participantComposerAttachmentEntriesById = participantComposerPresentation.attachmentEntriesById;
     const attachmentsUploadConfig = useAttachmentsUploadConfig();
     const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads');
-    const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(props.sessionId, participantServerId, 'attachment');
-    const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled
+    const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(props.sessionId ?? '', participantServerId, 'attachment');
+    const attachmentsUploadsEnabled = props.sessionId !== null && attachmentsUploadsFeatureEnabled
         && attachmentsUploadsTransferAvailable
         && composerAccountLifetime !== null;
     const transferDraftScope = React.useMemo<SessionAttachmentDraftScope | null>(() => {
@@ -381,7 +387,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         const occurrenceId = props.draftOccurrenceId?.trim()
             || props.initialLocalId?.trim()
             || (props.recipient?.kind === 'execution_run' ? props.recipient.runId : initialLocalIdRef.current);
-        if (!serverId || !participantAccountId || !occurrenceId) return null;
+        if (!serverId || !participantAccountId || !occurrenceId || props.sessionId === null) return null;
         return { serverId, accountId: participantAccountId, sessionId: props.sessionId, occurrenceId };
     }, [participantAccountId, participantServerId, props.draftOccurrenceId, props.initialLocalId, props.recipient, props.sessionId]);
     const initialTransferDrafts = React.useMemo(
@@ -501,8 +507,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
             layout: composerActionBarLayoutRef.current,
             capabilities: {
                 text: true,
-                references: true,
-                attachments: true,
+                references: props.sessionId !== null,
+                attachments: props.sessionId !== null,
                 submit: true,
             },
             state: {
@@ -514,7 +520,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                 ...(inputLock ? { inputLock } : {}),
             },
         };
-    }, [composerInputEffects.readComposerInputLock, composerRef, participantComposerAttachmentEntriesById, participantComposerDocumentOwner, readParticipantDocument]);
+    }, [composerInputEffects.readComposerInputLock, composerRef, participantComposerAttachmentEntriesById, participantComposerDocumentOwner, readParticipantDocument, props.sessionId]);
 
     const commitParticipantComposerDocument = React.useCallback((input: Readonly<{
         expectedRevision: number;
@@ -653,8 +659,9 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
             signal: participantComposerPresentation.scopeSignal,
             additionalSendableContent: submittedTransferDrafts.length > 0,
             route: {
-                kind: 'participantMessage',
-                ref: composerRef,
+                ...(composerRef.kind === 'newSession'
+                    ? { kind: 'newSession' as const, ref: composerRef }
+                    : { kind: 'participantMessage' as const, ref: composerRef }),
                 readCurrentExecutionTarget: () => (
                     participantComposerPresentation.scopeSignal.aborted
                         ? null
@@ -706,7 +713,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                         let outboundText = text;
                         let transferMetaOverrides: Record<string, unknown> | undefined;
                         if (submittedTransferDrafts.length > 0) {
-                            if (!composerAccountLifetime) {
+                            if (!composerAccountLifetime || props.sessionId === null) {
                                 throw new Error(t('common.unavailable'));
                             }
                             setIsUploadingAttachments(true);
@@ -756,6 +763,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                             if (metaOverrides === null) return { status: 'rejected' };
                             const submission = {
                                 text: routed.text,
+                                localId: submissionLocalId,
                                 ...(routed.displayText
                                     ? { displayText: routed.displayText }
                                     : text.length > 0 && routed.text !== text
@@ -774,7 +782,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                                 },
                                 readCurrentDraft: readParticipantDocument,
                                 onOutboundHandoff: () => {
-                                    if (!props.submitPreparedMessage) initialLocalIdRef.current = null;
+                                    initialLocalIdRef.current = null;
                                     handoff.accept();
                                     clearSubmittedTransferDrafts();
                                     return readParticipantDocument();
@@ -782,7 +790,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                             } satisfies ParticipantComposerPreparedSubmission;
                             if (props.submitPreparedMessage) {
                                 await props.submitPreparedMessage(submission);
-                            } else await sync.submitMessage(props.sessionId, submission.text, submission.displayText, metaOverrides, {
+                            } else if (props.sessionId !== null) await sync.submitMessage(props.sessionId, submission.text, submission.displayText, metaOverrides, {
                                 ...(participantServerId ? { serverId: participantServerId } : {}),
                                 recipient: routed.recipient,
                                 ...(routed.requestedAction ? { requestedAction: routed.requestedAction } : {}),
@@ -790,6 +798,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                                 callerSurface: 'participant_composer',
                                 onOutboundHandoff: submission.onOutboundHandoff,
                             });
+                            else throw new Error(t('common.unavailable'));
                             return { status: 'accepted' };
                         }
 
@@ -800,6 +809,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                         if (metaOverrides === null) return { status: 'rejected' };
                         const submission = {
                             text: outboundText,
+                            localId: submissionLocalId,
                             ...(text.length > 0 && outboundText !== text ? { displayText: text } : {}),
                             ...(metaOverrides ? { metaOverrides } : {}),
                             draft: {
@@ -812,7 +822,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                             },
                             readCurrentDraft: readParticipantDocument,
                             onOutboundHandoff: () => {
-                                if (!props.submitPreparedMessage) initialLocalIdRef.current = null;
+                                initialLocalIdRef.current = null;
                                 handoff.accept();
                                 clearSubmittedTransferDrafts();
                                 return readParticipantDocument();
@@ -820,7 +830,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                         } satisfies ParticipantComposerPreparedSubmission;
                         if (props.submitPreparedMessage) {
                             await props.submitPreparedMessage(submission);
-                        } else await sync.submitMessage(
+                        } else if (props.sessionId !== null) await sync.submitMessage(
                             props.sessionId,
                             outboundText,
                             text.length > 0 && outboundText !== text ? text : undefined,
@@ -832,6 +842,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                                 onOutboundHandoff: submission.onOutboundHandoff,
                             },
                         );
+                        else throw new Error(t('common.unavailable'));
                         return { status: 'accepted' };
                     } catch (error) {
                         if (error instanceof ParticipantComposerSubmissionHeld) return { status: 'rejected' };
@@ -906,8 +917,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
             {participantComposerPresentation.beforeComposer}
             <AgentInput
                 composerRef={composerRef}
-                composerReferenceHost={participantComposerDropHost}
-                composerFileScope={resolveWorkspaceTargetForSession(participantSessionAddress ?? props.sessionId)}
+                composerReferenceHost={props.sessionId === null ? null : participantComposerDropHost}
+                composerFileScope={props.sessionId === null ? undefined : resolveWorkspaceTargetForSession(participantSessionAddress ?? props.sessionId)}
                 placeholder={props.canSendMessages ? props.placeholder ?? t('session.inputPlaceholder') : t('session.sharing.viewOnlyMode')}
                 {...(props.engine ? {
                     agentType: props.engine.agentType,
@@ -937,11 +948,11 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                         mentions,
                     }, true);
                 }}
-                sessionId={props.sessionId}
+                sessionId={props.sessionId ?? undefined}
                 sessionAddress={participantSessionAddress}
                 onSend={handleParticipantSend}
-                autocompleteKinds={PARTICIPANT_COMPOSER_SUGGESTION_KINDS}
-                autocompleteSuggestions={(query, signal) => resolveSessionComposerSuggestions(props.sessionId, query, {
+                autocompleteKinds={props.sessionId === null ? [] : PARTICIPANT_COMPOSER_SUGGESTION_KINDS}
+                autocompleteSuggestions={(query, signal) => props.sessionId === null ? Promise.resolve([]) : resolveSessionComposerSuggestions(props.sessionId, query, {
                     kinds: PARTICIPANT_COMPOSER_SUGGESTION_KINDS,
                     signal,
                     composerReferenceHost: participantComposerReferenceHost,

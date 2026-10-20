@@ -1159,10 +1159,13 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         }));
     });
 
-    it('shows a specific message when the daemon rejects a stale connected-service group switch', async () => {
+    it.each([
+        ['group_generation_conflict', 'connectedServices.authSwitch.errors.groupGenerationConflict'],
+        ['restart_disallowed_by_execution_policy', 'connectedServices.authSwitch.errors.restartDisallowedByExecutionPolicy'],
+    ])('explains a rejected authentication switch (%s) and retains the current selection', async (errorCode, messageKey) => {
         setSessionConnectedServiceAuthBindingMock.mockResolvedValueOnce({
             ok: false,
-            errorCode: 'group_generation_conflict',
+            errorCode,
             serviceId: CODEX_SERVICE_KEY,
         });
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
@@ -1207,8 +1210,9 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         expect(modalAlertMock).toHaveBeenCalledWith(
             'common.error',
-            'connectedServices.authSwitch.errors.groupGenerationConflict',
+            messageKey,
         );
+        expect(renderChipPopover(hook).bindingsByServiceId[CODEX_SERVICE_KEY]).toEqual({ source: 'native' });
     });
 
     it('surfaces per-service non-applied badges when multi-service hot apply partially succeeds', async () => {

@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
-import type { Router } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text, TextInput } from '@/components/ui/text/Text';
@@ -13,7 +12,8 @@ import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/rev
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { formatReviewCommentAnchorLabel } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
 import { t } from '@/text';
-import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
+import type { WorkspaceFileOpen } from '@/components/workspaces/files/useWorkspaceFileOpener';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { Icon } from '@/components/ui/icons/Icon';
 
@@ -37,7 +37,7 @@ function renderSnippetLines(params: {
 
 export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Readonly<{
     sessionId?: string;
-    navigation?: Pick<Router, 'push'>;
+    openFile?: WorkspaceFileOpen;
     reviewScope?: WorkspaceScopeBase | null;
     reviewCommentDrafts: readonly ReviewCommentDraft[];
     onUpdateDraft: (draft: ReviewCommentDraft) => void;
@@ -45,7 +45,6 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const { open: openFile } = useWorkspaceFileOpener();
     const {
         onClose,
         onDeleteDraft,
@@ -95,12 +94,12 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
     }, [onDeleteDraft]);
 
     const jumpToDraft = React.useCallback((draft: ReviewCommentDraft) => {
-        if (!sessionId || !props.navigation) return;
+        if (!sessionId || !props.openFile) return;
         onClose();
-        void openFile({ kind: 'session', sessionId, path: draft.filePath,
+        fireAndForget(props.openFile({ kind: 'session', sessionId, path: draft.filePath,
             ...(props.reviewScope?.serverId ? { serverId: props.reviewScope.serverId } : {}) },
-        { view: draft.source === 'diff' ? 'changes' : 'view', anchor: draft.anchor, anchorSource: draft.source });
-    }, [onClose, openFile, props.navigation, props.reviewScope?.serverId, sessionId]);
+        { view: draft.source === 'diff' ? 'changes' : 'view', anchor: draft.anchor, anchorSource: draft.source }), { tag: 'ReviewCommentsDraftsModal.jumpToDraft' });
+    }, [onClose, props.openFile, props.reviewScope?.serverId, sessionId]);
 
     const includedCount = drafts.filter(isReviewCommentDraftIncludedInPrompt).length;
 
@@ -139,7 +138,7 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
                                         {formatReviewCommentAnchorLabel(draft)}
                                     </Text>
                                 </View>
-                                {sessionId && props.navigation ? (
+                                {sessionId && props.openFile ? (
                                     <Pressable
                                         accessibilityLabel={t('files.reviewComments.jump')}
                                         accessibilityRole="button"

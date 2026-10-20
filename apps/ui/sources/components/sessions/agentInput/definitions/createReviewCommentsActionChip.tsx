@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { Router } from 'expo-router';
+import type { WorkspaceFileOpen } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { Pressable, View } from 'react-native';
 
 import type {
@@ -58,7 +58,7 @@ function openReviewCommentsRemovePrompt(params: Readonly<{
 
 function openReviewCommentsDraftsModal(params: Readonly<{
     sessionId?: string;
-    navigation?: Pick<Router, 'push'>;
+    openFile?: WorkspaceFileOpen;
     reviewScope?: WorkspaceScopeBase | null;
     reviewCommentDrafts: readonly ReviewCommentDraft[];
     onUpdateDraft: (draft: ReviewCommentDraft) => void;
@@ -68,7 +68,7 @@ function openReviewCommentsDraftsModal(params: Readonly<{
         component: ReviewCommentsDraftsModal,
         props: {
             sessionId: params.sessionId,
-            navigation: params.navigation,
+            openFile: params.openFile,
             reviewScope: params.reviewScope ?? null,
             reviewCommentDrafts: params.reviewCommentDrafts,
             onUpdateDraft: params.onUpdateDraft,
@@ -88,7 +88,7 @@ function openReviewCommentsDraftsModal(params: Readonly<{
 
 export function createReviewCommentsActionChip(params: Readonly<{
     sessionId?: string;
-    navigation?: Pick<Router, 'push'>;
+    openFile?: WorkspaceFileOpen;
     reviewScope?: WorkspaceScopeBase | null;
     reviewCommentDrafts: readonly ReviewCommentDraft[];
     onSetDraftIncluded: (draftId: string, included: boolean) => void;
@@ -104,7 +104,7 @@ export function createReviewCommentsActionChip(params: Readonly<{
     const openDraftsModal = () => {
         openReviewCommentsDraftsModal({
             sessionId: params.sessionId,
-            navigation: params.navigation,
+            openFile: params.openFile,
             reviewScope: params.reviewScope ?? null,
             reviewCommentDrafts: params.reviewCommentDrafts,
             onUpdateDraft: params.onUpdateDraft,
