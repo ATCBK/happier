@@ -52,8 +52,10 @@ afterEach(async () => {
 it('opens a transcript file through the canonical Action into the qualified session destination', async () => {
     restoreLocks = installBrowserStorageLockBoundary();
     installDisconnectedServerSocketBoundary();
-    const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://transcript-files.test',
-        accountId: 'alice', currentAccount: true }, { key: 'other', serverUrl: 'https://transcript-files-other.test', accountId: 'alice' }], route: () => undefined });
+    const homes = await serveActionHomes({ homes: [
+        { key: 'other', serverUrl: 'https://transcript-files-other.test', accountId: 'alice' },
+        { key: 'home', serverUrl: 'https://transcript-files.test', accountId: 'alice', currentAccount: true },
+    ], route: () => undefined });
     disposeHome = homes.dispose;
     disconnectHome = await homes.restoreActiveConnection();
     const [{ WorkspaceProvider }, { AppPaneProvider }, { resolveCompactAppDestinations }, { StructuredReferencesRow }, { storage }, { useTranscriptFileLinks },
@@ -75,9 +77,10 @@ it('opens a transcript file through the canonical Action into the qualified sess
     const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: targetServerId, workspacePath: '/repo', navigate: () => {
         throw new Error('File references must use the workspace Action, not source navigation');
     } });
+    const rawPaths = ['src/100%25.ts', 'src/query?.ts', 'src/name#L4', ' leading /LICENSE ', ' '];
     const screen = await renderWithSessionTranscriptSource(<AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
         {owner => { navigation = owner; return <><HookProbe /><StructuredReferencesRow sessionId="s1" serverId={targetServerId}
-            references={[{ kind: 'file', path: 'src/a.ts' }]} fileOpenEnabled />
+            references={['src/a.ts', ...rawPaths].map(path => ({ kind: 'file' as const, path }))} fileOpenEnabled />
             <TranscriptTurnChangesCard sessionId="s1" serverId={targetServerId} turnId="turn-4" fileOpenEnabled
                 files={[scmFileStatusFromChange({ path: 'src/turn.ts', changeKind: 'modified', added: 1, removed: 1 })]}
                 firstHunkAnchors={{ 'src/turn.ts': { kind: 'diffLine', side: 'after', startLine: 40, newLine: 40, oldLine: null } }} />
@@ -91,6 +94,33 @@ it('opens a transcript file through the canonical Action into the qualified sess
             const group = navigation.state.groups[navigation.state.focusedGroupId];
             expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session',
                 params: { id: 's1', serverId: targetServerId, details: 'file', path: 'src/a.ts', fileView: 'view' } });
+        });
+        for (const path of rawPaths) {
+            await screen.pressByTestIdAsync(`linked-workspace-file:${path}`);
+            await vi.waitFor(() => {
+                const group = navigation.state.groups[navigation.state.focusedGroupId];
+                expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                    serverId: targetServerId, path, fileView: 'view',
+                } });
+            });
+        }
+        await act(async () => { expect(links.openPath('/repo/src/absolute%25?name#L2.ts')).toBe(true); });
+        await vi.waitFor(() => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: 'src/absolute%25?name#L2.ts', fileView: 'view',
+            } });
+        });
+        await act(async () => {
+            expect(links.openPath('/repo-neighbor/secret.ts')).toBe(false);
+            expect(links.openPath('../secret.ts')).toBe(false);
+        });
+        await act(async () => { expect(links.onMarkdownLinkPress('src/100%2525.ts#L7')).toBe(true); });
+        await vi.waitFor(() => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: 'src/100%25.ts', source: 'file', line: '7',
+            } });
         });
         await act(async () => { expect(links.onMarkdownLinkPress('src/range.ts:5-8')).toBe(true); });
         await vi.waitFor(() => {

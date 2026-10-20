@@ -25,6 +25,7 @@ export type WorkspaceFileOpenOptions = Readonly<Pick<WorkspaceFileOpenInput, 'an
     signal?: AbortSignal;
     origin?: WorkspaceFileOpenOrigin;
 }>;
+/** Resolves true when Action accepts the request, including deferred approval. */
 export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean>;
 
 /** Every file entry point enters the same Action policy and mounted navigation owner. */
@@ -66,7 +67,7 @@ export function useWorkspaceFileOpener() {
                 onReturn: kind => { if (kind === 'route') setTranscriptJumpHighlight(transcript); },
             }, phone ? 'route' : 'pane');
         }
-        return opened;
+        return result.ok;
     }, [canOpen, focusReturnOwner, instanceKey, openApproval, phone]);
     return React.useMemo(() => ({ open, canOpen }), [open, canOpen]);
 }
