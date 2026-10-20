@@ -200,9 +200,9 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                     ? [[endpoint.baseUrl, ['1.1.1.1']] as const] : [])),
             });
             if (resolved.status !== 'resolved') throw new Error('Expected native Provider source');
-            const providerSettings = ProviderSettingsV1Schema.parse({ ...sourceSettings, machineGrants: [{ v: 1,
-                connectionId: worker.record.connectionId, machineId, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint,
-                endpointSetFingerprint: resolved.record.endpointSetFingerprint, confirmedAt: 1 }] });
+            const providerSettings = ProviderSettingsV1Schema.parse({ ...sourceSettings, accountGrants: [{ v: 1,
+                connectionId: worker.record.connectionId, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint,
+                confirmedAt: 1 }] });
             const providerSourceSnapshot = { ...worker.snapshot, providerConnectionsCatalog: { status: 'ready' as const,
                 revision: 1, catalog: splitProviderSettingsV1(providerSettings).catalog } };
             const providerSourceRuntime = createRuntimeProviderModelManagementServices({ machineId, happyHomeDir: home,

@@ -8,11 +8,10 @@ import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivatePro
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialPayloadV1Schema } from '@happier-dev/protocol/teams';
 import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
-import { resolveProviderBindingCompatibilityFromSourceFactsV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
-import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
+import { resolveTeamCredentialModelCompatibility } from './teamCredentialModelCompatibility';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -130,12 +129,8 @@ describe('Session Team credential Provider binding', () => {
     publish();
     const adapter = { v: 1 as const, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeBrokerAuthoritySpawnEnv };
     const workerLease = lease(adapter);
-    const captured = readLeasedAgentProviderBindingAdapter({ lease: workerLease, agentId: 'codex' })!;
-    const compatibility = resolveProviderBindingCompatibilityFromSourceFactsV1({
-      agentTargetKey: row.selection.agentTargetKey, agent: captured.support, adapterVersion: adapter.adapterVersion,
-      endpoints: [sourceFacts.endpoint], credential: sourceFacts.credential,
-      compatibilityOverrides: sourceFacts.compatibilityOverrides, model: row.descriptor,
-    });
+    const compatibility = resolveTeamCredentialModelCompatibility({ lease: workerLease, agentId: 'codex',
+      model: { ...offered, deliveryMode: 'brokered' }, providerSettings: settings });
     const open = (selectedLease = workerLease) => openSessionTeamCredentialProviderBinding({
       sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex', agentTargetKey: row.selection.agentTargetKey,
       modelId: row.selection.modelId, binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: row.selection.resourceId,

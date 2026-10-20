@@ -10,10 +10,10 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { projectAgentProviderBrokerApplications, resolveManagedProviderBrokerPurpose } from '@/providers/broker/applicationProjection';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCredentialModelCatalog';
-import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
 
-/** Runtime opens read the current resource through the same Home catalog. */
+/** Runtime opens use the worker's admitted application and the shared catalog transport. */
 export async function readSessionTeamCredentialProviderModels(input: Readonly<{
   homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']>;
   lease: PluginRuntimeRegistryLease;
@@ -23,18 +23,16 @@ export async function readSessionTeamCredentialProviderModels(input: Readonly<{
   teamId: string;
   signal: AbortSignal;
 }>): Promise<TeamCredentialResourceCatalogEntryV1['providerModels']> {
-  let cursor: string | null = null;
-  do {
-    const raw = await input.homeDomainAction({
-      actionId: 'teams.credentials.entitled.list', input: { teamId: input.teamId, ...(cursor ? { cursor } : {}) },
-      context: { surface: 'cli' }, signal: input.signal,
-    });
-    const parsed = TeamCredentialResourceEntitledPageV1Schema.parse(raw);
-    const resource = parsed.resources.find(candidate => candidate.id === input.resourceId);
-    if (resource) return resource.providerModels;
-    cursor = parsed.nextCursor;
-  } while (cursor);
-  return [];
+  const requirements = readLeasedAgentProviderRequirements(input);
+  if (!requirements) throw new SessionTeamCredentialLaunchUnavailableError();
+  const applications = projectAgentProviderBrokerApplications({
+    registry: input.lease.registry.contributes, agentTargetKey: input.agentTargetKey,
+    acceptedProtocols: requirements.acceptsProtocols,
+  });
+  const resources = await readSessionTeamCredentialResourceCatalog({
+    homeDomainAction: input.homeDomainAction, applications, teamIds: [input.teamId], signal: input.signal,
+  });
+  return resources.find(resource => resource.id === input.resourceId)?.providerModels ?? [];
 }
 
 export type NormalizedSessionTeamCredentialLaunch = Readonly<{

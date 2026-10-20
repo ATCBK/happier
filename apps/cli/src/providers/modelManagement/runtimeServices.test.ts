@@ -735,6 +735,7 @@ describe('runtime provider model-management composition', () => {
     const canonicalProjection = await services.projectModels({
       machineId: 'machine-a',
       agentTargetKey: canonicalBrokerApplication.agentTargetKey,
+      sourceCatalog: true,
       providerConnection: {
         connectionId,
         expectedConnectionSecurityFingerprint: teamProviderSource.connectionSecurityFingerprint,
