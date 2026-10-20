@@ -1,4 +1,5 @@
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
+import { toolDetailOverrideStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 
 /**
  * The searchable settings of the `toolRendering` page. Its rows are one per tool (named by the tool
@@ -10,13 +11,13 @@ export const TOOL_RENDERING_SETTINGS = defineSettingsPage({
         collapsed: {
             titleKey: 'settingsSession.toolDetailOverrides.title',
             settings: {
-                collapsedOverrides: {},
+                collapsedOverrides: { storage: toolDetailOverrideStorage('collapsed') },
             },
         },
         expanded: {
             titleKey: 'settingsSession.toolDetailOverrides.expandedTitle',
             settings: {
-                expandedOverrides: {},
+                expandedOverrides: { storage: toolDetailOverrideStorage('expanded') },
             },
         },
     },

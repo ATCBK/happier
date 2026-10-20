@@ -3,7 +3,8 @@ import * as React from 'react';
 import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import {
     NEW_SESSION_WIZARD_SELECTION_SECTION_IDS,
     type NewSessionWizardSectionPresentation,
@@ -49,8 +50,9 @@ function WizardStepPresentationRow(props: Readonly<{
 }
 
 export const NewSessionWizardSettingsView = React.memo(function NewSessionWizardSettingsView() {
-    const [presentationBySection, setPresentationBySection] = useSettingMutable('newSessionWizardSectionPresentationV1');
+    const presentationBySection = useSetting('newSessionWizardSectionPresentationV1');
     const [columnsEnabled, setColumnsEnabled] = useSettingMutable('newSessionWizardColumnsEnabled');
+    const { setSetting } = useSettingActionFeedback();
 
     const normalizedPresentationBySection = React.useMemo(() => {
         const record = presentationBySection && typeof presentationBySection === 'object' && !Array.isArray(presentationBySection)
@@ -70,14 +72,8 @@ export const NewSessionWizardSettingsView = React.memo(function NewSessionWizard
         sectionId: NewSessionWizardSelectionSectionId,
         value: NewSessionWizardSectionPresentation,
     ) => {
-        const next = { ...normalizedPresentationBySection };
-        if (value === 'auto') {
-            delete next[sectionId];
-        } else {
-            next[sectionId] = value;
-        }
-        setPresentationBySection(next);
-    }, [normalizedPresentationBySection, setPresentationBySection]);
+        void setSetting(NEW_SESSION_WIZARD_SETTINGS.settings[sectionId], value);
+    }, [setSetting]);
 
     return (
         <ItemList style={{ paddingTop: 0 }}>

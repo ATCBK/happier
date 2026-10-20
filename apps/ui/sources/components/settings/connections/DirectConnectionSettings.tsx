@@ -13,10 +13,9 @@ import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import {
     readDirectConnectionsEnabled,
     readMachineDirectConnectionChoice,
-    withDirectConnectionsEnabled,
     type MachineDirectConnectionChoice,
 } from '@/sync/domains/settings/peerMediationPreferences';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 /**
@@ -39,15 +38,15 @@ function useServerDeniesDirectConnections(): boolean {
  * The stored value through its canonical schema (which falls back to the defaults rather than
  * throwing), so a missing or foreign value reads as "never changed" instead of breaking the page.
  */
-function usePeerMediationPreferences(): [PeerMediationPreferencesV1, (value: PeerMediationPreferencesV1) => void] {
-    const [stored, setStored] = useSettingMutable('peerMediationPreferencesV1');
-    const preferences = React.useMemo(() => PeerMediationPreferencesV1Schema.parse(stored), [stored]);
-    return [preferences, setStored];
+function usePeerMediationPreferences(): PeerMediationPreferencesV1 {
+    const stored = useSetting('peerMediationPreferencesV1');
+    return React.useMemo(() => PeerMediationPreferencesV1Schema.parse(stored), [stored]);
 }
 
 /** Account › Connections: one account-wide answer to "may my devices connect to my machines directly?". */
 export const AccountDirectConnectionsSection = React.memo(function AccountDirectConnectionsSection() {
-    const [preferences, setPreferences] = usePeerMediationPreferences();
+    const preferences = usePeerMediationPreferences();
+    const { setSetting } = useSettingActionFeedback();
     const serverDenies = useServerDeniesDirectConnections();
     const enabled = !serverDenies && readDirectConnectionsEnabled(preferences);
     const subtitle = serverDenies
@@ -66,7 +65,7 @@ export const AccountDirectConnectionsSection = React.memo(function AccountDirect
                         testID="settings-account-direct-connections-switch"
                         value={enabled}
                         disabled={serverDenies}
-                        onValueChange={(value) => setPreferences(withDirectConnectionsEnabled(preferences, value))}
+                        onValueChange={(value) => { void setSetting(ACCOUNT_SETTINGS.settings.directConnections, value); }}
                     />
                 }
             />
@@ -79,7 +78,7 @@ export const AccountDirectConnectionsSection = React.memo(function AccountDirect
  * shows, read from the same preferences (no request).
  */
 export function useMachineDirectConnectionSummary(machineId: string): string {
-    const [preferences] = usePeerMediationPreferences();
+    const preferences = usePeerMediationPreferences();
     const serverDenies = useServerDeniesDirectConnections();
     const choice = serverDenies ? 'relay' : readMachineDirectConnectionChoice(preferences, machineId);
     return choice === 'direct' ? t('settingsConnections.machineOptionDirect')
@@ -96,7 +95,7 @@ export const MachineDirectConnectionSection = React.memo(function MachineDirectC
     machineId: string;
     machineName: string;
 }>) {
-    const [preferences] = usePeerMediationPreferences();
+    const preferences = usePeerMediationPreferences();
     const { setSetting } = useSettingActionFeedback({ serverId: props.serverId });
     const serverDenies = useServerDeniesDirectConnections();
     const choice = serverDenies ? 'relay' : readMachineDirectConnectionChoice(preferences, props.machineId);

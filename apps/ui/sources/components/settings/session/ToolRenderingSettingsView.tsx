@@ -5,11 +5,9 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { t } from '@/text';
-import { useSettingMutable } from '@/sync/domains/state/storage';
-import {
-    TOOL_DETAIL_LEVEL_WITH_DEFAULT_OPTIONS,
-    type ToolViewDetailLevel,
-} from '@/components/settings/session/toolRendering/toolRenderingSettingOptions';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { TOOL_DETAIL_LEVEL_WITH_DEFAULT_OPTIONS } from '@/components/settings/session/toolRendering/toolRenderingSettingOptions';
 import { TOOL_RENDERING_OVERRIDE_ENTRIES } from '@/components/settings/session/toolRendering/toolRenderingOverrideEntries';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
@@ -18,13 +16,13 @@ import { TOOL_RENDERING_SETTINGS } from '@/components/settings/session/toolRende
 type ExpandedOverride = 'default' | 'summary' | 'full';
 
 export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettingsView() {
-    const popoverBoundaryRef = React.useRef<any>(null);
+    const popoverBoundaryRef = React.useRef<React.ComponentRef<typeof ItemList>>(null);
 
-    const [toolViewDetailLevelByToolName, setToolViewDetailLevelByToolName] = useSettingMutable('toolViewDetailLevelByToolName');
-    const [toolViewExpandedDetailLevelByToolName, setToolViewExpandedDetailLevelByToolName] = useSettingMutable('toolViewExpandedDetailLevelByToolName');
+    const toolViewDetailLevelByToolName = useSetting('toolViewDetailLevelByToolName');
+    const toolViewExpandedDetailLevelByToolName = useSetting('toolViewExpandedDetailLevelByToolName');
+    const { setSetting } = useSettingActionFeedback();
 
     const [openToolDetailMenu, setOpenToolDetailMenu] = React.useState<null | string>(null);
-    const tToolDetail = t as (key: any) => string;
     // One row per tool: the section says what the choice means, so the rows carry only the value.
     const expandedOptions = React.useMemo(() => [
         { id: 'default' as const, label: t('settingsSession.toolDetailLevel.defaultTitle') },
@@ -41,7 +39,7 @@ export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettin
                     description={t('settingsSessionPages.toolRendering.collapsedDescription')}
                 >
                     {TOOL_RENDERING_OVERRIDE_ENTRIES.map((toolKey) => {
-                        const override = (toolViewDetailLevelByToolName as any)?.[toolKey.toolName] as ToolViewDetailLevel | undefined;
+                        const override = toolViewDetailLevelByToolName[toolKey.toolName];
                         const selected = override ?? 'default';
 
                         return (
@@ -51,7 +49,7 @@ export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettin
                                 onOpenChange={(next) => setOpenToolDetailMenu(next ? `toolOverride:${toolKey.toolName}` : null)}
                                 variant="selectable"
                                 search={false}
-                                selectedId={selected as any}
+                                selectedId={selected}
                                 showCategoryTitles={false}
                                 matchTriggerWidth={true}
                                 connectToTrigger={true}
@@ -64,19 +62,14 @@ export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettin
                                 }}
                                 items={TOOL_DETAIL_LEVEL_WITH_DEFAULT_OPTIONS.map((opt) => ({
                                     id: opt.key,
-                                    title: tToolDetail(opt.titleKey),
-                                    subtitle: tToolDetail(opt.subtitleKey),
+                                    title: t(opt.titleKey),
+                                    subtitle: t(opt.subtitleKey),
                                 }))}
                                 onSelect={(id) => {
-                                    const next = id as ToolViewDetailLevel | 'default';
-                                    const current = (toolViewDetailLevelByToolName ?? {}) as Record<string, ToolViewDetailLevel>;
-                                    const nextRecord: Record<string, ToolViewDetailLevel> = { ...current };
-                                    if (next === 'default') {
-                                        delete nextRecord[toolKey.toolName];
-                                    } else {
-                                        nextRecord[toolKey.toolName] = next;
-                                    }
-                                    setToolViewDetailLevelByToolName(nextRecord as any);
+                                    const option = TOOL_DETAIL_LEVEL_WITH_DEFAULT_OPTIONS.find(candidate => candidate.key === id);
+                                    if (!option) return;
+                                    void setSetting(TOOL_RENDERING_SETTINGS.settings.collapsedOverrides,
+                                        { toolName: toolKey.toolName, detailLevel: option.key });
                                     setOpenToolDetailMenu(null);
                                 }}
                             />
@@ -91,7 +84,7 @@ export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettin
                     description={t('settingsSession.toolDetailOverrides.expandedFooter')}
                 >
                     {TOOL_RENDERING_OVERRIDE_ENTRIES.map((toolKey) => {
-                        const override = (toolViewExpandedDetailLevelByToolName as any)?.[toolKey.toolName] as 'summary' | 'full' | undefined;
+                        const override = toolViewExpandedDetailLevelByToolName[toolKey.toolName];
                         return (
                             <SegmentedChoiceItem<ExpandedOverride>
                                 key={toolKey.toolName}
@@ -100,16 +93,8 @@ export const ToolRenderingSettingsView = React.memo(function ToolRenderingSettin
                                 title={toolKey.title}
                                 options={expandedOptions}
                                 value={override ?? 'default'}
-                                onChange={(next) => {
-                                    const current = (toolViewExpandedDetailLevelByToolName ?? {}) as Record<string, 'summary' | 'full'>;
-                                    const nextRecord: Record<string, 'summary' | 'full'> = { ...current };
-                                    if (next === 'default') {
-                                        delete nextRecord[toolKey.toolName];
-                                    } else {
-                                        nextRecord[toolKey.toolName] = next;
-                                    }
-                                    setToolViewExpandedDetailLevelByToolName(nextRecord as any);
-                                }}
+                                onChange={(next) => { void setSetting(TOOL_RENDERING_SETTINGS.settings.expandedOverrides,
+                                    { toolName: toolKey.toolName, detailLevel: next }); }}
                             />
                         );
                     })}

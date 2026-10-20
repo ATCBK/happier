@@ -178,7 +178,7 @@ describe('provider state sharing through configurable Account Action approval', 
         expect(actual.acknowledgedRisksByAgentId['happier.agent.codex/codex']?.sharedStatePrivacy).toBe(true);
     });
 
-    it.each([{ stateMode: 'isolated' }, { configMode: 'copied' }] as const)(
+    it.each<{ stateMode: 'isolated' } | { configMode: 'copied' }>([{ stateMode: 'isolated' }, { configMode: 'copied' }])(
         'keeps non-sharing changes available without a sharing catalog (%j)', async change => {
             clearPluginAccountAvailabilityProjection();
             const { useSettingActionWriter } = await import('@/components/settings/catalog/useSettingActionWriter');
