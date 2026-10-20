@@ -150,14 +150,6 @@ export const ACCOUNT_SCM_FILES_SETTING_ANALYTICS = defineAccountSettingAnalytics
         identityScope: 'person',
         serializeCurrent: serializeCountBucket(100, 250),
     },
-    filesEditorMaxFileBytes: {
-        trackCurrentState: true,
-        trackChanges: true,
-        valueKind: 'bucket',
-        privacy: 'bucketed',
-        identityScope: 'person',
-        serializeCurrent: serializeBytesBucket(5000000, 8000000),
-    },
     filesEditorBridgeMaxChunkBytes: {
         trackCurrentState: true,
         trackChanges: true,

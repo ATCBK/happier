@@ -29,6 +29,39 @@ function mountLayout(
 }
 
 describe('plugin-ui semantic layout', () => {
+  it('resizes a controlled rail, commits the last width, and requests a reset without replacing panes', async () => {
+    const commit = vi.fn();
+    const reset = vi.fn();
+    const context = createSurfaceContext();
+    const hostApi = createHostApiStub(context);
+    function Surface() {
+      const [width, setWidth] = useState(320);
+      return <PluginUiProvider hostApi={hostApi} context={context}>
+        <ListDetailLayout testID="resizable" listTestID="rail" detailTestID="body"
+          minListWidth={200} minDetailWidth={400} preferredListRatio={0.4}
+          listWidthPx={width} onListWidthChange={setWidth} onListWidthCommit={commit} onListWidthReset={reset}
+          labels={{ resize: 'Resize collection', resizeValue: px => `${px} px` }}
+          list={<Stack />} detail={<Button title="Detail action" />} />
+      </PluginUiProvider>;
+    }
+    const mount = mountThroughReactNativeWeb(<Surface />);
+    try {
+      const node = mount.container.querySelector('[data-testid="resizable"]');
+      const measure = Reflect.get(node!, DOM_LAYOUT_HANDLER_NAME) as (event: unknown) => void;
+      act(() => measure({ nativeEvent: { layout: { x: 0, y: 0, width: 1000, height: 600 } } }));
+      const body = mount.container.querySelector('[data-testid="body"]');
+      const handle = mount.container.querySelector('[role="slider"]') as HTMLElement;
+      expect(handle).not.toBeNull();
+      act(() => handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 320 })));
+      act(() => window.dispatchEvent(new MouseEvent('mousemove', { clientX: 420 })));
+      act(() => window.dispatchEvent(new MouseEvent('mouseup', { clientX: 420 })));
+      expect(commit).toHaveBeenLastCalledWith(420);
+      expect(mount.container.querySelector('[data-testid="body"]')).toBe(body);
+      expect(handle.getAttribute('aria-valuenow')).toBe('420');
+      act(() => handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      expect(reset).toHaveBeenCalledOnce();
+    } finally { mount.unmount(); }
+  });
   it('holds the split with an idle detail so the first selection does not reflow the list', async () => {
     // Without a selection the list took the whole width, and the first press
     // snapped it to its split share under the pointer. An idle detail keeps

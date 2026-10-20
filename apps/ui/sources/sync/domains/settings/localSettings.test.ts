@@ -5,6 +5,56 @@ import { ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS } from './registry/local/loc
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
+    it('keeps remote image consent device-local, tolerant and scoped to the chosen document', () => {
+        expect(localSettingsParse({}).remoteImageConsentV1).toEqual([]);
+        const input = { remoteImageConsentV1: [['workspace-a', 'README.md'], ['workspace-a', 'README.md'], ['workspace-b', 'README.md'], null, ['only-one'], ['', 'README.md']] };
+        const parsed = localSettingsParse(input);
+        expect(parsed.remoteImageConsentV1).toEqual([['workspace-a', 'README.md'], ['workspace-b', 'README.md']]);
+        expect(localSettingsParse(parsed).remoteImageConsentV1).toEqual(parsed.remoteImageConsentV1);
+        expect(localSettingsParse({ remoteImageConsentV1: 'malformed', themePreference: 'dark' })).toMatchObject({ remoteImageConsentV1: [], themePreference: 'dark' });
+    });
+    it('keeps Track opt-in and device-local when reading older or malformed settings', () => {
+        expect(localSettingsParse({}).filesTrackAgentEdits).toBe(false);
+        expect(localSettingsParse({ filesTrackAgentEdits: 'true', sidebarCollapsed: true })).toMatchObject({
+            filesTrackAgentEdits: false, sidebarCollapsed: true,
+        });
+        expect(localSettingsParse(applyLocalSettings(localSettingsParse({}), { filesTrackAgentEdits: true })).filesTrackAgentEdits).toBe(true);
+    });
+    it('keeps arrangement and collection geometry device-local and tolerates an unknown arrangement', () => {
+        expect(localSettingsParse({})).toMatchObject({ paneArrangement: 'session', sessionColumnWidthPx: 440, collectionRailWidthsV1: {} });
+        const parsed = localSettingsParse({ paneArrangement: 'editor', sessionColumnWidthPx: 510, collectionRailWidthsV1: { machines: 310 } });
+        expect(localSettingsParse(parsed)).toMatchObject({ paneArrangement: 'editor', sessionColumnWidthPx: 510, collectionRailWidthsV1: { machines: 310 } });
+        expect(localSettingsParse({ paneArrangement: 'future', sidebarCollapsed: true })).toMatchObject({ paneArrangement: 'session', sidebarCollapsed: true });
+    });
+
+    it.each([
+        ['sidebarWidthPx', 'sidebarWidthBasisPx', [320], 1200],
+        ['rightPaneWidthPx', 'rightPaneWidthBasisPx', [360, 340], 1200],
+        ['detailsPaneWidthPx', 'detailsPaneWidthBasisPx', [520], 1200],
+        ['bottomPaneHeightPx', 'bottomPaneHeightBasisPx', [320], 900],
+        ['settingsNavSidebarWidthPx', 'settingsNavSidebarWidthBasisPx', [230, 280], 1200],
+    ] as const)('migrates scaled %s preferences once without rewriting chosen pixels', (pxKey, basisKey, oldDefaults, oldBasis) => {
+        for (const oldDefault of oldDefaults) {
+            const input = { [pxKey]: oldDefault, [basisKey]: oldBasis, sidebarCollapsed: true };
+            const parsed = localSettingsParse(input);
+            expect(parsed[pxKey]).toBe(localSettingsDefaults[pxKey]);
+            expect(parsed).not.toHaveProperty(basisKey);
+            expect(parsed.sidebarCollapsed).toBe(true);
+            expect(input).toHaveProperty(basisKey, oldBasis);
+            // A record without a basis was written as literal pixels, even when equal to an old default.
+            expect(localSettingsParse({ [pxKey]: oldDefault })[pxKey]).toBe(oldDefault);
+        }
+        const chosen = localSettingsParse({ [pxKey]: 777, [basisKey]: oldBasis * 2 });
+        expect(chosen[pxKey]).toBe(777);
+        expect(chosen).not.toHaveProperty(basisKey);
+        expect(localSettingsParse(chosen)[pxKey]).toBe(777);
+        expect(localSettingsParse({ [basisKey]: oldBasis })).not.toHaveProperty(basisKey);
+    });
+
+    it('preserves the 0.2 sidebar width the person saw at a larger basis', () => {
+        expect(localSettingsParse({ sidebarWidthPx: 320, sidebarWidthBasisPx: 1200 }).sidebarWidthPx).toBe(272);
+        expect(localSettingsParse({ sidebarWidthPx: 512, sidebarWidthBasisPx: 1920 }).sidebarWidthPx).toBe(512);
+    });
     it('defaults haptics on and keeps its opt-out device-local without coupling visual preferences', () => {
         expect(localSettingsParse({})).toMatchObject({ hapticsEnabled: true });
         const parsed = localSettingsParse({ hapticsEnabled: false, uiBackdropBlurEnabled: false, themePreference: 'dark' });

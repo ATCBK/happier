@@ -45,6 +45,7 @@ export const ACCOUNT_DISPLAY_SETTING_ANALYTICS = defineAccountSettingAnalytics({
     },
     executionRunsGuidanceEnabled: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     executionRunsNotifyParentOnCompletionDefault: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    filesAskWithoutSessionTarget: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     executionRunsGuidanceMaxChars: {
         trackCurrentState: true,
         trackChanges: true,

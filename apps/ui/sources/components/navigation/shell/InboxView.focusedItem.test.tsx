@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
@@ -10,6 +11,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 // The window size and the router are platform boundaries; the Inbox model and store stay real.
 const routerMock = vi.hoisted(() => ({
+  width: 390,
   current: null as null | {
     spies: { replace: { mock: { calls: unknown[][] }; mockClear: () => void } };
   },
@@ -17,7 +19,7 @@ const routerMock = vi.hoisted(() => ({
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
     useWindowDimensions: () => ({
-      width: 390,
+      width: routerMock.width,
       height: 844,
       scale: 1,
       fontScale: 1,
@@ -49,6 +51,7 @@ const initialState = storage.getState();
 
 describe('InboxView focused item on a phone', () => {
   beforeEach(() => {
+    routerMock.width = 390;
     routerMock.current?.spies.replace.mockClear();
     storage.setState(initialState, true);
     storage.setState({
@@ -83,5 +86,18 @@ describe('InboxView focused item on a phone', () => {
     await renderScreen(<InboxView />);
 
     expect(routerMock.current?.spies.replace.mock.calls).toHaveLength(0);
+  });
+
+  it('restores the Inbox rail width when a wide page opens an item', async () => {
+    routerMock.width = 1200;
+    storage.getState().applyLocalSettings({ collectionRailWidthsV1: { inbox: 430 } });
+    const { InboxView } = await import('./InboxView');
+    const screen = await renderScreen(<InboxView focusedItem={{ kind: 'approval', serverId: 'home-1', id: 'approval-1' }} />);
+    const layout = screen.findHostByTestId('inbox.layout');
+    expect(layout).not.toBeNull();
+    await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
+    const style = [screen.findHostByTestId('inbox.list-pane')?.props.style].flat(Infinity)
+      .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
+    expect(style.width).toBe(430);
   });
 });

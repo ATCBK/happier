@@ -156,6 +156,19 @@ function signIn() {
 }
 
 describe('Projects › Sources', () => {
+  it('restores the device-local Sources rail width without changing another collection', async () => {
+    signIn();
+    storage.getState().applyLocalSettings({ collectionRailWidthsV1: { 'project-sources': 365, inbox: 410 } });
+    const screen = await renderScreen(<ProjectSourcesScreen />);
+    const layout = screen.findHostByTestId('projects.sources.layout');
+    expect(layout).not.toBeNull();
+    await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
+    const railStyle = [screen.findHostByTestId('projects.sources.list-pane')?.props.style].flat(Infinity)
+      .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
+    expect(railStyle.width).toBe(365);
+    expect(storage.getState().localSettings.collectionRailWidthsV1.inbox).toBe(410);
+  });
+
   it('renews the mounted catalog exactly once when the same Account lifetime retires', async () => {
     signIn();
     const screen = await renderScreen(<ProjectSourcesScreen />);

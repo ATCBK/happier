@@ -67,7 +67,6 @@ describe('buildAccountSettingsSnapshot', () => {
             filesImagePreviewCacheMaxTotalBytes: 50 * 1024 * 1024,
             filesImagePreviewMaxBytes: 10 * 1024 * 1024,
             filesEditorChangeDebounceMs: 50,
-            filesEditorMaxFileBytes: 10_000_000,
             filesEditorBridgeMaxChunkBytes: 128_000,
             sessionReplayRecentMessagesCount: 600,
             sessionReplayMaxSeedChars: 300_000,
@@ -103,7 +102,6 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__filesImagePreviewCacheMaxTotalBytes).toBe('small');
         expect(snapshot.properties.acct_setting__filesImagePreviewMaxBytes).toBe('small');
         expect(snapshot.properties.acct_setting__filesEditorChangeDebounceMs).toBe('small');
-        expect(snapshot.properties.acct_setting__filesEditorMaxFileBytes).toBe('large');
         expect(snapshot.properties.acct_setting__filesEditorBridgeMaxChunkBytes).toBe('large');
         expect(snapshot.properties.acct_setting__sessionReplayRecentMessagesCount).toBe('large');
         expect(snapshot.properties.acct_setting__sessionReplayMaxSeedChars).toBe('large');

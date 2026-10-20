@@ -5,6 +5,12 @@ import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { buildLocalSettingsSnapshot } from './buildLocalSettingsSnapshot';
 
 describe('buildLocalSettingsSnapshot', () => {
+    it('buckets pane pixels independently of retired window bases', () => {
+        const smallBasis = buildLocalSettingsSnapshot({ ...localSettingsDefaults, sidebarWidthPx: 420, sidebarWidthBasisPx: 600 });
+        const largeBasis = buildLocalSettingsSnapshot({ ...localSettingsDefaults, sidebarWidthPx: 420, sidebarWidthBasisPx: 2560 });
+        expect(smallBasis.properties.local_setting__sidebarWidthPx).toBe(largeBasis.properties.local_setting__sidebarWidthPx);
+        expect(typeof smallBasis.properties.local_setting__sidebarWidthPx).toBe('string');
+    });
     it('tracks local theme preference, pane size buckets, acknowledged CLI counts, and ui font scale bucket', () => {
         const snapshot = buildLocalSettingsSnapshot({
             ...localSettingsDefaults,

@@ -177,6 +177,14 @@ export type PluginUiPaneHeaderHost = Readonly<{
  * navigation roots, or modal/portal infrastructure.
  */
 export type PluginUiPresentationHost = Readonly<{
+  /** Device-local collection widths, already scoped to this plugin by the host. */
+  panelSizing?: Readonly<{
+    useWidth(resizeKey: string): Readonly<{
+      widthPx: number | undefined;
+      commit(widthPx: number): void;
+      reset(): void;
+    }>;
+  }>;
   /** Same-realm surfaces join the incumbent mounted Find owner. */
   find?: FindSurfaceRegistrationHost;
   /** The incumbent host viewport policy, carried by a same-realm physical scroller. */
@@ -200,6 +208,10 @@ export type PluginUiPresentationHost = Readonly<{
   resolveMaterialColor?(input: Readonly<{ color: string; role?: HappierMaterialRole; nested: boolean; translucentColor?: string }>): string;
   /** Incumbent platform image decoder; Session-media acquisition remains in the mounted host API. */
   storedImageHost?: HappierStoredImageHost;
+  /** Same-realm presentation of an already admitted image; no read or modal authority crosses this port. */
+  mediaStage?: Readonly<{
+    open(items: readonly Readonly<{ kind: 'image'; uri: string; title: string }>[], index: number): void;
+  }>;
   /**
    * Keep a pushed detail's pinned footer above the on-screen keyboard through the host's keyboard
    * owner. `openedOffset` is how much of the footer's bottom padding (its home-indicator inset) may
