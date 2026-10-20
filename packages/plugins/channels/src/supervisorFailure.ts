@@ -3,6 +3,8 @@ import { isPluginError } from '@happier-dev/plugin-sdk';
 export type SupervisorFailureClassification = Readonly<{
   code: string;
   retryable: boolean;
+  sessionSpawnCode?: string;
+  sessionSpawnReason?: string;
 }>;
 
 /**
@@ -17,6 +19,8 @@ export type SupervisorFailureClassification = Readonly<{
  * this package already branches on by code elsewhere, exactly like the closed
  * `historyGap` reason logged beside them. Without them a background service can
  * fail on every wake for hours while saying only which boundary it failed at.
+ * Thread creation additionally retains the Session owner's projected codes,
+ * never its launch message or the rest of its result.
  *
  * A non-`PluginError` throwable classifies to nothing, so the redacted record
  * stays exactly as narrow as it is today.
@@ -24,9 +28,13 @@ export type SupervisorFailureClassification = Readonly<{
 export function classifySupervisorFailure(
   error: unknown,
 ): SupervisorFailureClassification | undefined {
-  return isPluginError(error)
-    ? Object.freeze({ code: error.code, retryable: error.retryable })
-    : undefined;
+  if (!isPluginError(error)) return undefined;
+  const details = error.code === 'channels_thread_spawn_failed' && error.details
+    && typeof error.details === 'object' && !Array.isArray(error.details) ? error.details : undefined;
+  return Object.freeze({ code: error.code, retryable: error.retryable,
+    ...(typeof details?.sessionSpawnCode === 'string' ? { sessionSpawnCode: details.sessionSpawnCode } : {}),
+    ...(typeof details?.sessionSpawnReason === 'string' ? { sessionSpawnReason: details.sessionSpawnReason } : {}),
+  });
 }
 
 /**

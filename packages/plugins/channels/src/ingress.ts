@@ -2067,7 +2067,14 @@ async function bindingsForThreadObservation(input: Readonly<{
     if (isPluginActionApprovalRequestCreated(spawned) || spawned.type === 'pending') {
       throw pluginError('channels_thread_spawn_unsettled', 'The thread Session has not settled; retry the same creation key.', true);
     }
-    if (spawned.type === 'error') throw pluginError('channels_thread_spawn_failed', 'The Session owner refused thread creation.', spawned.retryable);
+    if (spawned.type === 'error') {
+      const reason = spawned.code === 'update_required' ? spawned.details.reason
+        : spawned.launchError?.code ?? spawned.incompatibleTarget?.reason;
+      throw new PluginError({ code: 'channels_thread_spawn_failed',
+        message: 'The Session owner refused thread creation.', retryable: spawned.retryable,
+        // Keep only typed codes: launch messages may contain private content.
+        details: { sessionSpawnCode: spawned.code, ...(reason ? { sessionSpawnReason: reason } : {}) } });
+    }
     // Both creation and rejoin require the Session owner's persisted birth fact.
     const birth = isJsonRecord(spawned) ? own(spawned, 'attestedContext') : undefined;
     const origin = isJsonRecord(birth) && typeof own(birth, 'externalPrincipalId') === 'string'
