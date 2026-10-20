@@ -17,6 +17,7 @@ import {
 } from './identity.js';
 import { defineTriageSingleLineStringV1 } from './strings.js';
 import { TriageTaskCapabilitiesV1Schema } from './observations.js';
+import { TriageSourceScopeUnitDescriptorV1Schema } from './scopeSelection.js';
 
 /**
  * One tab a source's detail offers for an entry kind (r0.42).
@@ -124,6 +125,7 @@ export const TriageSourceDescriptorV1Schema = defineProtocolObject({
      * when it is present.
      */
     settingsPageId: TriageIdentifierV1ProtocolSchema.optional(),
+    scopeUnit: TriageSourceScopeUnitDescriptorV1Schema.optional(),
 }, { policy: 'additive-open/drop' });
 export type TriageSourceDescriptorV1 = ReturnType<typeof TriageSourceDescriptorV1Schema.parse>;
 

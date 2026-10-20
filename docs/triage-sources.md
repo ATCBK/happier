@@ -78,6 +78,45 @@ guard still refuses equal-version declarations with different contract digests.
 
 The source plugin retains its private configuration-token encoding and provider-specific behavior. Triage business behavior stays in `packages/plugins/triage`; shared host code stays source-neutral. Do not use this schema package as a new source service, credential store or corpus persistence owner.
 
+### Shared source unit selection (0.3 development source)
+
+A source can declare its natural scope unit through `descriptor.scopeUnit` and
+bind the optional safe `listScopeUnits` role. The executable selection, unit,
+input and result schemas live in
+[`scopeSelection.ts`](../packages/triage-protocol/src/v1/scopeSelection.ts)
+and are exported from the explicit V1 entrypoints. Selection is either All or
+a non-empty set of source-native unit ids. Unit labels and secondary text are
+presentation; an optional `collisionScope` is the source-authored join to its
+entry identity. Consumers never derive that join from names or ids.
+
+The source keeps its token codec, authorization, provider paging and scan
+behavior. The shared configuration envelope remains opaque. Available-mode
+listing searches and pages the source's selectable units under its exact
+credential binding. Partial pages retain readable units and a continuation or
+failure; a failed read never becomes an empty complete page. Configuration-only
+mode decodes the retained token and returns its selection and selected unit
+metadata without materializing credentials or reading the provider. This lets
+filters obtain configured units before entries load without a provider-specific
+parser in the aggregate. New source token writers retain the selected units'
+labels and known collision scopes; a legacy token can lack that identity fact.
+
+Source Settings declares `scopeSelection` on the existing shared surface
+factory. Its source-owned `readSelection` and `writeSelection` adapters translate
+the token; the shared
+[`editor`](../packages/triage-sources/src/settings/scopeSelectionEditor.tsx)
+owns All/Selected, search, multiple selection, paging, counts and read states.
+Optional `DraftFields` keeps other source settings inside that editor's single
+Save/Cancel flow. A source without this capability retains its existing editor.
+No source id selects the control, so an independently installed plugin uses the
+same contract.
+
+UI, agent, MCP and CLI callers invoke the same ordinary listing Action, then
+submit the chosen source-encoded draft to `sources/administer-v1`. Listing is a
+safe read; configuration writes retain their existing approval default and
+provider-silent lifecycle. The wire epoch remains V1, independently of package
+version `0.0.0`. This is an unreleased 0.3 source contract, not a released SDK
+rollback promise.
+
 The mounted detail receives a launch projection admitted by the host's exact
 `PluginUiLaunchInputV1Schema`, exposed through the public SDK `/ui` entry. When
 necessary, Triage's existing detail-input owner keeps relationship counts and

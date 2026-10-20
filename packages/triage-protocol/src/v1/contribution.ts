@@ -11,6 +11,10 @@ import { TriageSourceDescriptorV1Schema } from './descriptor.js';
 import { TriageDetailSurfaceInputV1Schema } from './detail.js';
 import { TriagePullRequestStatusResultV1Schema } from './pullRequestStatus.js';
 import {
+    TriageListScopeUnitsInputV1Schema, TriageListScopeUnitsResultV1Schema,
+    TriageListScopeUnitsConnectedAccountInputV1Schema, TriageListScopeUnitsCredentialInputV1Schema,
+} from './scopeSelection.js';
+import {
     TriageListInstancesInputV1Schema,
     TriageListInstancesResultV1Schema,
 } from './instances.js';
@@ -61,6 +65,12 @@ export const TriageSourcesContributionProtocolV1 = defineContributionProtocol({
     version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
     descriptor: TriageSourceDescriptorV1Schema,
     operations: {
+        listScopeUnits: {
+            required: false,
+            input: { kind: 'protocolDefined', schema: TriageListScopeUnitsInputV1Schema },
+            resultSchema: TriageListScopeUnitsResultV1Schema,
+            action: { surfaces: ['plugin', 'ui', 'agent', 'mcp', 'cli'], dangerLevel: 'safe' },
+        },
         linkSession: {
             required: false,
             input: { kind: 'protocolDefined', schema: TriageSourceLinkSessionInputV1Schema },
@@ -145,6 +155,7 @@ export const TriageSourcesContributionProtocolV1 = defineContributionProtocol({
 
 /** Exact V1 Action inputs for sources that support connected Accounts only. */
 export const TriageSourceConnectedAccountInputsV1 = {
+    listScopeUnits: TriageListScopeUnitsConnectedAccountInputV1Schema,
     linkSession: TriageSourceLinkSessionConnectedAccountInputV1Schema,
     readSessionLinks: TriageSourceReadSessionLinksConnectedAccountInputV1Schema,
     create: TriageTaskCreateConnectedAccountInputV1Schema,
@@ -160,6 +171,7 @@ export const TriageSourceConnectedAccountInputsV1 = {
 
 /** Exact inputs for a source that materializes connected or machine-native credentials. */
 export const TriageSourceCredentialInputsV1 = {
+    listScopeUnits: TriageListScopeUnitsCredentialInputV1Schema,
     create: TriageTaskCreateCredentialInputV1Schema,
     edit: TriageTaskEditCredentialInputV1Schema,
     transition: TriageTaskTransitionCredentialInputV1Schema,

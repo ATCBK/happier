@@ -9,6 +9,22 @@
 // projection a source mount asserts against. Everything else reads
 // `Schema.jsonSchema`.
 export * from './bounds.js';
+export {
+    TriageSourceScopeSelectionV1Schema,
+    TriageSourceScopeUnitV1Schema,
+    TriageSourceScopeUnitDescriptorV1Schema,
+    TriageListScopeUnitsInputV1Schema,
+    TriageListScopeUnitsConnectedAccountInputV1Schema,
+    TriageListScopeUnitsCredentialInputV1Schema,
+    TriageListScopeUnitsResultV1Schema,
+} from './scopeSelection.js';
+export type {
+    TriageSourceScopeSelectionV1,
+    TriageSourceScopeUnitV1,
+    TriageSourceScopeUnitDescriptorV1,
+    TriageListScopeUnitsInputV1,
+    TriageListScopeUnitsResultV1,
+} from './scopeSelection.js';
 export { buildTriageEntryRouteSegmentV1, readTriageEntryRouteSegmentV1 } from './entryRoute.js';
 export {
     triageTaskStatusCategoryV1,

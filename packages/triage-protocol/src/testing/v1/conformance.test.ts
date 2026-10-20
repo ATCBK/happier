@@ -19,6 +19,7 @@ const sourceOperations = TriageSourcesContributionProtocolV1.operations;
 const fixture = createTriageSourceV1Fixture();
 
 const ACTION_IDS = {
+    listScopeUnits: 'author/pick-projects',
     listInstances: 'author/discover-scopes',
     scan: 'author/walk-lanes',
     get: 'author/read-item',
@@ -75,6 +76,10 @@ function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = f
         id: 'example.forge-source',
         version: '1.0.0',
         actions: {
+            [ACTION_IDS.listScopeUnits]: declareAction('listScopeUnits', 'List selectable projects', {
+                kind: 'page', status: 'complete', selection: { kind: 'all' },
+                units: [{ id: 'project-1', label: 'Project one', collisionScope: fixture.getInput.localRef.collisionScope }],
+            }),
             [ACTION_IDS.listInstances]: declareAction(
                 'listInstances',
                 'Discover forge scopes',
@@ -99,8 +104,9 @@ function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = f
             'happier.triage': {
                 sources: {
                     'example-forge': TriageSourcesContributionProtocolV1.contribute({
-                        descriptor: fixture.descriptor,
+                        descriptor: { ...fixture.descriptor, scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' } },
                         operations: {
+                            listScopeUnits: sourceOperations.listScopeUnits.bind(ACTION_IDS.listScopeUnits),
                             listInstances: sourceOperations.listInstances.bind(ACTION_IDS.listInstances),
                             scan: sourceOperations.scan.bind(ACTION_IDS.scan),
                             get: sourceOperations.get.bind(ACTION_IDS.get),
