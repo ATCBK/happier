@@ -19,6 +19,8 @@ import { getSessionStatus } from '@/session/services/getSessionStatus';
 import * as sessionSockets from '@/api/session/sockets';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutor } from './createCliActionExecutor';
+import { createSessionFollowActionDeps } from '@/api/sessionFollowActionDeps';
 import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
 import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
@@ -26,6 +28,7 @@ import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/r
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -34,6 +37,81 @@ describe('CLI Session target composition', () => {
   const sessionId = 'c111111111111111111111111';
   const managerId = 'c222222222222222222222222';
   const context = { surface: 'cli', authority: 'present_user', serverId: 'srv_target_home' } as const;
+
+  it('reads Following and private rules through the portable Home of a fixed local profile', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'follow-portable-home-' }, async () => {
+      const profileId = 'stack_agent-qa-coord-n1__id_default';
+      await seedTestServerProfile({ id: profileId, homeId: context.serverId, serverUrl: home });
+      const { credentials } = setup(null);
+      const params = { token: credentials.token, credentials, sessionId, mode: 'plain' as const, ctx: null,
+        serverId: profileId, serverIdentityId: context.serverId, serverHttpBaseUrl: home };
+      const executor = createCliActionExecutor(params);
+      const follow = createSessionFollowActionDeps(params);
+      const sourceId = 'c333333333333333333333333';
+      vi.spyOn(axios, 'request').mockImplementation(async config => {
+        if (config.url === `${home}/v2/account/session-follow-rules`) return { status: 200, data: { rules: [] } };
+        if (config.url === `${home}/v2/sessions/${sessionId}/follows/sessions`) return { status: 200,
+          data: { sources: [{ sourceSessionId: sourceId, destinationSessionId: sessionId,
+            relation: 'follower', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false }] } };
+        throw new Error(`Unexpected Follow read: ${config.url}`);
+      });
+      await expect.soft(follow.readSessionFollowRules!({ context, serverId: context.serverId }))
+        .resolves.toEqual({ kind: 'complete', rules: [] });
+      await expect(executor.execute('session.targets.resolve', {
+        target: { selector: 'following', of: sessionId }, actionId: 'session.message.send',
+      }, context)).resolves.toMatchObject({ ok: true, result: { coverage: 'complete',
+        addresses: [{ serverId: context.serverId, sessionId: sourceId }], error: null } });
+      await expect(follow.readSessionFollowRules!({ context, serverId: 'srv_other_home' }))
+        .resolves.toEqual({ kind: 'unavailable' });
+      await expect(follow.readSessionFollowRules!({ context: { ...context, serverId: 'srv_other_home' }, serverId: profileId }))
+        .resolves.toEqual({ kind: 'unavailable' });
+      await expect(follow.sessionFollowAction!({ context: { ...context, serverId: 'srv_other_home' }, serverId: profileId,
+        actionId: 'follow.list', input: { direction: 'following', receiver: { kind: 'session', sessionId } } }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    });
+  });
+
+  it('uses portable Home Project facts for preview, Matching and direct Project listing from a local profile', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'preview-portable-home-' }, async () => {
+      const profileId = 'stack_agent-qa-coord-n1__id_default';
+      await seedTestServerProfile({ id: profileId, homeId: context.serverId, serverUrl: home });
+      const { credentials, session } = setup(null);
+      const candidate = { ...createSessionNotificationContextFixture(sessionId), ...session };
+      const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+        serverId: profileId, serverIdentityId: context.serverId, serverHttpBaseUrl: home });
+      const ref = { id: 'checkout', serverId: context.serverId, machineId: 'machine-selected', rootPath: '/repo',
+        projectKey: 'qa-project', createdAtMs: 1 };
+      const key = { kind: 'workspace-ref', serverId: context.serverId, id: ref.id };
+      vi.spyOn(axios, 'post').mockImplementation(async url => {
+        if (String(url).endsWith('/v1/account/project-rows/list')) return { status: 200,
+          data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } }] } };
+        if (String(url).endsWith('/v2/sessions/query')) return { status: 200,
+          data: SessionListQueryResponseV1Schema.parse({ sessions: [candidate], nextCursor: null, hasNext: false,
+            attentionNextCursor: null, attentionHasNext: false }) };
+        throw new Error(`Unexpected Project/Session read: ${url}`);
+      });
+      const project = { serverId: context.serverId, projectKey: 'qa-project' };
+      const filter = normalizeSessionListFilterV1({ homeServerIds: [context.serverId], show: 'sessions', scope: 'all_accessible',
+        startedBy: ['you', 'agents', 'triggers'], projects: { include: [project], exclude: [] } });
+      await expect(deps.sessionFollowPreview!({ context, serverId: context.serverId,
+        input: { receiver: { kind: 'account' }, filter } })).resolves.toMatchObject({ coverage: 'complete', matchCount: 1,
+          matches: [{ serverId: context.serverId, source: { kind: 'session', sessionId } }], unavailable: [] });
+      await expect(deps.sessionFollowPreview!({ context: { ...context, serverId: profileId }, serverId: profileId,
+        input: { receiver: { kind: 'account' }, filter: { ...filter, homeServerIds: [profileId],
+          projects: { include: [{ ...project, serverId: profileId }], exclude: [] } } } }))
+        .resolves.toMatchObject({ coverage: 'complete', matchCount: 1,
+          matches: [{ serverId: context.serverId, source: { kind: 'session', sessionId } }], unavailable: [] });
+      await expect(createActionExecutor(deps).execute('session.targets.resolve', {
+        target: { selector: 'matching', filter }, actionId: 'session.message.send',
+      }, context)).resolves.toMatchObject({ ok: true, result: { coverage: 'complete',
+        addresses: [{ serverId: context.serverId, sessionId }], error: null } });
+      await expect(deps.sessionList({ context, project, query: { v: 1, storage: 'active', includeInactive: true,
+        scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [] } }))
+        .resolves.toMatchObject({ sessions: [{ id: sessionId }] });
+      await expect(deps.sessionList({ context, serverId: 'srv_other_home' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    });
+  });
 
   function setup(manager: string | null = managerId, requester?: Readonly<{ privateKey: Uint8Array; installationId: string; secret?: Uint8Array }>) {
     const secret = requester?.secret;
@@ -56,6 +134,7 @@ describe('CLI Session target composition', () => {
       if (!requester) expect(config?.headers).toMatchObject({ Authorization: 'Bearer token' });
       if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200,
         data: createAccountEncryptionCurrentnessFixture({ mode }) };
+      if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode, updatedAt: 0 } };
       if (requester && String(url).endsWith('/v1/account/profile')) return { status: 200, data: { id: 'account-1' } };
       if (String(url).endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session } };
       if (String(url).endsWith('/v2/account/settings')) return { status: 200,

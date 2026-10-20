@@ -29,6 +29,8 @@ import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createPersonalFollowOccurrenceDispatcher } from '@/notifications/activity/dispatchPersonalFollowOccurrence';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 
 describe('released tracked-target compatibility', () => {
   it('qualifies bare ids to the fixed Home and preserves notification preferences', async () => {
@@ -80,6 +82,22 @@ describe('Follow HTTP family adapter', () => {
   let restore = () => {};
   beforeEach(() => { app = fastify(); restore = installAxiosFastifyAdapter({ app, origin: 'http://follow.test' }); });
   afterEach(async () => { restore(); await app.close(); });
+  it('qualifies portable tracked-target reads through the saved profile Home', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'tracked-portable-home-' }, async () => {
+      const profileId = 'stack_agent-qa-coord-n1__id_default';
+      const homeId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+      const serverUrl = 'https://follow.test';
+      restore();
+      restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+      await seedTestServerProfile({ id: profileId, homeId, serverUrl });
+      app.put(SESSION_FOLLOW_HTTP_PATHS_V1.voiceInclusions, async () => ({ changed: true, sessionIds: ['source'] }));
+      const follow = createSessionFollowActionDeps({ token: 'account-token', serverId: profileId, serverHttpBaseUrl: serverUrl });
+      const tracked = createSessionTrackedTargetCompatibilityDep({ serverId: profileId,
+        replaceSessionVoiceInclusions: follow.replaceSessionVoiceInclusions });
+      await expect(tracked.sessionTargetTrackedSet!({ context: {}, sessionAddresses: [{ serverId: homeId, sessionId: 'source' }] }))
+        .resolves.toMatchObject({ ok: true, sessionAddresses: [{ serverId: homeId, sessionId: 'source' }] });
+    });
+  });
   it.each(['read', 'write'] as const)('keeps nested Follow %s authorization bound to its declared effect', async operation => {
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'source' };

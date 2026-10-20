@@ -21,6 +21,7 @@ import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/re
 import { createAuthenticationHttpStatusError, createHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import {
   resolveExternalActionServerRequestHeaders,
   type ExternalActionHomeBinding,
@@ -118,7 +119,8 @@ export function createSessionFollowActionDeps(input: Readonly<{
   };
   return {
     readSessionFollowRules: async ({ context, serverId: requestedServerId, signal }) => {
-      if (requestedServerId !== serverId || context.serverId && context.serverId !== serverId) return { kind: 'unavailable' };
+      if (!await isServerProfileHomeIdentity(serverId, requestedServerId)
+        || context.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId)) return { kind: 'unavailable' };
       try {
         const access = ruleAccess(context, 'follow.list', true, signal);
         return { kind: 'complete', rules: await access.readRules() };
@@ -156,7 +158,8 @@ export function createSessionFollowActionDeps(input: Readonly<{
         : { ok: false };
     },
     sessionFollowAction: async ({ context, actionId, input: actionInput, serverId: requestedServerId, signal }) => {
-      if (requestedServerId && requestedServerId !== serverId) {
+      if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
+        || (context.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
@@ -257,7 +260,9 @@ export function createSessionTrackedTargetCompatibilityDep(input: Readonly<{
         ? targets.sessionAddresses
         : targets.sessionIds.map((sessionId) => ({ serverId: input.serverId, sessionId })))
         .map((address) => ({ serverId: address.serverId.trim(), sessionId: address.sessionId.trim() }));
-      if (requestedAddresses.some((address) => address.serverId !== input.serverId)) {
+      const homes = [...new Set(requestedAddresses.map(address => address.serverId))];
+      if ((await Promise.all(homes.map(home => isServerProfileHomeIdentity(input.serverId, home)))).some(admitted => !admitted)
+        || (targets.context.serverId && !await isServerProfileHomeIdentity(input.serverId, targets.context.serverId))) {
         return {
           ok: false as const,
           status: 'unavailable' as const,
@@ -279,11 +284,12 @@ export function createSessionTrackedTargetCompatibilityDep(input: Readonly<{
         status: 'unavailable' as const,
         error: { code: 'session_follow_unavailable' as const, message: 'Include in Voice could not be updated.' },
       };
+      const homeServerId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
       return {
         ok: true as const,
         status: 'ok' as const,
         sessionIds: [...replaced.sessionIds],
-        sessionAddresses: replaced.sessionIds.map(sessionId => ({ serverId: input.serverId, sessionId })),
+        sessionAddresses: replaced.sessionIds.map(sessionId => ({ serverId: homeServerId, sessionId })),
         sessions: [],
       };
     },
