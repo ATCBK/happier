@@ -1,17 +1,14 @@
-import { WORKSPACE_WRITE_FILE_TOO_LARGE_ERROR, workspaceWriteFile as writeWorkspaceFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
+import { workspaceWriteFile as writeWorkspaceFile, type WorkspaceWriteFileResponse } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
-export type WorkspaceWriteFileResponse =
-    | Readonly<{ success: true; hash: string }>
-    | Readonly<{ success: false; error: string; errorCode?: string }>;
-
-export { WORKSPACE_WRITE_FILE_TOO_LARGE_ERROR };
+export type { WorkspaceWriteFileResponse, WorkspaceWriteFileFailureKind } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
+export { classifyWorkspaceWriteFileFailure } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 
 export async function workspaceWriteFile(params: Readonly<{
     scope: WorkspaceScopeBase;
     path: string;
-    content: string;
+    content: string | Uint8Array;
     expectedHash?: string | null;
     signal?: AbortSignal | null;
 }>): Promise<WorkspaceWriteFileResponse> {

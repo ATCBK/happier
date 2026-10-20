@@ -159,6 +159,8 @@ describe('shared workspace filesystem Action admission', () => {
         expect(await workspaceReadFile(target, 'large.log', { range: { offset: 2, length: 3 } }))
             .toMatchObject({ success: false });
         filesystem.response = { success: true, content: 'YQ==', sizeBytes: 10, eof: true };
+        expect(await workspaceReadFile(target, 'large.log', { range: { offset: 2, length: 3 } }))
+            .toMatchObject({ success: false });
         expect(await workspaceReadFile(target, 'large.log', { range: { offset: 9, length: 3 } }))
             .toEqual({ success: true, content: 'YQ==', sizeBytes: 10, eof: true });
     });

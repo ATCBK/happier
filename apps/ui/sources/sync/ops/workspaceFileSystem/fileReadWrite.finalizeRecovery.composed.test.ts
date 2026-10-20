@@ -21,6 +21,14 @@ afterEach(async () => {
 });
 
 describe('workspaceWriteFile finalize recovery composition', () => {
+    it.each(['a'.repeat(64), null])('uploads a large guarded save with expectation %s intact', async expectedHash => {
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES', '4');
+        harness = await createWorkspaceFileDownloadHarness();
+        expect(await workspaceWriteFile(harness.scope, 'large.txt', 'hello', expectedHash)).toMatchObject({ success: true });
+        expect(harness.uploads[0]?.input).toMatchObject({ expectedHash, overwrite: expectedHash !== null });
+        expect(harness.uploads[0]?.bytes).toEqual(new TextEncoder().encode('hello'));
+    });
+
     it('waits for explicit same-session retries and re-presents an indeterminate finalize until terminal success', async () => {
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES', '4');
         harness = await createWorkspaceFileDownloadHarness();
