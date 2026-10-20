@@ -7011,6 +7011,7 @@ describe('PluginSurfacePlacementHost', () => {
         const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
         const { invalidateAccountEncryptionModeCache } = await import('@/sync/api/account/apiAccountEncryptionMode');
         let modeAvailable = true;
+        let modeDenied = false;
         let failedModeReads = 0;
         const mounts: string[] = [];
         function DraftPanel() {
@@ -7021,6 +7022,7 @@ describe('PluginSurfacePlacementHost', () => {
         reactNativeSurfaceRuntime.enabled = true;
         reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(DraftPanel) };
         await pluginSurfaceAccountLifetime.setScope({ serverId: 'server_1', accountId: 'account-a' }, path => {
+            if (path === '/v1/account/encryption' && modeDenied) return Response.json({ error: 'forbidden' }, { status: 403 });
             if (path !== '/v1/account/encryption' || modeAvailable) return undefined;
             failedModeReads += 1;
             return Response.json({ error: 'database_transaction_conflict_exhausted' }, { status: 503 });
@@ -7052,6 +7054,13 @@ describe('PluginSurfacePlacementHost', () => {
             await vi.waitFor(() => expect(screen.findByTestId('plugin-surface-unavailable')).toBeNull());
             expect(screen.findByTestId('availability-draft')?.props.value).toBe('Keep this recipe');
             expect(mounts).toEqual(['mount']);
+            modeDenied = true;
+            await act(async () => { invalidateAccountEncryptionModeCache(); });
+            await vi.waitFor(() => expect(screen.findByTestId(
+                'plugin-surface-unavailable-diagnostic-account_encryption_mode_unavailable',
+            )).not.toBeNull());
+            expect(screen.findByTestId('availability-draft')).toBeNull();
+            expect(mounts).toEqual(['mount', 'unmount']);
         } finally { await screen.unmount(); }
     });
 

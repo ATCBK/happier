@@ -3691,7 +3691,9 @@ function PluginSurfaceHostMount(props: Readonly<(
     // context. Revalidation keeps only the incumbent presentation within its
     // controller lifetime; it does not replace current Account/Action admission.
     if (accountLocalInteractionEnabled && !accountEncryptionMode) {
-        return <PluginSurfacePresentation lifetime={controller} notice={renderAccountEncryptionModeReadiness()} />;
+        return accountEncryptionModeReadiness.status === 'loading'
+            ? <PluginSurfacePresentation lifetime={controller} notice={renderAccountEncryptionModeReadiness()} />
+            : renderAccountEncryptionModeReadiness();
     }
     const surfaceTarget = resolvedSurfaceTarget.target;
     const resolvedHostApi = controller.hostApi;
