@@ -35,7 +35,9 @@ import { useArtifactBody } from './useArtifactBody';
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 import { ArtifactHtmlBody } from './ArtifactHtmlBody';
 import { ArtifactWidgetBody } from './ArtifactWidgetBody';
-import { ArtifactPassageSelection } from './ArtifactPassageSelection';
+import { ArtifactPassageSelection, type ArtifactPassageMargin } from './ArtifactPassageSelection';
+import { showArtifactPassageRefineSheet } from './ArtifactPassageRefineSheet';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useDocCollaboration, type DocCollaboration } from './useDocCollaboration';
 import { clearDocReturn, peekDocReturn, trackDocScroll } from './docThreadReturn';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -73,6 +75,19 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     const { artifact } = props;
     const body = useArtifactBody(props.artifactId, artifact);
     const collaboration = useDocCollaboration(body.state === 'failed' || body.state === 'loading' ? null : (body.result?.artifact ?? artifact));
+    const scope = useActiveServerAccountScope();
+    const menuKey = collaboration && scope ? JSON.stringify([scope.serverId, scope.accountId, props.artifactId]) : null;
+    const [threadMenu, setThreadMenu] = React.useState<Readonly<{ key: string | null; open: boolean }>>({ key: null, open: false });
+    const onThreadMenuOpenChange = React.useCallback((open: boolean) => setThreadMenu({ key: menuKey, open }), [menuKey]);
+    const openThreadList = React.useCallback(() => onThreadMenuOpenChange(true), [onThreadMenuOpenChange]);
+    const threadMenuOpen = menuKey !== null && threadMenu.key === menuKey && threadMenu.open;
+    // Preserve the former conditional menu's unmount lifetime after lifting its
+    // single open state to the Doc owner; a later Doc must not inherit it.
+    React.useEffect(() => {
+        setThreadMenu(current => current.key === menuKey ? current : { key: menuKey, open: false });
+    }, [menuKey]);
+    const margin = React.useMemo(() => collaboration ? { ...collaboration.margin, onOpenThreadList: openThreadList } : undefined,
+        [collaboration?.margin, openThreadList]);
     const styles = stylesheet;
     // Back from a passage's thread lands where the reader was (lab K1-Ap/Rp).
     const scroller = React.useRef<ScrollView>(null);
@@ -124,7 +139,7 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     ) : body.state === 'loading' ? (
         <View style={styles.bodyPlaceholder} testID="artifact:bodyLoading" />
     ) : (
-        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} collaboration={collaboration} />
+        <ArtifactBody artifact={body.result?.artifact ?? artifact} prepared={body.result} onRetry={body.retry} margin={margin} />
     );
 
     if (props.presentation === 'pane') {
@@ -132,7 +147,8 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
             <ItemList testID="artifact:pane">
                 <View style={styles.paneColumn}>
                     <ArtifactFacts artifact={artifact} collaboration={collaboration} />
-                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} collaboration={collaboration} />
+                    <ArtifactActions artifact={artifact} presentation="pane" onDeleted={props.onDeleted} collaboration={collaboration}
+                        threadMenuOpen={threadMenuOpen} onThreadMenuOpenChange={onThreadMenuOpenChange} />
                     <View style={styles.paneRule} />
                     {content}
                 </View>
@@ -145,7 +161,8 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
             <ArtifactPageHeader artifact={artifact} collaboration={collaboration} />
             <ItemGroup surface="none">
                 {/* The title keeps the whole column; the artifact's operations sit under its facts, as in the pane. */}
-                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} collaboration={collaboration} />
+                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} collaboration={collaboration}
+                    threadMenuOpen={threadMenuOpen} onThreadMenuOpenChange={onThreadMenuOpenChange} />
                 <View style={styles.paneRule} />
                 {content}
             </ItemGroup>
@@ -153,7 +170,7 @@ function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>):
     );
 }
 
-function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void; collaboration: DocCollaboration | null }>) {
+function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: ArtifactViewRead | null; onRetry: () => void; margin?: ArtifactPassageMargin }>) {
     if (isArtifactHtmlHeaderV1(props.artifact.rawHeader ?? props.artifact.header)) return <ArtifactHtmlBody
         artifactId={props.artifact.id} headerVersion={props.artifact.headerVersion} bodyVersion={props.artifact.bodyVersion}
         body={props.artifact.body} name={props.artifact.title || t('artifacts.untitled')} readPreview={sync.fetchArtifactHtmlPreview}
@@ -171,7 +188,7 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
     if (readArtifactCodeLanguage(props.artifact) || props.artifact.bodyVersion === undefined) return body;
     return <ArtifactPassageSelection artifactId={props.artifact.id} markdown={markdown}
         revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}
-        margin={props.collaboration?.margin} />;
+        margin={props.margin} onRequestNativeSelection={showArtifactPassageRefineSheet} />;
 }
 
 function readFacts(artifact: DecryptedArtifact, collaboration: DocCollaboration | null): readonly PageHeaderMetaFact[] {
@@ -241,7 +258,8 @@ function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; colla
 }
 
 /** Edit and History quiet, Share bordered, rare operations (Delete) behind ⋯ — in the pane and on the page. */
-function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void; collaboration: DocCollaboration | null }>) {
+function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presentation: 'pane' | 'page'; onDeleted?: () => void; collaboration: DocCollaboration | null;
+    threadMenuOpen: boolean; onThreadMenuOpenChange: (open: boolean) => void }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const styles = stylesheet;
@@ -264,7 +282,7 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
                     onPress={() => router.push(`/artifacts/edit/${encodeURIComponent(artifact.id)}` as never)}
                 />
             ) : null}
-            {props.collaboration ? <ArtifactThreadsMenu collaboration={props.collaboration} /> : null}
+            {props.collaboration ? <ArtifactThreadsMenu collaboration={props.collaboration} open={props.threadMenuOpen} onOpenChange={props.onThreadMenuOpenChange} /> : null}
             <RoundButton
                 testID="artifact:history"
                 size="small"
@@ -293,10 +311,9 @@ function ArtifactActions(props: Readonly<{ artifact: DecryptedArtifact; presenta
  * The comment count, and the Doc's threads behind it: each names its passage and who started it; a
  * thread whose passage changed says so. Choosing one shows it beside its passage, or opens it.
  */
-function ArtifactThreadsMenu(props: Readonly<{ collaboration: DocCollaboration }>) {
+function ArtifactThreadsMenu(props: Readonly<{ collaboration: DocCollaboration; open: boolean; onOpenChange: (open: boolean) => void }>) {
     const { theme } = useUnistyles();
-    const [open, setOpen] = React.useState(false);
-    const { collaboration } = props;
+    const { collaboration, open, onOpenChange: setOpen } = props;
     const items = React.useMemo(() => collaboration.threads.map((thread) => ({
         id: thread.id,
         testID: `artifact:comments.thread:${thread.id}`,
@@ -321,6 +338,9 @@ function ArtifactThreadsMenu(props: Readonly<{ collaboration: DocCollaboration }
                 collaboration.selectThread(id);
             }}
             placement="bottom"
+            // A body tap far down the Doc opens this list too: a phone shows it as a sheet, never anchored off-screen.
+            popoverPhonePresentation="sheet"
+            popoverAccessibilityLabel={t('artifacts.browser.passage.threadsTitle')}
             popoverAnchorAlign="start"
             matchTriggerWidth={false}
             showCategoryTitles={false}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapMarkdownSourceBlockToPassage, mapMarkdownSourceToRenderedRange, mapRenderedSelectionToMarkdownSource } from './markdownSelectionSource';
+import { mapMarkdownSourceToRenderedRange, mapRenderedSelectionToMarkdownSource } from './markdownSelectionSource';
 
 const markdown = [
   '# Runbook',
@@ -95,6 +95,16 @@ describe('mapRenderedSelectionToMarkdownSource', () => {
     ).toBeNull();
   });
 });
+describe('native block selections within the full Doc grammar', () => {
+  it('maps the second reference label in its admitted source window without losing document link definitions', () => {
+    const markdown = '# Earlier\n\n[shown][ref] and [shown][ref].\n\n[ref]: https://example.test';
+    const rendered = '\nshown and shown.\n';
+    const start = rendered.lastIndexOf('shown');
+    const input = { markdown, rendered, start, end: start + 5,
+      sourceRange: { start: markdown.indexOf('[shown]'), end: markdown.indexOf('\n\n[ref]') } };
+    expect(mapRenderedSelectionToMarkdownSource(input)).toEqual({ start: markdown.lastIndexOf('[shown]') + 1, end: markdown.lastIndexOf('[shown]') + 6 });
+  });
+});
 
 describe('mapMarkdownSourceToRenderedRange', () => {
   it('places a stored source passage on the rendered occurrence it came from, never a repeated phrase', () => {
@@ -114,25 +124,5 @@ describe('mapMarkdownSourceToRenderedRange', () => {
   it('reports nothing when the rendered text does not carry the passage', () => {
     expect(mapMarkdownSourceToRenderedRange({ markdown, rendered: 'Something else entirely', start: 10, end: 20 })).toBeNull();
     expect(mapMarkdownSourceToRenderedRange({ markdown, rendered, start: 3, end: 3 })).toBeNull();
-  });
-});
-
-describe('mapMarkdownSourceBlockToPassage', () => {
-  it('takes a rendered block as the passage: its drawn words, without the block’s own Markdown marks', () => {
-    const paragraph = markdown.indexOf('A replay');
-    const paragraphEnd = markdown.indexOf('\n\n- ');
-    expect(mapMarkdownSourceBlockToPassage({ markdown, start: paragraph, end: paragraphEnd + 2 }))
-      .toEqual({ start: paragraph, end: paragraphEnd });
-    // A heading's `# ` and a list item's `- **` are not part of what the reader sees.
-    expect(mapMarkdownSourceBlockToPassage({ markdown, start: 0, end: markdown.indexOf('\n') }))
-      .toEqual({ start: 2, end: markdown.indexOf('\n') });
-    const item = markdown.indexOf('- **Retrying');
-    const itemEnd = markdown.indexOf('\n1.');
-    expect(mapMarkdownSourceBlockToPassage({ markdown, start: item, end: itemEnd }))
-      .toEqual({ start: markdown.indexOf('Retrying…'), end: itemEnd });
-  });
-
-  it('has no passage for a block with nothing drawn from the source', () => {
-    expect(mapMarkdownSourceBlockToPassage({ markdown: 'a\n\n---\n', start: 3, end: 6 })).toBeNull();
   });
 });

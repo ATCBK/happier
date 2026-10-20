@@ -118,8 +118,10 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
     fillContainer?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
-    /** Items the native selection menu offers beside Copy; each reports only that it was chosen. */
-    contextMenuItems?: readonly Readonly<{ text: string; onPress: () => void }>[];
+    /** Older native binaries do not yet include the actual rendered text. */
+    contextMenuItems?: readonly Readonly<{ text: string; onPress: (event: {
+        text: string; renderedText?: string; selection: { start: number; end: number };
+    }) => void }>[];
 }>;
 
 /**

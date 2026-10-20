@@ -940,6 +940,23 @@ binary is eligible for 0.3 updates. Remove the guard only when no supported
 eligible binary can lack the SDK; delivering native modules still requires a
 native app build.
 
+### Native Doc passage selection (0.3 development)
+
+Exact passage comments use the existing enriched-Markdown native menu event's
+full `renderedText` snapshot, committed `sourceMarkdown` basis and UTF-16
+selection range. A menu from a different rendered basis cannot supply mapping
+evidence for the latest callback. The native dependency
+patch and its generated event emitters must be included in a rebuilt iOS/Android
+app; JavaScript or an OTA alone cannot add that payload to an installed binary.
+Older native events without the full snapshot do not publish a whole-block or
+quote-searched substitute; legacy text-only custom menu callbacks remain usable
+without source-mapping evidence. The marked-text refinement data contract passes the
+captured Markdown and a completion callback for the same native renderer and
+source mapper; the visible refinement host remains a Doc UI handoff.
+This is development behavior, not evidence that the host is composed, an
+installed app has the patch, or native selection/accessibility release checks
+have passed.
+
 ### Voice duration settings (0.3 development)
 
 The canonical Local conversation and Local direct settings schemas accept

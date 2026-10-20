@@ -48,6 +48,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     const sourceAction = React.useMemo<MarkdownSourceRangeAction>(() => ({
         sourceRange: props.segment.sourceRange,
         markdown: props.segment.markdown,
+        renderMarkdown: props.segment.type === 'enriched-markdown' ? props.segment.renderMarkdown ?? props.segment.markdown : props.segment.markdown,
         sourceStart: props.segment.sourceStart,
         sourceLength: props.segment.sourceLength,
     }), [props.segment]);
@@ -59,7 +60,12 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     // The renderer's selection menu (native) offers the caller's actions for this block.
     const selectionActions = props.selectionActions;
     const contextMenuItems = React.useMemo(() => Platform.OS === 'web' || !selectionActions?.length ? undefined
-        : selectionActions.map((action) => ({ text: action.label, onPress: () => action.onPress(sourceAction) })),
+        : selectionActions.map((action) => ({ text: action.label, onPress: (event: {
+            text: string; renderedText?: string; selection: { start: number; end: number };
+        }) => action.onPress(sourceAction, typeof event.renderedText === 'string' ? {
+            renderedText: event.renderedText, text: event.text,
+            start: event.selection.start, end: event.selection.end,
+        } : undefined) })),
     [selectionActions, sourceAction]);
     const content = props.segment.type === 'enriched-markdown' && (props.findActive || marked)
         ? <MarkdownFindFallback markdown={props.segment.markdown} sourceStart={props.segment.sourceStart}
@@ -128,6 +134,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     // A disabled `Pressable` claims no touch responder, so the non-review pass behaves like the
     // plain container it replaces and selection and link presses inside still reach the content.
     const pressable = props.onPressSourceRange !== undefined && (props.sourceRangePressable?.(sourceAction) ?? true);
+    const requestSelection = marked && selectionActions?.length === 1;
     return (
         <View style={styles.sourceRangeContainer}
             onLayout={props.sourceRangeLayoutObserver
@@ -137,8 +144,9 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
             <Pressable
                 testID={testID}
                 accessibilityRole={pressable ? 'button' : undefined}
-                disabled={!pressable}
+                disabled={!pressable && !requestSelection}
                 onPress={pressable ? () => props.onPressSourceRange?.(sourceAction) : undefined}
+                onLongPress={requestSelection ? () => selectionActions[0]!.onPress(sourceAction) : undefined}
                 style={[styles.sourceRangeTrigger, highlighted ? styles.highlight : null]}
             >
                 {content}

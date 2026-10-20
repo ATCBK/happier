@@ -1,4 +1,5 @@
 import { act, createElement, Fragment } from 'react';
+import { Platform } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -16,13 +17,16 @@ const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await
 const { useDocPassageThreads } = await import('./useDocPassageThreads');
 const { useDocCollaboration } = await import('./useDocCollaboration');
 const { ArtifactEditProposal } = await import('./ArtifactEditProposal');
+const { ArtifactView } = await import('./ArtifactView');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
 const { createArtifactActionsClient } = await import('./artifactActionsClient');
 const { createAccountArtifactStoredEnvelope } = await import('@/sync/domains/artifacts/accountArtifactEnvelope');
 const { storage } = await import('@/sync/domains/state/storage');
 
 let previousProfileScope = storage.getState().profileScope;
+const previousPlatform = Platform.OS;
 beforeEach(async () => { previousProfileScope = storage.getState().profileScope; await homes.reset(); });
-afterEach(async () => { standardCleanup(); storage.setState({ profileScope: previousProfileScope }); clearDiscussionRepositoryRegistryForTests(); resetServerFeaturesClientForTests(); await homes.reset(); });
+afterEach(async () => { standardCleanup(); Object.defineProperty(Platform, 'OS', { configurable: true, value: previousPlatform }); storage.setState({ profileScope: previousProfileScope }); clearDiscussionRepositoryRegistryForTests(); resetServerFeaturesClientForTests(); await homes.reset(); });
 
 describe('Doc passage thread demand', () => {
     async function mountedDoc(initialThreads: number, options: { unreadableTitle?: boolean } = {}) {
@@ -54,6 +58,8 @@ describe('Doc passage thread demand', () => {
         homes.answer(serverId, 'GET /v1/discussions', { select: (_input, request) => {
             const url = new URL(request.url);
             return { body: { discussions: entries.filter(entry => (url.searchParams.get('state') === 'archived') === (entry.discussion.archivedAt !== null))
+                .filter(entry => !url.searchParams.has('anchorDocArtifactId') || (entry.discussion.anchor?.kind === 'doc'
+                    && entry.discussion.anchor.doc.ref.artifactId === url.searchParams.get('anchorDocArtifactId')))
                 .map(entry => ({ ...entry.discussion, ...(options.unreadableTitle ? { titleContent: { t: 'plain', v: { invalidTitle: true } } } : {}), ...(url.searchParams.has('anchorDocArtifactId')
                     ? { firstMessage: refused ? null : entry.firstMessage } : {}) })), nextCursor: null } };
         } });
@@ -70,7 +76,7 @@ describe('Doc passage thread demand', () => {
         const hook = await renderHook(() => useDocCollaboration(artifact));
         await vi.waitFor(() => expect(hook.getCurrent()?.openCommentCount).toBe(initialThreads));
         await vi.waitFor(() => expect(hook.getCurrent()?.threads).toHaveLength(initialThreads));
-        return { scope, hook, entries, second, refuse: (docToo = true) => {
+        return { scope, hook, artifact, entries, second, refuse: (docToo = true) => {
             refused = true;
             if (docToo) homes.answer(serverId, 'GET /v1/artifacts/doc-a', { status: 409, body: { error: 'artifact_content_unavailable' } });
         } };
@@ -127,6 +133,26 @@ describe('Doc passage thread demand', () => {
             expect(hook.getCurrent()?.openCommentCount).toBe(0);
             expect(hook.getCurrent()?.threads).toHaveLength(0);
         });
+    });
+
+    it('opens the same existing Doc thread menu for an ambiguous native passage tap', async () => {
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+        const { scope, artifact } = await mountedDoc(2);
+        const screen = await renderScreen(createElement(ArtifactView, { artifactId: artifact.id, artifact, presentation: 'page' }));
+        const menu = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'artifact:comments.menu')!;
+        await vi.waitFor(() => expect(menu()?.props.items).toHaveLength(2));
+        const trigger = screen.findAllByType('Pressable').find(node => String(node.props.testID ?? '').startsWith('markdown-source-range-trigger') && !node.props.disabled)!;
+        expect(trigger).toBeDefined();
+        expect(menu().props.open).toBe(false);
+        await act(async () => trigger.props.onPress());
+        expect(menu().props.open).toBe(true);
+        const stored = homes.artifacts(scope.serverId).read(artifact.id)!;
+        homes.artifacts(scope.serverId).replaceStoredRow({ ...stored, id: 'other-doc' });
+        await act(async () => screen.update(createElement(ArtifactView, { artifactId: 'other-doc', artifact: { ...artifact, id: 'other-doc' }, presentation: 'page' })));
+        expect(menu().props.open).toBe(false);
+        await act(async () => screen.update(createElement(ArtifactView, { artifactId: artifact.id, artifact, presentation: 'page' })));
+        await vi.waitFor(() => expect(menu().props.items).toHaveLength(2));
+        expect(menu().props.open).toBe(false);
     });
 
     it('does not fall back to per-card reads for loading or unavailable parent admission, while standalone proposals still admit their source', async () => {

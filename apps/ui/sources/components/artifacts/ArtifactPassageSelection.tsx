@@ -13,11 +13,10 @@ import {
   type Href,
 } from '@/components/appShell/workspace/destinationRoute';
 import {
-  mapMarkdownSourceBlockToPassage,
   mapMarkdownSourceToRenderedRange,
   mapRenderedSelectionToMarkdownSource,
 } from '@/components/markdown/rendering/markdownSelectionSource';
-import { MarkdownView, type MarkdownSelectionAction, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
+import { MarkdownView, type MarkdownRenderedSelection, type MarkdownSelectionAction, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Text } from '@/components/ui/text/Text';
@@ -46,9 +45,19 @@ export type ArtifactPassageMargin = Readonly<{
   onFocus: (id: string) => void;
   /** Narrow layouts have no margin: a passage opens its thread instead. */
   onOpen: (id: string) => void;
+  /** An ambiguous native block opens the existing complete thread list, never its first thread. */
+  onOpenThreadList?: () => void;
   renderCard: (id: string) => React.ReactNode;
   /** Whether the threads sit beside the passages (wide) or open on their own (narrow). */
   reportShown?: (shown: boolean) => void;
+}>;
+
+/** UI-D supplies the visible native refinement host without replacing rich Markdown or its marks. */
+export type ArtifactNativeSelectionRequest = Readonly<{
+  /** Render this captured block through the same enriched native primitive/menu. */
+  markdown: string;
+  /** Return that menu's actual text snapshot and exact UTF-16 selection. */
+  complete: (selection: MarkdownRenderedSelection) => boolean;
 }>;
 
 type Rect = Readonly<{
@@ -72,10 +81,9 @@ const MARGIN_WIDTH = 288;
  *   revision being read, and opens the one Discussion composer with that passage;
  * - each commented passage is marked where its stored source range lands in this revision, and its
  *   thread sits beside it in the margin; a mark and its thread focus each other.
- * Web reads the browser selection and geometry. iOS/Android renderers report a selection only in
- * their own drawn text, which cannot be placed in the source without searching for it, so there the
- * selection menu's Comment takes the block the reader selected in as the passage; marks are drawn by
- * the Markdown owner at their source offsets, and a marked block opens its thread.
+ * Web reads browser selection and geometry; native menus report actual rendered text and UTF-16
+ * offsets through the same mapper. Marked native blocks retain their renderer and request an exact
+ * selection host; without that host, no block-sized substitute is published.
  */
 export function ArtifactPassageSelection(
   props: Readonly<{
@@ -83,12 +91,15 @@ export function ArtifactPassageSelection(
     markdown: string;
     revision: Revision | null;
     margin?: ArtifactPassageMargin;
+    onRequestNativeSelection?: (request: ArtifactNativeSelectionRequest) => void;
   }>,
 ): React.ReactElement {
+  const scope = useActiveServerAccountScope();
   if (props.revision === null)
     return <MarkdownView testID="artifact:body" markdown={props.markdown} />;
   if (Platform.OS !== 'web')
-    return <NativePassageSelection {...props} revision={props.revision} />;
+    return <NativePassageSelection key={JSON.stringify([props.artifactId, scope?.serverId, scope?.accountId])}
+      {...props} revision={props.revision} scope={scope} />;
   return <WebPassageSelection {...props} revision={props.revision} />;
 }
 
@@ -101,12 +112,14 @@ function NativePassageSelection(
     artifactId: string;
     markdown: string;
     revision: Revision;
+    scope: ReturnType<typeof useActiveServerAccountScope>;
     margin?: ArtifactPassageMargin;
+    onRequestNativeSelection?: (request: ArtifactNativeSelectionRequest) => void;
   }>,
 ) {
   const router = useRouter();
   const client = useArtifactActionsClient();
-  const scope = useActiveServerAccountScope();
+  const scope = props.scope;
   const margin = props.margin;
   // Native has no margin beside the body: a passage opens its thread (the phone thread page).
   const reportShown = margin?.reportShown;
@@ -127,30 +140,44 @@ function NativePassageSelection(
   );
   const marginRef = React.useRef(margin);
   marginRef.current = margin;
-  const passageIn = React.useCallback(
-    (block: MarkdownSourceRangeAction) => placed.find((passage) => overlapsBlock(passage.range, block)) ?? null,
+  const passagesIn = React.useCallback(
+    (block: MarkdownSourceRangeAction) => placed.filter((passage) => overlapsBlock(passage.range, block)),
     [placed],
   );
   const openPassage = React.useCallback((block: MarkdownSourceRangeAction) => {
-    const passage = passageIn(block);
-    if (passage) marginRef.current?.onOpen(passage.id);
-  }, [passageIn]);
-  const isMarked = React.useCallback((block: MarkdownSourceRangeAction) => passageIn(block) !== null, [passageIn]);
+    const passages = passagesIn(block);
+    if (passages.length === 1) marginRef.current?.onOpen(passages[0]!.id);
+    else if (passages.length > 1) marginRef.current?.onOpenThreadList?.();
+  }, [passagesIn]);
+  const isMarked = React.useCallback((block: MarkdownSourceRangeAction) => passagesIn(block).length > 0, [passagesIn]);
   const { artifactId, markdown, revision } = props;
+  const basis = React.useRef({ artifactId, markdown, revision, client, scope });
+  basis.current = { artifactId, markdown, revision, client, scope };
+  const mounted = React.useRef(false);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const selectionActions = React.useMemo<readonly MarkdownSelectionAction[] | undefined>(() => !client || !scope ? undefined : [{
     label: t('artifacts.browser.passage.comment'),
-    onPress: (block) => {
-      const range = mapMarkdownSourceBlockToPassage({ markdown, start: block.sourceStart, end: block.sourceStart + block.sourceLength });
-      if (!range) return;
-      const passage = captureDocPassageV1({
-        ref: { kind: 'doc', artifactId, serverId: scope.serverId },
-        revision,
-        source: markdown,
-        range,
-      });
-      router.push(client.beginPassageComment(passage) as Href);
+    onPress: (block, selection) => {
+      const publish = (input: Readonly<{ renderedText: string; start: number; end: number }>): boolean => {
+        const current = basis.current;
+        if (!mounted.current || current.artifactId !== artifactId || current.markdown !== markdown || current.client !== client
+          || current.scope?.serverId !== scope.serverId || current.scope.accountId !== scope.accountId
+          || current.revision.headerVersion !== revision.headerVersion || current.revision.bodyVersion !== revision.bodyVersion
+          || markdown.slice(block.sourceStart, block.sourceStart + block.sourceLength) !== block.markdown
+          || !Number.isInteger(input.start) || !Number.isInteger(input.end)) return false;
+        const range = mapRenderedSelectionToMarkdownSource({ markdown, rendered: input.renderedText,
+          start: input.start, end: input.end, sourceRange: { start: block.sourceStart, end: block.sourceStart + block.sourceLength } });
+        if (!range) return false;
+        const passage = captureDocPassageV1({ ref: { kind: 'doc', artifactId, serverId: scope.serverId }, revision, source: markdown,
+          range });
+        router.push(client.beginPassageComment(passage) as Href);
+        return true;
+      };
+      if (selection && selection.renderedText.slice(selection.start, selection.end) === selection.text && publish(selection)) return;
+      props.onRequestNativeSelection?.({ markdown: block.renderMarkdown ?? block.markdown,
+        complete: (input) => input.renderedText.slice(input.start, input.end) === input.text && publish(input) });
     },
-  }], [artifactId, client, markdown, revision, router, scope]);
+  }], [artifactId, client, markdown, props.onRequestNativeSelection, revision, router, scope]);
   return (
     <MarkdownView
       testID="artifact:body"

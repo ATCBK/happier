@@ -22,6 +22,8 @@ export type { MarkdownSourceRange };
 export type MarkdownSourceRangeAction = Readonly<{
     sourceRange: MarkdownSourceRange;
     markdown: string;
+    /** The renderer input, including this Doc's reference definitions when needed. */
+    renderMarkdown?: string;
     /** The block's place in the whole Markdown source (UTF-16 offsets). */
     sourceStart: number;
     sourceLength: number;
@@ -29,11 +31,17 @@ export type MarkdownSourceRangeAction = Readonly<{
 
 /**
  * An action offered on the reader's text selection where the platform renderer has a selection menu
- * (native). It reports the rendered block the selection was made in.
+ * (native). Offsets index the actual native text, including renderer spacing.
  */
+export type MarkdownRenderedSelection = Readonly<{
+    renderedText: string;
+    text: string;
+    start: number;
+    end: number;
+}>;
 export type MarkdownSelectionAction = Readonly<{
     label: string;
-    onPress: (block: MarkdownSourceRangeAction) => void;
+    onPress: (block: MarkdownSourceRangeAction, selection?: MarkdownRenderedSelection) => void;
 }>;
 
 /** What `findSourceRanges` marks: Find matches, or commented passages (a Doc's comment marks). */
