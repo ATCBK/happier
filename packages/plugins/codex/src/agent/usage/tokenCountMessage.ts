@@ -5,8 +5,8 @@ import type {
     UsageObservationTokens,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { estimateUsageModelCost } from '@happier-dev/protocol/usage/usageCost';
-import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
+import { estimateUsageModelCost } from '@happier-dev/plugin-sdk/agents/runtime';
+import { resolveUsageTokenCategories } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type CodexAppServerUsageObservationInput = Omit<
     Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' }>,

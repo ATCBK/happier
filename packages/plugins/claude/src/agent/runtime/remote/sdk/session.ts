@@ -14,7 +14,7 @@ import { HappierStructuredInputV1Schema } from '@happier-dev/plugin-sdk/sessions
 import type { AgentSessionInputFilesService } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeMcpUsageWitness } from './mcpUsage.js';
 import { createClaudeSkillUsageWitness } from './skillUsage.js';
-import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import {
     redactBugReportSensitiveText,
@@ -22,7 +22,7 @@ import {
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { SessionWorkStateV1 } from '@happier-dev/plugin-sdk/sessions/work-state';
-import type { SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import type { SessionGoalControlFailureV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeRuntimeActivityPublisher } from '../../shared/runtimeActivityPublisher.js';
 import {
     readClaudePendingLocalId,

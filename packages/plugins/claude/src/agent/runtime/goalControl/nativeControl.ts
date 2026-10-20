@@ -3,7 +3,7 @@ import type {
   AgentSessionGoalMutation,
   AgentSessionGoalMutationResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type ClaudeNativeGoalOperations = Readonly<{
   setGoal?(

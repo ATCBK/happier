@@ -15,7 +15,7 @@ import { resolveClaudeUsageSubjectRef } from '../usage/identity.js';
 import { mapClaudeProviderHttpUsageSnapshot } from '../usage/snapshot.js';
 import { resolveClaudeCodeUsageUserAgent } from './userAgent.js';
 import { parseClaudeQuotaResets, claudeResetRequestId } from './resets.js';
-import type { ConnectedServiceQuotaRecoveryCreditV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ConnectedServiceQuotaRecoveryCreditV1 } from '@happier-dev/plugin-sdk/connected-accounts';
 
 export const CLAUDE_DEFAULT_SUBSCRIPTION_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 

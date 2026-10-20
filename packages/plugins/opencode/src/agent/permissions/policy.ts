@@ -2,7 +2,7 @@ import {
   resolveAcpToolPermissionPolicy,
   type AgentSessionOpenRequest,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { listHappierToolAutoApprovedNameSpellingsV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
+import { listHappierToolAutoApprovedNameSpellingsV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { sanitizeOpenCodeMcpName } from '../runtime/server/mcpRegistration.js';
 
 export type OpenCodePermissionValue =
