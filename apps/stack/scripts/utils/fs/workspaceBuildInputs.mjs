@@ -245,6 +245,15 @@ export function readWorkspaceBuildInputs(packageDir, {
       || (entry.isFile() && (isWorkspaceBuildConfigFile(entry.name) || /\.(?:[cm]?js|d\.[cm]?ts)$/.test(entry.name)))
     ) visit(join(packageDir, entry.name));
   }
+  // Package admission and capture must consume the same explicitly referenced
+  // build scripts, including TypeScript helpers outside the standard roots.
+  if (existsSync(join(packageDir, 'package.json'))) {
+    const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+    const buildScript = String(packageJson.scripts?.build ?? '');
+    for (const match of buildScript.matchAll(/(?:^|\s)(\.{1,2}\/[^\s;&|]+\.(?:[cm]?[jt]sx?|json))(?=$|\s|[;&|])/g)) {
+      visit(resolve(packageDir, match[1]), { ignoreTests: false });
+    }
+  }
   visit(join(packageDir, '.happier-plugin', 'plugin.json'));
   visit(join(packageDir, '.happier-plugin', 'ui', 'hosted-web'), { ignoreTests: false });
   // Explicit shipped inputs can have test-like names (for example app QA specimens).
