@@ -57,7 +57,7 @@ import { MEMORY_DOCUMENT_ACTION_IDS_V1 } from '../prompts/library/memoryActionsV
 import { PROFILE_ACTION_SPECS_V1 } from './specs/profiles.js';
 import {
   describeCreateDirectoryApprovalSummary, describeDeleteApprovalSummary, describeRenameApprovalSummary,
-  describeWriteFileApprovalSummary, projectWriteFileApprovalInput,
+  describeUploadApprovalSummary, describeWriteFileApprovalSummary, projectWriteFileApprovalInput,
 } from './specs/filesystemApprovalPresentation.js';
 import { MCP_SERVER_ACTION_SPECS_V1 } from './specs/mcpServers.js';
 import { REGISTRY_ACTION_SPECS_V1, readRegistryAgentCliLocatorV1 } from './specs/registries.js';
@@ -12445,6 +12445,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   {
     id: 'daemon.filesystem.upload', approvalPolicy: { rpcConfirmation: true, uiConfirmation: 'direct' }, approval: {result: 'required'},
     title: 'Upload file',
+    approvalPresentation: { summary: describeUploadApprovalSummary },
     description: 'Upload actual bytes from the prepared source into the admitted workspace root.',
     approvalResultCustody: 'live_only',
     projectObservationOutput: () => ({ redacted: true }),

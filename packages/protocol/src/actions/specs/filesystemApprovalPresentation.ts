@@ -57,19 +57,23 @@ function summaryTarget(rootPath: string | null, path: string | null): Readonly<{
     : { path: relative, where: inCheckout(rootPath) };
 }
 
-/** The decoded size of base64 content, in words: "Empty file", "12 bytes", "3.4 KB". */
-export function describeBase64ContentSize(content: unknown): string | null {
-  if (typeof content !== 'string') return null;
-  const compact = content.replace(/\s+/gu, '');
-  if (!compact) return 'Empty file';
-  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
-  const bytes = Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+/** A byte count in words: "12 bytes", "3.4 KB". */
+export function describeByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
   const units = ['KB', 'MB', 'GB'];
   let value = bytes / 1024;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
   return `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unit]}`;
+}
+
+/** The decoded size of base64 content, in words: "Empty file", "12 bytes", "3.4 KB". */
+export function describeBase64ContentSize(content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  const compact = content.replace(/\s+/gu, '');
+  if (!compact) return 'Empty file';
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+  return describeByteSize(Math.max(0, Math.floor((compact.length * 3) / 4) - padding));
 }
 
 export function describeWriteFileApprovalSummary(input: unknown): string | null {
@@ -113,4 +117,16 @@ export function describeDeleteApprovalSummary(input: unknown): string | null {
   if (!target) return null;
   const from = target.where.replace(/^ in /u, ' from ');
   return value.recursive === true ? `Delete ${target.path} and everything in it${from}` : `Delete ${target.path}${from}`;
+}
+
+/** The file an upload adds, its size, and the checkout it lands in ("Upload docs/a.txt (4 bytes) to repo"). */
+export function describeUploadApprovalSummary(input: unknown): string | null {
+  const value = readRecord(input);
+  const root = readText(value.rootPath);
+  const target = summaryTarget(root, readText(value.path));
+  if (!target) return null;
+  const size = readRecord(value.source).sizeBytes;
+  const sized = typeof size === 'number' && Number.isFinite(size) && size >= 0 ? ` (${describeByteSize(size)})` : '';
+  const to = target.where.replace(/^ in /u, ' to ');
+  return `${value.overwrite === true ? 'Upload and replace' : 'Upload'} ${target.path}${sized}${to}`;
 }

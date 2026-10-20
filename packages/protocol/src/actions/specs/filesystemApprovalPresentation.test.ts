@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeCreateDirectoryApprovalSummary, describeDeleteApprovalSummary,
   describeRenameApprovalSummary, describeWorkspaceRelativePath,
-  describeWriteFileApprovalSummary, projectWriteFileApprovalInput,
+  describeUploadApprovalSummary, describeWriteFileApprovalSummary, projectWriteFileApprovalInput,
 } from './filesystemApprovalPresentation.js';
 
 describe('filesystem approval literal operands', () => {
@@ -46,3 +46,18 @@ describe('filesystem approval summaries for the checkout folder itself', () => {
   });
 });
 
+
+describe('upload approval summary', () => {
+  const source = { sourceId: 'source', sizeBytes: 4 };
+
+  it('names the file, its size and the checkout it lands in', () => {
+    expect(describeUploadApprovalSummary({ rootPath: '/home/happier/repo', path: '/home/happier/repo/upload-dir/a.txt', source, overwrite: false }))
+      .toBe('Upload upload-dir/a.txt (4 bytes) to repo');
+    expect(describeUploadApprovalSummary({ rootPath: '/repo', path: '/repo/big.bin', source: { ...source, sizeBytes: 3 * 1024 * 1024 }, overwrite: true }))
+      .toBe('Upload and replace big.bin (3 MB) to repo');
+  });
+
+  it('is absent without a destination, so the generic title stays the only copy', () => {
+    expect(describeUploadApprovalSummary({ rootPath: '/repo', source })).toBeNull();
+  });
+});
