@@ -13,7 +13,7 @@ import type { Prisma } from "@prisma/client";
 
 import { materializePluginCollectionContractsFromManifestTx } from "./contracts";
 import { getPluginCollection, queryPluginCollection, queryPluginCollectionUiQuery } from "./uiQuery";
-import { db, initDbMysql, initDbPostgres } from "@/storage/db";
+import { createDbMaintenanceClient, db, initDbMysql, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
@@ -303,6 +303,9 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
             const accountId = `collection-capture-${randomUUID()}`;
             const { readerContext, firstRowId } = await seedBinaryIndexCollectionAccount(accountId);
             const transaction = db.$transaction;
+            const snapshotUrl = new URL(process.env.DATABASE_URL!);
+            snapshotUrl.searchParams.set("connection_limit", "1");
+            const snapshotClient = await createDbMaintenanceClient("postgres", snapshotUrl.toString());
             let releaseWriter!: () => void;
             const writerReleased = new Promise<void>(resolve => { releaseWriter = resolve; });
             let writerReady!: () => void;
@@ -330,12 +333,16 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
             }, { isolationLevel: "Serializable" }]) as Promise<void>;
             const keeperOutcome = Promise.allSettled([keeper]);
             await Promise.race([keeperStarted, keeper]);
+            // Reuse a connection with retained SSI locks from an older transaction.
+            // The capture must be measured by its own virtual transaction, not its PID.
+            await snapshotClient.$transaction(tx => tx.account.count(), { isolationLevel: "Serializable" });
             let captured = false;
             let predicateLocks = -1;
-            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            let retainedPredicateLocks = 0;
+            db.$transaction = new Proxy(snapshotClient.$transaction, { apply(target, _receiver, args: unknown[]) {
                 const callback = args[0];
-                if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
-                return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                if (typeof callback !== "function") return Reflect.apply(target, snapshotClient, args);
+                return Reflect.apply(target, snapshotClient, [async (tx: Tx) => {
                     const result = await callback(new Proxy(tx, { get(inner, property, innerReceiver) {
                         if (property !== "account") return Reflect.get(inner, property, innerReceiver);
                         return new Proxy(inner.account, { get(model, method, modelReceiver) {
@@ -347,10 +354,17 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
                             };
                         } });
                     } }));
-                    const [{ count }] = await tx.$queryRaw<Array<{ count: number }>>`
-                        SELECT count(*)::int AS count FROM pg_locks WHERE pid = pg_backend_pid() AND mode = 'SIReadLock'
+                    const [{ total, active }] = await tx.$queryRaw<Array<{ total: number; active: number }>>`
+                        SELECT count(*)::int AS total,
+                            count(*) FILTER (WHERE virtualtransaction IN (
+                                SELECT virtualtransaction FROM pg_locks
+                                WHERE pid = pg_backend_pid() AND locktype = 'virtualxid'
+                                    AND mode = 'ExclusiveLock' AND granted
+                            ))::int AS active
+                        FROM pg_locks WHERE pid = pg_backend_pid() AND mode = 'SIReadLock'
                     `;
-                    predicateLocks = Math.max(predicateLocks, count);
+                    predicateLocks = Math.max(predicateLocks, active);
+                    retainedPredicateLocks = Math.max(retainedPredicateLocks, total - active);
                     return result;
                 }, ...args.slice(1)]);
             } });
@@ -373,6 +387,8 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
                     expect(after).toMatchObject({ changeCursor: 92, rows: [field
                         ? { context: { rowId: firstRowId, revision: 4 } } : { rowId: firstRowId, revision: 4 }, {}, {}] });
                 }
+                console.info('W13_COLLECTION_PREDICATE_LOCKS', { kind, predicateLocks, retainedPredicateLocks });
+                expect(retainedPredicateLocks).toBeGreaterThan(0);
                 expect(predicateLocks).toBe(0);
                 await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId, pluginId: readerContext.pluginId } }, data: { enabled: false } });
                 await expect(read()).rejects.toMatchObject({ code: "collection_unavailable" });
@@ -397,6 +413,7 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
                 db.$transaction = transaction;
                 await writerOutcome;
                 await keeperOutcome;
+                await snapshotClient.$disconnect();
                 await db.account.deleteMany({ where: { id: accountId } });
             }
         },
