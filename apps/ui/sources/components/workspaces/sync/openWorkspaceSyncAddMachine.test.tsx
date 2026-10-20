@@ -47,6 +47,7 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { MachineSelector } = await import('@/components/sessions/new/components/MachineSelector');
 const { PathSelectionList } = await import('@/components/ui/pathPicker/PathSelectionList');
 const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const owner = await import('./openWorkspaceSyncAddMachine');
 
 function deferred<T>() {
@@ -149,6 +150,9 @@ async function renderOpenedModal() {
     return { config, onClose, screen, submit };
 }
 
+const statusLine = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(SurfaceStateCard)
+    .find(node => node.props.testID === 'workspace-sync-add-machine-status');
+
 async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, path = '/target', machineId = 'machine-b') {
     const target = storage.getState().machines[machineId];
     await act(async () => { invokeTestInstanceHandler(screen.findByType(MachineSelector), 'onSelect', target); });
@@ -214,8 +218,8 @@ describe('Project Add machine modal', () => {
                 expect(menu).toBeTruthy();
                 await act(async () => invokeTestInstanceHandler(menu!, 'onSelect', value));
             };
-            await selectMenu('settingsSession.handoff.workspaceMode.title', 'mirror_exactly');
-            await selectMenu('settingsSession.handoff.targetBootstrap.title', 'materialize_from_source_workspace');
+            await selectMenu('sessionHandoff.targetApproval.modeLabel', 'mirror_exactly');
+            await selectMenu('workspaceSync.addMachine.folderSetup', 'materialize_from_source_workspace');
             const advanced = screen.findAll(node => node.props.title === 'settingsSession.handoff.advanced.title'
                 && typeof node.props.onPress === 'function')[0];
             expect(advanced).toBeTruthy();
@@ -239,7 +243,7 @@ describe('Project Add machine modal', () => {
     describe('Use existing folder for a Git source', () => {
         const unavailable = 'settingsSession.handoff.targetBootstrap.useExistingUnavailable';
         const destinationMenu = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(DropdownMenu)
-            .find(node => node.props.itemTrigger?.title === 'settingsSession.handoff.targetBootstrap.title')!;
+            .find(node => node.props.itemTrigger?.title === 'workspaceSync.addMachine.folderSetup')!;
         const useExisting = (screen: Awaited<ReturnType<typeof renderScreen>>) => (destinationMenu(screen).props.items as ReadonlyArray<{ id: string; disabled?: boolean; subtitle?: string }>)
             .find(item => item.id === 'use_existing')!;
 
@@ -290,6 +294,21 @@ describe('Project Add machine modal', () => {
         });
         await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.error.needsAttention'));
         expect(modal.screen.getTextContent()).not.toContain('Workspace sync relationship is not ready');
+        // One status line, in the failure tone and announced as an alert.
+        expect(statusLine(modal.screen)?.props).toMatchObject({ kind: 'error', accessibilitySemantics: 'alert' });
+    });
+
+    it('stays quiet when the person declines the Action approval: nothing ran, nothing failed', async () => {
+        owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+        const modal = await renderOpenedModal();
+        await chooseTarget(modal.screen);
+        await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+        await act(async () => { modal.submit().props.onPress(); });
+        await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+        expect(statusLine(modal.screen)).toBeUndefined();
+        expect(modal.screen.getTextContent()).not.toContain('approval_canceled');
+        expect(callsFor(RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE)).toEqual([]);
     });
 
     it('keeps an acknowledged committed result visible when the modal is dismissed', async () => {
@@ -297,6 +316,7 @@ describe('Project Add machine modal', () => {
         const modal = await startAddMachineLink();
         await act(async () => { pendingCreate.resolve(committedLink()); });
         await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.state.watching'));
+        expect(statusLine(modal.screen)?.props).toMatchObject({ kind: 'success', accessibilitySemantics: 'status' });
         expect(modal.config.onDismissRequest('shared')).toBe(true);
         expect(modal.onClose).not.toHaveBeenCalled();
     });

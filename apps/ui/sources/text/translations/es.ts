@@ -1185,7 +1185,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: 'Carpeta de destino',
       materializeTitle: 'Preparar desde este espacio de trabajo',
-      materializeSubtitle: 'Prepara desde este espacio de trabajo. Si el destino ya contiene archivos, se reemplazarán.',
+      materializeSubtitle: 'Los archivos que ya estén en la carpeta se reemplazarán.',
       useExistingTitle: 'Usar carpeta existente',
       useExistingSubtitle: 'Conserva el contenido actual de la carpeta y empieza a sincronizar con él.',
       useExistingUnavailable: 'Esta carpeta está vacía o todavía no existe.',

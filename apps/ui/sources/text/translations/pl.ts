@@ -1181,7 +1181,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: 'Folder docelowy',
       materializeTitle: 'Przygotuj z tego obszaru roboczego',
-      materializeSubtitle: 'Przygotuj z tego obszaru roboczego. Jeśli miejsce docelowe zawiera już pliki, zostaną one zastąpione.',
+      materializeSubtitle: 'Pliki, które już są w folderze, zostaną zastąpione.',
       useExistingTitle: 'Użyj istniejącego folderu',
       useExistingSubtitle: 'Zachowaj bieżącą zawartość folderu i rozpocznij jej synchronizację.',
       useExistingUnavailable: 'Ten folder jest pusty albo jeszcze nie istnieje.',

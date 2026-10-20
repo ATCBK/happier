@@ -1184,7 +1184,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: 'Cartella di destinazione',
       materializeTitle: 'Prepara da questa area di lavoro',
-      materializeSubtitle: 'Prepara da questa area di lavoro. Se la destinazione contiene già dei file, verranno sostituiti.',
+      materializeSubtitle: 'I file già presenti nella cartella vengono sostituiti.',
       useExistingTitle: 'Usa la cartella esistente',
       useExistingSubtitle: 'Mantieni il contenuto attuale della cartella e avvia la sincronizzazione con esso.',
       useExistingUnavailable: 'Questa cartella è vuota o non esiste ancora.',

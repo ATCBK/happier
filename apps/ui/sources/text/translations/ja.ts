@@ -1192,7 +1192,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: '移行先フォルダー',
       materializeTitle: 'このワークスペースから準備',
-      materializeSubtitle: 'このワークスペースから準備します。移行先にすでにファイルがある場合は置き換えられます。',
+      materializeSubtitle: 'フォルダー内にすでにあるファイルは置き換えられます。',
       useExistingTitle: '既存のフォルダーを使用',
       useExistingSubtitle: 'フォルダーの現在の内容を保持し、それを使って同期を開始します。',
       useExistingUnavailable: 'このフォルダーは空か、まだ存在しません。',

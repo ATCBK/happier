@@ -12105,7 +12105,7 @@ settingsSession: {
         targetBootstrap: {
           title: 'Dossier de destination',
           materializeTitle: 'Préparer à partir de ce workspace',
-          materializeSubtitle: 'Préparer à partir de ce workspace. Les fichiers déjà présents dans la destination seront remplacés.',
+          materializeSubtitle: 'Les fichiers déjà présents dans le dossier sont remplacés.',
           useExistingTitle: 'Utiliser le dossier existant',
           useExistingSubtitle: 'Conserver le contenu actuel du dossier et commencer la synchronisation avec celui-ci.',
           useExistingUnavailable: 'Ce dossier est vide ou n’existe pas encore.',

@@ -1186,7 +1186,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: 'Папка назначения',
       materializeTitle: 'Подготовить из этого рабочего пространства',
-      materializeSubtitle: 'Подготовить из этого рабочего пространства. Если в папке назначения уже есть файлы, они будут заменены.',
+      materializeSubtitle: 'Файлы, которые уже есть в папке, будут заменены.',
       useExistingTitle: 'Использовать существующую папку',
       useExistingSubtitle: 'Сохранить текущее содержимое папки и начать его синхронизацию.',
       useExistingUnavailable: 'Эта папка пуста или ещё не существует.',

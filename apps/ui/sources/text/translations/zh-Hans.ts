@@ -1190,7 +1190,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: '目标文件夹',
       materializeTitle: '从此工作区准备',
-      materializeSubtitle: '从此工作区准备。如果目标位置已有文件，它们将被替换。',
+      materializeSubtitle: '文件夹中已有的文件将被替换。',
       useExistingTitle: '使用现有文件夹',
       useExistingSubtitle: '保留文件夹的当前内容，并以这些内容开始同步。',
       useExistingUnavailable: '此文件夹为空或尚不存在。',

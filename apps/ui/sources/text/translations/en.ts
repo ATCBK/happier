@@ -13605,6 +13605,9 @@ const enWorkspaceSync = {
     exactReplica: 'Exact replica',
     editableCopy: 'Editable copy',
     thisMachine: 'This machine',
+    machineHint: 'Where this workspace is kept in sync.',
+    folderSetup: 'Folder setup',
+    awaitingApproval: 'Waiting for your approval.',
     editableCopyHint:
       'Changes on linked machines can become visible to agents on the others. Conflicting versions need review; use separate worktrees when you want isolation.',
   },
@@ -14555,8 +14558,7 @@ const enSettingsSession = {
     targetBootstrap: {
       title: 'Destination folder',
       materializeTitle: 'Prepare from this workspace',
-      materializeSubtitle:
-        'Prepare from this workspace. If the destination already has files, they will be replaced.',
+      materializeSubtitle: 'Files already in the folder are replaced.',
       useExistingTitle: 'Use existing folder',
       useExistingSubtitle:
         'Keep the folder’s current contents and begin syncing with them.',

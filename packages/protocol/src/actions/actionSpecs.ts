@@ -7650,7 +7650,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       presentation: { onStart: 'current' },
     },
     title: 'Add machine to workspace',
-    description: 'Link a selected Workspace to a folder on another machine. Attaching an existing folder preserves its contents; creating from this Workspace replaces them.',
+    description: 'Link a workspace to a folder on the machine you choose, which can be the one it is on. Attaching an existing folder preserves its contents; creating from this workspace replaces them.',
     safety: 'danger',
     placements: [],
     surfaces: {
@@ -7663,7 +7663,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     },
     inputHints: {
       title: 'Add a machine to this workspace',
-      description: 'Links the selected Workspace to a folder on another machine.',
+      description: 'Links this workspace to a folder on the machine you choose.',
       fields: [
         { path: 'sourceWorkspaceRefId', title: 'Source workspace id', widget: 'text', required: true },
         { path: 'targetMachineId', title: 'Target machine id', widget: 'text', required: true },

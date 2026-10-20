@@ -5,6 +5,7 @@ import { evaluateSessionHandoffWorkspaceTransferSourcePathSafety } from '@happie
 import { OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { ProjectWorkerNoAcceptanceFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { projectOpenRefusalPresentation } from '@/components/projects/activation/projectOpenRefusalPresentation';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -12,7 +13,7 @@ import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { Text } from '@/components/ui/text/Text';
+import { SurfaceStateCard, type SurfaceStateKind } from '@/components/ui/surfaces/SurfaceStateCard';
 import type { CustomModalInjectedProps } from '@/modal';
 import { Modal } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
@@ -24,7 +25,7 @@ import {
     type WorkspaceSyncRelationshipSummary,
 } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { useWorkspaceSyncRelationshipSummaries } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
-import { presentWorkspaceSyncFailure } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
+import { presentWorkspaceSyncFailure, readWorkspaceSyncErrorCode } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
 import {
     buildWorkspaceContentPolicy,
     parseSessionHandoffIgnoredIncludeGlobs,
@@ -68,6 +69,31 @@ const modeTitle = (mode: WorkspaceSyncPersistentModeV1) => t(
 );
 const emptyPaths = [] as const;
 const ignoreClose = () => {};
+
+/**
+ * The one status line under the form: what a failure says wins, then the step in flight, then the
+ * outcome. Tone and the live region come from the shared state line (danger for a failure, an alert
+ * announcement for it).
+ */
+function resolveStatusLine(input: Readonly<{
+    error: string | null;
+    phase: 'idle' | 'submitting' | 'approval_pending' | 'approving' | 'linked';
+    linkedConflictCount: number | null;
+}>): Readonly<{ kind: SurfaceStateKind; title: string; announce: 'status' | 'alert' }> | null {
+    if (input.error) return { kind: 'error', title: input.error, announce: 'alert' };
+    if (input.phase === 'approval_pending') {
+        return { kind: 'warning', title: t('workspaceSync.addMachine.awaitingApproval'), announce: 'status' };
+    }
+    if (input.phase === 'submitting' || input.phase === 'approving') {
+        return { kind: 'loading', title: t('workspaceSync.state.working'), announce: 'status' };
+    }
+    if (input.phase === 'linked') {
+        return input.linkedConflictCount
+            ? { kind: 'warning', title: t('workspaceSync.conflictCount', { count: input.linkedConflictCount }), announce: 'status' }
+            : { kind: 'success', title: t('workspaceSync.state.watching'), announce: 'status' };
+    }
+    return null;
+}
 
 function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
     const { binding } = useServerCredentialAccountScopeBinding(props.source.serverId);
@@ -174,6 +200,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             ? t('workspaceSync.start.blocked.destinationFolder')
             : null;
     const busy = phase === 'submitting' || phase === 'approving';
+    const statusLine = resolveStatusLine({ error, phase, linkedConflictCount });
 
     const confirmAndApprove = React.useCallback(async (artifactId: string, signal: AbortSignal) => {
         if (signal.aborted) {
@@ -250,7 +277,11 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                     serverId: props.source.serverId, machineId: props.source.machineId,
                     source: { kind: 'folder', path: props.source.rootPath }, materialization: { kind: 'attach' },
                 }, { surface: 'ui', serverId: props.source.serverId, signal: controller.signal });
-                if (!opened.ok) throw new Error(t('common.saveError'));
+                if (!opened.ok) {
+                    // A declined approval ran nothing: the person answered, nothing failed.
+                    if (isActionApprovalDeclinedErrorCode(opened.errorCode)) { setPhase('idle'); return; }
+                    throw new Error(t('common.saveError'));
+                }
                 const accepted = OpenProjectResultV1Schema.parse(opened.result);
                 if (accepted.kind === 'refused') throw new Error(projectOpenRefusalPresentation(accepted.code, null).title);
                 if (accepted.kind === 'outcomeUnknown') setInspectRequired(true);
@@ -302,6 +333,10 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             setLinkedConflictCount(outcome.result.status.conflictCount);
             setPhase('linked');
         } catch (caught) {
+            if (!controller.signal.aborted && isActionApprovalDeclinedErrorCode(readWorkspaceSyncErrorCode(caught))) {
+                setPhase('idle');
+                return;
+            }
             if (controller.signal.aborted || (caught && typeof caught === 'object' && 'code' in caught
                 && (caught.code === 'indeterminate' || caught.code === 'approval_execution_outcome_unknown'))) {
                 setInspectRequired(true);
@@ -354,6 +389,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                 machine={{
                     machines, selectedMachine, serverId: props.source.serverId, showSearch: true, presentation: 'dropdown',
                     showCliGlyphs: false, autoDetectCliGlyphs: false, disableOfflineMachines: true, describeMachine,
+                    ...(selectedMachine ? {} : { dropdownSubtitle: t('workspaceSync.addMachine.machineHint') }),
                     testIdPrefix: 'workspace-sync-add-machine',
                     onSelect: (machine) => { setMachineId(machine.id); setTargetPath(''); invalidateDraft(); },
                 }}
@@ -369,17 +405,17 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                 pathTitle={t('settingsSession.handoff.targetBootstrap.title')}
                 blockedReason={blockedReason}
             />
-            <ItemGroup title={t('settingsSession.handoff.workspaceMode.title')}>
+            <ItemGroup>
                 <WorkspaceActivationModeField
                     open={openMenu === 'mode'} onOpenChange={(open) => setOpenMenu(open ? 'mode' : null)}
-                    selectedId={mode} title={t('settingsSession.handoff.workspaceMode.title')} subtitle={modeTitle(mode)}
+                    selectedId={mode} title={t('sessionHandoff.targetApproval.modeLabel')} subtitle={modeTitle(mode)}
                     items={modes.map((value) => ({ id: value, title: modeTitle(value), subtitle: t(value === 'mirror_exactly' ? 'settingsSession.handoff.workspaceMode.mirrorExactlySubtitle' : value === 'keep_both_in_sync' ? 'settingsSession.handoff.workspaceMode.keepBothInSyncSubtitle' : 'settingsSession.handoff.workspaceMode.keepSyncedSubtitle') }))}
                     onSelect={(value) => { setMode(value as WorkspaceSyncPersistentModeV1); setOpenMenu(null); invalidateDraft(); }}
                 />
                 {mode === 'keep_both_in_sync' ? <Item title={t('workspaceSync.addMachine.editableCopyHint')} mode="info" /> : null}
                 <WorkspaceActivationModeField
                     open={openMenu === 'destination'} onOpenChange={(open) => setOpenMenu(open ? 'destination' : null)}
-                    selectedId={destinationIntent} title={t('settingsSession.handoff.targetBootstrap.title')}
+                    selectedId={destinationIntent} title={t('workspaceSync.addMachine.folderSetup')}
                     subtitle={t(destinationIntent === 'use_existing' ? 'settingsSession.handoff.targetBootstrap.useExistingSubtitle' : 'settingsSession.handoff.targetBootstrap.materializeSubtitle')}
                     items={[
                         { id: 'use_existing', title: t('settingsSession.handoff.targetBootstrap.useExistingTitle'),
@@ -406,9 +442,15 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                 />
             </ExpandableItem>
             {existing ? <Item title={t('settingsSession.handoff.workspaceMode.relationshipSelected')} mode="info" /> : null}
-            {phase === 'approval_pending' ? <Text accessibilityLiveRegion="polite">{t('sessionHandoff.targetApproval.title')}</Text> : null}
-            {phase === 'submitting' || phase === 'approving' ? <Text accessibilityLiveRegion="polite">{t('workspaceSync.state.working')}</Text> : null}
-            {phase === 'linked' ? <Text accessibilityLiveRegion="polite">{linkedConflictCount ? t('workspaceSync.conflictCount', { count: linkedConflictCount }) : t('workspaceSync.state.watching')}</Text> : null}
+            {statusLine ? (
+                <SurfaceStateCard
+                    testID="workspace-sync-add-machine-status"
+                    size="line"
+                    kind={statusLine.kind}
+                    title={statusLine.title}
+                    accessibilitySemantics={statusLine.announce}
+                />
+            ) : null}
             {phase === 'linked' && linkedConflictCount && existing ? (
                 <Item
                     title={t('workspaceSync.openConflicts', { count: linkedConflictCount })}
@@ -416,7 +458,6 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                     showChevron={true}
                 />
             ) : null}
-            {error ? <Text accessibilityLiveRegion="polite">{error}</Text> : null}
             {inspectRequired ? <Item title={t('workspaceSync.diagnostics.title')} subtitle={t('workspaceSync.error.needsAttention')} onPress={props.onClose} showChevron={true} /> : null}
         </ItemList>
     );

@@ -1217,7 +1217,7 @@ const settingsSessionHandoffTranslationExtensions = {
     targetBootstrap: {
       title: 'Pasta de destino',
       materializeTitle: 'Preparar a partir deste workspace',
-      materializeSubtitle: 'Prepare a partir deste workspace. Se o destino já tiver arquivos, eles serão substituídos.',
+      materializeSubtitle: 'Os arquivos que já estão na pasta serão substituídos.',
       useExistingTitle: 'Usar pasta existente',
       useExistingSubtitle: 'Mantenha o conteúdo atual da pasta e comece a sincronizar com ele.',
       useExistingUnavailable: 'Esta pasta está vazia ou ainda não existe.',

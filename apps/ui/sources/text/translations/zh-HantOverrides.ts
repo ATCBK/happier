@@ -1167,6 +1167,7 @@ const sessionHandoffTranslationExtensions = {
 
 const settingsSessionHandoffTranslationExtensions = {
   'zh-Hant': {
+    targetBootstrap: { materializeSubtitle: '資料夾中已有的檔案將被取代。' },
     title: '工作階段移交',
     groupTitle: '工作階段移交',
     groupFooter: '選擇在機器之間移動工作階段時使用的預設選項。',

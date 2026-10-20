@@ -12064,7 +12064,7 @@ settingsSession: {
               targetBootstrap: {
                   title: 'Zielordner',
                   materializeTitle: 'Aus diesem Workspace vorbereiten',
-                  materializeSubtitle: 'Aus diesem Workspace vorbereiten. Enthält das Ziel bereits Dateien, werden sie ersetzt.',
+                  materializeSubtitle: 'Dateien, die schon im Ordner liegen, werden ersetzt.',
                   useExistingTitle: 'Bestehenden Ordner verwenden',
                   useExistingSubtitle: 'Den aktuellen Inhalt des Ordners behalten und mit ihm synchronisieren.',
                   useExistingUnavailable: 'Dieser Ordner ist leer oder existiert noch nicht.',
