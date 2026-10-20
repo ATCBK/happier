@@ -99,7 +99,7 @@ export type VoiceInferenceSpeechStreamWorker = Readonly<{
 }>;
 
 export type VoiceInferenceSpeechStreamManager = Readonly<{
-  start: (input: DaemonVoiceInferenceSttStreamStartRequest) => Promise<DaemonVoiceInferenceSttStreamStartResponse>;
+  start: (input: DaemonVoiceInferenceSttStreamStartRequest, signal?: AbortSignal) => Promise<DaemonVoiceInferenceSttStreamStartResponse>;
   appendCompatibilityChunk: (input: DaemonVoiceInferenceSttStreamChunkRequest) => Promise<DaemonVoiceInferenceSttStreamChunkResponse>;
   appendPcm16Bytes: (input: Readonly<{
     streamId: string;
@@ -399,13 +399,14 @@ export function createVoiceInferenceSpeechStreamManager(
   }
 
   const manager: VoiceInferenceSpeechStreamManager = {
-    start: async (input) => {
+    start: async (input, signal) => {
       let startAbortController: AbortController | null = null;
+      let unlinkRequestAbort = () => {};
       let reservedApplicationAttempt = false;
       let publishedSession = false;
       let session: StreamSession | null = null;
       try {
-        if (disposed) {
+        if (disposed || signal?.aborted) {
           throw Object.assign(new Error('voice_inference_stream_manager_disposed'), { code: 'cancelled' });
         }
         const streamId = `stream-${randomUUID()}`;
@@ -437,6 +438,12 @@ export function createVoiceInferenceSpeechStreamManager(
         reservedApplicationAttempt = true;
         const diagnostics = input.diagnostics?.captureAllowed === true ? input.diagnostics : null;
         const abortController = new AbortController();
+        if (signal) {
+          const abortStart = () => abortController.abort();
+          signal.addEventListener('abort', abortStart, { once: true });
+          unlinkRequestAbort = () => signal.removeEventListener('abort', abortStart);
+          if (signal.aborted) abortStart();
+        }
         const peerApplicationEncryption: PeerApplicationEncryptionSession | null = input.peerApplicationEncryption
           ? {
               binding: input.peerApplicationEncryption,
@@ -556,6 +563,9 @@ export function createVoiceInferenceSpeechStreamManager(
         }
         return errorResponse(error);
       } finally {
+        // Request cancellation owns preparation only. Published streams retain
+        // their established explicit/transport-loss cancellation lifecycle.
+        unlinkRequestAbort();
         if (reservedApplicationAttempt && !publishedSession) {
           activeApplicationAttemptIds.delete(input.requestId);
         }

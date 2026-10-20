@@ -5,10 +5,8 @@ import {
   projectSessionActivityCompatibilityV1,
 } from '@happier-dev/protocol';
 
-import {
-  buildToolResultsFollowUpPrompt,
-  type LocalVoiceAgentToolResultEntry,
-} from './runVoiceAgentTurnWithTools';
+import { buildToolResultsFollowUpPrompt } from '@/voice/context/buildVoiceToolResultsFollowUp';
+import type { LocalVoiceAgentToolResultEntry } from '@/voice/tools/localVoiceEffectOutcomeCustody';
 
 function parseFollowUpJson(prompt: string): { toolResults: LocalVoiceAgentToolResultEntry[] } {
   const parsed = parseVoiceToolResultsFollowUp(prompt);
@@ -19,6 +17,14 @@ function parseFollowUpJson(prompt: string): { toolResults: LocalVoiceAgentToolRe
 }
 
 describe('runVoiceAgentTurnWithTools follow-up prompt privacy', () => {
+  it.each(['outcomeUnknown', 'pending', 'approval_request_created'])('does not label a %s outcome as completed success', status => {
+    const prompt = buildToolResultsFollowUpPrompt([{ t: 'sendSessionMessage', args: {}, result: { ok: true, status } }], {
+      shareFilePaths: false, shareSessionSummary: false, sharePermissionRequests: false, shareDeviceInventory: false,
+    });
+    expect(prompt).not.toContain('All actions succeeded');
+    expect(parseFollowUpJson(prompt).toolResults[0]?.result).toMatchObject({ ok: true, status });
+  });
+
   it('preserves owner-selected catalogs, paging facts and long valid text without a Voice volume policy', () => {
     const items = Array.from({ length: 12 }, (_, index) => ({ modelId: `model-${index}`, label: `Model ${index}` }));
     const longText = 'Valid response detail '.repeat(30);

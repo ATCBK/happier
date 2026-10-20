@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ModelPackManifestSchema } from '@happier-dev/protocol';
+import { DaemonVoiceInferenceSttStreamStartRequestSchema, DaemonVoiceInferenceSttStreamStartResponseSchema, DaemonVoiceInferenceSttStreamCancelResponseSchema, DaemonVoiceInferenceSttStreamStatusResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -13,6 +14,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '@/daemon/voiceInference/voiceInferenceWorker';
 import { createEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
 import { resolveVoiceInferencePaths } from '@/daemon/voiceInference/voiceInferencePaths';
+import type { VoiceInferenceRuntime } from '@/daemon/voiceInference/voiceInferenceRuntimeTypes';
 
 import { registerMachineVoiceInferenceRpcHandlers } from './rpcHandlers.voiceInference';
 
@@ -74,13 +76,13 @@ beforeEach(() => {
   reloadConfiguration();
 });
 
-async function createWorker(bytes = Buffer.from('tts-audio')) {
-  const packId = 'kokoro-82m-v1.0-onnx-q8-wasm';
+async function createWorker(bytes = Buffer.from('tts-audio'), streamingRuntime?: Pick<VoiceInferenceRuntime, 'createStreamingTranscriptionSession'>) {
+  const packId = streamingRuntime ? 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17' : 'kokoro-82m-v1.0-onnx-q8-wasm';
   const packDir = join(resolveVoiceInferencePaths().packsRootDir, packId);
   mkdirSync(packDir, { recursive: true });
   const model = Buffer.from('native-model-fixture');
   const manifest = ModelPackManifestSchema.parse({
-    packId, kind: 'tts_sherpa', model: 'kokoro', version: '2026-02-15',
+    packId, kind: streamingRuntime ? 'stt_sherpa' : 'tts_sherpa', model: streamingRuntime ? 'zipformer' : 'kokoro', version: '2026-02-15',
     files: [{
       path: 'model.onnx', url: 'https://example.test/model.onnx',
       sha256: createHash('sha256').update(model).digest('hex'), sizeBytes: model.byteLength,
@@ -94,6 +96,7 @@ async function createWorker(bytes = Buffer.from('tts-audio')) {
     runtimeLoader: async () => ({
       synthesizeTts: async ({ output }) => ({ bytes, output, name: 'tts.wav' }),
       transcribeAudio: async () => { throw new Error('unused native recognition'); },
+      ...streamingRuntime,
     }),
   });
   workers.push(worker);
@@ -112,6 +115,55 @@ afterEach(async () => {
 });
 
 describe('registerMachineVoiceInferenceRpcHandlers transfer lifecycle', () => {
+  it('cancels a pending JSON start and retires native preparation that completes after request abort', async () => {
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let observePreparation!: () => void;
+    const preparing = new Promise<void>(resolve => { observePreparation = resolve; });
+    let nativeSignal: AbortSignal | null | undefined;
+    const cancel = vi.fn(async () => {});
+    const close = vi.fn(async () => {});
+    const worker = await createWorker(undefined, {
+      createStreamingTranscriptionSession: async input => {
+        nativeSignal = input.signal;
+        observePreparation();
+        await preparation;
+        return { appendPcm16: async () => ({ events: [] }),
+          finish: async () => ({ text: '', language: 'en', events: [] }), cancel, close };
+      },
+    });
+    const manager = createRpcHandlerManager();
+    registrations.push(registerMachineVoiceInferenceRpcHandlers({ rpcHandlerManager: manager, voiceInferenceWorker: worker }));
+    const abort = new AbortController();
+    const request = DaemonVoiceInferenceSttStreamStartRequestSchema.parse({
+      requestId: 'cancel-pending-json', packId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17', language: 'en', streamingMode: 'runtime',
+    });
+    const starting = manager.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request, { signal: abort.signal });
+    try {
+      await preparing;
+      abort.abort();
+      expect(nativeSignal?.aborted).toBe(true);
+    } finally {
+      finishPreparation();
+    }
+    expect(DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await starting)).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    const retryAbort = new AbortController();
+    const retry = DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await manager.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request, { signal: retryAbort.signal },
+    ));
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error('Cancelled start retained request custody');
+    retryAbort.abort();
+    expect(DaemonVoiceInferenceSttStreamStatusResponseSchema.parse(await manager.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS, { streamId: retry.streamId, generation: retry.generation },
+    ))).toMatchObject({ ok: true, state: 'open' });
+    expect(DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await manager.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL, { streamId: retry.streamId, generation: retry.generation },
+    ))).toMatchObject({ ok: true });
+  });
+
   it('expires an abandoned STT upload without any later transfer traffic', async () => {
     vi.useFakeTimers();
     const worker = await createWorker();

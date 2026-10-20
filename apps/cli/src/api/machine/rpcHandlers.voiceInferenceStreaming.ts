@@ -57,14 +57,14 @@ export function registerMachineVoiceInferenceStreamingRpcHandlers(params: Readon
     voiceDiagnostics: params.voiceDiagnostics,
   });
 
-  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, async (raw: unknown) => {
+  params.rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, async (raw: unknown, context) => {
     const parsed = DaemonVoiceInferenceSttStreamStartRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return invalidParameters(DaemonVoiceInferenceSttStreamStartResponseSchema);
     }
     return parseVoiceInferenceResponse(
       DaemonVoiceInferenceSttStreamStartResponseSchema,
-      await streamManager.start(parsed.data),
+      await streamManager.start(parsed.data, context?.signal),
     );
   });
 

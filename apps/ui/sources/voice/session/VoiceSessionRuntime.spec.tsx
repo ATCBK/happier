@@ -204,7 +204,9 @@ function LayoutCommitBoundary({
 // is not part of the mounted runtime's lifecycle operation budget.
 await loadSyncSingletonForTests();
 
-async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolean; startGate?: Promise<void>; selectedProviderId?: string; local?: boolean; localPlatform?: 'ios' | 'web'; codex?: boolean }> = {}) {
+async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolean; startGate?: Promise<void>; selectedProviderId?: string; local?: boolean; localPlatform?: 'ios' | 'web'; codex?: boolean;
+  transcriptResponse?: (body: Readonly<{ localId: string }>) => Promise<Response | null>;
+}> = {}) {
   platformOsMock.value = input.local ? input.localPlatform ?? 'ios' : 'web';
   if (input.local && platformOsMock.value !== 'web') {
     // The actual web live producer's no-browser capability branch delegates
@@ -364,6 +366,8 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
         const body = z.object({ localId: z.string(), messageRole: z.literal('agent'),
           content: z.object({ t: z.literal('plain'), v: RawRecordSchema }),
         }).parse(JSON.parse(String(init.body)));
+        const override = await input.transcriptResponse?.(body);
+        if (override) return override;
         const sessionId = decodeURIComponent(transcriptWrite[1]!);
         const seq = Math.max(transcriptSequences.get(sessionId) ?? 0, storage.getState().sessions[sessionId]?.seq ?? 0) + 1;
         transcriptSequences.set(sessionId, seq);
@@ -873,6 +877,42 @@ describe('VoiceSessionRuntime', () => {
         deviceId: getDeviceAnalyticsId(), conversation: binding.conversationSessionAddress,
       });
     });
+  });
+
+  it('retries a failed connected continuation with the same identity after Home recovery, then acknowledges once', async () => {
+    const firstResponse = createDeferred<Response>();
+    const writes: string[] = [];
+    const mounted = await prepareGeneratedVoiceRuntime({ transcriptResponse: async ({ localId }) => {
+      writes.push(localId);
+      return writes.length === 1 ? firstResponse.promise : null;
+    } });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { getVoiceSessionPresentedBinding } = await import('./voiceSessionStore');
+    const { readStoredSessionMessages } = await import('@happier-dev/session-core/messages');
+    const { readVoiceContinuationProvenance } = await import('@/voice/transcript/voiceTranscriptNoteMeta');
+    await act(async () => { await mounted.lifecycle.toggle(null); });
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    const binding = getVoiceSessionPresentedBinding();
+    if (!binding) throw new Error('Expected a connected carrier');
+    const notes = () => readStoredSessionMessages(storage.getState(), binding.conversationSessionId)
+      .filter(message => readVoiceContinuationProvenance(message.meta));
+    expect(notes()).toEqual([]);
+    // Pending publication cannot fan out on repeated carrier updates.
+    const updateCarrier = () => {
+      const session = storage.getState().sessions[binding.conversationSessionId]!;
+      storage.getState().applySessions([{ ...session, seq: session.seq + 1 }]);
+    };
+    await act(async () => { updateCarrier(); });
+    expect(writes).toHaveLength(1);
+    await act(async () => { firstResponse.resolve(Response.json({}, { status: 503 })); });
+    // Recovered Home/current carrier facts are the existing retry trigger.
+    await act(async () => { updateCarrier(); });
+    await vi.waitFor(() => expect(notes()).toHaveLength(1));
+    expect(writes).toEqual([writes[0], writes[0]]);
+    await act(async () => { updateCarrier(); });
+    expect(writes).toHaveLength(2);
+    expect(mounted.lifecycle.getSnapshot().status).toBe('connected');
+    expect(mounted.agentRequests).toEqual([]);
   });
 
   it('does not renormalize materialized Voice settings for connectivity or Profile presentation updates', async () => {
