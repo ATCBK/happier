@@ -11212,6 +11212,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       stop: 'Interrompi',
       openNativeDevtools: 'Apri strumenti di sviluppo nativi',
       reloadAfterCrash: 'Ricarica la pagina',
+      historyUncontrollable: 'Questo sito non permette a Happier di controllarne la cronologia.',
+      stopUncontrollable: 'Questo sito non permette a Happier di interromperne il caricamento.',
     },
     tabs: {
       newTab: 'Nuova scheda',

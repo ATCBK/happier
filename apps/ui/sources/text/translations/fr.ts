@@ -10827,6 +10827,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       stop: 'Arrêter',
       openNativeDevtools: 'Ouvrir les outils de développement natifs',
       reloadAfterCrash: 'Recharger la page',
+      historyUncontrollable: 'Ce site ne laisse pas Happier contrôler son historique.',
+      stopUncontrollable: 'Ce site ne laisse pas Happier arrêter son chargement.',
     },
     tabs: {
       newTab: 'Nouvel onglet',

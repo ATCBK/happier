@@ -12849,6 +12849,8 @@ const enBrowserShell = {
     stop: 'Stop',
     openNativeDevtools: 'Open native developer tools',
     reloadAfterCrash: 'Reload page',
+    historyUncontrollable: "This site doesn't let Happier control its history.",
+    stopUncontrollable: "This site doesn't let Happier stop the page loading.",
   },
   tabs: {
     newTab: 'New tab',

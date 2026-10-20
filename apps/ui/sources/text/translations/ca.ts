@@ -10129,6 +10129,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             stop: 'Atura',
             openNativeDevtools: 'Obre les eines de desenvolupament natives',
             reloadAfterCrash: 'Torna a carregar la pàgina',
+            historyUncontrollable: 'Aquest lloc no deixa que Happier controli el seu historial.',
+            stopUncontrollable: "Aquest lloc no deixa que Happier n'aturi la càrrega.",
         },
         tabs: {
             newTab: 'Pestanya nova',

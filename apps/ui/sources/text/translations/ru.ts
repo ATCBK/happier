@@ -10839,6 +10839,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       stop: 'Остановить',
       openNativeDevtools: 'Открыть встроенные инструменты разработчика',
       reloadAfterCrash: 'Перезагрузить страницу',
+      historyUncontrollable: 'Этот сайт не даёт Happier управлять своей историей.',
+      stopUncontrollable: 'Этот сайт не даёт Happier остановить загрузку.',
     },
     tabs: {
       newTab: 'Новая вкладка',

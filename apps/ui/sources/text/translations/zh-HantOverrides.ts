@@ -8996,6 +8996,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             stop: '停止',
             openNativeDevtools: '開啟原生開發者工具',
             reloadAfterCrash: '重新載入頁面',
+            historyUncontrollable: '此網站不允許 Happier 控制其瀏覽記錄。',
+            stopUncontrollable: '此網站不允許 Happier 停止載入。',
         },
         tabs: {
             newTab: '新分頁',

@@ -10830,6 +10830,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             stop: 'Stopp',
             openNativeDevtools: 'Native Entwickler-Tools öffnen',
             reloadAfterCrash: 'Seite neu laden',
+            historyUncontrollable: 'Diese Website lässt Happier ihren Verlauf nicht steuern.',
+            stopUncontrollable: 'Diese Website lässt Happier das Laden nicht stoppen.',
         },
         tabs: {
             newTab: 'Neuer Tab',

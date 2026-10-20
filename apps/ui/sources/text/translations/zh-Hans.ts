@@ -10621,6 +10621,8 @@ const zhHansValues = {
       stop: '停止',
       openNativeDevtools: '打开原生开发者工具',
       reloadAfterCrash: '重新加载页面',
+      historyUncontrollable: '此网站不允许 Happier 控制其历史记录。',
+      stopUncontrollable: '此网站不允许 Happier 停止加载。',
     },
     tabs: {
       newTab: '新建标签页',

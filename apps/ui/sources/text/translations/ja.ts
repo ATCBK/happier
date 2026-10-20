@@ -11285,6 +11285,8 @@ localTailscale: {
       stop: '停止',
       openNativeDevtools: 'ネイティブ開発者ツールを開く',
       reloadAfterCrash: 'ページを再読み込み',
+      historyUncontrollable: 'このサイトは Happier に履歴の操作を許可していません。',
+      stopUncontrollable: 'このサイトは Happier に読み込みの停止を許可していません。',
     },
     tabs: {
       newTab: '新しいタブ',

@@ -10818,6 +10818,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       stop: 'Zatrzymaj',
       openNativeDevtools: 'Otwórz natywne narzędzia deweloperskie',
       reloadAfterCrash: 'Załaduj stronę ponownie',
+      historyUncontrollable: 'Ta witryna nie pozwala Happier sterować swoją historią.',
+      stopUncontrollable: 'Ta witryna nie pozwala Happier zatrzymać ładowania.',
     },
     tabs: {
       newTab: 'Nowa karta',

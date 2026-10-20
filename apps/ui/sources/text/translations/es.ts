@@ -10991,6 +10991,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       stop: 'Detener',
       openNativeDevtools: 'Abrir herramientas de desarrollo nativas',
       reloadAfterCrash: 'Volver a cargar la página',
+      historyUncontrollable: 'Este sitio no deja que Happier controle su historial.',
+      stopUncontrollable: 'Este sitio no deja que Happier detenga su carga.',
     },
     tabs: {
       newTab: 'Pestaña nueva',

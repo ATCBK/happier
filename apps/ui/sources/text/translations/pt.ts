@@ -11111,6 +11111,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       stop: 'Parar',
       openNativeDevtools: 'Abrir ferramentas de desenvolvimento nativas',
       reloadAfterCrash: 'Recarregar página',
+      historyUncontrollable: 'Este site não deixa o Happier controlar o histórico.',
+      stopUncontrollable: 'Este site não deixa o Happier interromper o carregamento.',
     },
     tabs: {
       newTab: 'Nova aba',
