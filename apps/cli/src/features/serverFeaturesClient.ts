@@ -46,7 +46,7 @@ function isEndpointMissing(status: number): boolean {
   return status === 404 || status === 405 || status === 501;
 }
 
-function isRetryableError(snapshot: CliServerFeaturesSnapshot): boolean {
+export function isServerFeaturesProbeRetryable(snapshot: CliServerFeaturesSnapshot): boolean {
   if (snapshot.status !== 'error') return false;
   if (snapshot.reason === 'network' || snapshot.reason === 'timeout') return true;
   return snapshot.reason === 'response_status' && snapshot.httpStatus !== undefined
@@ -60,7 +60,7 @@ function ttlForSnapshot(snapshot: CliServerFeaturesSnapshot): number {
 }
 
 function writePublicSnapshot(key: string, snapshot: CliServerFeaturesSnapshot): CliServerFeaturesSnapshot {
-  if (isRetryableError(snapshot)) {
+  if (isServerFeaturesProbeRetryable(snapshot)) {
     const previousEntry = publicCache.get(key);
     const previous = previousEntry?.kind === 'success' ? previousEntry.value : undefined;
     if (previous?.status === 'ready') {

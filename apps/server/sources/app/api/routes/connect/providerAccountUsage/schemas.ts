@@ -35,7 +35,7 @@ export const ProviderAccountUsageRecordMetadataSchema = z.strictObject({
         providerAccountUsageFetchedAt:
             z.number().check(z.int(), z.nonnegative()),
         sealed: SealedConnectedServiceQuotaSnapshotV1Schema,
-    })).check(z.maxLength(100))),
+    }))),
 });
 
 export const UpsertProviderAccountUsageRecordSchema = z.strictObject({
