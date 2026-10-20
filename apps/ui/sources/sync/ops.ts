@@ -10,7 +10,6 @@ export {
     machineStopDaemon,
     machineStopSession,
     machineBash,
-    machineCreateDirectory,
     machinePreviewEnv,
     machineCollectBugReportDiagnostics,
     machineGetBugReportLogTail,

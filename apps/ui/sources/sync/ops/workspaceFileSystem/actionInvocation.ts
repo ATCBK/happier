@@ -59,8 +59,9 @@ export async function invokeWorkspaceFileSystemMutation(
     target: WorkspaceFileSystemTarget,
     actionId: Exclude<FilesystemMutationActionId, 'daemon.filesystem.copy'>,
     input: unknown,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<WorkspaceFileSystemMutationResponse> {
-    const result = await invokeWorkspaceFileSystemAction(target, actionId, input);
+    const result = await invokeWorkspaceFileSystemAction(target, actionId, input, options);
     if (!result.ok) return { success: false, error: result.error, errorCode: result.errorCode };
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
     if (approval.success) return { success: false, errorCode: 'approval_required',

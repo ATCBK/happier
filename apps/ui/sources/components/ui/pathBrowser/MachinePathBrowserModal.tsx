@@ -26,7 +26,7 @@ import {
     warmMachineFileBrowserDirectoryCache,
     warmMachineFileBrowserRoots,
 } from '@/sync/domains/input/machineFileBrowser';
-import { machineCreateDirectory } from '@/sync/ops/machines';
+import { workspaceCreateDirectory } from '@/sync/ops/workspaceFileSystem';
 import { useWorkspaceFileQuery } from '@/sync/domains/workspaces/files/useWorkspaceFileQuery';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
@@ -790,7 +790,11 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
 
         try {
             setIsCreatingFolder(true);
-            const res = await machineCreateDirectory(props.machineId, nextDirectoryPath, { serverId: props.serverId, signal: folderCaller.signal });
+            const res = await workspaceCreateDirectory({
+                machineId: props.machineId,
+                serverId: props.serverId,
+                rootPath: directoryPath,
+            }, nextDirectoryPath, { signal: folderCaller.signal });
             if (folderCaller.signal.aborted) return;
             if (!res.success) {
                 Modal.alert(t('common.error'), res.error || t('files.createFolderFailed'));

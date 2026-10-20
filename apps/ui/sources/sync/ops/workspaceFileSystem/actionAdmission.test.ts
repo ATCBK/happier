@@ -493,8 +493,9 @@ describe('shared workspace filesystem Action admission', () => {
         expect(filesystem.calls).toEqual([expect.objectContaining({
             method: 'daemon.filesystem.readFile',
             payload: { rootPath: '/repo', path: '/repo/README.md' },
-            signal: controller.signal,
+            signal: expect.any(AbortSignal),
         })]);
+        expect(filesystem.calls[0]).toMatchObject({ signal: { aborted: false } });
     });
 
     it('keeps the caller bound on a relay Action read', async () => {

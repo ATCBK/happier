@@ -57,10 +57,6 @@ vi.mock('@/sync/domains/input/machineFileBrowser', () => ({
     warmMachineFileBrowserRoots: async () => ({ ok: true, roots: [] }),
 }));
 
-vi.mock('@/sync/ops/machines', () => ({
-    machineCreateDirectory: async () => ({ success: true }),
-}));
-
 vi.mock('@/sync/ops/machineWorkspaceFileList', () => ({
     machineWorkspaceFileList: async () => ({ ok: true, paths: [], truncated: false }),
 }));

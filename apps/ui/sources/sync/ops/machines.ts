@@ -897,31 +897,6 @@ export async function machineBash(
     }
 }
 
-export async function machineCreateDirectory(
-    machineId: string,
-    path: string,
-    options?: { serverId?: string | null; signal?: AbortSignal },
-): Promise<
-    | { success: true }
-    | { success: false; error: string; errorCode?: string }
-> {
-    try {
-        return await machineRpcWithServerScope<{ success: true } | { success: false; error: string }, { path: string }>({
-            machineId,
-            method: RPC_METHODS.CREATE_DIRECTORY,
-            payload: { path },
-            serverId: options?.serverId,
-            ...(options?.signal ? { signal: options.signal } : {}),
-        });
-    } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: readRpcErrorCode(error),
-        };
-    }
-}
-
 export type EnvPreviewSecretsPolicy = 'none' | 'redacted' | 'full';
 
 export type PreviewEnvSensitivitySource = 'forced' | 'hinted' | 'none';
