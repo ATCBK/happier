@@ -49,7 +49,9 @@ export function UsageSourceCoverageWidget(props: UsageBodyProps) {
 function groupCoverageRows(sources: readonly UsageAnalyticsCoverage['sources'][number][]) {
   const groups = new Map<string, { title: string; label: string; count: number }>();
   for (const source of sources) {
-    const title = usageSourceTitle(source.source);
+    // A source's own title can be a mid-sentence fragment ("usage"); a row opens with a capital.
+    const named = usageSourceTitle(source.source);
+    const title = `${named.charAt(0).toLocaleUpperCase()}${named.slice(1)}`;
     const label = sourceCoverageLabel(source);
     const key = `${title}\u0000${label}`;
     const group = groups.get(key);

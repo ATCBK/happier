@@ -144,7 +144,7 @@ export function UsageOutsideSessions(props: Readonly<{ serverId: string; query: 
             query={props.query} testID={`${props.testID}.${machine.id}`} />)}</OutsideBrowsePage>;
 }
 
-function OutsideBrowsePage(props: Readonly<{ testID: string; children: React.ReactNode }>) {
+export function OutsideBrowsePage(props: Readonly<{ testID: string; children: React.ReactNode }>) {
     const [waiting, setWaiting] = React.useState<ReadonlySet<string>>(() => new Set());
     const [request, setRequest] = React.useState(0);
     const register = React.useCallback((key: string) => {

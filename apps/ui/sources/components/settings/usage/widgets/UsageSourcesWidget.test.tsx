@@ -356,14 +356,30 @@ describe('Usage Sources body', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it('keeps one Agent\'s sources together whatever their status', async () => {
+    const codex = { ...found, sourceId: 'codex-user', agent: { pluginId: 'happier.agent.codex', localId: 'codex' },
+      root: { kind: 'default', path: '/Users/ada/.codex' } } satisfies UsageSourceV1;
+    const earlier = { ...codex, sourceId: 'codex-earlier', root: { kind: 'configured', path: '/tmp/codex-earlier' },
+      status: 'stopped', asOfMs: 100 } satisfies UsageSourceV1;
+    const boundary = machineBoundary(found, [earlier, found, codex]);
+    const screen = await mount(boundary.executor);
+    await vi.waitFor(() => expect(screen.findByTestId('sources.machine.mac.source.codex-user.add')).toBeTruthy());
+    const text = screen.getTextContent();
+    const at = (needle: string) => text.indexOf(needle);
+    expect([at('~/.claude'), at('/tmp/codex-earlier'), at('~/.codex')]).toEqual(
+      [at('~/.claude'), at('/tmp/codex-earlier'), at('~/.codex')].sort((a, b) => a - b));
+    expect(at('~/.claude')).toBeGreaterThan(-1);
+  });
   it('hides a found card on Not now without consenting or deleting anything', async () => {
     const boundary = machineBoundary();
     const screen = await mount(boundary.executor);
     const card = 'sources.machine.mac.source.claude-default';
     await vi.waitFor(() =>
-      expect(screen.findByTestId(`${card}.notNow`)).toBeTruthy(),
+      expect(screen.findByTestId(`${card}.add`)).toBeTruthy(),
     );
-    await screen.pressByTestIdAsync(`${card}.notNow`);
+    // Not now is a quiet option in the row's menu; only Add is drawn on the row.
+    expect(screen.findByTestId(`${card}.notNow`)).toBeFalsy();
+    await chooseOption(screen, card, 'notNow');
     await vi.waitFor(() => expect(screen.findByTestId(card)).toBeFalsy());
     expect(boundary.calls).toEqual(['usage.sources.discover']);
   });

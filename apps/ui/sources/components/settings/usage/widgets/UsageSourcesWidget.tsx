@@ -40,7 +40,7 @@ import type {
   UsageSourcesSnapshot,
 } from './usageSourcesController';
 import { useUsageSourcesController, type UsageSourcesHookOptions } from './useUsageSources';
-import { UsageExternalSessionCandidates } from './UsageExternalSessionCandidates';
+import { OutsideBrowsePage, UsageExternalSessionCandidates } from './UsageExternalSessionCandidates';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 
@@ -180,20 +180,23 @@ export function UsageSourcesMachines(
     <View testID={props.testID} style={styles.machines}
       onLayout={event => { const next = Math.round(event.nativeEvent.layout.width); setWidthPx(previous => previous === next ? previous : next); }}>
       <HappierSessionsSource wide={wide} testID={`${props.testID}.happier`} />
-      {online.map((machine) => (
-        <MachineSources
-          key={machine.id}
-          machine={machine}
-          lifetime={props.lifetime}
-          serverId={props.serverId}
-          executor={props.executor}
-          agentIds={props.input.agents}
-          accountingSources={props.input.sources}
-          onState={reportState}
-          wide={wide}
-          testID={`${props.testID}.machine.${machine.id}`}
-        />
-      ))}
+      {/* One Browse request opens every waiting source's outside sessions, as Work's page does, not a link per row. */}
+      <OutsideBrowsePage testID={`${props.testID}.browse`}>
+        {online.map((machine) => (
+          <MachineSources
+            key={machine.id}
+            machine={machine}
+            lifetime={props.lifetime}
+            serverId={props.serverId}
+            executor={props.executor}
+            agentIds={props.input.agents}
+            accountingSources={props.input.sources}
+            onState={reportState}
+            wide={wide}
+            testID={`${props.testID}.machine.${machine.id}`}
+          />
+        ))}
+      </OutsideBrowsePage>
       {lookingCount + unreadable.length + emptyCount + offlineCount > 0 ? <View style={styles.groups}>
         {lookingCount > 0 ? groupLine('lookingMachines', lookingCount, t('usage.board.sources.machineLooking')) : null}
         {unreadable.length > 0 ? (
@@ -312,6 +315,9 @@ function MachineSources(
     .map(source => ({ source, status: resolveUsageSourceRowStatus(source) }));
   const tracked = rows.filter(row => row.status.kind !== 'found' && row.status.kind !== 'missing');
   const found = rows.filter(row => row.status.kind === 'found');
+  // One Agent's folders sit together (what is counted first), so a name never repeats across separate status groups.
+  const listed = [...tracked, ...found].map(row => ({ ...row, agent: usageAgentTitle(usageSourceAgentKey(row.source)) }))
+    .sort((a, b) => a.agent.localeCompare(b.agent));
   const missing = rows.filter(row => row.status.kind === 'missing').map(row => row.source);
   const counted = scoped.filter(source => source.consent === 'enabled').length;
   const discovering = snapshot.pending.some(operation => operation.actionId === 'usage.sources.discover');
@@ -342,11 +348,10 @@ function MachineSources(
         {discovering ? <ActivitySpinner size={ICON_SIZE.xs} color={theme.colors.text.tertiary} /> : null}
       </View>
       {snapshot.approval ? <Text style={styles.note}>{t('usage.board.sources.approvalPending')}</Text> : null}
-      {controller ? tracked.map(row => (
-        <TrackedSourceRow key={row.source.sourceId} {...rowProps(row.source)} status={row.status} controller={controller} wide={props.wide} />
-      )) : null}
-      {controller ? found.map(row => (
+      {controller ? listed.map(row => row.status.kind === 'found' ? (
         <FoundSourceRow key={row.source.sourceId} {...rowProps(row.source)} controller={controller} />
+      ) : (
+        <TrackedSourceRow key={row.source.sourceId} {...rowProps(row.source)} status={row.status} controller={controller} wide={props.wide} />
       )) : null}
       {controller && missing.length > 0 ? (
         <MissingSources sources={missing} controller={controller} machineName={props.machine.name} serverId={props.serverId}
@@ -448,22 +453,22 @@ function TrackedSourceRow(props: SourceRowProps & Readonly<{ status: UsageSource
   );
 }
 
-/** A source found on the machine and not counted yet: what it is, where it is, Add or Not now. */
+/** A source found on the machine and not counted yet: what it is, where it is, Add; Not now waits in its menu. */
 function FoundSourceRow(props: SourceRowProps) {
   const { source, controller } = props;
   const { agentId, agent, busy, folder, changeFolder } = useSourceRow(props);
+  const actions: ItemAction[] = [
+    ...folderActions(props.testID, source, controller, busy, changeFolder),
+    { id: `${props.testID}.notNow`, title: t('usage.board.sources.notNow'), icon: 'eye-slash', disabled: busy,
+      onPress: () => { void controller.notNow(source.sourceId); } },
+  ];
   return (
     <View testID={props.testID} style={styles.source} accessibilityState={{ busy }}>
-      <SourceIdentity agentId={agentId} agent={agent} folder={folder} serverId={props.serverId}>
-        <View style={styles.actions}>
-          <RoundButton size="small" display="secondary" title={t('usage.board.sources.add')} loading={busy}
-            onPress={() => { void controller.setConsent(source.sourceId, true); }} testID={`${props.testID}.add`} />
-          <RoundButton size="small" display="inverted" title={t('usage.board.sources.notNow')} disabled={busy}
-            onPress={() => { void controller.notNow(source.sourceId); }} testID={`${props.testID}.notNow`} />
-        </View>
-      </SourceIdentity>
+      <SourceIdentity agentId={agentId} agent={agent} folder={folder} serverId={props.serverId} />
       <View style={styles.controls}>
-        <SourceOptions testID={props.testID} agent={agent} actions={folderActions(props.testID, source, controller, busy, changeFolder)} />
+        <RoundButton size="small" display="secondary" title={t('usage.board.sources.add')} loading={busy}
+          onPress={() => { void controller.setConsent(source.sourceId, true); }} testID={`${props.testID}.add`} />
+        <SourceOptions testID={props.testID} agent={agent} actions={actions} />
       </View>
     </View>
   );

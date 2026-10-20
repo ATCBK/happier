@@ -468,6 +468,11 @@ function canReuseSessionMessageEvidence(retained: SessionInputEvidence | undefin
         && retained.callerDataKeyEnvelope === admitted.callerDataKeyEnvelope;
 }
 
+function sessionEvidenceReadError(error: unknown): unknown {
+    return error instanceof Error && 'httpStatus' in error && typeof error.httpStatus === 'number' && error.httpStatus >= 500
+        ? new RetryableServerResponseError(error.httpStatus, 'Session input evidence unavailable') : error;
+}
+
 async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries: readonly UsageQuery[],
     accounting: readonly UsageAccountingSourceSnapshot[], readSession: SessionInputReader,
     readAccountCurrentnessSource: () => Promise<SessionAccountCurrentnessSource>,
@@ -642,14 +647,25 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                     try {
                         request.assertCurrent();
                         const result = snapshots.get(request.sessionId);
+                        if (result && !result.ok && request.retained && isTransientConnectivityError(sessionEvidenceReadError(result.error))) {
+                            request.reject(sessionEvidenceReadError(result.error));
+                            continue;
+                        }
                         request.resolve(result?.ok ? { ...result.snapshot, detail: projectSessionUsageWorkEvidence(result.snapshot.session),
                             completeMessageCoverage: false } : null);
                     } catch { request.resolve(null); }
                 }
             });
-        } catch {
+        } catch (error) {
             requireCurrent(context, ownerSignal);
-            for (const request of requests) request.resolve(null);
+            const failure = sessionEvidenceReadError(error);
+            for (const request of requests) {
+                // Failed replacement is not a new empty admission. Let the
+                // Resource retain its admitted snapshot and expose the failure;
+                // cold reads and actual refusals still withdraw unavailable facts.
+                if (request.retained && isTransientConnectivityError(failure)) request.reject(failure);
+                else request.resolve(null);
+            }
         }
     }, (id, value) => onValue(id, value, !readTranscript || !value));
     // Transcript demand adds one messages-only transport batch to the same
@@ -676,12 +692,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                         const result = await pages;
                         if (result.ok) return result.rows.get(request.sessionId)?.messages;
                         requireCurrent(context, ownerSignal);
-                        const error: unknown = result.error;
-                        // Keep the existing per-page transient-failure semantics.
-                        if (error && typeof error === 'object' && 'httpStatus' in error && typeof error.httpStatus === 'number' && error.httpStatus >= 500) {
-                            throw new RetryableServerResponseError(error.httpStatus, 'Session input evidence unavailable');
-                        }
-                        throw error;
+                        throw sessionEvidenceReadError(result.error);
                     });
                 request.resolve(value);
             }));
@@ -1102,7 +1113,15 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     && sessionInputs.get(key) === entry) sessionInputs.delete(key);
                 return value;
             }).catch(error => {
-                if (sessionInputs.get(key) === entry) sessionInputs.delete(key);
+                if (sessionInputs.get(key) === entry) {
+                    if (retained?.value && isTransientConnectivityError(error)
+                        && sharedContext.accountLifetime.isCurrent() && readEvidenceBasis(sessionId) === basis) {
+                        // Keep admission custody across repeated failed replacements,
+                        // but require the next reader to try admission again.
+                        entry.value = retained.value;
+                        entry.needsAdmission = true;
+                    } else sessionInputs.delete(key);
+                }
                 if (error && typeof error === 'object' && 'code' in error && error.code === 'usage_session_evidence_changed') return null;
                 throw error;
             });

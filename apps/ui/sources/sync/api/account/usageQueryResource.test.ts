@@ -3046,14 +3046,17 @@ describe('usage query captured Resource adapter', () => {
     } finally { release(); }
   });
 
-  it('keeps Account Coach membership on a failed accounting refresh and isolates a Session-scoped sibling', async () => {
+  it.each(['accounting', 'sessions'] as const)('keeps Account Coach membership on a failed %s refresh and isolates a Session-scoped sibling', async failureSource => {
     const ids = ['first', 'second', 'third'];
     let membership = ids;
     let failing = false;
     const captured = await context(request => {
+      if (failing && failureSource === 'sessions' && request.path === '/v2/sessions/read-batch') {
+        return Response.json({ error: 'unavailable' }, { status: 503 });
+      }
       if (request.path === '/v2/usage/query') {
         const pinned = UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.sessionIds;
-        if (failing && !pinned?.length) return Response.json({ error: 'unavailable' }, { status: 503 });
+        if (failing && failureSource === 'accounting' && !pinned?.length) return Response.json({ error: 'unavailable' }, { status: 503 });
         return Response.json({ ...value, contributions: membership.filter(id => !pinned?.length || pinned.includes(id))
           .map(id => ({ ...workContribution, id, sessionId: id, turnId: null })) });
       }
@@ -3087,13 +3090,20 @@ describe('usage query captured Resource adapter', () => {
     for (let pass = 0; pass < 2; pass++) {
       await pinned.refresh();
       failing = true;
+      if (failureSource === 'sessions') publishHomeAccountChange(serverId);
       await broad.refresh();
       expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
       expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
       expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
       const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
-      expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+      if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+      else expect(broad.getSnapshot().error).toBeDefined();
       expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+      if (failureSource === 'sessions') {
+        await broad.refresh();
+        expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
+        expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      }
       failing = false;
       await broad.refresh();
       expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
