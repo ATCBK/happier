@@ -2425,6 +2425,7 @@ export const ca: TranslationStructure = {
                 profileMissing: 'El compte connectat seleccionat ja no està disponible. Actualitza la llista de comptes i tria’n un altre.',
                 groupMissing: 'El Pool de comptes seleccionat ja no està disponible. Actualitza la llista de comptes i tria un altre Pool.',
                 metadataUpdateFailed: 'La sessió no ha pogut desar la nova selecció d’autenticació. Torna-ho a provar quan acabi la sincronització.',
+                restartDisallowedByExecutionPolicy: 'Aquest canvi d’autenticació requereix un reinici que no es permet mentre la sessió està en execució. Atura la sessió abans de canviar-ne l’autenticació.',
                 restartFailed: 'No s’ha pogut reiniciar la sessió amb la nova selecció d’autenticació. Atura la sessió i torna-ho a provar.',
                 hotApplyFailed: 'La sessió en execució ha rebutjat la nova selecció d’autenticació. Reinicia la sessió i torna-ho a provar.',
                 agentMismatch: 'Aquesta selecció d’autenticació no coincideix amb el backend de la sessió.',

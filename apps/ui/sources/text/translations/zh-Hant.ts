@@ -1216,6 +1216,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 profileMissing: '選取的已連線帳號已無法使用。請重新整理帳號清單並選擇其他帳號。',
                 groupMissing: '選取的帳號池已無法使用。請重新整理帳號清單並選擇其他池。',
                 metadataUpdateFailed: '工作階段無法儲存新的驗證選擇。請在同步完成後再試一次。',
+                restartDisallowedByExecutionPolicy: '此驗證變更需要重新啟動，但工作階段執行期間不允許重新啟動。請先停止工作階段，再變更其驗證。',
                 restartFailed: '無法使用新的驗證選擇重新啟動工作階段。請停止工作階段後再試一次。',
                 hotApplyFailed: '執行中的工作階段拒絕了新的驗證選擇。請重新啟動工作階段後再試一次。',
                 agentMismatch: '此驗證選擇與工作階段後端不相符。',

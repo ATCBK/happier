@@ -2584,6 +2584,7 @@ export const pl: TranslationStructure = {
                 profileMissing: 'Wybrane połączone konto nie jest już dostępne. Odśwież listę kont i wybierz inne konto.',
                 groupMissing: 'Wybrana pula kont nie jest już dostępna. Odśwież listę kont i wybierz inną pulę.',
                 metadataUpdateFailed: 'Sesja nie mogła zapisać nowego wyboru uwierzytelnienia. Spróbuj ponownie po zakończeniu synchronizacji sesji.',
+                restartDisallowedByExecutionPolicy: 'Ta zmiana uwierzytelniania wymaga ponownego uruchomienia, które nie jest dozwolone podczas działania sesji. Zatrzymaj sesję przed zmianą jej uwierzytelniania.',
                 restartFailed: 'Nie można ponownie uruchomić sesji z nowym wyborem uwierzytelnienia. Zatrzymaj sesję i spróbuj ponownie.',
                 hotApplyFailed: 'Działająca sesja odrzuciła nowy wybór uwierzytelnienia. Uruchom sesję ponownie i spróbuj jeszcze raz.',
                 agentMismatch: 'Ten wybór uwierzytelnienia nie pasuje do backendu sesji.',

@@ -2340,6 +2340,7 @@ export const en = {
                 profileMissing: 'The selected connected account is no longer available. Refresh the account list and choose another account.',
                 groupMissing: 'The selected account pool is no longer available. Refresh the account list and choose another pool.',
                 metadataUpdateFailed: 'The session could not save the new authentication selection. Try again after the session finishes syncing.',
+                restartDisallowedByExecutionPolicy: 'This authentication change requires a restart that is not allowed while the session is running. Stop the session before changing its authentication.',
                 restartFailed: 'The session could not be restarted with the new authentication selection. Stop the session and try again.',
                 hotApplyFailed: 'The running session rejected the new authentication selection. Restart the session and try again.',
                 agentMismatch: 'This authentication selection does not match the session backend.',

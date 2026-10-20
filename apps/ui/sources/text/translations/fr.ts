@@ -2339,6 +2339,7 @@ export const fr: TranslationStructure = {
                 profileMissing: 'Le compte connecté sélectionné n’est plus disponible. Actualise la liste des comptes et choisis-en un autre.',
                 groupMissing: 'Le pool de comptes sélectionné n’est plus disponible. Actualise la liste des comptes et choisis un autre pool.',
                 metadataUpdateFailed: 'La session n’a pas pu enregistrer la nouvelle sélection d’authentification. Réessaie une fois la synchronisation de la session terminée.',
+                restartDisallowedByExecutionPolicy: 'Ce changement d’authentification nécessite un redémarrage qui n’est pas autorisé pendant l’exécution de la session. Arrête la session avant de changer son authentification.',
                 restartFailed: 'La session n’a pas pu être redémarrée avec la nouvelle sélection d’authentification. Arrête la session et réessaie.',
                 hotApplyFailed: 'La session en cours a rejeté la nouvelle sélection d’authentification. Redémarre la session et réessaie.',
                 agentMismatch: 'Cette sélection d’authentification ne correspond pas au backend de la session.',
