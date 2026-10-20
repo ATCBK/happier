@@ -55,7 +55,7 @@ import { FollowPolicyEditorBinding, FollowPolicySection } from './FollowPolicyEd
 import { FollowSessionMark } from './FollowSessionMark';
 import { describeSessionFollowLevel } from './sessionFollowLevelCopy';
 import { describeFollowRuleMatchCount, useFollowRuleMatchCounts } from './followRuleMatchCounts';
-import { useSessionFollowing, type SessionFollowingProjection } from './useSessionFollowing';
+import { useSessionFollowing, type SessionFollowingController, type SessionFollowingProjection } from './useSessionFollowing';
 import { openSessionFollowSourcePicker } from './openSessionFollowDestinationPicker';
 import {
     prepareSessionFollowSourceKey,
@@ -169,6 +169,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     destination: Readonly<{ id: string }>;
     serverId: string | null;
     destinationMachineId: string | null;
+    /** The host's own Following census for this destination, when it also summarizes it (People's header line). */
+    following?: SessionFollowingController;
     page?: Readonly<{
         /** The source's row key (`followSourceKey`): a Session source's id, or another kind's qualified key. */
         sourceKey: string;
@@ -193,7 +195,9 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const { binding } = useServerCredentialAccountScopeBinding(currentScope ? null : props.serverId);
     const accountScope = currentScope ?? (binding?.isCurrent() ? binding.scope : null);
     const reachabilityRevision = useMachineReachabilityRevision();
-    const following = useSessionFollowing(props.serverId ? { serverId: props.serverId, sessionId: props.destination.id } : null, enabled);
+    // One census per destination: a host that already reads it passes it in, and this read stays idle.
+    const ownFollowing = useSessionFollowing(props.serverId && !props.following ? { serverId: props.serverId, sessionId: props.destination.id } : null, enabled && !props.following);
+    const following = props.following ?? ownFollowing;
     const sources = following.projection?.sources ?? EMPTY_SOURCES;
     // A rule follows whatever matches it when each event happens; it is a row like a source, never enrolled sessions.
     const rules = following.projection?.rules ?? EMPTY_RULES;
