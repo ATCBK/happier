@@ -2,14 +2,14 @@ import * as React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useResizableSize, type ResizableDockedPaneCoreInput, type ResizableDockedPaneCoreResult } from './useResizableSize.js';
+import { useResizableSize, type ResizableSizeInput, type ResizableSizeResult } from './useResizableSize.js';
 
 let root: Root | undefined;
 afterEach(async () => { await act(async () => root?.unmount()); vi.unstubAllGlobals(); });
 
-async function mount(options: Partial<ResizableDockedPaneCoreInput> = {}) {
+async function mount(options: Partial<ResizableSizeInput> = {}) {
   await act(async () => root?.unmount());
-  let current!: ResizableDockedPaneCoreResult;
+  let current!: ResizableSizeResult;
   const commits = vi.fn();
   const collapsed = vi.fn();
   const armed = vi.fn();

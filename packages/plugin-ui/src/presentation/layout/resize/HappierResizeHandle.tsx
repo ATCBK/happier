@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Platform, Pressable, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, View, type ViewStyle } from 'react-native';
+import type { HappierStyleProp } from '../../portableTypes.js';
 
 export function resolveResizablePaneNativeTouchTargetSize(): number | null {
     if (Platform.OS === 'web') return null;
@@ -12,16 +13,30 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
     /** Omit for a centered divider whose parent already owns the full target. */
     edge?: 'start' | 'end';
     testID?: string;
-    style?: StyleProp<ViewStyle>;
+    style?: HappierStyleProp;
     showIndicator?: boolean;
     indicatorColor?: string;
     indicatorOpacity?: number;
-    interactionProps?: Partial<PressableProps>;
-    accessibilityHandleProps?: Pick<
-        PressableProps,
-        'accessibilityActions' | 'accessibilityValue' | 'onAccessibilityAction'
-    >;
+    /** Opaque web/native responder props returned by useResizableSize. */
+    interactionProps?: Readonly<Record<string, unknown>>;
+    accessibilityHandleProps?: Readonly<{
+        accessibilityValue?: Readonly<{ min?: number; max?: number; now?: number }>;
+        accessibilityActions?: ReadonlyArray<Readonly<{ name: 'increment' | 'decrement' }>>;
+        onAccessibilityAction?: (event: unknown) => void;
+    }>;
 }>) => {
+    const handleRef = React.useRef<React.ElementRef<typeof View>>(null);
+    const { onDoubleClick, ...interactionProps } = props.interactionProps ?? {};
+    const resetRef = React.useRef(onDoubleClick);
+    resetRef.current = onDoubleClick;
+    React.useEffect(() => {
+        if (Platform.OS !== 'web') return;
+        const target = handleRef.current as unknown as Partial<Pick<EventTarget, 'addEventListener' | 'removeEventListener'>> | null;
+        if (!target?.addEventListener || !target.removeEventListener) return;
+        const reset = () => { if (typeof resetRef.current === 'function') resetRef.current(); };
+        target.addEventListener('dblclick', reset);
+        return () => target.removeEventListener?.('dblclick', reset);
+    }, []);
     const showIndicator = props.showIndicator !== false && typeof props.indicatorColor === 'string';
     const nativeTouchTargetSize = resolveResizablePaneNativeTouchTargetSize();
     const visualHandleSize = props.axis === 'x' ? 10 : 18;
@@ -42,12 +57,13 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
 
     return (
         <Pressable
+            ref={handleRef}
             testID={props.testID}
             focusable={Platform.OS === 'web'}
             accessibilityRole="adjustable"
             accessibilityLabel={props.labels.label}
             accessibilityHint={props.labels.hint}
-            {...props.interactionProps}
+            {...interactionProps}
             {...props.accessibilityHandleProps}
             {...resolveDividerValueProps(props.accessibilityHandleProps?.accessibilityValue, props.labels.value)}
             hitSlop={nativeHitSlop}
