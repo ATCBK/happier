@@ -159,10 +159,10 @@ export function createSessionFollowActionDeps(input: Readonly<{
       if (requestedServerId && requestedServerId !== serverId) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
-      const parsedInput = SessionFollowActionInputSchemasV1[actionId].parse(actionInput);
+      const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
+      const parsedInput = listInput ?? SessionFollowActionInputSchemasV1[actionId].parse(actionInput);
       const source = 'source' in parsedInput ? parsedInput.source : null;
-      const direction = 'direction' in parsedInput ? parsedInput.direction : null;
-      const privateRuleOperation = source?.kind === 'rule' || direction === 'following';
+      const privateRuleOperation = source?.kind === 'rule' || listInput?.direction === 'following';
       const { assertCurrent, authorize, captureRuleStorage, openRule, readRules } = ruleAccess(context, actionId, privateRuleOperation, signal);
       const ruleTarget = source?.kind === 'rule' && 'receiver' in parsedInput
         ? { ruleId: source.ruleId, receiver: FollowReceiverRefV1Schema.parse(parsedInput.receiver) } : null;
@@ -205,7 +205,6 @@ export function createSessionFollowActionDeps(input: Readonly<{
           || !equalFollowRuleReceiverV1(rule.receiver, ruleTarget.receiver))) throw new Error('session_follow_response_target_mismatch');
         return parseSessionFollowActionResponse(actionId, actionInput, { rule: rule ? openRule(rule, storage) : null });
       }
-      const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
       if (listInput?.direction === 'following') {
         const receiver = FollowReceiverRefV1Schema.parse(listInput.receiver);
         // The rule owner supplies a complete private census on the first page;
