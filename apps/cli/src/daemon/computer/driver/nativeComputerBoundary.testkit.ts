@@ -1,5 +1,6 @@
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, beforeEach, vi } from 'vitest';
+import { COMPUTER_CUA_DRIVER_VERSION } from '@happier-dev/protocol/installables';
 
 const native = vi.hoisted(() => ({ instances: [] as Array<{
   onmessage?: (message: JSONRPCMessage) => void;
@@ -47,6 +48,6 @@ export function captureResult() {
 }
 
 beforeEach(() => { native.instances.length = 0; native.tools.length = 0; native.call.mockReset();
-  native.initialize.mockReset().mockResolvedValue({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'cua-driver', version: '0.31.0' } });
+  native.initialize.mockReset().mockResolvedValue({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'cua-driver', version: COMPUTER_CUA_DRIVER_VERSION } });
   native.close.mockReset().mockImplementation(async (transport: { onclose?: () => void }) => { transport.onclose?.(); }); });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });

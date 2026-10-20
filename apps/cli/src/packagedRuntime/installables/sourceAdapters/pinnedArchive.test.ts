@@ -141,7 +141,7 @@ describe('pinned archive runtime installable adapter', () => {
     stageArchiveContaining('cua-driver');
     const { createInstallableCapabilitiesFromContributions } = await import('@/capabilities/registry/installables');
     const { getArchiveDownloadInstallableAdapter } = await import('../registry');
-    const { COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR } = await import('@happier-dev/protocol/installables');
+    const { COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR, COMPUTER_CUA_DRIVER_VERSION } = await import('@happier-dev/protocol/installables');
     const capabilities = await createInstallableCapabilitiesFromContributions({});
     const capability = capabilities.find(entry => entry.descriptor.id === 'dep.computer-cua-driver');
     expect(capability).toBeDefined();
@@ -153,7 +153,7 @@ describe('pinned archive runtime installable adapter', () => {
     const archive = getArchiveDownloadInstallableAdapter('computer-cua-driver');
     const executable = join(configurationState.happyHomeDir, 'tools', 'computer-cua-driver', 'current', 'cua-driver');
     await expect(archive?.resolveInstalledExecutable()).resolves.toBe(executable);
-    await expect(capability?.detect({ request: { id: 'dep.computer-cua-driver' }, context: { cliSnapshot: null } })).resolves.toMatchObject({ installed: true, installedVersion: '0.31.0' });
+    await expect(capability?.detect({ request: { id: 'dep.computer-cua-driver' }, context: { cliSnapshot: null } })).resolves.toMatchObject({ installed: true, installedVersion: COMPUTER_CUA_DRIVER_VERSION });
     await appendFile(executable, 'changed');
     await expect(archive?.resolveInstalledExecutable()).resolves.toBeNull();
     await expect(capability?.detect({ request: { id: 'dep.computer-cua-driver' }, context: { cliSnapshot: null } })).resolves.toMatchObject({ installed: false });
