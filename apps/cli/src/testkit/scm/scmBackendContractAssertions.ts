@@ -5,7 +5,8 @@ import { expect } from 'vitest';
 
 export type ScmOperationResult = Readonly<{
     success: boolean;
-    errorCode?: ScmOperationErrorCode;
+    /** Read operations may own a narrower operation-specific error vocabulary. */
+    errorCode?: string;
     error?: string;
 }>;
 

@@ -408,6 +408,13 @@ export function createRegisteredScmBackendAdapter(input: Readonly<{
         async diffFile({ context, request }) {
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.diffFile, { context, request });
         },
+        async blameFile(operationInput) {
+            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.blameFile, operationInput);
+        },
+        async fileAtRevision({ context, request }) {
+            if (!input.registration.handlers.read?.fileAtRevision) return { success: false, errorCode: 'unsupported' };
+            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read.fileAtRevision, { context, request });
+        },
         async diffCommit({ context, request }) {
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.diffCommit, { context, request });
         },

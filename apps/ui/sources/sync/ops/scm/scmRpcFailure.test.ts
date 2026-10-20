@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { assertScmResponse, scmFallbackError } from './scmRpcFailure';
+import { RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 
 describe('SCM RPC failure normalization', () => {
+    it('preserves known read transport failures without treating refusals as retryable native reads', () => {
+        for (const [error, errorCode] of [
+            [new RetryableServerResponseError(503, 'unavailable'), 'REMOTE_NETWORK_FAILED'],
+            [new TypeError('Failed to fetch'), 'REMOTE_NETWORK_FAILED'],
+            [Object.assign(new Error('timeout'), { code: 'MACHINE_RPC_TIMEOUT' }), 'COMMAND_TIMEOUT'],
+        ] as const) expect(scmFallbackError(error, { method: RPC_METHODS.SCM_PULL_REQUEST_LIST, request: {} })).toMatchObject({ errorCode });
+        expect(scmFallbackError(Object.assign(new Error('Denied'), { code: 'denied' }),
+            { method: RPC_METHODS.SCM_PULL_REQUEST_LIST, request: {} }).errorCode).toBe('BACKEND_UNAVAILABLE');
+    });
     it('does not grant mutation retry authority after a lost result', () => {
         const error = new Error('transport timeout with private diagnostics');
         const cases = [

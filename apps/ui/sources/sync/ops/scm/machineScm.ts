@@ -24,6 +24,8 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
+    ScmFileAtRevisionRequest,
+    ScmFileReadResponse,
     ScmDiffSummaryResultClearInput,
     ScmLogListRequest,
     ScmLogListResponse,
@@ -343,6 +345,14 @@ export async function machineScmBranchList(
     options?: MachineScmCallOptions,
 ): Promise<ScmBranchListResponse | ScmRpcFailure> {
     return await callMachineScm<ScmBranchListResponse, ScmBranchListRequest>(machineId, RPC_METHODS.SCM_BRANCH_LIST, request, options);
+}
+
+export async function machineScmFileRead(
+    machineId: string,
+    request: ScmFileAtRevisionRequest,
+    options?: MachineScmCallOptions,
+): Promise<ScmFileReadResponse | ScmRpcFailure> {
+    return await callMachineScm<ScmFileReadResponse, ScmFileAtRevisionRequest>(machineId, RPC_METHODS.SCM_FILE_READ, request, options);
 }
 
 export async function machineScmBranchCreate(

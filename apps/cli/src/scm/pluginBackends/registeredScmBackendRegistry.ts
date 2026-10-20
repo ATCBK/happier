@@ -36,6 +36,7 @@ type SupportedLeaf = Readonly<{
 }>;
 
 const EXECUTABLE_SUPPORTED_LEAVES: readonly SupportedLeaf[] = [
+    { key: 'read.fileAtRevision', hasHandler: (registration) => typeof registration.handlers.read?.fileAtRevision === 'function' },
     { key: 'read.ignoredPaths', hasHandler: (registration) => typeof registration.handlers.read?.ignoredPaths === 'function' },
     { key: 'worktree.retire', hasHandler: (registration) => typeof registration.handlers.worktree?.retire === 'function' },
     { key: 'worktree.reinstate', hasHandler: (registration) => typeof registration.handlers.worktree?.reinstate === 'function' },
@@ -50,6 +51,10 @@ const EXECUTABLE_SUPPORTED_LEAVES: readonly SupportedLeaf[] = [
     {
         key: 'read.diffFile',
         hasHandler: (registration) => typeof registration.handlers.read?.diffFile === 'function',
+    },
+    {
+        key: 'read.blame',
+        hasHandler: (registration) => typeof registration.handlers.read?.blameFile === 'function',
     },
     {
         key: 'read.diffCommit',

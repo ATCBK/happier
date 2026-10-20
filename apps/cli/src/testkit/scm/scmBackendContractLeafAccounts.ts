@@ -78,6 +78,22 @@ function executableOperation(
 
 function createGitOperationAccounts(): readonly ScmBackendContractLeafAccount[] {
     return [
+        executableOperation({ group: 'read', leaf: 'fileAtRevision' },
+            input => requireMethod(input.backend.fileAtRevision)({ context: input.context,
+                request: { cwd: input.fixture.rootPath, path: input.fixture.trackedPath, selector: { side: 'before', area: 'both' } } }),
+            async input => {
+                const expected = readFileSync(join(input.fixture.rootPath, input.fixture.trackedPath));
+                const read = requireMethod(input.backend.fileAtRevision);
+                const response = await read({ context: input.context, request: { cwd: input.fixture.rootPath,
+                    path: input.fixture.trackedPath, selector: { side: 'before', area: 'both' } } });
+                assertSupportedResult(response);
+                if (!response.success) return;
+                expect(Buffer.from(response.contentBase64, 'base64')).toEqual(expected);
+                expect(response.sizeBytes).toBe(expected.length);
+                expect(await read({ context: input.context, request: { cwd: input.fixture.rootPath,
+                    path: input.fixture.trackedPath, selector: { side: 'before', area: 'both' }, maxBytes: expected.length - 1 } }))
+                    .toMatchObject({ success: false, errorCode: 'too_large' });
+            }),
         executableOperation({ group: 'read', leaf: 'ignoredPaths' },
             (input) => requireMethod(input.backend.ignoredPaths)({ context: input.context, request: { cwd: input.fixture.rootPath } }),
             async (input) => {
@@ -382,6 +398,12 @@ function saplingUnsupportedMethod(
 
 function createSaplingUnsupportedHostingMethodAccounts(): readonly ScmBackendContractLeafAccount[] {
     return [
+        saplingUnsupportedMethod({ group: 'read', leaf: 'fileAtRevision' }, async input => {
+            const read = requireMethod(input.backend.fileAtRevision);
+            expect(await read({ context: input.context, request: { cwd: input.fixture.rootPath,
+                path: input.fixture.trackedPath, selector: { side: 'before', area: 'both' } } }))
+                .toMatchObject({ success: false, errorCode: 'unsupported' });
+        }),
         saplingUnsupportedMethod({ group: 'hosting', leaf: 'pullRequestRead' }, async (input) => {
             expect(input.backend.pullRequestList).toBeTypeOf('function');
             expect(input.backend.pullRequestGet).toBeTypeOf('function');

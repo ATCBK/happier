@@ -153,6 +153,7 @@ import { createDirectoryRpcActionExecutor } from '@/rpc/handlers/fileSystem/dire
 import { FILESYSTEM_MUTATION_ACTION_IDS } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createPreparedFilesystemTransferActionExecutor, projectPreparedFilesystemActionResult } from '@/machines/transfer/createPreparedFilesystemTransferActionExecutor';
 import type { DirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
+import { deliverScmFileAtRevision, prepareScmFileBytesExport } from '@/scm/actions/deliverScmFileAtRevision';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { registerMachineFileBrowserHandlers } from '@/rpc/handlers/machineFileBrowser/registerMachineFileBrowserHandlers';
@@ -1491,6 +1492,13 @@ export class ApiMachineClient {
         registerScmHandlers(this.rpcHandlerManager, this.machineRpcWorkingDirectory, {
             accessPolicy: this.filesystemAccessPolicy,
             machineId: this.machine.id,
+            deliverFileAtRevision: async (request, response, signal) => await deliverScmFileAtRevision({ request, response, signal,
+                ...(this.lifecycleDependencies.directPeerServerLifecycle ? { lifecycle: this.lifecycleDependencies.directPeerServerLifecycle } : {}) }),
+            prepareFileBytesExport: async input => {
+                const lifecycle = this.lifecycleDependencies.directPeerServerLifecycle;
+                if (!lifecycle) throw Object.assign(new Error('Prepared file delivery is unavailable'), { errorCode: 'unsupported' });
+                return await prepareScmFileBytesExport({ ...input, lifecycle });
+            },
         });
     }
 

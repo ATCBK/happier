@@ -22,6 +22,10 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
+    ScmBlameFileRequest,
+    ScmBlameFileResponse,
+    ScmFileAtRevisionRequest,
+    ScmFileReadResponse,
     ScmLogListRequest,
     ScmLogListResponse,
     ScmRemoteAddRequest,
@@ -98,6 +102,8 @@ import type { ScmHostingRepositoryResolveAddressRequestV1, ScmHostingRepositoryR
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { readStoredCredentials } from '@/persistence';
+import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
+import type { FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 
 const scmRpcOperationContextStorage = new AsyncLocalStorage<RpcHandlerContext>();
 
@@ -110,6 +116,8 @@ export function registerScmHandlers(
         hostingProviderRegistry?: ResolvedScmHostingProviderRegistry;
         machineId?: string;
         actionExecutor?: RpcActionExecutor;
+        deliverFileAtRevision?: Parameters<typeof executeScmActionOperation>[0]['deliverFileAtRevision'];
+        prepareFileBytesExport?: Parameters<typeof executeScmActionOperation>[0]['prepareFileBytesExport'];
     }>,
 ): void {
     const scmRpcHandlerManager: RpcHandlerRegistrar = {
@@ -129,10 +137,21 @@ export function registerScmHandlers(
         },
     };
     const routeBase = {
+        emitFileReviewNote: async ({ sessionId, ...note }: FileReviewNoteV1 & Readonly<{ sessionId: string }>) => {
+            const credentials = await readStoredCredentials();
+            if (!credentials) throw new Error('File review note credentials are unavailable');
+            await sendFileReviewNoteToSession({ credentials, sessionId, note });
+        },
+        get sessionId(): string | undefined {
+            const authorization = scmRpcOperationContextStorage.getStore()?.authorization;
+            return authorization?.kind === 'session.write' ? authorization.sessionId : undefined;
+        },
         workingDirectory,
         accessPolicy: deps?.accessPolicy,
         registry: deps?.registry,
         hostingProviderRegistry: deps?.hostingProviderRegistry,
+        deliverFileAtRevision: deps?.deliverFileAtRevision,
+        prepareFileBytesExport: deps?.prepareFileBytesExport,
         get signal(): AbortSignal | undefined {
             return scmRpcOperationContextStorage.getStore()?.signal;
         },
@@ -279,6 +298,13 @@ export function registerScmHandlers(
         }) as ScmWorktreesEnrichmentResponse,
     );
 
+    scmRpcHandlerManager.registerHandler<ScmFileAtRevisionRequest, ScmFileReadResponse>(
+        RPC_METHODS.SCM_FILE_READ,
+        async (request) => await executeScmActionOperation({
+            actionId: 'scm.file.read', input: request, ...routeBase,
+        }) as ScmFileReadResponse,
+    );
+
     scmRpcHandlerManager.registerHandler<ScmDiffFileRequest, ScmDiffFileResponse>(
         RPC_METHODS.SCM_DIFF_FILE,
         async (request) => await executeScmActionOperation({
@@ -287,6 +313,13 @@ export function registerScmHandlers(
             ...routeBase,
             rpcCompatibility: true,
         }) as ScmDiffFileResponse,
+    );
+
+    scmRpcHandlerManager.registerHandler<ScmBlameFileRequest, ScmBlameFileResponse>(
+        RPC_METHODS.SCM_BLAME_FILE,
+        async (request) => await executeScmActionOperation({
+            actionId: 'scm.blame.get', input: request, ...routeBase, rpcCompatibility: true,
+        }) as ScmBlameFileResponse,
     );
 
     scmRpcHandlerManager.registerHandler<ScmDiffCommitRequest, ScmDiffCommitResponse>(
@@ -327,6 +360,7 @@ export function registerScmHandlers(
             actionId: 'scm.change.discard',
             input: request,
             ...routeBase,
+            authorizeSession: authorizeWorkSession,
             rpcCompatibility: true,
             runMutation: runWithStatusSnapshotCacheInvalidation,
         }) as ScmChangeDiscardResponse,

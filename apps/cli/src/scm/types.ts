@@ -27,6 +27,10 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
+    ScmBlameFileRequest,
+    ScmBlameFileResponse,
+    ScmFileAtRevisionRequest,
+    ScmFileAtRevisionResponse,
     ScmLogListRequest,
     ScmLogListResponse,
     ScmHistoryEntriesRequest,
@@ -277,6 +281,15 @@ export interface ScmBackend {
         context: ScmBackendContext;
         request: ScmDiffFileRequest;
     }): Promise<ScmDiffFileResponse>;
+    blameFile?(input: {
+        context: ScmBackendContext;
+        request: ScmBlameFileRequest;
+        signal?: AbortSignal;
+    }): Promise<ScmBlameFileResponse>;
+    fileAtRevision?(input: {
+        context: ScmBackendContext;
+        request: ScmFileAtRevisionRequest;
+    }): Promise<ScmFileAtRevisionResponse>;
     diffCommit(input: {
         context: ScmBackendContext;
         request: ScmDiffCommitRequest;

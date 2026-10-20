@@ -20,7 +20,9 @@ describe('git SCM backend runtime registration', () => {
                 statusSnapshot: expect.any(Function),
                 worktreesEnrichment: expect.any(Function),
                 diffFile: expect.any(Function),
+                blameFile: expect.any(Function),
                 diffCommit: expect.any(Function),
+                fileAtRevision: expect.any(Function),
                 logList: expect.any(Function),
                 historyEntries: expect.any(Function),
             }),
@@ -47,6 +49,10 @@ describe('git SCM backend runtime registration', () => {
 
         expect(registration.handlers.hosting?.repositoryDescribePublishTargets).toEqual(expect.any(Function));
         expect(GIT_SCM_BACKEND_CAPABILITIES.hosting.repositoryPublishTargets.support).toBe('supported');
+    });
+
+    it('advertises base-revision reads through the canonical backend capability', () => {
+        expect(GIT_SCM_BACKEND_CAPABILITIES.read.fileAtRevision.support).toBe('supported');
     });
 
     it('admits implemented remote policies through the real Git capability projection', () => {

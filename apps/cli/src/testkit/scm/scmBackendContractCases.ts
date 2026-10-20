@@ -599,6 +599,23 @@ export function createScmBackendContractOperations(capabilities: ScmBackendCapab
             })),
         },
         {
+            path: { group: 'read', leaf: 'blame' },
+            assertSupported: async (input) => {
+                expect(input.backend.blameFile).toBeTypeOf('function');
+                if (!input.backend.blameFile) throw new Error('Declared blame capability requires a handler');
+                const response = await input.backend.blameFile({ context: input.context,
+                    request: { cwd: input.fixture.rootPath, path: input.fixture.trackedPath } });
+                assertSupportedResult(response);
+                expect(response.ranges).toEqual([{ startLine: 1, lineCount: 1, commitIndex: 0 }]);
+                expect(response.commits[0]?.sha).toBe(input.fixture.headCommit);
+            },
+            assertUnsupported: async (input) => {
+                if (!input.backend.blameFile) return;
+                await assertFeatureUnsupported(input.backend.blameFile({ context: input.context,
+                    request: { cwd: input.fixture.rootPath, path: input.fixture.trackedPath } }));
+            },
+        },
+        {
             path: { group: 'read', leaf: 'log' },
             assertSupported: assertLogSupported,
             assertUnsupported: (input) => assertFeatureUnsupported(input.backend.logList({
