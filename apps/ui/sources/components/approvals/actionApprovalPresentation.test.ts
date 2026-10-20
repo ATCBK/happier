@@ -12,6 +12,17 @@ import { readActionApprovalReview } from './actionApprovalReview';
 afterEach(() => setPreferredLanguageFromSettings('en'));
 
 describe('the shared Action approval presentation owner', () => {
+    it('exposes literal reviewed file operands separately from their formatted approval description', () => {
+        const actionArgs = { rootPath: '/repo', path: '/repo/ leading file ', content: 'aGVsbG8=' };
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent' }, actionId: 'daemon.filesystem.writeFile', actionArgs,
+            summary: 'Review file write', executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli',
+                caller: { kind: 'host' }, serverId: 'home-a', sessionId: 'session-a', machineId: 'machine-a',
+                actionId: 'daemon.filesystem.writeFile', requestId: 'write-a' } });
+        expect(readActionApprovalReview(request).workspaceFileSource).toEqual({ rootPath: actionArgs.rootPath, path: actionArgs.path });
+        expect(readActionApprovalReview({ ...request, actionArgs: {} }).workspaceFileSource).toBeNull();
+        expect(readActionApprovalReview({ ...request, actionId: 'account.name.set', actionArgs: { name: 'Name' } }).workspaceFileSource).toBeNull();
+    });
     it('shares full-review requirements with compact approval decisions', () => {
         const requestFor = (actionId: string, actionArgs: unknown, preview?: unknown) => ApprovalRequestV2Schema.parse({
             v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, createdBy: { surface: 'agent' },

@@ -8,6 +8,7 @@ import { isConfidentialSecretApprovalAction, readConfidentialSecretApproval } fr
 import { readResourceProposalApproval } from './resourceProposal/readResourceProposalApproval';
 import { readPromptDocUpdateApproval } from './promptDocApprovalModel';
 import { readCapabilityEnableApproval } from '@/components/sessions/capabilities/capabilityEnableApproval';
+import { readApprovalFileSource } from './approvalFileSource';
 
 export type ActionApprovalReview = Readonly<{
     admission: ReturnType<typeof resolveApprovalRequestApproveAdmission> | null;
@@ -18,6 +19,7 @@ export type ActionApprovalReview = Readonly<{
     resourceProposal: ReturnType<typeof readResourceProposalApproval>;
     visualPreview: ReturnType<typeof resolveApprovalVisualPreview>;
     simple: boolean;
+    workspaceFileSource: ReturnType<typeof readApprovalFileSource>;
 }>;
 
 /**
@@ -45,5 +47,5 @@ export function readActionApprovalReview(request: ApprovalRequest): ActionApprov
     const simple = request.v === 2 && request.status === 'open' && admission?.status === 'available'
         && spec !== null && spec.inputSchema.safeParse(request.actionArgs).success && !requiresReview;
     return { admission, confidentialAction, confidential, capabilityEnable, promptDocUpdate, resourceProposal,
-        visualPreview, simple };
+        visualPreview, simple, workspaceFileSource: readApprovalFileSource(request) };
 }
