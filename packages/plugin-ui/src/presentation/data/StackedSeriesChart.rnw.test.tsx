@@ -1,4 +1,4 @@
-import { act, type ReactNode } from 'react';
+import { act, Profiler, type ReactNode } from 'react';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { createSurfaceContextFixture, SURFACE_CONTEXT_THEME_FIXTURE as theme } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
@@ -321,7 +321,36 @@ describe('neutral series dataset', () => {
       expect(mount.container.textContent).not.toContain('-8');
     } finally { mount.unmount(); }
   });
+  it('does not commit React work on animation frames between live samples', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame'] });
+    // Browser compositor boundary: jsdom has no Web Animations implementation.
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
+    const animate = vi.fn(() => ({ cancel: vi.fn() }));
+    Object.defineProperty(Element.prototype, 'animate', { configurable: true, value: animate });
+    const commits = vi.fn();
+    const render = (sampleKey: number) => <Profiler id="live" onRender={commits}>
+      <StackedSeriesChart theme={theme} label="CPU" series={series} variant="line" size="tile" width={200}
+        reducedMotion={false} liveMotion={{ sampleKey, stepPx: 10, durationMs: 2_000 }} />
+    </Profiler>;
+    const mount = mountThroughReactNativeWeb(render(1));
+    try {
+      await mount.render(render(2));
+      expect(animate).toHaveBeenCalledWith([{ transform: 'translateX(10px)' }, { transform: 'translateX(0px)' }],
+        { duration: 2_000, easing: 'linear' });
+      commits.mockClear();
+      for (let frame = 0; frame < 10; frame++) await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(commits).not.toHaveBeenCalled();
+    } finally {
+      mount.unmount(); vi.useRealTimers();
+      if (descriptor) Object.defineProperty(Element.prototype, 'animate', descriptor);
+      else Reflect.deleteProperty(Element.prototype, 'animate');
+    }
+  });
   it('slides one incoming sample while the endpoint stays fixed, and redraws immediately when motion is reduced or inactive', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
+    const animation = { cancel: vi.fn() };
+    const animate = vi.fn(() => animation);
+    Object.defineProperty(Element.prototype, 'animate', { configurable: true, value: animate });
     const render = (sampleKey: number, reducedMotion: boolean, active = true) => <StackedSeriesChart theme={theme} label="CPU, last hour"
       series={[{ id: 'cpu', label: 'CPU', points: [20, 40].map((y, x) => ({ id: String(x), x, y })) }]}
       variant="line" size="tile" width={200} viewportHeight={100} plotInset={0} minimumMaximum={100} testID="live"
@@ -332,15 +361,21 @@ describe('neutral series dataset', () => {
       expect(find(mount.container, 'live').getAttribute('aria-label')).toContain('CPU 40');
       expect(find(mount.container, 'live').getAttribute('aria-label')).not.toContain('CPU 20');
       await mount.render(render(2, false));
-      expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(10px)');
+      expect(animate).toHaveBeenLastCalledWith([{ transform: 'translateX(10px)' }, { transform: 'translateX(0px)' }],
+        { duration: 100, easing: 'linear' });
       expect(find(mount.container, 'live-endpoint-0').getAttribute('cx')).toBe('200');
       expect(find(mount.container, 'live-endpoint-0').closest('[data-testid="live-sliding-ink"]')).toBeNull();
       await mount.render(render(3, true));
+      expect(animation.cancel).toHaveBeenCalled();
       expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(0px)');
       await mount.render(render(4, false, false));
       expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(0px)');
       expect(mount.container.querySelector('[data-testid="live-endpoint-0"]')).toBeNull();
-    } finally { mount.unmount(); }
+    } finally {
+      mount.unmount();
+      if (descriptor) Object.defineProperty(Element.prototype, 'animate', descriptor);
+      else Reflect.deleteProperty(Element.prototype, 'animate');
+    }
   });
   it('renders a source pattern on bars and area ribbons while retaining distinct exact series values', async () => {
     const input = [
