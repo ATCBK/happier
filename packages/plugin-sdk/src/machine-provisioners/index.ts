@@ -1,3 +1,5 @@
+export type { LimaCommandResult, LimaExecutor, LimaIdentity, LimaInstance, LimaInstanceOptions } from './lima.js';
+export { changeLimaPower, createLimaInstance, deleteLimaInstance, execLimaGuest, inspectLimaCapabilities, inspectLimaInstance, limaInstanceField, limaVersionAtLeast, parseLimaVersion, putLimaGuestFile, runLimaCommand, validateLimaStore } from './lima.js';
 export type { DevcontainerEffectReviewV1 } from '../machineProvisioners.js';
 export type { DevcontainerNativeObservationV1 } from '../machineProvisioners.js';
 export type { MachineProvisionerAcquireResultV1 } from '../machineProvisioners.js';

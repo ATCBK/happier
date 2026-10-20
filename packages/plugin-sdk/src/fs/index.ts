@@ -1,3 +1,4 @@
+export { canonicalAbsolutePathsEqual } from '../sessions/fileStores/paths.js';
 export type { ConnectedServiceNativeHome } from './nativeHome.js';
 export type { FileSystemService } from '../fs.js';
 export type { FsAtomicWriteInput } from '../fs.js';

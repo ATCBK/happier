@@ -1,7 +1,7 @@
 import { accessSync, constants, closeSync, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-import { resolveGitIndexPath } from '@happier-dev/cli-common/scm/gitTemporaryIndex';
+import { resolveGitIndexPath } from '@happier-dev/plugin-sdk/scm';
 import { SCM_OPERATION_ERROR_CODES, type ScmCommitCreateRequest, type ScmCommitCreateResponse, type ScmOperationErrorCode } from '@happier-dev/plugin-sdk/scm';
 
 import { getScmCommandIndeterminateErrorCode, type ScmExecResult } from '../runtime.js';

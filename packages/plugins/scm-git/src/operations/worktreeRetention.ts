@@ -1,7 +1,6 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@happier-dev/cli-common/path';
-import { canonicalizePath } from '@happier-dev/plugin-sdk/fs';
+import { canonicalAbsolutePathsEqual, canonicalizePath, isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
 import { SCM_OPERATION_ERROR_CODES, type ScmOperationErrorCode, type ScmWorktreeRetireRequest, type ScmWorktreeRemoveResponse } from '@happier-dev/plugin-sdk/scm';
 import { inspectGitCheckoutIdentity } from '../checkoutIdentity.js';
 import type { ScmBackendContext } from '../types.js';

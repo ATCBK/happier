@@ -1,4 +1,5 @@
 export type { AuthCallbackCreateInput } from '../connectedAccounts.js';
+export type { ConnectedServiceQuotaRecoveryCreditsV1 } from '../connectedAccounts.js';
 export type { AuthCallbackCreateResult } from './projections.js';
 export type { AuthCallbackMode } from '../connectedAccounts.js';
 export type { AuthCallbackResult } from './projections.js';
