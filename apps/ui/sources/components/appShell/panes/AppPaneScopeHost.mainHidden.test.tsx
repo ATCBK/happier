@@ -1,15 +1,20 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { installAppPaneScopeHostCommonModuleMocks } from './appPaneScopeHostTestHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
-let paneArrangement: 'session' | 'editor' = 'session';
 let width = 1200;
-let multiPaneEnabled = true;
-installAppPaneScopeHostCommonModuleMocks({ getDimensions: () => ({ width, height: 900 }),
-    getLocalSetting: key => key === 'paneArrangement' ? paneArrangement : key === 'uiMultiPanePanelsEnabled' ? multiPaneEnabled : null });
-afterEach(() => { paneArrangement = 'session'; width = 1200; multiPaneEnabled = true; });
+// Geometry and the disconnected network are system boundaries; pane/settings owners remain real.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View', useWindowDimensions: () => ({ width, height: 900, scale: 1, fontScale: 1 }) });
+});
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const initialStorage = storage.getState();
+beforeEach(() => storage.getState().applyLocalSettings({ paneArrangement: 'session', uiMultiPanePanelsEnabled: true }, { source: 'ui' }));
+afterEach(async () => { await standardCleanup(); storage.setState(initialStorage, true); width = 1200; });
 const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
 const { AppPaneScopeHost } = await import('./AppPaneScopeHost');
 const { usePaneMainColumn } = await import('./mainColumn/usePaneMainColumn');
@@ -36,7 +41,7 @@ function Harness(props: Readonly<{ detailsOpen: boolean; unnamed?: boolean; unav
 
 describe('AppPaneScopeHost main column', () => {
     it('lets only the focused app destination offer an arrangement when multi-pane is enabled', async () => {
-        multiPaneEnabled = false;
+        storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false }, { source: 'ui' });
         await renderScreen(<AppPaneProvider><AppPaneScopeHost scopeId="app" arrangement="honour"
             mainColumn={{ hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' }}
             main={<Main />} /></AppPaneProvider>);
@@ -71,7 +76,7 @@ describe('AppPaneScopeHost main column', () => {
     });
 
     it('returns to the folded session through published effective controls while the persisted flag is false', async () => {
-        paneArrangement = 'editor'; width = 834;
+        storage.getState().applyLocalSettings({ paneArrangement: 'editor' }, { source: 'ui' }); width = 834;
         const paneRef: { current: ReturnType<typeof useAppPaneScope> | null } = { current: null };
         const mainRef: { current: PaneMainColumnState | null } = { current: null };
         const layouts: ReturnType<typeof useOptionalAppPaneScopeLayout>[] = [];

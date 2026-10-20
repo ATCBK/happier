@@ -223,7 +223,7 @@ export const Easing = {
 } as const;
 
 export function useWindowDimensions() {
-    return { width: 800, height: 600 };
+    return Dimensions.get();
 }
 
 export const findNodeHandle = () => null;

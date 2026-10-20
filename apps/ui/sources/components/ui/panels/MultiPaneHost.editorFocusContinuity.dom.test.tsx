@@ -12,13 +12,45 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
+// Keep the cold real graph outside each DOM journey's render/focus budget.
+const { MultiPaneHost } = await import('./MultiPaneHost');
+const { MultiPaneHostWithBottom } = await import('./MultiPaneHostWithBottom');
+const { focusPaneRegion } = await import('@/components/appShell/panes/paneRegion');
+
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.unstubAllGlobals(); });
 
 describe('retained editor DOM focus', () => {
+    it.each([
+        { direction: 'next', region: 'main' },
+        { direction: 'previous', region: 'bottom' },
+    ] as const)('cycles into the actual $region root on its first visit', async ({ direction, region }) => {
+        vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }));
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        cleanups.push(async () => { await act(async () => root.unmount()); container.remove(); });
+        await act(async () => root.render(<MultiPaneHostWithBottom
+            main={<input data-testid="unvisited-main-input" />}
+            rightPane={null} detailsPane={null}
+            layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
+            rightDockWidthPx={340} detailsDockWidthPx={600}
+            onCloseRight={() => {}} onCloseDetails={() => {}}
+            onCommitRightDockWidthPx={() => {}} onCommitDetailsDockWidthPx={() => {}}
+            bottomPane={<input data-testid="unvisited-bottom-input" />}
+            bottomPresentation="docked" bottomDockHeightPx={240}
+            bottomDockMinHeightPx={120} bottomDockMaxHeightPx={500}
+            onCloseBottom={() => {}} onCommitBottomDockHeightPx={() => {}}
+        />));
+        const target = region === 'main'
+            ? container.querySelector('[data-testid="multi-pane-main-column"]')
+            : container.querySelector('[data-testid="multi-pane-bottom-dock"]')?.closest('[role="region"]');
+        expect(target).toBeTruthy();
+        expect(focusPaneRegion(direction)).toBe(true);
+        expect(document.activeElement).toBe(target);
+    });
     it('keeps main and editor nodes, caret and iframe through arrangement and hide/show', async () => {
         vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }));
-        const { MultiPaneHost } = await import('./MultiPaneHost');
         const container = document.createElement('div'); document.body.appendChild(container);
         const root = createRoot(container);
         cleanups.push(async () => { await act(async () => root.unmount()); container.remove(); });
@@ -60,7 +92,6 @@ describe('retained editor DOM focus', () => {
     it.each(['details', 'right'] as const)('retains the %s caret through dock, overlay, and dock but restores the opener on real close', async (kind) => {
         // The OS reduced-motion preference is a browser boundary; pane motion/resizing remain real.
         vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }));
-        const { MultiPaneHost } = await import('./MultiPaneHost');
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);

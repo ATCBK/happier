@@ -1,13 +1,18 @@
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { installAppPaneScopeHostCommonModuleMocks } from './appPaneScopeHostTestHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 let width = 1200;
-installAppPaneScopeHostCommonModuleMocks({
-    getDimensions: () => ({ width, height: 900 }),
-    getLocalSetting: key => key === 'rightPaneWidthPx' ? 360 : null,
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View', useWindowDimensions: () => ({ width, height: 900, scale: 1, fontScale: 1 }) });
 });
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const initialStorage = storage.getState();
+beforeEach(() => storage.getState().applyLocalSettings({ paneArrangement: 'session', uiMultiPanePanelsEnabled: true, rightPaneWidthPx: 360 }, { source: 'ui' }));
+afterEach(async () => { await standardCleanup(); storage.setState(initialStorage, true); width = 1200; });
 const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
 const { AppPaneScopeHost } = await import('./AppPaneScopeHost');
 const { MultiPaneHostWithBottom } = await import('@/components/ui/panels/MultiPaneHostWithBottom');
@@ -31,7 +36,7 @@ describe('AppPaneScopeHost hidden main sizing', () => {
             rightPaneBuiltinAdapter={rightAdapter}
             destinationDetails={{ pane: <div />, onClose: () => {} }}
         /></AppPaneProvider>);
-        const paneHost = screen.root.findByType(MultiPaneHostWithBottom);
+        const paneHost = screen.findByType(MultiPaneHostWithBottom);
         expect(paneHost.props.layout.right).toBe('docked');
         expect(paneHost.props.layout.details).toBe('docked');
         expect(paneHost.props.rightDockWidthPx).toBe(360);

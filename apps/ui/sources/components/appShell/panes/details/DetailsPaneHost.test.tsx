@@ -23,12 +23,14 @@ vi.mock('react-native', async () => {
     });
 });
 const runtime = installSessionPaneRuntimeTestHarness({ scopeId: 'app' });
-let MultiPaneHostWithBottom: typeof import('@/components/ui/panels/MultiPaneHostWithBottom')['MultiPaneHostWithBottom'];
+// Load the real graph once after platform/transport registration, outside the
+// per-journey budget. A cold import must not outlive a timed-out render act().
+const { MultiPaneHostWithBottom } = await import('@/components/ui/panels/MultiPaneHostWithBottom');
+const { DetailsPaneHost } = await import('./DetailsPaneHost');
 let currentScreen: Awaited<ReturnType<typeof renderPanelScreen>>;
 beforeEach(async () => {
     state.windowWidthPx = 1200;
     state.hookReadWidths = [];
-    ({ MultiPaneHostWithBottom } = await import('@/components/ui/panels/MultiPaneHostWithBottom'));
 });
 function Wrapper({ children }: React.PropsWithChildren) {
     return <runtime.Wrapper><AppShellPluginUiProjectionValueProvider value={{
@@ -53,7 +55,6 @@ function useSettings(settings: Partial<ReturnType<typeof storage.getState>['loca
 describe('DetailsPaneHost', () => {
     it('opens a tabless details pane with its header, and closes it when the destination clears the selection', async () => {
         useSettings({ detailsPaneWidthPx: 520 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const onClose = vi.fn();
         const screen = await renderScreen((<DetailsPaneHost
             main={<div />}
@@ -80,7 +81,6 @@ describe('DetailsPaneHost', () => {
 
     it('overlays instead of squeezing the main content below the minimum the destination declares', async () => {
         useSettings({ detailsPaneWidthPx: 520 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const details = { content: React.createElement('PluginDetailStub') };
 
         // 1200 − 520 leaves 680 for main: enough for the canonical minimum…
@@ -95,7 +95,6 @@ describe('DetailsPaneHost', () => {
 
     it('persists a fixed resized width for every details pane', async () => {
         useSettings({ detailsPaneWidthPx: 520 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen((<DetailsPaneHost
             main={<div />}
             details={{ content: React.createElement('PluginDetailStub') }}
@@ -111,7 +110,6 @@ describe('DetailsPaneHost', () => {
         // Window 1440, but the shell's rail and contextual column take 450 of it: the page gets 990.
         state.windowWidthPx = 1440;
         useSettings({ detailsPaneWidthPx: 400 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const screen = await renderScreen((<DetailsPaneHost
             main={<div />}
             details={{ content: React.createElement('PluginDetailStub') }}
@@ -130,7 +128,6 @@ describe('DetailsPaneHost', () => {
     it('never docks wider than main allows while dragging: pulled past the threshold it becomes an overlay and stays one', async () => {
         state.windowWidthPx = 990;
         useSettings({ detailsPaneWidthPx: 400 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen((<DetailsPaneHost
             main={<div />}
             details={{ content: React.createElement('PluginDetailStub') }}
@@ -162,7 +159,6 @@ describe('DetailsPaneHost', () => {
 
     it("stands a destination's details and the App's right sidebar in one pane host", async () => {
         useSettings({ detailsPaneWidthPx: 420, rightPaneWidthPx: 360 });
-        const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen(<DetailsPaneHost
             main={<div />}
             details={{ content: React.createElement('PluginDetailStub') }}

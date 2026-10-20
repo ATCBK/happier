@@ -142,7 +142,7 @@ describe('workspace tabs production composition', () => {
         } finally { await screen.unmount(); storage.setState(initial, true); }
     });
     it('keeps the canonical file opener when Search renders in the global modal outside Workspace context', async () => {
-        route.pathname = '/search'; route.params = {};
+        route.platform = 'web'; route.pathname = '/search'; route.params = {};
         window.history.replaceState(null, '', '/search');
         restoreBrowserLocks = installBrowserStorageLockBoundary();
         installDisconnectedServerSocketBoundary();
@@ -180,6 +180,7 @@ describe('workspace tabs production composition', () => {
             const { invokeWorkspaceAction } = await import('./workspaceActionRuntime');
             await vi.waitFor(async () => { await act(async () => {});
                 expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true }); });
+            expect((await import('react-native')).Platform.OS).toBe('web');
             vi.mocked(Modal.show).mockClear();
             await act(async () => runtime.open(undefined, { accountId: scope.accountId, serverId: scope.serverId,
                 machineId: 'studio', rootPath: '/repo', sessionId: null }, { source: 'files' }));
@@ -279,6 +280,9 @@ describe('workspace tabs production composition', () => {
         ]);
         const initial = storage.getState();
         const scope = storage.getState().profileScope!;
+        route.pathname = '/projects/riverside/overview';
+        route.params = { workspaceRefId: 'riverside', serverId: scope.serverId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${encodeURIComponent(scope.serverId)}`);
         storage.setState({ isDataReady: true });
         applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'riverside', serverId: scope.serverId,
             machineId: 'studio', rootPath: '/repo', label: null, createdAtMs: 1 }] });

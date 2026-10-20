@@ -2,7 +2,7 @@
 import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installBrowserStorageLockBoundary, renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -68,7 +68,9 @@ let disconnect: (() => Promise<unknown>) | undefined;
 let restoreLocks: (() => void) | undefined;
 let baseline: ReturnType<(Awaited<ReturnType<typeof loadProduction>>)[7]['storage']['getState']> | undefined;
 
-beforeAll(async () => {
+// Cold production-graph imports belong to collection, after transport boundaries
+// are installed; individual lifecycle hooks should measure the actual journeys.
+{
     restoreLocks = installBrowserStorageLockBoundary();
     installDisconnectedServerSocketBoundary();
     fixture = await serveActionHomes({ homes: [{ key: 'import', serverUrl: 'https://workspace-shell-import.test', accountId: 'alice', currentAccount: true }], route: () => undefined });
@@ -79,7 +81,7 @@ beforeAll(async () => {
     await disconnect(); disconnect = undefined;
     await fixture.dispose(); fixture = undefined;
     restoreLocks(); restoreLocks = undefined;
-});
+}
 beforeEach(() => {
     baseline = production[7].storage.getState();
     window.history.replaceState(null, '', '/');
