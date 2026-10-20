@@ -2495,7 +2495,15 @@ export function createDaemonControlApp({
         ...(request.body.policyDisposition ? { policyDisposition: request.body.policyDisposition } : {}),
       });
       if (!isProviderAccountUsageSnapshotIntakeAccepted(result)) {
-        throw new Error('provider_account_usage_snapshot_canonical_custody_unavailable');
+        logger.warn('[CONTROL SERVER] Provider account usage snapshot canonical intake failed', {
+          sessionId: request.body.sessionId,
+          observation: result,
+        });
+        reply.code(503);
+        return {
+          ok: false as const,
+          errorCode: 'provider_account_usage_snapshot_intake_failed' as const,
+        };
       }
       return { ok: true as const, result };
     } catch (error) {

@@ -6,9 +6,10 @@ import {
     type ProviderAccountUsageAdoptionV1,
 } from './adoption';
 
-import type {
-    ProviderAccountUsagePersistenceScheduler,
-    QualifiedProviderAccountUsagePersistenceTarget,
+import {
+    ProviderAccountUsageSourceQualificationError,
+    type ProviderAccountUsagePersistenceScheduler,
+    type QualifiedProviderAccountUsagePersistenceTarget,
 } from './persistence';
 import {
     type ProviderAccountUsageObservation,
@@ -26,6 +27,11 @@ type QualifiedPersistenceTargetResolver = (input: Readonly<{
     snapshot: ProviderAccountUsageSnapshotV1;
     sources: readonly ConnectedServiceUsageSourceV1[];
 }>) => Promise<readonly QualifiedProviderAccountUsagePersistenceTarget[]>;
+
+type UnpersistedSnapshotObservation = Extract<
+    Awaited<ReturnType<ProviderAccountUsagePersistenceScheduler['recordInBandSnapshot']>>,
+    { status: 'not_persisted' }
+>;
 
 function normalizeSessionId(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -68,9 +74,10 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
     sessionId: string;
     snapshot: ProviderAccountUsageSnapshotV1;
 }>): Promise<
-    | Readonly<{ status: ProviderAccountUsageStoreMutationStatus; recordId: string; persisted: boolean }>
+    | Readonly<{ status: ProviderAccountUsageStoreMutationStatus; recordId: string; persisted: boolean; persistence?: UnpersistedSnapshotObservation }>
     | Readonly<{ status: 'session_not_found' }>
     | Readonly<{ status: 'credential_fingerprint_mismatch'; recordId: string; persisted: boolean }>
+    | Readonly<{ status: 'source_qualification_failed'; reason: ProviderAccountUsageSourceQualificationError['reason']; recordId: string; persisted: false }>
 > {
     const tracked = findTrackedSession(input.getChildren(), input.sessionId);
     if (!tracked) return { status: 'session_not_found' };
@@ -144,19 +151,32 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
         : snapshot;
 
     let persisted = false;
+    let unpersistedObservation: UnpersistedSnapshotObservation | undefined;
     if (input.persistence) {
-        const targets = input.resolvePersistenceTargets
-            ? await input.resolvePersistenceTargets({
-                sessionId: input.sessionId,
-                snapshot: currentSnapshot,
-                sources: qualifiedSources ?? [],
-            })
-            : [];
+        let targets: readonly QualifiedProviderAccountUsagePersistenceTarget[];
+        try {
+            targets = input.resolvePersistenceTargets
+                ? await input.resolvePersistenceTargets({
+                    sessionId: input.sessionId,
+                    snapshot: currentSnapshot,
+                    sources: qualifiedSources ?? [],
+                })
+                : [];
+        } catch (error) {
+            if (!(error instanceof ProviderAccountUsageSourceQualificationError)) throw error;
+            return {
+                status: 'source_qualification_failed',
+                reason: error.reason,
+                recordId: currentSnapshot.recordId,
+                persisted: false,
+            };
+        }
         const persistence = await input.persistence.recordInBandSnapshot(
             currentSnapshot,
             { targets },
         );
         persisted = persistence.status !== 'not_persisted';
+        if (persistence.status === 'not_persisted') unpersistedObservation = persistence;
     }
 
     const recorded = input.store.recordSnapshot(currentSnapshot, observation);
@@ -176,6 +196,7 @@ export async function recordProviderAccountUsageSnapshotForSession(input: Readon
         status: recorded.status,
         recordId: recorded.recordId,
         persisted,
+        ...(unpersistedObservation ? { persistence: unpersistedObservation } : {}),
     };
 }
 

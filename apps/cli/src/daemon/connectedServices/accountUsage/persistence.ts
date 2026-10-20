@@ -41,6 +41,16 @@ export type QualifiedProviderAccountUsagePersistenceTarget = Readonly<{
   expectedConfigurationRevision: string | null;
 }>;
 
+export class ProviderAccountUsageSourceQualificationError extends Error {
+  constructor(
+    readonly reason: 'qualified_account_listing_failed' | 'credential_resolution_failed',
+    cause: unknown,
+  ) {
+    super('Provider account usage source qualification failed', { cause });
+    this.name = 'ProviderAccountUsageSourceQualificationError';
+  }
+}
+
 type ProviderAccountUsagePersistencePayload = Readonly<{
   snapshot: ProviderAccountUsageSnapshotV1;
   target: QualifiedProviderAccountUsagePersistenceTarget;

@@ -247,6 +247,7 @@ describe('recordProviderAccountUsageSnapshotForSession', () => {
             status: 'snapshot_advanced',
             recordId: snapshot.recordId,
             persisted: false,
+            persistence: { status: 'not_persisted', reason: 'no_current_qualified_source' },
         });
 
         expect(store.resolveRecordId(snapshot.recordId)).toEqual(snapshot);
