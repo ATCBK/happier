@@ -110,7 +110,7 @@ describe('CustomModal', () => {
         const focusReturnRef = { current: { focus: vi.fn() } };
         const screen = await renderCustomModal({
             type: 'custom', component: RawModal, props: { label: 'stage' },
-            focusReturnRef, chrome: { kind: 'stage', title: 'Photo' },
+            focusReturnRef, chrome: { kind: 'stage', title: 'Photo', testID: 'photo-stage' },
         }, onClose);
         const base = screen.findByType(BaseModal);
         expect(base.props.placement).toBe('fullscreen');
@@ -118,8 +118,9 @@ describe('CustomModal', () => {
         expect(base.props.showBackdrop).toBe(false);
         expect(base.props.scrollHost).toBe('body');
         expect(base.props.accessibilityLabel).toBe('Photo');
+        expect(base.props.testID).toBe('photo-stage');
         expect(base.props.focusReturnRef).toBe(focusReturnRef);
-        expect(screen.findByType(ModalCardFrame).props.framed).toBe(false);
+        expect(screen.findAllByType(ModalCardFrame)).toHaveLength(0);
         act(() => base.props.onClose());
         expect(onClose).toHaveBeenCalledOnce();
     });

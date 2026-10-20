@@ -72,12 +72,15 @@ interface BaseModalProps {
     onClose?: () => void;
     children: React.ReactNode;
     accessibilityLabel?: string;
+    testID?: string;
     closeOnBackdrop?: boolean;
     showBackdrop?: boolean;
     zIndexBase?: number;
     webPlacement?: 'auto' | 'top';
     /** `bottom` anchors the content to the bottom edge (a phone sheet) on every platform. */
     placement?: 'center' | 'bottom' | 'fullscreen';
+    /** A stage supplies its own entrance and exit while the modal keeps input custody. */
+    motion?: 'none';
     /** The overlay scrolls by default; bounded modal bodies may own their one scroll region. */
     scrollHost?: 'overlay' | 'body';
     webPortalTarget?: ModalPortalTarget;
@@ -86,16 +89,23 @@ interface BaseModalProps {
     focusReturnFallback?: 'activation-time';
 }
 
+function ModalContentFrame({ motion, ...props }: React.ComponentProps<typeof OverlayMotionFrame> & Readonly<{ motion?: 'none' }>) {
+    if (motion === 'none') return <View pointerEvents={props.pointerEvents} style={props.style}>{props.children}</View>;
+    return <OverlayMotionFrame {...props} />;
+}
+
 export function BaseModal({
     visible,
     onClose,
     children,
     accessibilityLabel,
+    testID,
     closeOnBackdrop = true,
     showBackdrop = true,
     zIndexBase,
     webPlacement = 'auto',
     placement = 'center',
+    motion,
     scrollHost = 'overlay',
     webPortalTarget = null,
     focusReturnRef,
@@ -128,6 +138,7 @@ export function BaseModal({
     );
     const modalMotion = useOverlayMotionAnimation({
         visible,
+        disabled: motion === 'none',
         preset: modalMotionPreset,
     });
     const modalPresence = useOverlayPresence(
@@ -226,7 +237,7 @@ export function BaseModal({
             right: 0,
             bottom: 0,
             zIndex: baseZ,
-            transition: [
+            transition: motion === 'none' ? undefined : [
                 `background-color ${scrimTiming}`,
                 ...(materialBlurEnabled
                     ? [
@@ -314,6 +325,7 @@ export function BaseModal({
                     <div
                         ref={webContentShellRef}
                         role="dialog"
+                        data-testid={testID}
                         data-happy-modal-layer=""
                         aria-modal="true"
                         aria-label={modalAccessibilityLabel}
@@ -352,7 +364,8 @@ export function BaseModal({
                                         interactivePointerEvents.webStyle,
                                     ]}
                                 >
-                                    <OverlayMotionFrame
+                                    <ModalContentFrame
+                                        motion={motion}
                                         visible={visible}
                                         kind="modal"
                                         direction={placement === 'bottom' ? 'bottom' : undefined}
@@ -360,6 +373,7 @@ export function BaseModal({
                                         style={[
                                             styles.content,
                                             topPlacementContentStyle,
+                                            placement === 'fullscreen' ? styles.contentFullscreen : null,
                                         ]}
                                     >
                                         <View
@@ -372,7 +386,7 @@ export function BaseModal({
                                         >
                                             {sheetChildren}
                                         </View>
-                                    </OverlayMotionFrame>
+                                    </ModalContentFrame>
                                 </KeyboardAwareModalFrame>
                             </ModalBoundaryProvider>
                         </ModalPortalTargetProvider>
@@ -412,6 +426,7 @@ export function BaseModal({
             ]}
             pointerEvents={modalPointerEvents.nativePointerEvents}
             role="dialog"
+            testID={testID}
             accessibilityLabel={modalAccessibilityLabel}
             accessibilityViewIsModal={visible}
         >
@@ -445,13 +460,15 @@ export function BaseModal({
                         </TouchableWithoutFeedback>
                     ) : null}
 
-                    <OverlayMotionFrame
+                    <ModalContentFrame
+                        motion={motion}
                         visible={visible}
                         kind="modal"
                         direction={placement === 'bottom' ? 'bottom' : undefined}
                         pointerEvents="box-none"
                         style={[
                             styles.content,
+                            placement === 'fullscreen' ? styles.contentFullscreen : null,
                         ]}
                     >
                         <ModalBoundaryProvider>
@@ -463,17 +480,17 @@ export function BaseModal({
                                 scrollEnabled={scrollHost === 'overlay'}
                                 showsVerticalScrollIndicator={false}
                                 keyboardShouldPersistTaps="handled"
-                                centerContent={placement !== 'bottom'}
+                                centerContent={placement === 'center'}
                             >
                                 <View
                                     pointerEvents={interactivePointerEvents.nativePointerEvents}
-                                    style={[styles.scrollContentInner, interactivePointerEvents.webStyle]}
+                                    style={[styles.scrollContentInner, placement === 'fullscreen' ? styles.contentFullscreen : null, interactivePointerEvents.webStyle]}
                                 >
                                     {sheetChildren}
                                 </View>
                             </ScrollView>
                         </ModalBoundaryProvider>
-                    </OverlayMotionFrame>
+                    </ModalContentFrame>
                     <OverlayPortalHost />
                 </KeyboardAwareModalFrame>
             </OverlayPortalProvider>
@@ -516,6 +533,11 @@ const styles = StyleSheet.create(() => ({
         width: '100%',
         flex: 1,
         alignSelf: 'stretch',
+    },
+    contentFullscreen: {
+        flex: 1,
+        alignSelf: 'stretch',
+        alignItems: 'stretch',
     },
     scrollContent: {
         flexGrow: 1,

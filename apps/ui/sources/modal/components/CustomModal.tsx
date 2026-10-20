@@ -127,6 +127,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
             visible={visible}
             onClose={handleSharedDismiss}
             accessibilityLabel={accessibilityLabel}
+            testID={effectiveChrome?.kind === 'stage' ? effectiveChrome.testID : undefined}
             focusReturnRef={config.focusReturnRef}
             closeOnBackdrop={config.closeOnBackdrop ?? true}
             showBackdrop={showBackdrop && presentation.showBackdrop}
@@ -137,7 +138,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
             placement={presentation.placement}
             scrollHost={presentation.scrollHost}
         >
-            <ModalCardFrame
+            {effectiveChrome?.kind === 'stage' ? content : <ModalCardFrame
                 framed={chrome !== null}
                 material={chrome?.material}
                 header={chrome?.header}
@@ -160,7 +161,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
                 onClose={chrome && dismissible ? handleSharedDismiss : undefined}
             >
                 {content}
-            </ModalCardFrame>
+            </ModalCardFrame>}
         </BaseModal>
     );
 }
