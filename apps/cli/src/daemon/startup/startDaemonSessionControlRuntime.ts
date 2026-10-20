@@ -25,6 +25,7 @@ import { getSharedTerminalProcessRegistry } from '../local/services/inventory/te
 import { randomBytes, randomUUID } from 'node:crypto';
 import { issueMcpRequestAuthCapability } from '@/mcp/runtime/issueMcpRequestAuthCapability';
 import { readMcpRequestAuthFailureCode, readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
+import { createDaemonRunnerPluginMcp } from '../agentRuntime/runnerPluginMcp';
 import { createGuardLeftBehindActionExecutor } from '../guard/actions';
 import type { DaemonAdmissionDrain } from '../lifecycle/admissionDrain';
 import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
@@ -16596,6 +16597,7 @@ export async function startDaemonSessionControlRuntime(
   ): Promise<void> => {
     const failures: unknown[] = [];
     const phases: ReadonlyArray<readonly [string, () => Promise<void>]> = [
+      ['runner_plugin_mcp', async () => { await runnerPluginMcp.dispose(); }],
       [
         'runner_plugin_services_host',
         async () => {
@@ -16971,6 +16973,9 @@ export async function startDaemonSessionControlRuntime(
       else return await sourceFollow.dispatcher.dispatch(request.occurrence);
     }, undefined, shutdownCancellationDomains.daemonWorkSignal);
   };
+  const runnerPluginMcp = createDaemonRunnerPluginMcp({ acquireRegistry: acquireDaemonPluginRuntimeRegistryLease,
+    trackedSessions: params.pidToTrackedSession, spawnResourceCleanupByPid: params.spawnResourceCleanupByPid,
+    signal: shutdownCancellationDomains.daemonWorkSignal });
   const { port: controlPort, stop: stopControlServer } =
     await startDaemonControlServer({
       skillStore: params.skillStore,
@@ -17225,6 +17230,23 @@ export async function startDaemonSessionControlRuntime(
               message: 'Execution Run executable snapshot is unavailable' } };
           }
           const retainedAgent = runSnapshot?.projection.agent?.binding ?? context.retainedAgent;
+          if (request.operation.kind === 'mcp.plugin.prepare' || request.operation.kind === 'mcp.plugin.materialize'
+            || request.operation.kind === 'mcp.plugin.close') {
+            try {
+              if (request.operation.kind !== 'mcp.plugin.close') {
+                const decision = await authorizeRunnerAgentNewTurn({ retainedAgent });
+                if (decision.status !== 'admitted') return { ok: false as const, error: {
+                  code: 'agent_runtime_daemon_service_generation_not_current', message: 'Runner Agent generation is not current' } };
+              }
+              return { ok: true as const, result: await runnerPluginMcp.dispatch(request.operation, { ...context,
+                agentId: retainedAgent.agentId,
+                ...(runSnapshot ? { runtimeRegistryLease: { ...runSnapshot.snapshot.runtimeRegistryLease, release: async () => {} } } : {}),
+              }) };
+            } catch (error) {
+              return { ok: false as const, error: { code: isPluginError(error) ? error.code : 'plugin_mcp_preparation_unavailable',
+                message: 'Plugin MCP preparation is unavailable' } };
+            }
+          }
           if (request.operation.kind === 'mcp.request_auth.open' || request.operation.kind === 'mcp.request_auth.close') {
             const operation = request.operation;
             const tracked = trackedSession;

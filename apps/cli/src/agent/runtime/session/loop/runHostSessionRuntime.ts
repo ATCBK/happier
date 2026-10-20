@@ -2645,6 +2645,7 @@ export async function runHostSessionRuntime(
       : null,
     getCurrentResolvedRoles: sessionRoleContext.readResolvedRoles,
     getPluginMcpRuntimeRegistry: () => config.pluginMcpRuntimeRegistry ?? config.pluginRuntimeRegistryLease?.registry ?? null,
+    getPluginMcpPort: () => daemonTurnContributionsBridge?.pluginMcp ?? null,
     readRoleSources,
     getCurrentWorkspaceWrites: sessionRoleContext.readWorkspaceWrites,
     prepareWorkspaceWritesPolicy,
@@ -3888,6 +3889,7 @@ export async function runHostSessionRuntime(
           if (snapshot?.mcpServerCatalog?.status !== 'ready' || snapshot.mcpServerCatalog.authority !== 'active') return null;
           const settings = readMcpServersSettingsFromAccountSettings(snapshot);
           return { context: runnerMcpReach.context, settings,
+            catalog: { revision: snapshot.mcpServerCatalog.revision, authority: snapshot.mcpServerCatalog.authority },
             mcpPluginItems: runnerMcpReach.mcpPluginItems.map(item => ({ ...item,
               rules: settings.bindings.filter(rule => rule.serverId === item.itemId) })) };
         },
@@ -3898,7 +3900,8 @@ export async function runHostSessionRuntime(
           const read = readPromptLibraryCatalogRecordV1({ catalog: snapshot.promptLibraryCatalog, key: 'skill-rules',
             rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings });
           return read.status === 'ready' && read.record.key === 'skill-rules'
-            ? { context: runnerSkills.reach.context, rules: read.record.value.rules } : null;
+            ? { context: runnerSkills.reach.context, rules: read.record.value.rules,
+                catalog: { revision: read.revision, authority: read.authority } } : null;
         },
         subscribeAccountSettings: listener => {
           observeCapabilityAccountSettings = listener;

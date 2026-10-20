@@ -3049,6 +3049,8 @@ export function createDaemonControlApp({
     const releasesNewWork = request.body.operation.kind === 'turn.admission.authorize'
       || request.body.operation.kind === 'execution_run.snapshot.acquire_v1'
       || request.body.operation.kind === 'mcp.request_auth.open'
+      || request.body.operation.kind === 'mcp.plugin.prepare'
+      || request.body.operation.kind === 'mcp.plugin.materialize'
       || request.body.operation.kind === 'session.input.admit'
       || request.body.operation.kind === 'managed_server.supervision.authorize';
     if (releasesNewWork ? isDaemonQuiescing() : admissionDrain.isPublicationQuiescing()) {

@@ -238,4 +238,37 @@ describe('standalone MCP client Action admission', () => {
       expect(JSON.parse(text.text)).toEqual({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' });
     } finally { await client.close(); await mcp.close(); }
   });
+
+  it('preserves daemon_unavailable when the captured daemon request fails', async () => {
+    const requests: string[] = [];
+    const daemon = createServer((request, response) => {
+      request.resume();
+      requests.push(request.url ?? '');
+      response.statusCode = 503;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' }));
+    });
+    daemon.listen(0, '127.0.0.1');
+    await once(daemon, 'listening');
+    const address = daemon.address();
+    if (!address || typeof address === 'string') throw new Error('Missing daemon address');
+    const { mcp } = createExternalMcpServer({
+      credentials,
+      daemonControlTarget: { pid: process.pid, httpPort: address.port, controlToken: 'request-failure-control' },
+    });
+    const client = new Client({ name: 'failed-daemon-request-test', version: '1' });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await mcp.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const response = CallToolResultSchema.parse(await client.callTool({ name: 'ui_find', arguments: { op: 'read' } }));
+      const text = response.content.find(entry => entry.type === 'text');
+      if (!text || text.type !== 'text') throw new Error('Missing MCP text result');
+      expect(JSON.parse(text.text)).toEqual({ errorCode: 'daemon_unavailable', error: 'daemon_unavailable' });
+      expect(requests).toEqual(['/actions/root/execute']);
+    } finally {
+      await client.close(); await mcp.close();
+      daemon.closeAllConnections();
+      await new Promise<void>(resolve => daemon.close(() => resolve()));
+    }
+  });
 });
