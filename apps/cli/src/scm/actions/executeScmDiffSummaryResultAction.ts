@@ -7,7 +7,7 @@ import { resolveExecutionRunInteractionAffordances } from '@happier-dev/protocol
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { buildReviewCommentsOutboundMessage } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
 import { ScmDiffSummaryResultReadInputSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultRevisionInputSchema, ScmDiffSummaryRefineInputSchema, ScmDiffSummaryAddOutputsInputSchema, ScmDiffSummaryDiscussInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
-import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ScmComparison, ScmReviewedMarkResponse, ReviewCommentDraftMessageV1, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
+import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ReviewCommentDraftMessageV1, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/buildDiffSummaryPrompt';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/presentScmDiffSummaryModelContext';
@@ -22,7 +22,6 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   actionId: ScmDiffSummarySavedActionId; input: unknown; cwd: string; sessionId?: string;
   executeCanonicalAction?: ExecuteCanonicalAction; signal?: AbortSignal;
   actionContext?: ActionExecutorContext;
-  clearReviewedMarks?: (comparison: ScmComparison) => Promise<ScmReviewedMarkResponse>;
 }>): Promise<ScmDiffSummaryResultResponse | ScmDiffSummaryResultDeleteResponse> {
   const request = ScmDiffSummaryResultReadInputSchema.parse({
     cwd: params.cwd, resultId: (params.input as { resultId: string }).resultId,
@@ -37,16 +36,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   if (params.actionId === 'scm.diffSummary.result.undo' || params.actionId === 'scm.diffSummary.result.delete') {
     const input = ScmDiffSummaryResultRevisionInputSchema.parse(params.input);
     if (params.actionId === 'scm.diffSummary.result.undo') return store.undo({ ...scope, expectedRevision: input.expectedRevision });
-    const saved = await store.read(scope);
-    if (!saved.success) return saved;
-    const deleted = await store.delete({ ...scope, expectedRevision: input.expectedRevision });
-    if (!deleted.success || !params.clearReviewedMarks || !saved.result.output.comparison) return deleted;
-    try {
-      const cleanup = await params.clearReviewedMarks(saved.result.output.comparison);
-      return { ...deleted, marksCleanup: cleanup.success ? { success: true } : { success: false, errorCode: cleanup.errorCode, error: cleanup.error } };
-    } catch (error) {
-      return { ...deleted, marksCleanup: { success: false, errorCode: 'reviewed_marks_unavailable', error: error instanceof Error ? error.message : 'Reviewed marks are unavailable' } };
-    }
+    return store.delete({ ...scope, expectedRevision: input.expectedRevision });
   }
   const read = await store.read(scope);
   if (!read.success) return read;

@@ -1,9 +1,7 @@
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { ScmComparisonCaptureInputSchema, ScmDiffSummaryGenerateInputSchema,
-    buildScmReviewedMarksKey, createScmReviewedMarksRecordPort } from '@happier-dev/protocol/scm';
-import { createAccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
+import { ScmComparisonCaptureInputSchema, ScmDiffSummaryGenerateInputSchema } from '@happier-dev/protocol/scm';
 import { createScmReviewedMarksOperations } from '@/sync/ops/scmDiffSummary/reviewedMarks';
 import { createScmDiffSummaryOperations, type ScmDiffSummaryGenerateRpc, type ScmComparisonCaptureRpc } from '@/sync/ops/scmDiffSummary/generate';
 import {
@@ -56,21 +54,7 @@ export function createScmDiffSummaryOperationsWithTransport(
     return createScmDiffSummaryOperations({ ...captured, ...(actionExecutor ? { actionExecutor } : {}) });
 }
 
-/** Simulate admitted Machine marks transport while exercising the real Account CAS/encryption owner. */
+/** Personal UI marks use the real Account CAS/encryption owner without a Machine dependency. */
 export function createScmReviewedMarksOperationsWithTransport(params: Parameters<typeof createScmReviewedMarksOperations>[0]) {
-    const transport = createAccountKvJsonTransport({ ...params, key: buildScmReviewedMarksKey(params.comparison.id) });
-    const port = createScmReviewedMarksRecordPort({ comparison: params.comparison, transport });
-    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionApprovalRequired: () => false,
-        scmActionExecute: ({ actionId, input }) => {
-            if (actionId !== 'scm.diffSummary.reviewed.mark' && actionId !== 'scm.diffSummary.reviewed.unmark')
-                throw new Error(`Unexpected SCM transport for ${actionId}`);
-            const refs = (input as Readonly<{ changeRefs: string[] }>).changeRefs;
-            return port.setReviewed(refs, actionId === 'scm.diffSummary.reviewed.mark');
-        },
-    // Only the Machine marks transport is simulated; Account record behavior remains real.
-    }));
-    const operations = createScmDiffSummaryResultOperations({ machineId: 'marks-machine', shouldContinue: params.shouldContinue, actionExecutor: executor });
-    return createScmReviewedMarksOperations({ ...params, setReviewedAction: params.setReviewedAction ?? ((refs, reviewed) =>
-        operations.setReviewed({ v: 2, cwd: params.comparison.repository.rootPath, comparisonId: params.comparison.id,
-            source: params.comparison.source, changeRefs: [...refs] }, reviewed)) });
+    return createScmReviewedMarksOperations(params);
 }

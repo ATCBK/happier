@@ -38,6 +38,78 @@ describe('SCM Action execution at the Git backend', () => {
     await Promise.all(repositories.map((path) => rm(path, { recursive: true, force: true })));
   });
 
+  it('emits one HEAD discard note only for files changed before the successful Action', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-scm-head-note-' });
+    repositories.push(fixture.rootPath);
+    const notes: unknown[] = [];
+    const execute = () => executeScmActionOperation({ actionId: 'scm.change.discard',
+      input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'modified' }] },
+      registry, workingDirectory: fixture.rootPath, sessionId: 'review-session',
+      emitFileReviewNote: async note => { notes.push(note); } });
+    expect(await execute()).toMatchObject({ success: true });
+    expect(notes).toEqual([]);
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'changed before discard\n');
+    expect(await execute()).toMatchObject({ success: true, noteDelivery: { status: 'queued' } });
+    expect(notes).toEqual([{ sessionId: 'review-session', action: 'discard', paths: [fixture.trackedPath] }]);
+    expect(await execute()).toMatchObject({ success: true });
+    expect(notes).toHaveLength(1);
+  });
+
+  it('preserves a completed HEAD discard while reporting unavailable note evidence or delivery', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-scm-head-note-failure-' });
+    repositories.push(fixture.rootPath);
+    const registered = createGitScmBackendRuntimeRegistration();
+    // A real contribution without status support exercises the adapter's ordinary
+    // unsupported result; no domain service or state machine is mocked.
+    const noStatus = { ...registered, handlers: { ...registered.handlers,
+      read: { ...registered.handlers.read, statusSnapshot: undefined } } };
+    const noStatusRegistry = createScmBackendRegistry([createRegisteredScmBackendAdapter({
+      definition: { id: 'git', kind: 'git' }, qualifiedId: 'happier.scm.backend.git/git',
+      executableDefinition: registered.runtime!, registration: noStatus,
+      hostingProviderRuntimeServices: createScmHostingProviderRuntimeServicesForTest(),
+    })]);
+    const input = { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'modified' }] };
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'discard without status evidence\n');
+    const notes: unknown[] = [];
+    expect(await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry: noStatusRegistry,
+      workingDirectory: fixture.rootPath, sessionId: 'review-session', emitFileReviewNote: async note => { notes.push(note); } }))
+      .toMatchObject({ success: true, noteDelivery: { status: 'failed' } });
+    expect(notes).toEqual([]);
+    expect(runScmExecutable(fixture.rootPath, 'git', ['diff', '--name-only'])).toBe('');
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'discard with unavailable Home\n');
+    expect(await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry,
+      workingDirectory: fixture.rootPath, sessionId: 'review-session', emitFileReviewNote: async () => { throw new Error('Home unavailable'); } }))
+      .toMatchObject({ success: true, noteDelivery: { status: 'failed' } });
+    expect(runScmExecutable(fixture.rootPath, 'git', ['diff', '--name-only'])).toBe('');
+  });
+
+  it('returns blame ranges through the registered RPC and canonical Action, and refuses unsupported leaves', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-scm-blame-action-' });
+    repositories.push(fixture.rootPath);
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'uncommitted line\n');
+    const handlers = new Map<string, RpcHandler>();
+    registerScmHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, fixture.rootPath, { registry });
+    const handler = handlers.get('scm.blame.file');
+    expect(handler, 'Blame RPC must reach the canonical SCM Action dispatcher').toBeTypeOf('function');
+    const input = { cwd: fixture.rootPath, path: fixture.trackedPath };
+    const action = await executeScmActionOperation({ actionId: 'scm.blame.get', input, registry, workingDirectory: fixture.rootPath });
+    expect(action).toMatchObject({ success: true, ranges: [{ startLine: 1, lineCount: 1, commitIndex: null }], commits: [] });
+    expect(await handler!(input)).toEqual(action);
+    expect(await handler!({ ...input, expectedHash: '0'.repeat(64) })).toMatchObject({ success: false, errorCode: 'stale_file' });
+    expect(await handler!({ ...input, unknownAuthority: true })).toMatchObject({ success: false, errorCode: 'INVALID_REQUEST' });
+    const registered = createGitScmBackendRuntimeRegistration();
+    const noBlameRegistration = { ...registered,
+      handlers: { ...registered.handlers, read: { ...registered.handlers.read, blameFile: undefined } },
+    };
+    const unsupportedRegistry = createScmBackendRegistry([createRegisteredScmBackendAdapter({
+      definition: { id: 'git', kind: 'git' }, qualifiedId: 'happier.scm.backend.git/git',
+      executableDefinition: noBlameRegistration.runtime!, registration: noBlameRegistration,
+      hostingProviderRuntimeServices: createScmHostingProviderRuntimeServicesForTest(),
+    })]);
+    expect(await executeScmActionOperation({ actionId: 'scm.blame.get', input, registry: unsupportedRegistry, workingDirectory: fixture.rootPath }))
+      .toMatchObject({ success: false, errorCode: 'FEATURE_UNSUPPORTED' });
+  });
+
   it('returns a typed invalid-request response at raw RPC ingress before any Git effect', async () => {
     await expect(executeScmActionOperation({
       actionId: 'scm.change.include', input: { paths: ['../outside'] },

@@ -589,6 +589,47 @@ anchors and line ordinals do not authorize mutation. Shared anchor resolution
 qualifies ambiguous, stale, missing or unsupported navigation; it cannot transfer
 marks or replace exact occurrence selection.
 
+## Comparison Discard and guarded Undo
+
+In unreleased 0.3 source, `scm.change.discard` retains its HEAD operation and adds
+a closed `kind: 'comparison'` entry. Comparison selectors never downgrade to
+HEAD. A present UI user can discard selected comparison runs directly; HEAD
+discard still confirms, and Agent, MCP and CLI calls retain danger approval.
+The same executor checks Session authority and exact selected-key membership.
+It consumes Protocol's hunk engine, the backend's `fileAtRevision` bytes, and
+`commitGuardedFileReplace`; it does not add another parser, blob reader or writer.
+
+Run discard requires strict UTF-8 and exact context. Whole-file restore is
+binary-safe. Staged selections, renames, copies and untracked files refuse this
+operation. An added file is deleted only while its current bytes still match the
+captured after blob; an edited added file is kept. An absent deleted file can be
+recreated, without Undo because no current file was overwritten. Every write
+uses its observed current-byte hash or absent-file expectation, preserving a
+concurrent edit instead of overwriting it.
+
+The File-review facade offers one sticky, hash-guarded Undo, retired by dismissal
+or the next review action. Unit inverses retain only changed text; whole-file
+preimages use inline bytes or the existing prepared export. Exported preimages
+are downloaded and verified before ready Undo is offered, released through that
+transfer owner, and held only in the result/notice closure until retirement.
+A failed preimage download reports the completed mutation with unavailable Undo;
+it never repeats the mutation. The rendered File-page integration remains a
+separate presentation handoff, not a completed flow established by this helper.
+
+Two no-cap Undo outcomes remain `AMENDMENT_REQUIRED`: an inverse containing a
+large changed run can itself exceed the routed response budget, and the ordinary
+local Session executor has no preimage-export publisher. Both refuse before
+filesystem mutation when Undo cannot be delivered. The proposed oversized-unit
+resolution is the existing previous-byte export, not truncation or a file-size
+cap. A local Session remains usable without requiring a daemon; introducing a
+publisher there or requiring a different transport needs an explicit decision.
+
+The executor emits one `file_review_note.v1` item per successful Discard/Restore
+Action and receiving Session for all callers. The UI emits only a successful
+Undo's note. Keep, refusal and `kept_edited` emit none. These are explicit
+`next_turn` inputs and do not wake an idle Session. Note-delivery failure is
+reported separately from a completed filesystem mutation and never replays it.
+
 ## Saved edits, personal marks and offline access
 
 Files, Walkthrough and Commits restore through `useScmWalkthroughState` and the

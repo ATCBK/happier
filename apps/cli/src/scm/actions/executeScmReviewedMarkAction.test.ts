@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ScmComparison } from '@happier-dev/protocol/scm';
+import { applyScmReviewedMarkIntent, type ScmComparison } from '@happier-dev/protocol/scm';
 import { createAccountScopedCryptoMaterialSnapshotV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1, deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol';
 import { encrypt, encodeBase64, decodeBase64, decryptResult } from '@/api/encryption';
 import tweetnacl from 'tweetnacl';
-import { createCliScmReviewedMarkAction, clearCliScmReviewedMarks } from './executeScmReviewedMarkAction';
+import { createCliScmReviewedMarkAction } from './executeScmReviewedMarkAction';
 
 const network = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 // Only the HTTP boundary is replaced; currentness, encryption and intent reconciliation are real.
@@ -11,11 +11,12 @@ vi.mock('axios', () => ({ default: network }));
 const comparison: ScmComparison = { id: 'basis', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' },
   endpoints: { before: 'old', after: 'new' }, inventory: { state: 'complete', reasons: [], files: [{
     path: 'a.ts', changeKind: 'modified', binary: false, generated: false, lockfile: false,
-    evidence: { state: 'available', unifiedDiff: 'patch' }, occurrences: [{ id: 'exact', alias: 'c1', path: 'a.ts', position: 0,
+    evidence: { state: 'available', unifiedDiff: '@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [{ id: 'exact', alias: 'c1', path: 'a.ts', position: 0,
       before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 } }],
   }] } };
 const currentness = { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 };
 const resolveAuthorizationHeaders = () => ({ Authorization: 'Bearer token' });
+const marked = () => applyScmReviewedMarkIntent(comparison, null, ['exact'], true);
 
 describe('explicit CLI personal reviewed Action', () => {
   beforeEach(() => { network.get.mockReset(); network.post.mockReset(); });
@@ -26,9 +27,9 @@ describe('explicit CLI personal reviewed Action', () => {
       data: { success: true, results: [{ key: body.mutations[0].key, version: 0 }] } }));
     await expect(createCliScmReviewedMarkAction({ credentials: { token: 'token', encryption: null }, serverBaseUrl: 'https://home',
       resolveAuthorizationHeaders, comparison, changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: true,
-      record: { comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
+      record: marked() });
     const value = network.post.mock.calls[0][1].mutations[0].value;
-    expect(JSON.parse(Buffer.from(value, 'base64').toString())).toEqual({ t: 'plain', v: { v: 1, comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
+    expect(JSON.parse(Buffer.from(value, 'base64').toString())).toEqual({ t: 'plain', v: marked() });
   });
   it('fails before KV mutation on unsupported Account material and unreadable ciphertext', async () => {
     const secret = new Uint8Array(32).fill(7);
@@ -55,7 +56,15 @@ describe('explicit CLI personal reviewed Action', () => {
       resolveAuthorizationHeaders: () => null, comparison, changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: false, errorCode: 'not_authenticated' });
     expect(network.post).not.toHaveBeenCalled();
   });
-  it('never writes or clears the custodian personal record on behalf of another authenticated Machine actor', async () => {
+  it('reports a typed mode mismatch without disclosing or overwriting stored marks', async () => {
+    network.get.mockImplementation(async (url: string) => url.endsWith('/currentness') ? { status: 200, data: currentness }
+      : { status: 200, data: { key: decodeURIComponent(url.slice(url.indexOf('/v1/kv/') + '/v1/kv/'.length)), value: 'encrypted-content', version: 1 } });
+    expect(await createCliScmReviewedMarkAction({ credentials: { token: 'token', encryption: null }, serverBaseUrl: 'https://home',
+      resolveAuthorizationHeaders, comparison, changeRefs: ['exact'], reviewed: true }))
+      .toMatchObject({ success: false, errorCode: 'account_stored_json_mode_mismatch' });
+    expect(network.post).not.toHaveBeenCalled();
+  });
+  it('never writes the custodian personal record on behalf of another authenticated Machine actor', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'custodian' })).toString('base64url')}.signature`;
     let retainedRecord: string | undefined;
     network.get.mockImplementation(async (url: string) => url.endsWith('/currentness') ? { status: 200, data: currentness }
@@ -68,12 +77,10 @@ describe('explicit CLI personal reviewed Action', () => {
       resolveAuthorizationHeaders: () => ({ Authorization: `Bearer ${token}` }), comparison };
     await expect(createCliScmReviewedMarkAction({ ...params, requesterAccountId: 'collaborator',
       changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: false, errorCode: 'reviewed_marks_unavailable' });
-    await expect(clearCliScmReviewedMarks({ ...params, requesterAccountId: 'collaborator' }))
-      .resolves.toMatchObject({ success: false, errorCode: 'reviewed_marks_unavailable' });
     expect(retainedRecord).toBeUndefined();
     await expect(createCliScmReviewedMarkAction({ ...params, requesterAccountId: 'custodian',
       changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: true,
-        record: { comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
+        record: marked() });
     expect(retainedRecord).toBeDefined();
   });
   it.each(['legacy', 'dataKey'] as const)('writes data-key-readable marks from actual %s Account credentials', async type => {
@@ -91,6 +98,6 @@ describe('explicit CLI personal reviewed Action', () => {
       resolveAuthorizationHeaders, comparison, changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: true });
     const encoded = network.post.mock.calls[0][1].mutations[0].value;
     expect(decryptResult(type === 'legacy' ? deriveAccountMachineKeyFromRecoverySecret(key) : key, 'dataKey', decodeBase64(encoded))).toEqual({ status: 'authenticated',
-      value: { v: 1, comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
+      value: marked() });
   });
 });

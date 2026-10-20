@@ -2,7 +2,7 @@ import axios, { AxiosHeaders } from 'axios';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ScmDiffSummaryGenerateOutputSchema, createScmReviewedMarksRecordPort, getActionSpec, type ActionId, type ScmActionId } from '@happier-dev/protocol';
+import { ScmDiffSummaryGenerateOutputSchema, createScmReviewedMarksRecordPort, applyScmReviewedMarkIntent, getActionSpec, type ActionId, type ScmActionId } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -12,10 +12,39 @@ import { configuration } from '@/configuration';
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { removeTempDir } from '@/testkit/fs/tempDir';
+import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { ScmDiffFileResponseSchema } from '@happier-dev/protocol/scm';
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('saved SCM producer admission', () => {
+  it('marks the live working-tree diff by content key without capturing it, and rejects stale keys', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-live-marks-' });
+    const cwd = fixture.rootPath;
+    let value: unknown = null; let version = -1;
+    const transport = { read: async () => ({ value, version }), compareAndSet: async (next: unknown) => {
+      value = next; return { success: true as const, version: ++version };
+    } };
+    const executeReviewedMarks: NonNullable<ExecuteScmActionOperationParams['executeReviewedMarks']> = (evidence, request, reviewed) => {
+      const port = createScmReviewedMarksRecordPort('id' in evidence ? { comparison: evidence, transport } : { source: evidence, transport });
+      return 'changeKeys' in request ? port.setReviewedKeys(request.changeKeys, reviewed) : port.setReviewed(request.changeRefs, reviewed);
+    };
+    const base = { workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots' as const, roots: [cwd] }, executeReviewedMarks };
+    try {
+      await writeFile(join(cwd, fixture.trackedPath), 'Live change without a capture\n');
+      const diff = ScmDiffFileResponseSchema.parse(await executeScmActionOperation({ ...base, actionId: 'scm.diff.file', input: { cwd, path: fixture.trackedPath, area: 'both' } }));
+      expect(diff.success).toBe(true);
+      const changeKeys = buildReviewUnits(fixture.trackedPath, 'combined', diff.diff ?? '').map(unit => unit.key);
+      expect(changeKeys.length).toBeGreaterThan(0);
+      const input = { v: 2, cwd, source: { kind: 'workingTree' }, changeKeys };
+      expect(await executeScmActionOperation({ ...base, actionId: 'scm.diffSummary.reviewed.mark', input }))
+        .toMatchObject({ success: true, record: { reviewedChangeKeys: changeKeys } });
+      await writeFile(join(cwd, fixture.trackedPath), 'Rewritten after display\n');
+      expect(await executeScmActionOperation({ ...base, actionId: 'scm.diffSummary.reviewed.unmark', input }))
+        .toMatchObject({ success: false, errorCode: 'reviewed_marks_invalid_selection' });
+      expect(value).toMatchObject({ reviewedChangeKeys: changeKeys });
+    } finally { await removeTempDir(cwd); }
+  });
   it('marks an exact retained comparison without a saved result and refuses private, foreign-Home and foreign-root captures', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-comparison-marks-' });
     const cwd = fixture.rootPath;
@@ -29,15 +58,17 @@ describe('saved SCM producer admission', () => {
     } };
     const refs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id));
     expect(refs.length).toBeGreaterThan(0);
-    const executeReviewedMarks = vi.fn<NonNullable<ExecuteScmActionOperationParams['executeReviewedMarks']>>((comparison, request, reviewed) =>
-      createScmReviewedMarksRecordPort({ comparison, transport }).setReviewed(request.changeRefs, reviewed));
+    const executeReviewedMarks = vi.fn<NonNullable<ExecuteScmActionOperationParams['executeReviewedMarks']>>((evidence, request, reviewed) => {
+      const port = createScmReviewedMarksRecordPort('id' in evidence ? { comparison: evidence, transport } : { source: evidence, transport });
+      return 'changeKeys' in request ? port.setReviewedKeys(request.changeKeys, reviewed) : port.setReviewed(request.changeRefs, reviewed);
+    });
     const base = { workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots' as const, roots: [cwd] }, executeReviewedMarks };
     const input = { v: 2, cwd, comparisonId: captured.comparison.id, source: captured.comparison.source, changeRefs: refs };
     try {
       expect(await executeScmActionOperation({ ...base, actionId: 'scm.diffSummary.reviewed.mark', input }))
-        .toMatchObject({ success: true, record: { comparisonId: captured.comparison.id, reviewedChangeRefs: refs } });
+        .toMatchObject({ success: true, record: applyScmReviewedMarkIntent(captured.comparison, null, refs, true) });
       expect(await executeScmActionOperation({ ...base, actionId: 'scm.diffSummary.reviewed.unmark', input }))
-        .toMatchObject({ success: true, record: { reviewedChangeRefs: [] } });
+        .toMatchObject({ success: true, record: { reviewedChangeKeys: [] } });
       executeReviewedMarks.mockClear();
       for (const rejected of [
         { input: { ...input, comparisonId: privateCapture.comparison.id, sessionId: 'private' } },

@@ -1,7 +1,7 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmDiffSummaryResultClearInputSchema, ScmDiffSummaryResultClearResponseSchema, ScmDiffSummaryResultResponseSchema, type ScmDiffSummaryResultClearResponse } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
-import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmComparisonSourceKey } from '@happier-dev/protocol/scm';
+import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmComparisonSourceKey, buildScmReviewScopeId, buildReviewUnits, ScmStatusSnapshotResponseSchema, ScmDiffFileResponseSchema, type ScmReviewedMarksSource } from '@happier-dev/protocol/scm';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { runMachineScmRpcWithFallback } from '@/sync/ops/scm/machineScm';
@@ -37,8 +37,23 @@ export function createUiScmAction(
             const read = <T extends Readonly<{ cwd: string }>>(readMethod: string, payload: T) => target?.kind === 'machine'
                 ? runMachineScmRpcWithFallback(target.machineId, readMethod, payload, { serverId, accountId, signal: context.signal })
                 : runSessionScmRpc(sessionId!, readMethod, { ...payload, cwd: undefined }, serverId, context.signal, accountId);
-            const comparison = await (async () => {
-                if ('v' in selection) {
+            const evidence = await (async () => {
+                if ('changeKeys' in selection) {
+                    if (selection.source.kind !== 'workingTree') return null;
+                    const response = ScmStatusSnapshotResponseSchema.safeParse(await read(RPC_METHODS.SCM_STATUS_SNAPSHOT, { cwd: selection.cwd }));
+                    account.assertCurrent();
+                    if (!response.success || !response.data.success || response.data.snapshot?.repo.rootPath !== selection.cwd) return null;
+                    const snapshot = response.data.snapshot;
+                    const groups = await Promise.all(snapshot.entries.map(async entry => (await Promise.all(snapshot.capabilities.supportedDiffAreas.map(async area => {
+                        const diff = ScmDiffFileResponseSchema.safeParse(await read(RPC_METHODS.SCM_DIFF_FILE, { cwd: selection.cwd, path: entry.path, area }));
+                        account.assertCurrent();
+                        if (!diff.success || !diff.data.success) throw new Error('Live change evidence is unavailable.');
+                        const layer = area === 'both' ? 'combined' : area === 'included' ? 'staged' : entry.kind === 'untracked' ? 'untracked' : 'unstaged';
+                        return buildReviewUnits(entry.path, layer, diff.data.diff ?? '').map(unit => unit.key);
+                    }))).flat()));
+                    return { repositoryRootPath: snapshot.repo.rootPath, source: selection.source, changeKeys: groups.flat() } satisfies ScmReviewedMarksSource;
+                }
+                if ('comparisonId' in selection) {
                     const captured = ScmComparisonCaptureOutputSchema.safeParse(await read(RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE, {
                         cwd: selection.cwd, comparisonId: selection.comparisonId, source: selection.source,
                         ...(sessionId ?? selection.sessionId ? { sessionId: sessionId ?? selection.sessionId } : {}),
@@ -62,13 +77,16 @@ export function createUiScmAction(
                 return saved.success && saved.data.success && saved.data.result.resultId === selection.resultId
                     && saved.data.result.output.comparison?.repository.rootPath === selection.cwd ? saved.data.result.output.comparison : null;
             })();
-            if (!comparison) return { success: false, errorCode: 'reviewed_marks_unavailable', error: 'The exact captured comparison is unavailable for this caller.' };
+            if (!evidence) return { success: false, errorCode: 'reviewed_marks_unavailable', error: 'The selected change evidence is unavailable for this caller.' };
             const { encryption } = await account.resolveAccountEncryption();
             account.assertCurrent();
             const shouldContinue = () => { try { account.assertCurrent(); context.signal?.throwIfAborted(); return true; } catch { return false; } };
-            const transport = createAccountKvJsonTransport({ key: buildScmReviewedMarksKey(comparison.id), credentials: account.credentials,
+            const scope = 'id' in evidence ? { repositoryRootPath: evidence.repository.rootPath, source: evidence.source } : evidence;
+            const transport = createAccountKvJsonTransport({ key: buildScmReviewedMarksKey(buildScmReviewScopeId(scope)), credentials: account.credentials,
                 request: account.request, encryption, shouldContinue });
-            const result = await createScmReviewedMarksRecordPort({ comparison, transport }).setReviewed(selection.changeRefs, actionId === 'scm.diffSummary.reviewed.mark');
+            const port = createScmReviewedMarksRecordPort('id' in evidence ? { comparison: evidence, transport } : { source: evidence, transport });
+            const result = await ('changeKeys' in selection ? port.setReviewedKeys(selection.changeKeys, actionId === 'scm.diffSummary.reviewed.mark')
+                : port.setReviewed(selection.changeRefs, actionId === 'scm.diffSummary.reviewed.mark'));
             account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
             return result;
         }
@@ -79,12 +97,10 @@ export function createUiScmAction(
             const cwd = actionId === 'scm.repository.clone' ? request.destinationParentPath : request.cwd;
             if (!target.machineId.trim() || (!machineInventory && !cwd?.trim())) return { ok: false, errorCode: 'invalid_input', error: 'invalid_input' };
             if (actionId === 'scm.diffSummary.result.clear') {
-                if (!account) return { success: false, errorCode: 'result_unavailable', error: 'Captured Account credentials are required to clear personal reviewed marks.' };
                 const selection = ScmDiffSummaryResultClearInputSchema.parse(input);
                 const deleted: Extract<ScmDiffSummaryResultClearResponse, { success: true }>['deleted'] = [];
                 const failures: Extract<ScmDiffSummaryResultClearResponse, { success: true }>['failures'] = [];
-                const current = () => { context.signal?.throwIfAborted(); account.assertCurrent(); };
-                const shouldContinue = () => { try { current(); return true; } catch { return false; } };
+                const current = () => { context.signal?.throwIfAborted(); account?.assertCurrent(); };
                 for (const item of selection.results) {
                     try {
                         current();
@@ -103,33 +119,20 @@ export function createUiScmAction(
                         if (isScmCommitPlanApplicationLocked(saved.application)) {
                             failures.push({ resultId: item.resultId, success: false, errorCode: 'application_locked', error: 'Resolve the accepted commit application before clearing its result.' }); continue;
                         }
-                        // This is the admitted terminal, not a consumer pre-prepare effect.
-                        // Keep the canonical saved identity for retry until Account cleanup succeeds.
-                        const { clearScmReviewedMarksForComparisonId } = await import('@/sync/ops/scmDiffSummary/reviewedMarks');
-                        current();
-                        const { encryption } = await account.resolveAccountEncryption();
-                        current();
-                        const cleanup = await clearScmReviewedMarksForComparisonId({ comparisonId: item.comparisonId,
-                            credentials: account.credentials, request: account.request, encryption, shouldContinue });
-                        current();
-                        if (!cleanup.success) {
-                            failures.push({ resultId: item.resultId, success: false, errorCode: 'result_unavailable',
-                                error: `${cleanup.errorCode}: ${cleanup.error}` }); continue;
-                        }
                         // A concurrent edit/application may still win: the machine's existing
                         // locked revision/application check remains the deletion authority.
                         const cleared = ScmDiffSummaryResultClearResponseSchema.safeParse(await runMachineScmRpcWithFallback(target.machineId,
                             method, { results: [item] }, { serverId, accountId, signal: context.signal }));
-                        account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
+                        account?.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
                         if (!cleared.success) throw new Error('The saved-result Clear response could not be validated.');
                         if (!cleared.data.success) failures.push({ ...cleared.data, resultId: item.resultId });
                         else {
                             failures.push(...cleared.data.failures);
-                            deleted.push(...cleared.data.deleted.map(result => ({ ...result, marksCleanup: result.marksCleanup ?? { success: true } })));
+                            deleted.push(...cleared.data.deleted);
                         }
                     } catch (error) {
                         failures.push({ resultId: item.resultId, success: false, errorCode: 'result_unavailable',
-                            error: error instanceof Error ? error.message : 'Saved result or Account marks are unavailable.' });
+                            error: error instanceof Error ? error.message : 'The saved result is unavailable.' });
                     }
                 }
                 return { success: true, deleted, failures };

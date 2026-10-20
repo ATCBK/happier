@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     createActionExecutor, type ActionExecutorDeps, ExecutionRunStartRequestSchema,
     ScmComparisonSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryResultResponseSchema,
-    ScmReviewedMarksRecordSchema, ScmReviewedMarkResponseSchema,
+    ScmReviewedMarksRecordSchema, ScmReviewedMarkResponseSchema, applyScmReviewedMarkIntent,
     type ScmComparison, type ScmDiffSummaryResultReadInput, type ScmDiffSummaryResultEditInput,
     type ScmDiffSummaryResultResponse, type ScmReviewedMarksRecord, type ScmReviewedMarkResponse, type ScmReviewedMarkInput,
 } from '@happier-dev/protocol';
@@ -99,7 +99,8 @@ describe('captured comparison, structured publication and personal marks', () =>
                     executeReviewedMarks: (captured, request, reviewed) => createCliScmReviewedMarkAction({
                         credentials: { token: 'journey-account', encryption: null }, serverBaseUrl: 'https://journey.test',
                         resolveAuthorizationHeaders: () => ({ Authorization: 'Bearer journey-account' }),
-                        comparison: captured, changeRefs: request.changeRefs, reviewed,
+                        ...('id' in captured ? { comparison: captured } : { source: captured }),
+                        ...('changeKeys' in request ? { changeKeys: request.changeKeys } : { changeRefs: request.changeRefs }), reviewed,
                     }),
                 });
             const settings = { v: 1, actions: {}, approvalWaivedSurfaces: {
@@ -137,7 +138,7 @@ describe('captured comparison, structured publication and personal marks', () =>
             let version = -1;
             let content: string | null = null;
             let injectConcurrentMark = false;
-            const record = (refs: string[]) => ScmReviewedMarksRecordSchema.parse({ v: 1, comparisonId: comparison.id, reviewedChangeRefs: refs });
+            const record = (refs: string[]) => applyScmReviewedMarkIntent(comparison, null, refs, true);
             const encode = (value: unknown) => Buffer.from(JSON.stringify({ t: 'plain', v: value })).toString('base64');
             const route = (path: string, body?: { mutations: { key: string; value: string; version: number }[] }) => {
                 if (path.endsWith('/currentness')) return { status: 200, data: currentness };
