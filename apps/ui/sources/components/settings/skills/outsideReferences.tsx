@@ -43,7 +43,7 @@ export function remainingOutsideReferences(
 }
 
 /**
- * A previewed skill's instructions point at other files: the siblings the person keeps ("Also adds X, which Y refers
+ * A previewed skill's instructions point at other files: the siblings the person keeps ("Also adds X, which it refers
  * to") and the relative files its bundle will not have (an advisory, never a block). On a preview row it is quiet
  * lines under the facts, through `CapabilityRow` `note`.
  */
@@ -62,7 +62,6 @@ export function skillReferencesNote(
       {siblings.map((sibling) => (
         <SkillAlsoAddsNote
           key={sibling.path}
-          skill={item.name}
           name={nameByPath.get(sibling.path) ?? sibling.path}
           testID={`${testID}.sibling.${sibling.path}`}
         />
@@ -74,14 +73,14 @@ export function skillReferencesNote(
   );
 }
 
-/** "Also adds <name>, which <skill> refers to": the one line that says why a sibling comes along. */
-export function SkillAlsoAddsNote(props: Readonly<{ name: string; skill: string; testID: string }>) {
+/** "Also adds <name>, which it refers to": the one line that says why a sibling comes along. */
+export function SkillAlsoAddsNote(props: Readonly<{ name: string; testID: string }>) {
   const { theme } = useUnistyles();
   return (
     <View style={styles.note} testID={props.testID}>
       <Icon name="plus-circle" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
       <Text variant="meta" style={styles.noteText}>
-        {t('capabilities.skillAdd.alsoAdds', { name: props.name, skill: props.skill })}
+        {t('capabilities.skillAdd.alsoAdds', { name: props.name })}
       </Text>
     </View>
   );

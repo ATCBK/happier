@@ -164,7 +164,7 @@ describe('SkillLinkInput referenced siblings', () => {
   it('names the sibling a ticked skill brings, leaves only the other file as the warning, and adds both', async () => {
     const { screen, installs } = await renderFoundPair();
     expect(screen.findHostByTestId('link.item.prisma-cli.sibling.skills/orm-setup')).not.toBeNull();
-    expect(screen.getTextContent()).toContain('Also adds orm-setup, which prisma-cli refers to');
+    expect(screen.getTextContent()).toContain('Also adds orm-setup, which it refers to');
     expect(screen.getTextContent()).toContain('one file');
     await screen.pressByTestIdAsync('link.add');
     expect(installs).toEqual([

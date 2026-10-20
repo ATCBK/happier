@@ -33,6 +33,7 @@ import {
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -738,6 +739,7 @@ function SkillAddDetail(
   return (
     <View style={styles.detail}>
       <ItemGroup surface="none">
+        <BareSectionContent>
         <View style={styles.head}>
         <Text
           variant="title"
@@ -820,6 +822,7 @@ function SkillAddDetail(
           </View>
         ) : null}
         </View>
+        </BareSectionContent>
       </ItemGroup>
       <WhereItsOnControl
         testID={`${TEST_ID}.detail.where`}
@@ -941,7 +944,6 @@ function SkillAddDetail(
               keptSiblings.has(sibling.path) ? (
                 <SkillAlsoAddsNote
                   name={sibling.name}
-                  skill={offered.primary.name}
                   testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
                 />
               ) : undefined
@@ -962,6 +964,7 @@ function SkillAddDetail(
         title={t('capabilities.skillAdd.detail.nextTitle')}
         surface="none"
       >
+        <BareSectionContent>
         <View style={styles.steps}>
           {[
             t('capabilities.skillAdd.detail.next1'),
@@ -975,6 +978,7 @@ function SkillAddDetail(
             >{`${index + 1}. ${line}`}</Text>
           ))}
         </View>
+        </BareSectionContent>
       </ItemGroup>
       {skill && skill.files.length > 0 ? (
         <ItemGroup

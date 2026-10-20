@@ -83,11 +83,14 @@ export function SkillUploadInput(
   >({ kind: 'idle' });
   const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set());
   const [adding, setAdding] = React.useState(false);
+  // A failed Add keeps the preview and the ticks: the footer says so and the same Add retries the same selection.
+  const [addError, setAddError] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState(false);
 
   const accept = React.useCallback(
     async (source: UploadSource) => {
       setState({ kind: 'reading' });
+      setAddError(null);
       const read = await readSkillUpload(source);
       if (!read.ok) {
         setState({ kind: 'error', message: describeUploadError(read.error) });
@@ -190,7 +193,10 @@ export function SkillUploadInput(
       testID={`${props.testID}.preview`}
       items={items}
       ticked={ticks}
-      onToggle={(path) => setTicked((previous) => toggleSkillPreview(items, previous, path))}
+      onToggle={(path) => {
+        setAddError(null);
+        setTicked((previous) => toggleSkillPreview(items, previous, path));
+      }}
       onOpen={props.onAdded}
       facts={(item) => ({
         presentation: 'row',
@@ -204,6 +210,7 @@ export function SkillUploadInput(
   const add = React.useCallback(async () => {
     if (state.kind !== 'ready') return;
     setAdding(true);
+    setAddError(null);
     // One skill is added as it is; a folder of several adds the ticked ones.
     const several = state.items.length > 1;
     const outcome = await installSkills(props.execute, {
@@ -212,7 +219,7 @@ export function SkillUploadInput(
     });
     setAdding(false);
     if (!outcome.ok) {
-      setState({ kind: 'error', message: t('capabilities.add.addFailed') });
+      setAddError(t('capabilities.add.addFailed'));
       return;
     }
     props.onAdded(outcome.skillIds[0]!);
@@ -281,12 +288,24 @@ export function SkillUploadInput(
               {previewRows(state.items, ticked)}
             </ItemGroup>
           ) : (
-            previewRows(state.items, null)
+            // The one skill found stands in the same bare section as several, so its row has the same hairline extent.
+            <ItemGroup surface="none" header="none">
+              {previewRows(state.items, null)}
+            </ItemGroup>
           )
         ) : null}
       </ScrollView>
       {state.kind === 'ready' ? (
-        <CapabilityAddFooter testID={`${props.testID}.footer`} start={null}>
+        <CapabilityAddFooter
+          testID={`${props.testID}.footer`}
+          start={
+            addError ? (
+              <Text variant="meta" style={{ color: theme.colors.status.error }} testID={`${props.testID}.add-error`}>
+                {addError}
+              </Text>
+            ) : null
+          }
+        >
           {allHeld?.kind === 'open' ? (
             <RoundButton
               size="normal"
