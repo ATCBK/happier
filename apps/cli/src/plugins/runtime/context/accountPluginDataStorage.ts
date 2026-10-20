@@ -90,7 +90,7 @@ export type AccountPluginDataHttpClient = Readonly<{
  */
 export type AccountPluginDataStorageHostDependencies = Readonly<{
     readCredentials?: () => Promise<StoredCredentials | null>;
-    isCurrentAccount?: (credentials: StoredCredentials) => boolean;
+    isCurrentAccount?: (credentials: StoredCredentials) => boolean | Promise<boolean>;
     resolveAccountScopeKey?: () => string | null;
     http?: AccountPluginDataHttpClient;
     resolveBaseUrl?: () => string;
@@ -656,10 +656,11 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             await assertBoundCurrent(lifecycle, operationSignal);
             let current = false;
             try {
-                current = isCurrentAccount(credentials);
+                current = await isCurrentAccount(credentials);
             } catch {
                 current = false;
             }
+            await assertBoundCurrent(lifecycle, operationSignal);
             if (!current) {
                 throw dataError(ACCOUNT_DATA_UNAVAILABLE_CODE, 'Account Data is unavailable for the current Account');
             }

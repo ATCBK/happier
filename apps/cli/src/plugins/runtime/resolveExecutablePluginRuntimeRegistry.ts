@@ -1790,7 +1790,7 @@ export type PluginRuntimeMachineAdmissionTransport = CliActionMachineAdmissionTr
 export async function resolveExecutablePluginRuntimeRegistry(
     params?: Readonly<{
         /** Source and lifetime of the authenticated invoking Account process. */
-        accountExecution?: Pick<AccountPluginActivationSourcesInput, 'credentials' | 'serverUrl' | 'isCurrent'>
+        accountExecution?: Pick<AccountPluginActivationSourcesInput, 'credentials' | 'serverUrl' | 'isCurrent' | 'isCredentialCurrent'>
             & Readonly<{ machineId?: string; serverId?: string; serverIdentityId?: string }>;
         signal?: AbortSignal;
         readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
@@ -1889,7 +1889,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
     const generation = params?.generation ?? 0;
     const scopedActionRuntime = params?.scopedActionRuntime;
     const readSessionCredentials = params?.accountExecution
-        ? async () => params.accountExecution!.credentials
+        ? async () => await params.accountExecution!.isCredentialCurrent?.() === false
+            ? null : params.accountExecution!.credentials
         : scopedActionRuntime
         ? async () => scopedActionRuntime.credentials
         : readStoredCredentials;
@@ -2463,7 +2464,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
             : {}),
         ...(params?.accountExecution ? {
             readCredentials: readSessionCredentials,
-            isCurrentAccount: () => params.accountExecution!.isCurrent(),
+            isCurrentAccount: async () => await params.accountExecution!.isCredentialCurrent?.() !== false
+                && params.accountExecution!.isCurrent(),
             resolveAccountScopeKey: () => resolveAccountSettingsScopeKey(params.accountExecution!.credentials),
             resolveBaseUrl: () => params.accountExecution!.serverUrl,
         } : {}),

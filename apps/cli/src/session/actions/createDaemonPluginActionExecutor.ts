@@ -125,14 +125,17 @@ export function createPluginActionExecutor(params: Readonly<{
       } } };
     }
     if (local && 'accountSelectionUnavailable' in local) {
-      const metadataIdentity = actionId === 'action.spec.get' && typeof input === 'object' && input !== null
-        && 'id' in input && typeof input.id === 'string' ? parseQualifiedPluginActionId(input.id) : null;
+      const metadataActionId = typeof input === 'object' && input !== null
+        ? actionId === 'action.spec.get' && 'id' in input ? input.id
+          : actionId === 'action.options.resolve' && 'actionId' in input ? input.actionId : null
+        : null;
+      const metadataIdentity = typeof metadataActionId === 'string' ? parseQualifiedPluginActionId(metadataActionId) : null;
       const reference = PluginContributionIdentityV1Schema.safeParse(actionId === 'action.invoke'
         && typeof input === 'object' && input !== null && 'action' in input ? input.action : metadataIdentity ?? contributedIdentity);
       const unavailable = { matched: true as const, result: { ok: false as const,
         errorCode: 'plugin_action_execution_placement_unavailable', error: 'plugin_action_execution_placement_unavailable' } };
-      // An Account-classified receiver may read a current Machine descriptor,
-      // but losing Account custody cannot admit a Machine effect there.
+      // An Account-classified receiver may read a current non-Account
+      // descriptor, but losing Account custody cannot admit an effect there.
       if (!params.requestPluginActionExecution && actionId !== 'action.spec.get') return unavailable;
       if (!reference.success) return unavailable;
       const id = formatQualifiedPluginActionId(reference.data);
@@ -144,7 +147,10 @@ export function createPluginActionExecutor(params: Readonly<{
         : { matched: true as const, result: await params.base.execute('action.spec.get', { id }, context) };
       if (!descriptor.matched || !descriptor.result.ok) return unavailable;
       const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].safeParse(descriptor.result.result);
-      if (!parsed.success || parsed.data.actionSpec.id !== id || parsed.data.actionSpec.executionPlacement !== 'machine') return unavailable;
+      if (!parsed.success || parsed.data.actionSpec.id !== id
+        || (parsed.data.actionSpec.executionPlacement !== 'machine'
+          && !(parsed.data.actionSpec.executionPlacement === 'client'
+            && (params.requestPluginActionExecution !== undefined || actionId === 'action.spec.get')))) return unavailable;
       if (!params.requestPluginActionExecution || actionId === 'action.spec.get') return descriptor;
       // The daemon's ordinary final owner rechecks its current declaration and
       // refuses Account placement immediately before any handler invocation.

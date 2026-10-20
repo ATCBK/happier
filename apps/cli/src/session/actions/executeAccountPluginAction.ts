@@ -77,11 +77,17 @@ export async function executeAccountPluginAction(params: Readonly<{
       ...(params.host.happyHomeDir ? { happyHomeDir: params.host.happyHomeDir } : {}),
       ...(params.context?.signal ? { signal: params.context.signal } : {}),
       accountExecution: { credentials, serverUrl: params.host.serverHttpBaseUrl!, isCurrent,
+        ...(params.host.isCredentialCurrent ? { isCredentialCurrent: params.host.isCredentialCurrent } : {}),
         ...(params.host.serverId ? { serverId: params.host.serverId } : {}),
         ...(params.context?.serverIdentityId ? { serverIdentityId: params.context.serverIdentityId } : {}),
         ...(params.context?.executionRunTargetMachineId ? { machineId: params.context.executionRunTargetMachineId } : {}) },
     }).catch(unavailableSource);
-    if (!registry) return search ? { matched: false } : { matched: false, accountSelectionUnavailable: true };
+    // A non-search call reaches runtime construction only after its exact
+    // current declaration selected Account execution. Losing that source does
+    // not turn the invocation into an independently admitted Machine Action.
+    const accountHandlerUnavailable = { matched: true as const, result: { ok: false as const,
+      errorCode: 'plugin_action_handler_missing', error: 'plugin_action_handler_missing' } };
+    if (!registry) return search ? { matched: false } : accountHandlerUnavailable;
     try {
       const selection = pluginId ? registry.readAccountExecutionSelection?.(pluginId) : null;
       if (selection?.kind === 'unavailable' && selection.code !== 'plugin_account_execution_unavailable') return { matched: true,
@@ -89,7 +95,7 @@ export async function executeAccountPluginAction(params: Readonly<{
       if (!search && !registry.contributes.actions.some(action => action.identity?.pluginId === pluginId
         && action.identity?.localId === localId && typeof action.definition.execution === 'object'
         && action.definition.execution !== null && 'target' in action.definition.execution
-        && action.definition.execution.target === 'account')) return { matched: false, accountSelectionUnavailable: true };
+        && action.definition.execution.target === 'account')) return accountHandlerUnavailable;
       // Borrow the same finite runtime for nested schema/invocation reads; the
       // owning invocation disposes it once, after approval and settlement.
       const lease = { registry, source: 'ephemeral' as const, durableRevision: -1, release: async () => {} };

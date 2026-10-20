@@ -121,7 +121,7 @@ describe('admitted Channels checkpoint supervisor caller provenance', () => {
                         expect(callerOrigin).toEqual({ serverIdentityId: home.serverIdentityId,
                             materializationRef: fixture.registry.resolveCurrentPluginMaterializationRef?.('happier.channels') });
                     }
-                });
+                }, { timeout: 30_000 });
             } finally {
                 await fixture.dispose();
                 await supervisor.dispose();

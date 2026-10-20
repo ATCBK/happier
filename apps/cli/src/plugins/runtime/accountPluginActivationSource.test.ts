@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
-import { resolveAccountPluginActivationSources } from './accountPluginActivationSource';
+import { readCurrentAccountPluginExecutionSelection, resolveAccountPluginActivationSources } from './accountPluginActivationSource';
 import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
 import { createCommittedContributedActionInvoker, createCommittedContributedActionDefinitionLister,
     createCommittedContributedActionSchemaReader } from './invocation/actions/createCommittedContributedActionDeps';
@@ -23,8 +23,78 @@ import { executeAccountPluginAction } from '@/session/actions/executeAccountPlug
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { PLUGIN_ACTION_EXECUTE_PATH } from '@/plugins/daemon/controlRoutes';
+import * as persistence from '@/persistence';
 
 describe('Account activation source assembly', () => {
+    it.each(['Artifact', 'Account source census'] as const)('keeps a selected Account release refused after %s HTTP 404 instead of replaying its Action on a Machine', async phase => {
+        const home = await mkdtemp(join(tmpdir(), 'account-missing-artifact-'));
+        const app = fastify();
+        const daemon = fastify();
+        const { pluginId, artifactId } = await registerAuthoredAccountActionRelease(app, 'owner');
+        const qualifiedId = formatQualifiedPluginActionId({ pluginId, localId: 'echo' });
+        const credentials = { token: 'fixture', encryption: null } as const;
+        const serverUrl = 'http://account-missing-artifact.test';
+        const failedSourcePath = phase === 'Artifact' ? `/v1/artifacts/${artifactId}`
+            : PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'];
+        let missingSourceReads = 0;
+        app.addHook('onRequest', async (request, reply) => {
+            if (request.url === failedSourcePath) {
+                missingSourceReads += 1;
+                return reply.code(404).send({ error: 'not_found' });
+            }
+        });
+        app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+        app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
+        const machineDescriptor = ActionDiscoveryDefinitionV1Schema.parse({ id: qualifiedId, kindVersion: 1,
+            title: 'Incumbent Machine echo', description: null, safety: 'safe', placements: [], slash: null,
+            bindings: null, examples: null, inputHints: null, inputSchema: {}, executionPlacement: 'machine',
+            surfaces: { ui: false, voice: false, agent: false, mcp: false, cli: true, rpc: false, api: false, plugin: false } });
+        let machineDescriptorReads = 0;
+        let machineEffects = 0;
+        daemon.post<{ Body: Parameters<typeof daemonControlClient.requestDaemonPluginActionExecution>[0] }>(PLUGIN_ACTION_EXECUTE_PATH,
+            async request => {
+                if (request.body.actionId === 'action.spec.get') {
+                    expect(request.body.input).toEqual({ id: qualifiedId });
+                    machineDescriptorReads += 1;
+                    return { matched: true, result: { ok: true, result: { actionSpec: machineDescriptor } } };
+                }
+                expect(request.body).toMatchObject({ actionId: 'action.invoke',
+                    input: { action: { pluginId, localId: 'echo' }, input: { key: 'cold' } } });
+                machineEffects += 1;
+                return { matched: true, result: { ok: true, result: { replayedOnMachine: true } } };
+            });
+        const daemonUrl = await daemon.listen({ host: '127.0.0.1', port: 0 });
+        // The local state-file reader is the filesystem boundary. Dispatch,
+        // daemon HTTP, selection, compilation and activation remain real.
+        const readDaemonState = vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: process.pid,
+            httpPort: Number(new URL(daemonUrl).port), startedAt: Date.now(), startedWithCliVersion: 'test' });
+        await app.ready();
+        const restore = installAxiosFastifyAdapter({ app, origin: serverUrl });
+        try {
+            expect(await readCurrentAccountPluginExecutionSelection({ pluginId, credentials, serverUrl }))
+                .toMatchObject({ kind: 'available', sourceCustody: { kind: 'account_release' },
+                    manifest: { contributes: { actions: expect.arrayContaining([expect.objectContaining({ id: 'echo',
+                        execution: expect.objectContaining({ target: 'account' }) })]) } } });
+            // Prove the incumbent transport admits this exact Machine descriptor
+            // before using its effect counter as the no-fallback oracle.
+            expect(await daemonControlClient.requestDaemonPluginActionExecution({ actionId: 'action.spec.get',
+                input: { id: qualifiedId }, surface: 'cli' })).toMatchObject({ matched: true,
+                result: { ok: true, result: { actionSpec: { id: qualifiedId, executionPlacement: 'machine' } } } });
+            machineDescriptorReads = 0;
+            const cli = createCliActionExecutor({ token: 'fixture', credentials: { ...credentials, credentialProvenance: 'stored_session' },
+                happyHomeDir: home, sessionId: 'cli-global', mode: 'plain', ctx: null,
+                serverId: 'account-missing-artifact', serverHttpBaseUrl: serverUrl });
+            const result = await cli.execute('action.invoke', { action: { pluginId, localId: 'echo' }, input: { key: 'cold' } }, { surface: 'cli' });
+            expect(missingSourceReads).toBeGreaterThan(0);
+            expect({ result, machineDescriptorReads, machineEffects }).toMatchObject({
+                result: { ok: false, errorCode: expect.any(String) }, machineDescriptorReads: 0, machineEffects: 0,
+            });
+        } finally { readDaemonState.mockRestore(); restore(); await Promise.all([app.close(), daemon.close()]);
+            await rm(home, { recursive: true, force: true }); }
+    });
     it('reports one missing bundled root without losing another Account source', async () => {
         const home = await mkdtemp(join(tmpdir(), 'account-source-isolation-'));
         const app = fastify();

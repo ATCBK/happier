@@ -7,7 +7,9 @@ import { StoredTargetActionApprovalRequestV1Schema } from '@happier-dev/protocol
 import { PluginAccountStorageMutationRequestV1Schema, PluginAccountStorageMutationResponseV1Schema,
     PluginAccountStorageReadResponseV1Schema } from '@happier-dev/protocol/plugins/data/accountKvV1';
 import * as accountChanges from '@/api/observeAccountChanges';
+import { readStoredCredentialsForServerId, removeStoredCredentialsForServerId, writeStoredCredentialsForServerId } from '@/persistence';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { registerAccountHomeHttp } from '@/session/actions/widgetApproval.testkit';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { registerAuthoredAccountActionRelease } from './accountPluginActions.testkit';
@@ -24,14 +26,19 @@ it.each([
     { scenario: 'uncertain', surface: 'cli' },
     { scenario: 'cancel', surface: 'cli' },
     { scenario: 'caller_retire', surface: 'cli' },
+    { scenario: 'credential_rotate', surface: 'cli' },
+    { scenario: 'credential_rotate_read', surface: 'cli' },
 ] as const)(
     'keeps the public authored Account write pending until a separate CLI decides: $surface $scenario', async ({ scenario, surface }) => {
         const app = fastify();
         const endpoint = 'http://account-approval.test';
-        const serverId = 'account-approval';
+        const rotatesCredentials = scenario === 'credential_rotate' || scenario === 'credential_rotate_read';
+        const serverId = rotatesCredentials ? 'account-approval-rotation' : 'account-approval';
         const accountId = `account-owner-${surface}-${scenario}`;
         const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
             encryption: null, credentialProvenance: 'stored_session' as const };
+        const rotateStoredCredentials = () => writeStoredCredentialsForServerId(serverId,
+            { ...credentials, token: `${credentials.token}-rotated` });
         const { pluginId, providerPluginId, artifacts, setEnabled, setPluginEnabled } = await registerAuthoredAccountActionRelease(app, accountId,
             { includeAccountProvider: scenario === 'caller_retire' });
         const effectPluginId = scenario === 'caller_retire' ? providerPluginId : pluginId;
@@ -50,7 +57,17 @@ it.each([
         };
         let stored: ReturnType<typeof PluginAccountStorageReadResponseV1Schema.parse> = { status: 'absent' };
         let writes = 0;
-        app.get(`/v1/account/plugin-storage/${effectPluginId}`, async () => stored);
+        let rotatedDuringRead = false;
+        app.get(`/v1/account/plugin-storage/${effectPluginId}`, async request => {
+            if (scenario === 'credential_rotate_read' && !rotatedDuringRead) {
+                // The handler has already entered. Home accepts its captured
+                // bearer, then the stored sign-in changes before this read ends.
+                expect(request.headers.authorization).toBe(`Bearer ${credentials.token}`);
+                await rotateStoredCredentials();
+                rotatedDuringRead = true;
+            }
+            return stored;
+        });
         app.post(`/v1/account/plugin-storage/${effectPluginId}`, async (request, reply) => {
             const mutation = PluginAccountStorageMutationRequestV1Schema.parse(request.body);
             expect(readApproval().status).toBe('executing');
@@ -84,8 +101,13 @@ it.each([
             return { dispose: async () => {} };
         });
         const controller = new AbortController();
+        if (rotatesCredentials) {
+            await writeStoredCredentialsForServerId(serverId, credentials);
+            expect(await readStoredCredentialsForServerId(serverId)).toEqual(credentials);
+        }
         const original = createCliActionExecutorFromCredentials({ credentials, serverId, serverIdentityId: serverId,
-            serverApiUrl: endpoint });
+            serverApiUrl: endpoint,
+            ...(rotatesCredentials ? { readCredentials: () => readStoredCredentialsForServerId(serverId) } : {}) });
         let settled = false;
         const invoking = original.execute('action.invoke', { action: { pluginId, localId: scenario === 'caller_retire' ? 'record-source' : 'write' },
             input: scenario === 'caller_retire' ? { key: 'approved' } : { key: 'approved', value: 'written once' } }, { surface, signal: controller.signal,
@@ -121,6 +143,16 @@ it.each([
                 expect(await readCurrentAccountPluginExecutionSelection({ credentials, serverUrl: endpoint, pluginId: effectPluginId }))
                     .toMatchObject({ kind: 'available' });
             }
+            const capturedAccountLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+            const capturedAccountSnapshot = getActiveAccountSettingsSnapshot();
+            if (scenario === 'credential_rotate') {
+                // Rotate only the real stored credential. Home still accepts
+                // the original token and the release/settings remain current.
+                await rotateStoredCredentials();
+                expect((await readStoredCredentialsForServerId(serverId))?.token).toBe(`${credentials.token}-rotated`);
+                expect(await readCurrentAccountPluginExecutionSelection({ credentials, serverUrl: endpoint, pluginId }))
+                    .toMatchObject({ kind: 'available' });
+            }
             // This standalone public executor gets no plugin registry, replay
             // override, current-intent callback, Machine or shared test harness.
             if (scenario === 'cancel') {
@@ -135,6 +167,18 @@ it.each([
             const decision = await deciding.execute('approval.request.decide', decisionInput, decisionContext);
             expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
             const result = await invoking;
+            if (rotatesCredentials) {
+                expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(capturedAccountLifetime);
+                expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe(capturedAccountSnapshot?.scopeKey);
+                expect(getActiveAccountSettingsSnapshot()?.settings).toEqual(capturedAccountSnapshot?.settings);
+                expect((await readStoredCredentialsForServerId(serverId))?.token).toBe(`${credentials.token}-rotated`);
+                expect(await readCurrentAccountPluginExecutionSelection({ credentials, serverUrl: endpoint, pluginId }))
+                    .toMatchObject({ kind: 'available' });
+            }
+            if (scenario === 'credential_rotate_read') expect(rotatedDuringRead).toBe(true);
+            const noEffect = scenario === 'reject' || scenario === 'disable' || scenario === 'cancel'
+                || scenario === 'caller_retire' || rotatesCredentials;
+            expect(writes).toBe(noEffect ? 0 : 1);
             if (scenario === 'cancel') {
                 expect(result).toMatchObject({ ok: false, errorCode: 'plugin_action_aborted' });
                 expect(readApproval().status).toBe('canceled');
@@ -143,9 +187,13 @@ it.each([
             } else if (scenario === 'reject') {
                 expect(result).toMatchObject({ ok: false, errorCode: 'plugin_action_current_intent_rejected' });
                 expect(readApproval().status).toBe('rejected');
-            } else if (scenario === 'disable' || scenario === 'caller_retire') {
+            } else if (scenario === 'disable' || scenario === 'caller_retire' || scenario === 'credential_rotate') {
                 expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'plugin_action_generation_retired' });
                 expect(readApproval()).toMatchObject({ status: 'failed', execution: { ok: false, effectAttempted: false } });
+            } else if (scenario === 'credential_rotate_read') {
+                expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'plugin_account_storage_unavailable' });
+                expect(readApproval()).toMatchObject({ status: 'failed', execution: { ok: false,
+                    errorCode: 'plugin_account_storage_unavailable', effectAttempted: true } });
             } else if (scenario === 'uncertain') {
                 expect(result).toMatchObject({ ok: false, errorCode: 'plugin_account_storage_outcome_unknown' });
                 expect(readApproval()).toMatchObject({ status: 'failed', execution: { ok: false,
@@ -154,8 +202,6 @@ it.each([
                 expect(result).toMatchObject({ ok: true, result: { version: expect.any(Number) } });
                 expect(readApproval()).toMatchObject({ status: 'executed', execution: { ok: true, effectAttempted: true } });
             }
-            const noEffect = scenario === 'reject' || scenario === 'disable' || scenario === 'cancel' || scenario === 'caller_retire';
-            expect(writes).toBe(noEffect ? 0 : 1);
             await deciding.execute('approval.request.decide', decisionInput, decisionContext);
             expect(writes).toBe(noEffect ? 0 : 1);
             if (scenario === 'approve' || scenario === 'uncertain') {
@@ -166,6 +212,7 @@ it.each([
         } finally {
             controller.abort();
             await invoking.catch(() => undefined);
+            if (rotatesCredentials) await removeStoredCredentialsForServerId(serverId);
             restore(); await app.close();
         }
     });

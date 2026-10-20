@@ -70,6 +70,7 @@ export type AccountPluginActivationSourcesInput = Readonly<{
     credentials: StoredCredentials;
     serverUrl: string;
     isCurrent: () => boolean;
+    isCredentialCurrent?: () => boolean | Promise<boolean>;
     resolveBundledActivationSource: (target: ActivationTarget, options?: BundledActivationSourceSelectionOptions) => PluginActivationSource<PluginDaemonModuleNamespace> | null;
     signal?: AbortSignal;
 }>;
@@ -114,10 +115,14 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
         if (!isCurrent(pluginId)) return false;
         const admitted = selected.get(pluginId)!;
         try {
+            if (await input.isCredentialCurrent?.() === false) {
+                retired.add(pluginId);
+                return false;
+            }
             const read = await readIntent({ ...input, pluginId, ...(signal ? { signal } : {}) });
             const next = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read,
                 ...(admitted.bundled ? { bundled: admitted.bundled } : {}) });
-            if (!isCurrent(pluginId) || next.kind !== 'available'
+            if (await input.isCredentialCurrent?.() === false || !isCurrent(pluginId) || next.kind !== 'available'
                 || createCanonicalJsonSigningInput(next) !== createCanonicalJsonSigningInput(admitted.selection)) {
                 retired.add(pluginId);
                 return false;
