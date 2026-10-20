@@ -157,6 +157,18 @@ function promptFiles(comparison: ScmComparison): ScmDiffSummaryPromptFile[] {
     ...(file.evidence.state === 'unavailable' ? { description: file.evidence.reason } : {}) }));
 }
 
+/** The capture owner resolves contextual turn selectors before publishing or reading evidence. */
+export function resolveCapturedScmComparisonSource(source: ScmComparisonSource, context: Readonly<{
+  sessionId?: string; turnId?: string; checkpointReceiptId?: string; turnEvidenceMode?: ScmDiffSummaryTurnEvidenceMode;
+}>): ScmComparisonSource {
+  if (source.kind !== 'turnCheckpoint') return source;
+  const sessionId = source.sessionId ?? context.sessionId;
+  const turnId = source.turnId ?? context.turnId;
+  const checkpointReceiptId = source.checkpointReceiptId ?? context.checkpointReceiptId;
+  return { ...source, ...(sessionId ? { sessionId } : {}), ...(turnId ? { turnId } : {}),
+    ...(checkpointReceiptId ? { checkpointReceiptId } : {}), evidenceMode: source.evidenceMode ?? context.turnEvidenceMode ?? 'checkpoint' };
+}
+
 export async function readCapturedScmComparison(input: Readonly<{
   cwd: string; comparisonId: string; sessionId?: string; source?: ScmComparisonSource;
   turnId?: string; checkpointReceiptId?: string; turnEvidenceMode?: ScmDiffSummaryTurnEvidenceMode;
@@ -173,6 +185,8 @@ export async function readCapturedScmComparison(input: Readonly<{
   if ((context?.detection.rootPath ?? resolve(input.cwd)) !== stored.comparison.repository.rootPath
     || stored.comparison.id !== input.comparisonId || stored.metadata.sourceKey !== input.comparisonId
     || stored.sessionId !== input.sessionId
+    || ((requestedSource?.kind === 'session' || requestedSource?.kind === 'turnCheckpoint')
+      && requestedSource.sessionId !== undefined && requestedSource.sessionId !== stored.sessionId)
     || (requestedSource && projectedSourceIdentity(requestedSource) !== projectedSourceIdentity(stored.comparison.source))
     || (requestedSource?.kind === 'pullRequest' && (
       (requestedSource.locator.baseOid !== undefined && requestedSource.locator.baseOid !== stored.comparison.pullRequest?.baseOid)
@@ -182,7 +196,13 @@ export async function readCapturedScmComparison(input: Readonly<{
     || (input.turnEvidenceMode && input.turnEvidenceMode !== stored.metadata.turnEvidenceMode)) {
     throw Object.assign(new Error('Captured comparison does not belong to this repository, session and source'), { code: 'DIFF_UNAVAILABLE' });
   }
-  return { metadata: stored.metadata, comparison: stored.comparison, files: promptFiles(stored.comparison) };
+  // Older captures retained these resolved selectors beside a bare source. Qualify their
+  // read projection without changing comparison/occurrence identities or persisted marks.
+  const source = resolveCapturedScmComparisonSource(stored.comparison.source, { sessionId: stored.sessionId,
+    turnId: stored.metadata.turnId, checkpointReceiptId: stored.metadata.checkpointReceiptId,
+    turnEvidenceMode: stored.metadata.turnEvidenceMode });
+  const comparison = { ...stored.comparison, source };
+  return { metadata: { ...stored.metadata, source }, comparison, files: promptFiles(comparison) };
 }
 
 /** Explicit captured-comparison deletion disposes only pins recorded by this owner. */
@@ -422,12 +442,13 @@ export async function captureScmComparison(input: CaptureScmComparisonInput): Pr
   const id = buildScmComparisonIdentity({ source, repositoryRootPath: rootPath, beforeOid: before, afterOid: after, indexOid,
     ...((source.kind === 'session' || source.kind === 'turnCheckpoint') && sessionId ? { sessionId } : {}),
     turnId, checkpointReceiptId: receiptId, turnEvidenceMode: evidenceMode, evidenceIdentity });
-  const comparison = ScmComparisonSchema.parse({ id, source, repository: { rootPath },
+  const capturedSource = resolveCapturedScmComparisonSource(source, { sessionId, turnId, checkpointReceiptId: receiptId, turnEvidenceMode: evidenceMode });
+  const comparison = ScmComparisonSchema.parse({ id, source: capturedSource, repository: { rootPath },
     ...(commitTarget ? { commitTarget } : {}),
     endpoints: { ...(before ? { before } : {}), ...(after ? { after } : {}) },
     ...(pullRequest ? { pullRequest } : {}),
     inventory: { state, files: inventoryFiles(id, files), reasons }, freshness, attributionScope });
-  const metadata: ScmDiffSummaryMetadata = { source,
+  const metadata: ScmDiffSummaryMetadata = { source: capturedSource,
     sourceKey: comparison.id,
     ...(turnId ? { turnId } : {}), ...(receiptId ? { checkpointReceiptId: receiptId } : {}),
     ...(evidenceMode ? { turnEvidenceMode: evidenceMode } : {}), contentConfidence: state === 'complete' ? 'exact' : 'unavailable', attributionScope };

@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configuration } from '@/configuration';
+import { createScmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { applyScmReviewedMarkIntent, isScmSelectionReviewed } from '@happier-dev/protocol/scm/reviewedMarks';
 import { buildScmReviewScopeId } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { retainRepositoryCheckpointTurnEvidence } from '../checkpoints/sessionEvidence';
@@ -53,6 +54,35 @@ describe('captured SCM comparison storage', () => {
       expect(retained.comparison.inventory).toEqual(first.comparison.inventory);
       expect(scope(retained.comparison)).toBe(scope(first.comparison));
       expect(isScmSelectionReviewed(record, retained.comparison, refs)).toBe(true);
+      await expect(readCapturedScmComparison({ cwd: fixture.rootPath, sessionId: first.sessionId,
+        comparisonId: first.comparison.id, source: { kind: 'turnCheckpoint', sessionId: 'foreign-session' } }))
+        .rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+      const directory = join(fixture.rootPath, 'saved-results');
+      const store = createScmDiffSummaryResultStore({ directory });
+      const created = await store.create({ cwd: fixture.rootPath, sessionId: first.sessionId, output: {
+        success: true, sourceKey: first.comparison.id, metadata: first.metadata, comparison: first.comparison,
+        analysis: { suppliedChangeRefs: refs, analysedChangeRefs: refs, remainingChangeRefs: [] },
+        requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'complete', value: {
+          title: 'Original', intro: 'Inspect the change', stops: [{ id: 'stop', title: 'Change', explanationMarkdown: 'Inspect', changeRefs: refs }], otherChangeRefs: [],
+        } } },
+      } });
+      const request = { cwd: fixture.rootPath, sessionId: first.sessionId, resultId: created.resultId };
+      const edited = await store.edit({ ...request, expectedRevision: 0, edit: { kind: 'renameWalkthrough', title: 'Edited' } });
+      if (!edited.success) throw new Error(edited.error);
+      const savedPath = join(directory, `${created.resultId}.json`);
+      const saved = JSON.parse(await readFile(savedPath, 'utf8')) as { result: typeof created; undoOutput: typeof created.output };
+      for (const output of [saved.result.output, saved.undoOutput]) {
+        output.comparison!.source = { kind: 'turnCheckpoint' };
+        output.metadata!.source = { kind: 'turnCheckpoint' };
+      }
+      await writeFile(savedPath, JSON.stringify(saved));
+      expect(await store.list()).toMatchObject({ results: [{ source: first.comparison.source }] });
+      for (const result of [await store.read(request), await store.undo({ ...request, expectedRevision: 1 })]) {
+        if (!result.success) throw new Error(result.error);
+        expect(result.result.output.comparison?.id).toBe(first.comparison.id);
+        expect(result.result.output.comparison?.source).toEqual(first.comparison.source);
+        expect(isScmSelectionReviewed(record, result.result.output.comparison!, refs)).toBe(true);
+      }
     } finally {
       await Promise.all(captures.map(capture => deleteCapturedScmComparison({ cwd: fixture.rootPath,
         sessionId: capture.sessionId, comparisonId: capture.comparison.id })));

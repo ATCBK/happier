@@ -9,7 +9,7 @@ import { ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditSchema, ScmWalkthro
 import { ScmCommitPlanAcceptanceSchema, ScmCommitPlanApplicationSchema, isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
 import type { ScmDiffSummaryGenerateOutput, ScmDiffSummaryModelOutput, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs, ScmDiffSummaryResult, ScmDiffSummaryResultEdit, ScmDiffSummaryResultResponse, ScmDiffSummaryResultFailure, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryGeneratorSelection, ScmDiffSummarySavedResultItem, ScmCommitPlanAcceptance, ScmCommitPlanApplication } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
-import { prepareCapturedScmComparisonInvestigation } from '@/scm/comparisons/captureScmComparison';
+import { prepareCapturedScmComparisonInvestigation, resolveCapturedScmComparisonSource } from '@/scm/comparisons/captureScmComparison';
 import { reviewFindingCitationsSchema, publishReviewFindingCitations, publishFindingCitationMarkdown, validatePublishedFindingCitationMarkdown,
   type ReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 import { withJsonOwnerFileLock } from '@/utils/fs/jsonOwnerFileLock';
@@ -38,6 +38,19 @@ const storedSchema = z.strictObject({
 });
 type Stored = z.infer<typeof storedSchema>;
 const storedReadSchema = createStoredReadSchema(storedSchema);
+/** Embedded captured evidence has the same resolved-source owner as the capture shelf. */
+function resolveStoredCapturedSources(stored: Stored): Stored {
+  const resolveOutput = (output: ScmDiffSummaryGenerateOutput): ScmDiffSummaryGenerateOutput => {
+    if (!output.comparison) return output;
+    const source = resolveCapturedScmComparisonSource(output.comparison.source, { sessionId: stored.sessionId,
+      turnId: output.metadata?.turnId, checkpointReceiptId: output.metadata?.checkpointReceiptId,
+      turnEvidenceMode: output.metadata?.turnEvidenceMode });
+    return { ...output, comparison: { ...output.comparison, source },
+      ...(output.metadata ? { metadata: { ...output.metadata, source } } : {}) };
+  };
+  return { ...stored, result: { ...stored.result, output: resolveOutput(stored.result.output) },
+    ...(stored.undoOutput ? { undoOutput: resolveOutput(stored.undoOutput) } : {}) };
+}
 export type ScmDiffSummaryResultStore = Readonly<{
   admitGeneration(input: Readonly<{ cwd: string; sessionId?: string; key: string; outputs: readonly ScmDiffSummaryOutputKind[]; bypass?: boolean; signal?: AbortSignal }>,
     generate: () => Promise<ScmDiffSummaryGenerateOutput>): Promise<ScmDiffSummaryGenerateOutput>;
@@ -97,7 +110,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
       const stored = storedReadSchema.parse(JSON.parse(await readProtectedLocalStateFile(path(scope.resultId))));
       if (stored.result.resultId !== scope.resultId || stored.cwd !== resolve(scope.cwd)
         || (scope.sessionId !== undefined && stored.sessionId !== scope.sessionId)) return null;
-      return stored;
+      return resolveStoredCapturedSources(stored);
     } catch (error) {
       if (error instanceof Error && ('code' in error) && error.code === 'ENOENT') return null;
       throw error;
@@ -106,7 +119,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
   async function save(stored: Stored) {
     // Return the same JSON data that readers reload. Optional native members
     // must not escape as undefined into strict Action/approval responses.
-    const saved = storedSchema.parse(projectNativeJsonValueForTransport(stored));
+    const saved = storedSchema.parse(projectNativeJsonValueForTransport(resolveStoredCapturedSources(stored)));
     await writeProtectedLocalStateFileAtomic(path(saved.result.resultId), JSON.stringify(saved));
     return saved;
   }
@@ -244,7 +257,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         let updatedAtMs: number;
         try { raw = await readProtectedLocalStateFile(join(directory, entry)); updatedAtMs = Math.floor((await stat(join(directory, entry))).mtimeMs); }
         catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue; throw error; }
-        const stored = storedReadSchema.parse(JSON.parse(raw));
+        const stored = resolveStoredCapturedSources(storedReadSchema.parse(JSON.parse(raw)));
         const { result } = stored;
         if (`${result.resultId}.json` !== entry || !result.output.comparison) throw new Error('Saved result inventory identity is invalid');
         const source = result.output.comparison.source;
@@ -376,6 +389,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
             const target = selected.find((stop) => stop.id === edit.targetStopId)!;
             const merged = { ...target, title: edit.title ?? target.title, explanationMarkdown: edit.explanationMarkdown,
               changeRefs: selected.flatMap((stop) => stop.changeRefs),
+              ...(selected.some(stop => stop.suggestedQuestions) ? { suggestedQuestions: [...new Set(selected.flatMap(stop => stop.suggestedQuestions ?? []))] } : {}),
               ...(selected.some((stop) => stop.findingRefs) ? { findingRefs: [...new Set(selected.flatMap((stop) => stop.findingRefs ?? []))] } : {}),
               ...(selected.some(stop => stop.reviewExplanations) ? { reviewExplanations: selected.flatMap(stop => stop.reviewExplanations ?? []) } : {}) };
             const firstIndex = value.stops.findIndex((stop) => edit.stopIds.includes(stop.id));

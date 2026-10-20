@@ -62,6 +62,29 @@ async function setupPartialApplication() {
 }
 
 describe('saved SCM result owner', () => {
+  it('carries suggested questions through publication, revisioned edits, merge and Undo', async () => {
+    const { directory, store, request } = await setup();
+    const questions = ['Why keep the selected change?', 'Which test covers the second change?'];
+    await store.beginRefinement({ ...request, expectedRevision: 0, inputId: 'questions', output: 'walkthrough' });
+    const published = await store.publish({ ...request, inputId: 'questions', modelOutput: { walkthrough: {
+      ...modelWalkthrough, stops: modelWalkthrough.stops.map((stop, index) => ({ ...stop, suggestedQuestions: [questions[index]!] })),
+    } } });
+    expect(published).toMatchObject({ success: true, result: { revision: 1 } });
+    const reloaded = createScmDiffSummaryResultStore({ directory });
+    expect(await reloaded.read(request)).toMatchObject({ success: true, result: { output: { outputs: {
+      walkthrough: { value: { stops: questions.map(question => ({ suggestedQuestions: [question] })) } },
+      summary: output.outputs?.summary, commitPlan: output.outputs?.commitPlan,
+    } } } });
+    await reloaded.edit({ ...request, expectedRevision: 1, edit: { kind: 'renameStop', stopId: 's2', title: 'My title' } });
+    expect(await reloaded.edit({ ...request, expectedRevision: 2, edit: { kind: 'mergeStops', stopIds: ['s1', 's2'],
+      targetStopId: 's2', explanationMarkdown: 'Both changes' } })).toMatchObject({ success: true, result: { revision: 3,
+      output: { outputs: { walkthrough: { value: { stops: [{ title: 'My title', suggestedQuestions: questions }] } } } },
+    } });
+    expect(await reloaded.undo({ ...request, expectedRevision: 2 })).toMatchObject({ success: false, errorCode: 'revision_conflict' });
+    expect(await reloaded.undo({ ...request, expectedRevision: 3 })).toMatchObject({ success: true, result: { revision: 4,
+      output: { outputs: { walkthrough: { value: { stops: questions.map(question => ({ suggestedQuestions: [question] })) } } } },
+    } });
+  });
   it('publishes a refined walkthrough with omitted changes reachable in Other changes without changing analysis or other outputs', async () => {
     const { store, request } = await setup();
     await store.beginRefinement({ ...request, expectedRevision: 0, inputId: 'refinement', output: 'walkthrough' });
