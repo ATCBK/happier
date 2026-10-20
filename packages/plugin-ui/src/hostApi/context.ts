@@ -29,6 +29,7 @@ import type { PluginUiEphemeralSharedScope } from './ephemeralSharedScope.public
 type PluginHostApiContextValue = Readonly<{
   hostApi: PluginUiHostApi;
   resourceStore: PluginUiResourceStore;
+  mountedPluginId: string | undefined;
   composerRef: ComposerRefV1 | null;
   surfaceActive: boolean | undefined;
   ephemeralSharedScope: PluginUiEphemeralSharedScope | null;
@@ -131,11 +132,12 @@ export function PluginHostApiProviderInternal({
     () => Object.freeze({
       hostApi,
       resourceStore,
+      mountedPluginId,
       composerRef,
       surfaceActive: surfaceActivity?.active,
       ephemeralSharedScope,
     }),
-    [hostApi, resourceStore, composerRef, surfaceActivity?.active, ephemeralSharedScope],
+    [hostApi, resourceStore, mountedPluginId, composerRef, surfaceActivity?.active, ephemeralSharedScope],
   );
   return createElement(PluginHostApiContext.Provider, { value },
     createElement(HappierUiAnimationActivityProviderInternal, {
@@ -150,6 +152,11 @@ export function usePluginHostApi(): PluginUiHostApi {
     throw new Error('PluginHostApiProvider is required before using plugin UI host API hooks.');
   }
   return context.hostApi;
+}
+
+/** Internal package identity already bound by the surface entry, never inferred from its placement. */
+export function usePluginHostApiMountedPluginId(): string | undefined {
+  return useContext(PluginHostApiContext)?.mountedPluginId;
 }
 
 /** Internal hook used by the public Resource hooks in this package. */

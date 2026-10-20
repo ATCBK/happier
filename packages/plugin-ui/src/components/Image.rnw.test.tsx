@@ -4,9 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { mountThroughReactNativeWeb, mountThroughReactNativeWebAsync } from '../rnwMount.testSupport.js';
 import { createAdmittedBrandPngFixture, createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { BrandMark, Image as ResourceImage } from './Image.js';
-import { PluginUiProvider } from './PluginUiProvider.js';
+import { PluginUiProvider, PluginUiProviderInternal } from './PluginUiProvider.js';
 import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { PluginUiPresentationHostProviderInternal } from '../presentationHost/context.js';
+import { HappierBrandMark } from '../presentation/content/Image.js';
+import { projectHappierUiEnvironment } from '../environment/projectEnvironment.js';
 
 const TRANSPARENT_BRAND_BYTES = createAdmittedBrandPngFixture();
 
@@ -54,6 +56,37 @@ function renderedColor(property: 'backgroundColor' | 'borderColor', color: strin
 }
 
 describe('bounded package image and brand fallback', () => {
+  it.each([true, false])('uses the mounted package asset owner when surface brand Resource metadata is available: %s', async (hasResource) => {
+    const context = createSurfaceContext();
+    const resource = { pluginId: 'external.tracker', localId: 'identity-mark' };
+    const theme = projectHappierUiEnvironment(context).theme;
+    // The platform asset owner already has the admitted mark. Its surface Resource
+    // transport is unavailable, as it may be during a daemon refresh.
+    const mount = await mountThroughReactNativeWebAsync(
+      <PluginUiProviderInternal mountedPluginId="external.tracker" hostApi={createHostApiStub(context, {
+        readResource: async () => { throw new Error('Resource transport unavailable'); },
+      })} context={context}>
+        <PluginUiPresentationHostProviderInternal host={{
+          brand: { displayName: 'External tracker', ...(hasResource ? { resource } : {}) },
+          renderBrandMark: (input) => <HappierBrandMark
+            {...input} displayName="External tracker" theme={theme} bytes={TRANSPARENT_BRAND_BYTES}
+          />,
+          renderMarkdown: () => null,
+          renderCodeBlock: () => null,
+          renderPopover: () => null,
+          renderIcon: () => null,
+        }}>
+          <BrandMark testID="mounted-settings-mark" />
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProviderInternal>,
+    );
+    expect(mount.container.querySelector('[data-testid="mounted-settings-mark"] img')?.getAttribute('src')).toBe(
+      `data:image/png;base64,${Buffer.from(TRANSPARENT_BRAND_BYTES).toString('base64')}`,
+    );
+    expect(mount.container.textContent).not.toContain('E');
+    mount.unmount();
+  });
+
   it('fits a public brand into the presentation owner\'s compact mark slot', () => {
     const context = createSurfaceContext();
     const mount = mountThroughReactNativeWeb(
