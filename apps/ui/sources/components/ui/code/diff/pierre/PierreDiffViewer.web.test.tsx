@@ -2,22 +2,20 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import { storage } from '@/sync/domains/state/storageStore';
+import { BrowserWorker } from './pierreWorkerTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fileDiffSpy = vi.fn();
 const virtualizerSpy = vi.fn();
-const pierreWorkerPoolMock = vi.hoisted(() => ({
-    current: null as any,
-}));
 
 function resetSettingValues() {
     storage.setState({ settings: { ...storage.getState().settings,
@@ -32,27 +30,6 @@ function resetSettingValues() {
 resetSettingValues();
 
 installCodeDiffCommonModuleMocks();
-
-vi.mock('./pierreThemeRegistry.web', () => ({
-    ensureHappierPierreThemesRegistered: () => {},
-    ensureHappierPierreThemeRegistered: () => {},
-    resolveHappierPierreThemeIds: () => ({ light: 'light', dark: 'dark' }),
-    HAPPIER_PIERRE_THEME_IDS: { light: 'light', dark: 'dark' },
-}));
-
-vi.mock('./pierreWorkerPool.web', async importOriginal => ({
-    ...await importOriginal<typeof import('./pierreWorkerPool.web')>(),
-    getPierreDiffWorkerPool: () => pierreWorkerPoolMock.current,
-}));
-
-vi.mock('./resolvePierreLanguageOverride.web', () => ({
-    resolvePierreLanguageOverride: (path: string | null | undefined) => {
-        const p = String(path ?? '');
-        if (p === '.env.production') return 'dotenv';
-        if (p.endsWith('.ts')) return 'ts';
-        return null;
-    },
-}));
 
 vi.mock('@pierre/diffs/react', async () => {
     const actual = await vi.importActual<any>('@pierre/diffs/react');
@@ -228,8 +205,9 @@ describe('PierreDiffViewer (web)', () => {
     });
     beforeEach(() => {
         resetSettingValues();
-        pierreWorkerPoolMock.current = null;
+        vi.stubGlobal('Worker', BrowserWorker);
     });
+    afterEach(() => vi.unstubAllGlobals());
 
     it('uses an exact content-sensitive cache key for initial presentation terminality', async () => {
         const { buildPierreInitialPresentationCacheKey } = await import('./pierreInitialPresentation.web');
@@ -336,6 +314,8 @@ describe('PierreDiffViewer (web)', () => {
 
     it('commits a final app fallback when the initial presentation has no worker pool', async () => {
         fileDiffSpy.mockClear();
+        // Missing browser animation scheduling is a real pool-unavailable boundary.
+        vi.stubGlobal('requestAnimationFrame', undefined);
         const handle = {
             complete: vi.fn(),
             dispose: vi.fn(),
@@ -547,7 +527,7 @@ describe('PierreDiffViewer (web)', () => {
         fileDiffSpy.mockClear();
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
 
-        const hugePatch = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1 +1 @@']
+        const hugePatch = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1,3 +1,3 @@']
             .concat(['-a', '+b', ' c', '-d', '+e'])
             .join('\n');
 
@@ -928,7 +908,7 @@ describe('PierreDiffViewer (web)', () => {
                         'diff --git a/a.ts b/a.ts',
                         '--- a/a.ts',
                         '+++ b/a.ts',
-                        '@@ -1,1 +1,2 @@',
+                        '@@ -1,0 +1,2 @@',
                         '+first',
                         '+second',
                         '',

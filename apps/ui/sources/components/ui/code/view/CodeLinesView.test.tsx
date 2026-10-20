@@ -60,9 +60,9 @@ describe('CodeLinesView', () => {
             lines={[lines[0]!, { ...lines[1]!, newLine: 10000 }]}
             onPressAddComment={() => {}} showInactiveCommentAffordance={false}
             isCommentActive={line => line.newLine === 10000} />);
-        const sizingText = screen.findAll(node => node.type === 'Text' && node.props.accessible === false && node.props['aria-hidden'] === true);
+        const sizingText = findAllByType(screen.tree, 'Text').filter(node => node.props.accessible === false && node.props['aria-hidden'] === true);
         expect(sizingText.map(node => node.children.join(''))).toEqual(['00000', '00000']);
-        expect(screen.findAll(node => node.props.testID === 'review-comment-line-affordance-lane' && node.type === 'View')).toHaveLength(2);
+        expect(findAllByType(screen.tree, 'View').filter(node => node.props.testID === 'review-comment-line-affordance-lane')).toHaveLength(2);
     });
     it('does not render FlatList when virtualized=false', async () => {
         const { CodeLinesView } = await import('./CodeLinesView');

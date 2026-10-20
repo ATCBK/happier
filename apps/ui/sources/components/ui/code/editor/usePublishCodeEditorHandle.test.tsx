@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@/dev/testkit';
-import type { CodeEditorHandle } from './codeEditorTypes';
+import type { TextEditorHandle } from './codeEditorTypes';
 import { usePublishCodeEditorHandle } from './usePublishCodeEditorHandle';
 
 describe('editor handle publication', () => {
     it('notifies only accepted incumbent changes when an outgoing transition retires late', async () => {
-        const editorRef = { current: null as CodeEditorHandle | null };
+        const editorRef = { current: null as TextEditorHandle | null };
         const notify = vi.fn();
         const outgoing = await renderHook(() => usePublishCodeEditorHandle(editorRef, notify));
         const incoming = await renderHook(() => usePublishCodeEditorHandle(editorRef, notify));
-        const first: CodeEditorHandle = { getValue: () => 'first', flushPendingChange: async () => {} };
-        const second: CodeEditorHandle = { getValue: () => 'second', flushPendingChange: async () => {} };
+        const first: TextEditorHandle = { getValue: () => 'first', flushPendingChange: async () => {} };
+        const second: TextEditorHandle = { getValue: () => 'second', flushPendingChange: async () => {} };
         outgoing.getCurrent()(first);
         incoming.getCurrent()(second);
         outgoing.getCurrent()(null);
