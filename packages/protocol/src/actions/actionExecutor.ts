@@ -1,4 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { CodeIntelligenceActionInputSchema } from './codeIntelligenceActionFamily.js';
+import { queryCodeIntelligenceFallback } from '../machines/codeIntelligenceFallback.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { PetChooseInputV1Schema } from '../pets/selection.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
@@ -128,6 +130,7 @@ import { installAcpRegistryAgentV1 } from '../acp/catalog/registry/installAcpReg
 import { AgentsAcpBackendsInstallFromRegistryInputV1Schema } from '../acp/catalog/registry/registryInstallActionV1.js';
 import { WorkflowEventsListInputV1Schema } from './specs/workflowEvents.js';
 import { WorkspaceFilesSearchActionInputSchema } from './actionSpecs.js';
+import { WorkspaceFilesReplacePreviewActionInputSchema, WorkspaceFilesReplaceActionInputSchema } from './actionSpecs.js';
 import { HomeConnectInputSchema, HomeReconnectInputSchema, MachineAddCommandInputSchema, MachinePairingCreateInputSchema, MACHINE_ADD_SSH_ACTION_IDS, MACHINE_ADD_SSH_INPUT_SCHEMAS, MACHINE_PAGE_ACTION_IDS, MACHINE_PAGE_ACTION_INPUT_SCHEMAS, type MachineAddSshActionId, type MachinePageActionId } from './specs/machineConnection.js';
 import { isMachineTerminalActionId, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from './specs/machineTerminal.js';
 import { MachineAccessActionIdSchema, machineAccessApprovalDisclosure, machineAccessGrantSetRequiresUiConfirmation } from './specs/machineAccess.js';
@@ -148,7 +151,7 @@ import { isWorkBoardActionIdV1 } from '../boards/actionIdsV1.js';
 import { WorkBoardActionInputSchemasV1 } from '../boards/actionsV1.js';
 import { HOME_HUB_LAYOUT_ACTION_IDS, HomeHubLayoutUpdateInputSchema } from './specs/homeHub.js';
 import { WidgetInstanceActionIdV1Schema, WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, readWidgetActionSurfaceV1, readWidgetActionDestinationV1, readWidgetCatalogBoundSessionV1 } from '../widgets/actionsV1.js';
-import { executeWidgetInstanceActionV1, admitWidgetInstanceConfigurationV1, admitWidgetInstanceSizeV1, readWidgetActionSurfacePortV1 } from '../widgets/executeWidgetInstanceActionV1.js';
+import { executeWidgetInstanceActionV1, admitWidgetInstanceConfigurationV1, admitWidgetInstanceSizeV1, isWidgetAdmissionUndecidableHereV1, readWidgetActionSurfacePortV1 } from '../widgets/executeWidgetInstanceActionV1.js';
 import { getWidgetSizeFootprintV1, WIDGET_SIZE_ORDER_V1 } from '../widgets/widgetPresentationV1.js';
 import { clientActionUnavailable } from './clientDispatchV1.js';
 import { projectKnownAccountAuthorityRetirementReceipt } from './accountAuthorityRetirement.js';
@@ -391,7 +394,7 @@ import { ConnectedServiceConfigurationActionIdV1Schema } from '../connect/config
 import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { isActionPolicyActionId } from './actionPolicyActionFamily.js';
 import { isVoiceConversationActionId } from './voiceConversationActionFamily.js';
-import { isAppShellActionId } from './appShellActionFamily.js';
+import { isAppShellActionId, readNoticeInboxAccountIdV1 } from './appShellActionFamily.js';
 import { isNotificationConfigurationActionId } from './notificationConfigurationActionFamily.js';
 import { BugReportSubmitInputSchema } from './specs/bugReport.js';
 import { isAppUpdateActionId } from './appUpdateActionFamily.js';
@@ -4635,7 +4638,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const added = WidgetInstanceActionInputSchemasV1['widgets.item.add'].safeParse(admittedInput);
           const refusal = added.success ? await admitWidgetInstanceConfigurationV1(deps,
             { surface: widgetTarget, instanceId: added.data.instance.id }, added.data.instance, ctx) : null;
-          if (refusal) return refusal;
+          if (refusal && !isWidgetAdmissionUndecidableHereV1(refusal)) return refusal;
         }
         if (options?.confirmUiDefault && approvalRouting === baseApprovalRouting && !folderApprovalRouting?.required
           && ctx.surface === 'ui' && isPresentUserHostInvocation(ctx) && !ctx.bypassApprovals
@@ -5011,6 +5014,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
 
       const executionPlacement = resolveActionExecutionPlacementForInput(spec, admittedInput);
+      if (actionId === 'inbox.get') {
+        const accountId = readNoticeInboxAccountIdV1(ctx);
+        if (!accountId) return { ok: false, errorCode: 'forbidden', error: 'forbidden' };
+        ctx = { ...ctx, expectedAccountId: accountId };
+      }
       if (executionPlacement === 'client' && deps.clientActionExecute) {
         const delivered = await deps.clientActionExecute({ actionId, input: admittedInput, context: ctx });
         // The recap explicitly serves headless callers with compose data. Only a declared
@@ -8987,9 +8995,27 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
+        if (actionId === 'code.definition.get' || actionId === 'code.references.list') {
+          if (!deps.workspaceFilesSearch) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          const { machineId, ...input } = CodeIntelligenceActionInputSchema.parse(parsed.data);
+          const search = deps.workspaceFilesSearch;
+          return completeActionResult(await queryCodeIntelligenceFallback({ ...input,
+            kind: actionId === 'code.definition.get' ? 'definition' : 'references',
+          }, request => search({ machineId, ...request }, ctx)));
+        }
+
         if (actionId === 'workspace.files.search') {
           if (!deps.workspaceFilesSearch) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
           return completeActionResult(await deps.workspaceFilesSearch(WorkspaceFilesSearchActionInputSchema.parse(parsed.data), ctx));
+        }
+
+        if (actionId === 'workspace.files.replace.preview') {
+          if (!deps.workspaceFilesReplacePreview) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          return completeActionResult(await deps.workspaceFilesReplacePreview(WorkspaceFilesReplacePreviewActionInputSchema.parse(parsed.data), ctx));
+        }
+        if (actionId === 'workspace.files.replace') {
+          if (!deps.workspaceFilesReplace) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          return completeActionResult(await deps.workspaceFilesReplace(WorkspaceFilesReplaceActionInputSchema.parse(parsed.data), ctx));
         }
 
         if (actionId === 'agents.backends.list') {

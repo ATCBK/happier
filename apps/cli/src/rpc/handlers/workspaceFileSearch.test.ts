@@ -7,6 +7,9 @@ import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
 import { DaemonWorkspaceFileSearchResponseSchema, WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES } from '@happier-dev/protocol';
 import { registerWorkspaceFileSearchHandler } from './workspaceFileSearch';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { DaemonWorkspaceFileSearchRequest } from '@happier-dev/protocol/machines/workspaceFiles';
 
 describe('workspace file content search through the registered daemon owner', () => {
     let root: string;
@@ -22,6 +25,49 @@ describe('workspace file content search through the registered daemon owner', ()
         handler = (request, context) => registered(request, { signal: lifetime.signal, ...context });
     });
     afterEach(async () => { lifetime.abort(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
+
+    it('runs code definition and text-reference Actions through the registered search owner and native rg', async () => {
+        await mkdir(join(root, 'src'));
+        await writeFile(join(root, 'src', 'a.ts'), 'export function greet() {}\ngreet(); greet();\nconst greeting = 1;\n');
+        await writeFile(join(root, 'far.ts'), 'export function greet() {}\n');
+        const executor = createActionExecutor({ workspaceFilesSearch: async ({ machineId, ...request }, context) => {
+            expect(machineId).toBe('machine');
+            return DaemonWorkspaceFileSearchResponseSchema.parse(await handler(request, { signal: context.signal }));
+        } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch'> as unknown as ActionExecutorDeps);
+        const input = { machineId: 'machine', rootPath: root, path: 'src/a.ts', line: 2, symbol: 'greet', languageId: 'typescript' };
+        const definition = await executor.execute('code.definition.get', input, { surface: 'agent' });
+        expect(definition).toMatchObject({ ok: true, result: { source: 'text_matches', coverage: 'complete', hasMore: false,
+            locations: [{ path: 'src/a.ts', range: { start: { line: 0, character: 16 } } }, { path: 'far.ts' }] } });
+        const references = await executor.execute('code.references.list', input, { surface: 'agent' });
+        expect(references).toMatchObject({ ok: true, result: { source: 'text_matches', locations: expect.any(Array) } });
+        if (!references.ok) throw new Error('References Action failed');
+        const result = getActionSpec('code.references.list').outputSchema!.parse(references.result);
+        expect(result).toMatchObject({ locations: [
+            { path: 'src/a.ts', range: { start: { line: 1, character: 0 } } },
+            { path: 'src/a.ts', range: { start: { line: 1, character: 9 } } },
+            { path: 'src/a.ts', range: { start: { line: 0, character: 16 } } },
+            { path: 'far.ts' },
+        ] });
+    });
+
+    it('keeps native code-name searches exact for Unicode, combining marks and dollar names', async () => {
+        const { queryCodeIntelligenceFallback } = await import('@happier-dev/protocol/machines/codeIntelligenceFallback');
+        const symbols = ['cafe\u0301', '℘', '𝒜', '$item'];
+        await writeFile(join(root, 'a.ts'), symbols.map(symbol => `export const ${symbol} = 1;\n${symbol}; ${symbol}; ${symbol}Extra;`).join('\n'));
+        for (const symbol of symbols) {
+            const input = { rootPath: root, path: 'a.ts', line: 1, symbol, languageId: 'typescript', kind: 'references' as const };
+            const search = async (request: DaemonWorkspaceFileSearchRequest) =>
+                DaemonWorkspaceFileSearchResponseSchema.parse(await handler(request));
+            const references = await queryCodeIntelligenceFallback(input, search);
+            expect(references).toMatchObject({ status: 'ok', hasMore: false, coverage: 'complete' });
+            if (references.status !== 'ok') throw new Error('Native references unavailable');
+            expect(references.locations).toHaveLength(3);
+            const definition = await queryCodeIntelligenceFallback({ ...input, kind: 'definition' }, search);
+            expect(definition).toMatchObject({ status: 'ok', locations: [{ range: { start: { character: 13 } } }] });
+            if (definition.status !== 'ok') throw new Error('Native definition unavailable');
+            expect(definition.locations).toHaveLength(1);
+        }
+    });
 
     it('preserves completed text matches with partial coverage when another subtree fails traversal', async () => {
         // Native process output is the boundary; the handler parses real rg records.

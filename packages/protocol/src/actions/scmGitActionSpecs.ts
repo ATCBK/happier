@@ -186,6 +186,45 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
+    id: 'scm.file.read', approval: { result: 'required' },
+    title: 'Read file at revision',
+    description: 'Read the exact bytes of a comparison blob or the before side of a source-control file.',
+    safety: 'safe', placements: [],
+    bindings: { rpcMethod: 'scm.file.read' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    sideEffectClass: 'read',
+    inputSchema: scm.ScmFileAtRevisionRequestSchema,
+    outputSchema: scm.ScmFileReadResponseSchema,
+    inputHints: { title: 'Read file at revision', fields: [
+      { path: 'cwd', title: 'cwd', widget: 'text' },
+      { path: 'path', title: 'path', widget: 'text' },
+      { path: 'selector.blobId', title: 'Blob ID', widget: 'text' },
+      { path: 'selector.side', title: 'Side', widget: 'text' },
+      { path: 'selector.area', title: 'Area', widget: 'text' },
+      { path: 'maxBytes', title: 'Preview byte budget', widget: 'number' },
+    ] },
+  }),
+  defineScmActionSpec({
+    id: 'scm.blame.get', approval: { result: 'required' },
+    title: 'Blame file',
+    description: 'Read committed and uncommitted line ranges in the selected source-control repository.',
+    safety: 'safe',
+    placements: [],
+    bindings: { rpcMethod: RPC_METHODS.SCM_BLAME_FILE },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    sideEffectClass: 'read',
+    inputSchema: scm.ScmBlameFileRequestSchema,
+    outputSchema: scm.ScmBlameFileResponseSchema,
+    inputHints: {
+      title: 'Blame file',
+      fields: [
+        { path: 'cwd', title: 'cwd', widget: 'text' },
+        { path: 'path', title: 'path', widget: 'text' },
+        { path: 'expectedHash', title: 'Expected file hash', widget: 'text' },
+      ],
+    },
+  }),
+  defineScmActionSpec({
     id: 'scm.diff.commit', approval: {result: 'required'},
     title: 'Diff commit',
     description: 'Diff commit in the explicitly selected source-control repository.',
@@ -252,6 +291,10 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.change.discard', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct', uiConfirmationForInput: input => {
+      const parsed = scm.ScmChangeDiscardRequestSchema.safeParse(input);
+      return !parsed.success || parsed.data.entries.some(entry => entry.kind !== 'comparison');
+    } },
     examples: { voice: { argsExample: '{"cwd":"/repo","entries":[{"path":"src/app.ts","kind":"modified"}]}' } },
     workspaceWrite: true,
     title: 'Discard changes',
@@ -1739,8 +1782,13 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS: readonly [
     inputSchema: ScmReviewedMarkInputSchema, outputSchema: ScmReviewedMarkResponseSchema,
     inputHints: { title: 'Mark changes reviewed', fields: [
       { path: 'cwd', title: 'Repository directory', widget: 'text', required: true },
-      { path: 'resultId', title: 'Saved result', widget: 'text', required: true },
-      { path: 'changeRefs', title: 'Exact change references', widget: 'text_list', listSeparator: 'newline', required: true },
+      { path: 'v', title: 'Selector version', widget: 'integer' },
+      { path: 'resultId', title: 'Saved result', widget: 'text' },
+      { path: 'comparisonId', title: 'Captured comparison', widget: 'text' },
+      { path: 'source', title: 'Comparison source', widget: 'json' },
+      { path: 'sessionId', title: 'Session namespace', widget: 'text' },
+      { path: 'changeRefs', title: 'Exact change references', widget: 'text_list', listSeparator: 'newline' },
+      { path: 'changeKeys', title: 'Live content keys', widget: 'text_list', listSeparator: 'newline' },
     ] },
   }),
   defineScmActionSpec({
@@ -1754,8 +1802,13 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS: readonly [
     inputSchema: ScmReviewedMarkInputSchema, outputSchema: ScmReviewedMarkResponseSchema,
     inputHints: { title: 'Unmark reviewed changes', fields: [
       { path: 'cwd', title: 'Repository directory', widget: 'text', required: true },
-      { path: 'resultId', title: 'Saved result', widget: 'text', required: true },
-      { path: 'changeRefs', title: 'Exact change references', widget: 'text_list', listSeparator: 'newline', required: true },
+      { path: 'v', title: 'Selector version', widget: 'integer' },
+      { path: 'resultId', title: 'Saved result', widget: 'text' },
+      { path: 'comparisonId', title: 'Captured comparison', widget: 'text' },
+      { path: 'source', title: 'Comparison source', widget: 'json' },
+      { path: 'sessionId', title: 'Session namespace', widget: 'text' },
+      { path: 'changeRefs', title: 'Exact change references', widget: 'text_list', listSeparator: 'newline' },
+      { path: 'changeKeys', title: 'Live content keys', widget: 'text_list', listSeparator: 'newline' },
     ] },
   }),
   defineScmActionSpec({
