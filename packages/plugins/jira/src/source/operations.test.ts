@@ -57,17 +57,30 @@ export function host(respond: (url: URL, body: unknown) => { status?: number; bo
         return { status: response.status ?? 200, finalUrl: input.url, headers: response.headers ?? {}, body: new TextEncoder().encode(JSON.stringify(response.body)) };
     });
     const materializeListedAccount = vi.fn(async () => ({ kind: 'httpHeaders', headers: { authorization: 'Basic fixture-only' } }));
+    const listAccounts = vi.fn(async () => ({ status: 'complete', accounts: [{ account, state: 'connected', displayName: 'Work Jira', connectedAccountOrigins: [origin] }] }));
     // Genuine host service boundaries: Connected Accounts + HTTP; all Jira and Triage logic stays real.
     const context = { signal: new AbortController().signal, services: {
         connectedAccounts: {
-            listAccounts: vi.fn(async () => ({ status: 'complete', accounts: [{ account, state: 'connected', displayName: 'Work Jira', connectedAccountOrigins: [origin] }] })),
+            listAccounts,
             materializeListedAccount,
         }, http: { request },
     } } as unknown as PluginInvocationContext;
-    return { context, request, materializeListedAccount };
+    return { context, request, materializeListedAccount, listAccounts };
 }
 
 describe('Jira source through provider HTTP', () => {
+    it('projects due and resolved dates from provider fields into the shared scan snapshot', async () => {
+        const h = host((url, body) => {
+            if (url.pathname === '/rest/api/3/myself') return { body: { accountId: 'person-1' } };
+            expect(body).toMatchObject({ fields: expect.arrayContaining(['duedate', 'resolutiondate']) });
+            return { body: { isLast: true, issues: [{ ...issue, fields: { ...issue.fields, duedate: '2026-10-25',
+                resolutiondate: '2026-10-20T10:30:00Z', status: { name: 'Done', statusCategory: { key: 'done' } } } }] } };
+        });
+        expect(TriageScanResultV1Schema.parse(await scanJiraSource({ v: 1, instance, page: { kind: 'initial', limit: 20 } }, h.context)))
+            .toMatchObject({ kind: 'complete', observations: [{ snapshot: {
+                dueDate: '2026-10-25', completedAtMs: Date.parse('2026-10-20T10:30:00Z'),
+            } }] });
+    });
     it('reads historical project configuration as a selected scope without losing create defaults', () => {
         expect(readJiraConfiguration(JSON.stringify({ v: 1, projectId: '10000', involvement: 'mine', issueTypeId: '10002' })))
             .toEqual({ v: 2, scope: { kind: 'selected', unitIds: ['10000'] }, involvement: 'mine', projectId: '10000', issueTypeId: '10002' });
@@ -87,8 +100,11 @@ describe('Jira source through provider HTTP', () => {
         });
         const result = TriageScanResultV1Schema.parse(await scanJiraSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 3 } }, h.context));
         expect(result).toMatchObject({ kind: 'complete', observations: kind === 'selected'
-            ? [{ localRef: { entryId: '10001' } }, { localRef: { entryId: '10005' } }]
-            : [{ localRef: { entryId: '10001' } }, { localRef: { entryId: '10005' } }, { localRef: { entryId: '10006' } }] });
+            ? [{ localRef: { entryId: '10001' }, snapshot: { scopeUnitId: '10000' } },
+                { localRef: { entryId: '10005' }, snapshot: { scopeUnitId: '10002' } }]
+            : [{ localRef: { entryId: '10001' }, snapshot: { scopeUnitId: '10000' } },
+                { localRef: { entryId: '10005' }, snapshot: { scopeUnitId: '10002' } },
+                { localRef: { entryId: '10006' }, snapshot: { scopeUnitId: '10003' } }] });
         expect(result.kind === 'complete' && result.evidence).toMatchObject(kind === 'selected'
             ? { kind: 'partial', omittedItemCount: 1 } : { kind: 'walkFinished' });
     });
@@ -130,7 +146,7 @@ describe('Jira source through provider HTTP', () => {
         if (read === undefined) throw new Error('Jira scope Action was not activated');
         const draft = { v: 1, binding: instance.binding, localInstanceKey: origin, keyStability: 'locatorDerived',
             configuration: { v: 1, token: JSON.stringify({ v: 2, scope: { kind: 'selected', unitIds: ['10000'] }, involvement: 'mine',
-                scopeUnits: [{ id: '10000', label: 'Platform', secondaryText: 'ABC' }] }) },
+                scopeUnits: [{ id: '10000', label: 'Platform', secondaryText: 'ABC', collisionScope: 'invented-project-identity' }] }) },
             locator: { v: 1, displayLabel: 'Work Jira' } };
         const h = host((url) => {
             expect(url.pathname).toBe('/rest/api/3/project/search');
@@ -145,12 +161,17 @@ describe('Jira source through provider HTTP', () => {
         if (first.kind !== 'page' || first.status !== 'partial' || !first.nextCursor) throw new Error('Project continuation missing');
         expect(TriageListScopeUnitsResultV1Schema.parse(await read({ v: 1, draft, query: 'Platform', cursor: first.nextCursor }, h.context)))
             .toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '10002', label: 'Platform mobile' }] });
-        h.request.mockClear(); h.materializeListedAccount.mockClear();
+        h.request.mockClear(); h.materializeListedAccount.mockClear(); h.listAccounts.mockClear();
+        expect(await read({ v: 1, draft, query: 'Other', cursor: first.nextCursor }, h.context))
+            .toMatchObject({ kind: 'failed', failure: { code: 'jira/projectCursorInvalid' } });
+        expect(h.request).not.toHaveBeenCalled();
+        h.listAccounts.mockClear();
         expect(await read({ v: 1, draft, mode: 'configured' }, h.context))
             .toEqual({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['10000'] },
                 units: [{ id: '10000', label: 'Platform', secondaryText: 'ABC' }] });
         expect(h.request).not.toHaveBeenCalled();
         expect(h.materializeListedAccount).not.toHaveBeenCalled();
+        expect(h.listAccounts).not.toHaveBeenCalled();
     });
     it('loads complete editable values and never invents a value for an omitted provider field', async () => {
         const h = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
@@ -180,6 +201,14 @@ describe('Jira source through provider HTTP', () => {
         if (result.kind !== 'complete') throw new Error('Expected site discovery');
         expect(result.candidates).toHaveLength(1);
         expect(h.request).not.toHaveBeenCalled();
+        const draft = result.candidates[0];
+        if (draft === undefined) throw new Error('Expected the site candidate');
+        expect(readJiraConfiguration(draft.configuration.token)).toEqual({ v: 2, scope: { kind: 'all' }, involvement: 'mine' });
+        const provider = host((url) => ({ body: url.pathname === '/rest/api/3/myself'
+            ? { accountId: 'person-1' } : { isLast: true, issues: [issue] } }));
+        const configured = { ...instance, binding: draft.binding, localInstanceKey: draft.localInstanceKey, configuration: draft.configuration };
+        expect(await scanJiraSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 1 } }, provider.context))
+            .toMatchObject({ kind: 'complete', observations: [{ localRef: ref }] });
     });
 
     it('pages enhanced JQL search and preserves Jira identity, native state and involvement', async () => {
@@ -396,7 +425,7 @@ describe('Jira source through provider HTTP', () => {
         ] } : url.pathname.endsWith('/editmeta') ? { fields: { summary: { operations: ['set'] }, priority: { operations: ['set'] } } }
             : url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' } : issue }));
         expect(await getJiraEntry({ v: 1, instance, localRef: ref }, h.context)).toMatchObject({ kind: 'present', snapshot: {
-            taskCapabilities: { editFields: ['title', 'priority'], transitions: [{ id: '31', label: 'Complete', state: { presentation: 'resolved', completionReason: 'completed' } }] },
+            taskCapabilities: { editFields: ['title', 'priority'], completingTransitionId: '31', transitions: [{ id: '31', label: 'Complete', state: { presentation: 'resolved', completionReason: 'completed' } }] },
         } });
     });
 

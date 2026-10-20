@@ -1,9 +1,12 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { computeCanonicalDomainSeparatedDigest, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ConnectedAccountRef } from '@happier-dev/plugin-sdk/connected-accounts';
 import {
     TriageListInstancesInputV1Schema, TriageListInstancesResultV1Schema,
     TriageGetInputV1Schema, TriageScanInputV1Schema, TriageScanContinuationV1Schema,
     TriageSourceInstanceDraftV1Schema, isTriageSourceConnectedAccountInstanceV1,
+    TriageListScopeUnitsInputV1Schema, TriageListScopeUnitsResultV1Schema,
+    TriageSourceScopeUnitV1Schema, triageSourceBindingComponentsV1, projectTriageDisplayTextV1,
+    type TriageListScopeUnitsResultV1, type TriageSourceScopeUnitV1,
     type TriageListInstancesResultV1, type TriageScanResultV1, type TriageGetResultV1,
     type TriageConfiguredSourceInstanceV1, type TriageSourceEntryLocalRefV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -12,7 +15,7 @@ import { JIRA_ACCOUNT_PURPOSE } from '../contracts.js';
 import { createJiraClient, invalidJira, jiraCloudOrigin, jiraFailure, numericId, object, string, type JiraClient } from '../api.js';
 import { readJiraConfiguration, readJiraIssue, projectJiraIssue, jiraTaskFields, type JiraConfiguration, type JiraIssue } from './model.js';
 import { readJiraTaskCapabilities } from './metadata.js';
-import { encodeJiraConfiguration, jiraProjectIncluded } from './configurationContract.js';
+import { encodeJiraConfiguration, jiraConfiguredScopeUnits, jiraProjectIncluded, JiraProjectCursorSchema } from './configurationContract.js';
 
 function sameAccount(a: ConnectedAccountRef, b: ConnectedAccountRef): boolean {
     return a.accountId === b.accountId && a.service.pluginId === b.service.pluginId && a.service.localId === b.service.localId;
@@ -65,6 +68,52 @@ export async function openJiraInstance(instance: Pick<TriageConfiguredSourceInst
     const account = listing.accounts.find((row) => sameAccount(row.account, accountRef));
     if (account === undefined || account.connectedAccountOrigins.length !== 1 || jiraCloudOrigin(account.connectedAccountOrigins[0]) !== origin) throw invalidJira('jira/accountSiteMismatch');
     return { client: createJiraClient(context, accountRef, origin), configuration };
+}
+
+/** Jira REST v3 project/search owns visibility, search and offset paging. */
+export async function listJiraScopeUnits(raw: unknown, context: PluginInvocationContext): Promise<TriageListScopeUnitsResultV1> {
+    const input = TriageListScopeUnitsInputV1Schema.parse(raw);
+    try {
+        const configuration = readJiraConfiguration(input.draft.configuration.token);
+        if (input.mode === 'configured') return {
+            kind: 'page', status: 'complete', selection: configuration.scope, units: jiraConfiguredScopeUnits(configuration),
+        };
+        const query = input.query ?? '';
+        const boundary = computeCanonicalDomainSeparatedDigest('happier.jira.project-directory.v1',
+            [...triageSourceBindingComponentsV1(input.draft.binding), input.draft.localInstanceKey]);
+        let startAt = 0;
+        if (input.cursor !== undefined) {
+            let rawCursor: unknown;
+            try { rawCursor = JSON.parse(input.cursor.token); } catch { throw invalidJira('jira/projectCursorInvalid'); }
+            const cursor = JiraProjectCursorSchema.safeParse(rawCursor);
+            if (!cursor.success || cursor.data.boundary !== boundary || cursor.data.query !== query) throw invalidJira('jira/projectCursorInvalid');
+            startAt = cursor.data.startAt;
+        }
+        const { client } = await openJiraInstance(input.draft, context);
+        const search = new URLSearchParams({ startAt: String(startAt), ...(query === '' ? {} : { query }) });
+        const page = object(await client.request(`/rest/api/3/project/search?${search}`));
+        if (!Array.isArray(page.values) || typeof page.isLast !== 'boolean'
+            || page.startAt !== startAt || !Number.isSafeInteger(page.maxResults) || Number(page.maxResults) < 0) throw invalidJira('jira/projectPageInvalid');
+        const units: TriageSourceScopeUnitV1[] = [];
+        let invalid = false;
+        for (const rawProject of page.values) {
+            const project = object(rawProject);
+            if (!numericId(project.id)) { invalid = true; continue; }
+            const unit = TriageSourceScopeUnitV1Schema.safeParse({ id: project.id,
+                label: projectTriageDisplayTextV1(string(project.name) ?? string(project.key) ?? project.id).value,
+                ...(string(project.key) ? { secondaryText: projectTriageDisplayTextV1(String(project.key)).value } : {}),
+            });
+            if (unit.success) units.push(unit.data); else invalid = true;
+        }
+        const next = startAt + Number(page.maxResults);
+        if (!page.isLast && (!Number.isSafeInteger(next) || next <= startAt)) throw invalidJira('jira/projectPageInvalid');
+        return TriageListScopeUnitsResultV1Schema.parse({ kind: 'page', selection: configuration.scope, units,
+            status: page.isLast && !invalid ? 'complete' : 'partial',
+            ...(invalid ? { failure: { class: 'unsupportedContract', code: 'jira/projectRowsInvalid' } } : {}),
+            ...(page.isLast ? {} : { nextCursor: TriageScanContinuationV1Schema.parse({ v: 1,
+                token: JSON.stringify({ v: 1, boundary, query, startAt: next }) }) }),
+        });
+    } catch (error) { return { kind: 'failed', failure: jiraFailure(error) }; }
 }
 
 export async function jiraViewer(client: JiraClient): Promise<string> {

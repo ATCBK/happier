@@ -9,7 +9,7 @@ import { withTriageSourceSettingsTranslationsV1 } from '@happier-dev/triage-sour
 import { JIRA_UI_TRANSLATIONS } from './ui/translations.js';
 import { JIRA_ACCOUNT_PURPOSE, JIRA_ACTIONS, JIRA_PLUGIN_ID, JIRA_SOURCE_ID } from './contracts.js';
 import { jiraAccountRuntime } from './connect.js';
-import { getJiraEntry, listJiraInstances, scanJiraSource } from './source/operations.js';
+import { getJiraEntry, listJiraInstances, listJiraScopeUnits, scanJiraSource } from './source/operations.js';
 import { JiraDetailResultSchema, readJiraDetail } from './source/detail.js';
 import { JiraCommentInputSchema, createJiraIssue, editJiraIssue, transitionJiraIssue, commentJiraIssue } from './source/writes.js';
 import { JIRA_TASK_FIELDS } from './source/metadata.js';
@@ -99,7 +99,7 @@ export const JIRA_PLUGIN = definePlugin({
             resultSchema: TriageTaskWriteResultV1Schema.jsonSchema, run: commentJiraIssue,
         },
         [JIRA_ACTIONS.listInstances]: {
-            title: 'Discover Jira sites and projects', surfaces: sources.operations.listInstances.declaration.surfaces,
+            title: 'Discover Jira sites', surfaces: sources.operations.listInstances.declaration.surfaces,
             placementBindings: [], dangerLevel: 'safe', hostAccess: access,
             inputSchema: TriageSourceConnectedAccountInputsV1.listInstances.jsonSchema,
             resultSchema: sources.operations.listInstances.declaration.resultSchema.jsonSchema, run: listJiraInstances,
@@ -109,6 +109,13 @@ export const JIRA_PLUGIN = definePlugin({
             dangerLevel: 'safe', hostAccess: access, connectedAccountPurposeBindings: bindings,
             inputSchema: TriageSourceConnectedAccountInputsV1.scan.jsonSchema,
             resultSchema: sources.operations.scan.declaration.resultSchema.jsonSchema, run: scanJiraSource,
+        },
+        [JIRA_ACTIONS.listScopeUnits]: {
+            title: 'List Jira projects', surfaces: sources.operations.listScopeUnits.declaration.surfaces,
+            placementBindings: [], dangerLevel: 'safe', hostAccess: access,
+            connectedAccountPurposeBindings: [{ path: 'draft.binding.account', purpose: JIRA_ACCOUNT_PURPOSE }],
+            inputSchema: TriageSourceConnectedAccountInputsV1.listScopeUnits.jsonSchema,
+            resultSchema: sources.operations.listScopeUnits.declaration.resultSchema.jsonSchema, run: listJiraScopeUnits,
         },
         [JIRA_ACTIONS.get]: {
             title: 'Read a Jira issue', surfaces: sources.operations.get.declaration.surfaces,
@@ -126,10 +133,12 @@ export const JIRA_PLUGIN = definePlugin({
     contributesTo: { [TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1]: { [TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1]: {
         [JIRA_SOURCE_ID]: sources.contribute({
             descriptor: { v: 1, purpose: JIRA_ACCOUNT_PURPOSE, displayName: 'Jira', settingsPageId: 'jira-sources',
+                scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' },
                 kinds: [{ id: 'issue', workflowSubject: 'issue', displayName: 'Issue', pluralDisplayName: 'Issues',
                     task: true, taskCapabilities: { createFields: JIRA_TASK_FIELDS, editFields: JIRA_TASK_FIELDS },
                     detailTabs: [{ kind: 'shared', id: 'overview' }] }] },
             operations: { listInstances: sources.operations.listInstances.bind(JIRA_ACTIONS.listInstances),
+                listScopeUnits: sources.operations.listScopeUnits.bind(JIRA_ACTIONS.listScopeUnits),
                 scan: sources.operations.scan.bind(JIRA_ACTIONS.scan), get: sources.operations.get.bind(JIRA_ACTIONS.get),
                 create: sources.operations.create.bind(JIRA_ACTIONS.create), edit: sources.operations.edit.bind(JIRA_ACTIONS.edit),
                 transition: sources.operations.transition.bind(JIRA_ACTIONS.transition) },

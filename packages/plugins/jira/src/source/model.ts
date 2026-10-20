@@ -5,15 +5,13 @@ import {
 } from '@happier-dev/triage-protocol/v1';
 import { numericId, object, string, invalidJira } from '../api.js';
 import { JIRA_PLUGIN_ID, JIRA_SOURCE_ID } from '../contracts.js';
-import { JiraConfigurationSchema, type JiraConfiguration } from './configurationContract.js';
+import { parseJiraConfiguration, type JiraConfiguration } from './configurationContract.js';
 export type { JiraConfiguration } from './configurationContract.js';
 
 export function readJiraConfiguration(token: string): JiraConfiguration {
-    let raw: unknown;
-    try { raw = JSON.parse(token); } catch { throw invalidJira('jira/configurationInvalid'); }
-    const value = JiraConfigurationSchema.safeParse(raw);
-    if (!value.success) throw invalidJira('jira/configurationInvalid');
-    return value.data;
+    const value = parseJiraConfiguration(token);
+    if (value === null) throw invalidJira('jira/configurationInvalid');
+    return value;
 }
 export function jiraLocalRef(origin: string, id: string) {
     return TriageSourceEntryLocalRefV1Schema.parse({ kindId: 'issue', collisionScope: `jira:${origin}`, entryId: id });
@@ -81,6 +79,8 @@ export function projectJiraIssue(issue: JiraIssue, origin: string, viewerId: str
     const creator = string(object(fields.creator).displayName);
     const authorLabel = creator === undefined ? undefined : display(creator, issue.id);
     const createdAtMs = Date.parse(String(fields.created));
+    const dueAtMs = Date.parse(String(fields.duedate));
+    const completedAtMs = Date.parse(String(fields.resolutiondate));
     const updated = Date.parse(String(fields.updated));
     const involvement: ('author' | 'assignee' | 'subscribed')[] = [];
     if (object(fields.creator).accountId === viewerId) involvement.push('author');
@@ -89,8 +89,10 @@ export function projectJiraIssue(issue: JiraIssue, origin: string, viewerId: str
     return {
         kind: 'present', localRef: jiraLocalRef(origin, issue.id),
         locator: { v: 1, displayPath: designation, webUrl: `${origin}/browse/${encodeURIComponent(issue.key)}` },
-        snapshot: TriageSourceEntrySnapshotV1Schema.parse({ v: 1, title, scopeLabel, designation,
+        snapshot: TriageSourceEntrySnapshotV1Schema.parse({ v: 1, title, scopeLabel, scopeUnitId: String(object(fields.project).id), designation,
             ...(authorLabel === undefined ? {} : { authorLabel }), ...(Number.isFinite(createdAtMs) ? { createdAtMs } : {}),
+            ...(Number.isFinite(dueAtMs) ? { dueDate: fields.duedate } : {}),
+            ...(jiraState(fields.status).presentation === 'resolved' && Number.isFinite(completedAtMs) ? { completedAtMs } : {}),
             state: jiraState(fields.status), relations: relations(issue, origin), facts,
             ...(truncated ? { projectionTruncated: true } : {}),
         }),

@@ -1,4 +1,4 @@
-import { defineProtocolArray, defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
+import { defineProtocolArray, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
 import { TriageSourceConnectedAccountBindingV1Schema, TriageSourceInstanceConfigurationV1Schema, TriageSourceFailureV1Schema,
     TriageSourceScopeSelectionV1Schema, TriageSourceScopeUnitV1Schema, type TriageSourceScopeUnitV1,
     type TriageSourceScopeSelectionV1, type TriageSourceInstanceConfigurationV1 } from '@happier-dev/triage-protocol/v1';
@@ -18,6 +18,11 @@ export const JiraConfigurationSchema = defineProtocolObject({
     projectId: id.optional(), issueTypeId: id.optional(),
 }, { policy: 'closed' });
 export type JiraConfiguration = ReturnType<typeof JiraConfigurationSchema.parse>;
+
+export const JiraProjectCursorSchema = defineProtocolObject({
+    v: defineProtocolLiteral(1), boundary: text, query: defineProtocolString(),
+    startAt: defineProtocolNumber({ integer: true, minimum: 0 }),
+}, { policy: 'closed' });
 
 export function jiraProjectIncluded(configuration: JiraConfiguration, projectId: string): boolean {
     return configuration.scope.kind === 'all' || configuration.scope.unitIds.includes(projectId);

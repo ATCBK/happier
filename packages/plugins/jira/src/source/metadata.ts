@@ -1,4 +1,4 @@
-import { projectTriageDisplayTextV1, TriageTaskCapabilitiesV1Schema, type TriageTaskCapabilitiesV1 } from '@happier-dev/triage-protocol/v1';
+import { projectTriageDisplayTextV1, triageTaskTransitionCapabilitiesV1, TriageTaskCapabilitiesV1Schema, type TriageTaskCapabilitiesV1 } from '@happier-dev/triage-protocol/v1';
 import { invalidJira, object, string, type JiraClient } from '../api.js';
 import { jiraState, type JiraIssue } from './model.js';
 
@@ -26,7 +26,7 @@ export async function readJiraTaskCapabilities(client: JiraClient, issue: JiraIs
         client.request(`/rest/api/3/issue/${issue.id}/editmeta`), readJiraTransitions(client, issue.id),
     ]);
     const fields = edit.status === 'fulfilled' ? object(object(edit.value).fields) : {};
-    return TriageTaskCapabilitiesV1Schema.parse({
+    const capabilities = TriageTaskCapabilitiesV1Schema.parse({
         editFields: JIRA_TASK_FIELDS.filter((id) => {
             const operations = object(fields[JIRA_FIELD_IDS[id]]).operations;
             return Array.isArray(operations) && operations.includes('set');
@@ -39,6 +39,7 @@ export async function readJiraTaskCapabilities(client: JiraClient, issue: JiraIs
             return parsed.success ? parsed.data.transitions ?? [] : [];
         }),
     });
+    return { ...capabilities, ...triageTaskTransitionCapabilitiesV1(capabilities.transitions ?? []) };
 }
 
 /** Jira's offset-paged create-metadata resources. No local page ceiling. */
