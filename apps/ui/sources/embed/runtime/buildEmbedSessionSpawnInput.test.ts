@@ -74,6 +74,15 @@ describe('buildEmbedSessionSpawnInput', () => {
         expect(unrestricted.permissionMode).toBe('default');
     });
 
+    it('omits Connected Service bindings when the creation grant inherits the Account default', () => {
+        const self = createSelf();
+        const { connectedServices: _connectedServices, ...create } = self.grant.create!;
+        self.grant.create = create;
+        expect(buildEmbedSessionSpawnInput({
+            draft: createDraft(), attemptId: 'launch-attempt', self, endpointUrl,
+        })).not.toHaveProperty('connectedServices');
+    });
+
     it('fails with typed create_not_granted when creation, presentation or canonical action admission refuses the spawn', () => {
         const self = createSelf();
         const denied = [
