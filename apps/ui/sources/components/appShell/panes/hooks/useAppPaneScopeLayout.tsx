@@ -1,9 +1,14 @@
 import * as React from 'react';
 
-import type { ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
+import type { PaneArrangement, ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import type { ResolvedBottomPanePresentation } from '@/components/ui/panels/resolveBottomPaneLayout';
 
 export type AppPaneScopeLayoutState = Readonly<{
+    arrangement: PaneArrangement;
+    mainHidden: boolean;
+    mainDrawerOpen: boolean;
+    effectiveDetailsOpen: boolean;
+    detailsAvailable: boolean;
     containerWidthPx: number;
     containerHeightPx: number;
     mainRegionWidthPx: number;

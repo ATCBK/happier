@@ -13,11 +13,10 @@ describe('MultiPaneHost (hideMain docked)', () => {
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<MultiPaneHost
-                    hideMain
                     main={<Main />}
                     rightPane={<Right />}
                     detailsPane={<Details />}
-                    layout={{ kind: 'threePane', right: 'docked', details: 'docked' }}
+                    layout={{ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -26,7 +25,11 @@ describe('MultiPaneHost (hideMain docked)', () => {
                     onCommitDetailsDockWidthPx={() => {}}
                 />)).tree;
 
-        expect(() => tree!.findByType('Main' as any)).toThrow();
+        const main = tree!.findByType('Main' as any);
+        await renderer.act(async () => tree!.update(<MultiPaneHost hideMain main={<Main />} rightPane={<Right />} detailsPane={<Details />}
+            layout={{ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' }} rightDockWidthPx={360} detailsDockWidthPx={520}
+            onCloseRight={() => {}} onCloseDetails={() => {}} onCommitRightDockWidthPx={() => {}} onCommitDetailsDockWidthPx={() => {}} />));
+        expect(tree!.findByType('Main' as any)).toBe(main);
         expect(tree!.findByType('Details' as any)).toBeTruthy();
         expect(tree!.findByType('Right' as any)).toBeTruthy();
     });

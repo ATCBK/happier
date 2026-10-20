@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { resolvePaneLayout } from './paneBreakpoints';
 
 describe('resolvePaneLayout', () => {
+    it('keeps the editor permanent and folds side then session in editor-first', () => {
+        const input = { arrangement: 'editor' as const, deviceType: 'tablet' as const, multiPaneEnabled: true,
+            rightOpen: true, detailsOpen: false, rightPreferredPx: 340, sessionWidthPx: 440 };
+        expect(resolvePaneLayout({ ...input, containerWidthPx: 1280 })).toMatchObject({ main: 'docked', right: 'docked', details: 'docked' });
+        expect(resolvePaneLayout({ ...input, containerWidthPx: 1100 })).toMatchObject({ main: 'docked', right: 'overlay', details: 'docked' });
+        expect(resolvePaneLayout({ ...input, containerWidthPx: 834, detailsOpenedFrom: 'side' })).toMatchObject({ main: 'overlay', right: 'overlay', details: 'docked' });
+    });
     it('returns single when multi-pane is disabled', () => {
         expect(resolvePaneLayout({
             containerWidthPx: 1400,
@@ -9,7 +16,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: false,
             rightOpen: true,
             detailsOpen: true,
-        })).toEqual({ kind: 'single', right: 'hidden', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' });
     });
 
     it('returns single on phone regardless of width', () => {
@@ -19,7 +26,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: true,
-        })).toEqual({ kind: 'single', right: 'hidden', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' });
     });
 
     it('docks right when main+right fit, even on narrower widths', () => {
@@ -29,7 +36,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: false,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' });
     });
 
     it('docks right when the preferred right width cannot fit with main (clamped later by sizing)', () => {
@@ -40,7 +47,7 @@ describe('resolvePaneLayout', () => {
             rightOpen: true,
             detailsOpen: false,
             rightPreferredPx: 560,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' });
     });
 
     it('uses overlay for right when preferred cannot fit and the caller explicitly prefers overlay', () => {
@@ -52,7 +59,7 @@ describe('resolvePaneLayout', () => {
             detailsOpen: false,
             rightPreferredPx: 560,
             rightPreferOverlayWhenPreferredDoesNotFit: true,
-        })).toEqual({ kind: 'overlayStack', right: 'overlay', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' });
     });
 
     it('uses overlay when main+right cannot fit', () => {
@@ -62,7 +69,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: false,
-        })).toEqual({ kind: 'overlayStack', right: 'overlay', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' });
     });
 
     it('docks right and overlays details when both are open but three panes do not fit', () => {
@@ -72,7 +79,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: true,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
     });
 
     it('docks right and overlays details when both are open and still do not fit three panes', () => {
@@ -82,7 +89,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: true,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
     });
 
     it('docks right in twoPane when only right is open', () => {
@@ -92,7 +99,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: false,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'hidden' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' });
     });
 
     it('docks details in twoPane when only details is open and it fits', () => {
@@ -102,7 +109,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: false,
             detailsOpen: true,
-    })).toEqual({ kind: 'twoPane', right: 'hidden', details: 'docked' });
+    })).toEqual({ main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' });
     });
 
     it('docks details when the preferred details width cannot fit with main (clamped later by sizing)', () => {
@@ -113,7 +120,7 @@ describe('resolvePaneLayout', () => {
             rightOpen: false,
             detailsOpen: true,
             detailsPreferredPx: 700,
-        })).toEqual({ kind: 'twoPane', right: 'hidden', details: 'docked' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' });
     });
 
     it('uses overlay for details when preferred cannot fit and the caller explicitly prefers overlay', () => {
@@ -125,7 +132,7 @@ describe('resolvePaneLayout', () => {
             detailsOpen: true,
             detailsPreferredPx: 700,
             detailsPreferOverlayWhenPreferredDoesNotFit: true,
-        })).toEqual({ kind: 'overlayStack', right: 'hidden', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'overlayStack', right: 'hidden', details: 'overlay' });
     });
 
     it('uses threePane when both panes are open and fit', () => {
@@ -135,7 +142,7 @@ describe('resolvePaneLayout', () => {
             multiPaneEnabled: true,
             rightOpen: true,
             detailsOpen: true,
-        })).toEqual({ kind: 'threePane', right: 'docked', details: 'docked' });
+        })).toEqual({ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' });
     });
 
     it('prefers overlay details when three-pane mins fit but preferred widths do not', () => {
@@ -147,7 +154,7 @@ describe('resolvePaneLayout', () => {
             detailsOpen: true,
             rightPreferredPx: 560,
             detailsPreferredPx: 700,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
     });
 
     it('falls back to docked right + overlay details when three panes do not fit but two do', () => {
@@ -158,7 +165,7 @@ describe('resolvePaneLayout', () => {
             rightOpen: true,
             detailsOpen: true,
             mainMinPx: 800,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
     });
 
     it('falls back to overlayStack when even main+right does not fit', () => {
@@ -169,7 +176,7 @@ describe('resolvePaneLayout', () => {
             rightOpen: true,
             detailsOpen: true,
             mainMinPx: 1100,
-        })).toEqual({ kind: 'overlayStack', right: 'hidden', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'overlayStack', right: 'hidden', details: 'overlay' });
     });
 
     it('avoids overlayStack when preferred three-pane widths do not fit but mins do', () => {
@@ -181,7 +188,7 @@ describe('resolvePaneLayout', () => {
             detailsOpen: true,
             rightPreferredPx: 560,
             detailsPreferredPx: 700,
-        })).toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+        })).toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
     });
 
     it('allows threePane with a relaxed main minimum when both panes are open', () => {
@@ -192,7 +199,7 @@ describe('resolvePaneLayout', () => {
             rightOpen: true,
             detailsOpen: true,
             mainMinPxThreePane: 320,
-        })).toEqual({ kind: 'threePane', right: 'docked', details: 'docked' });
+        })).toEqual({ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' });
     });
 
     describe('Details never covers what it was opened from (details lab 2, Q1)', () => {
@@ -208,18 +215,18 @@ describe('resolvePaneLayout', () => {
 
         it('folds the sidebar to its rail and docks Details when opened from the transcript', () => {
             expect(resolvePaneLayout({ ...wideEnoughForTwoNotThree, detailsOpenedFrom: 'main' }))
-                .toEqual({ kind: 'twoPane', right: 'hidden', details: 'docked' });
+                .toEqual({ main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' });
         });
 
         it('keeps the sidebar list and draws Details as a drawer when opened from that list', () => {
             expect(resolvePaneLayout({ ...wideEnoughForTwoNotThree, detailsOpenedFrom: 'side', rightPreferredPx: 900 }))
-                .toEqual({ kind: 'twoPane', right: 'docked', details: 'overlay' });
+                .toEqual({ main: 'docked', kind: 'twoPane', right: 'docked', details: 'overlay' });
         });
 
         it('docks all three when they fit, whichever region opened Details', () => {
             for (const detailsOpenedFrom of ['main', 'side'] as const) {
                 expect(resolvePaneLayout({ ...wideEnoughForTwoNotThree, containerWidthPx: 1800, detailsOpenedFrom }))
-                    .toEqual({ kind: 'threePane', right: 'docked', details: 'docked' });
+                    .toEqual({ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' });
             }
         });
     });

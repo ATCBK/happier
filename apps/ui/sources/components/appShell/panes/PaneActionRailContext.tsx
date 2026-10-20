@@ -8,6 +8,7 @@ export const PANE_ACTION_RAIL_WIDTH = Platform.OS === 'web' ? 44 : Platform.OS =
 export const PaneActionRailContext = React.createContext<Readonly<{
     visible: boolean;
     contentWidthPx: number;
+    mirrored?: boolean;
     rightPaneHiddenByDetails?: boolean;
 }> | null>(null);
 

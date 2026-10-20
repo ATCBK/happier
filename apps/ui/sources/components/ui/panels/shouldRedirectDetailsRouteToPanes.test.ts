@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { shouldRedirectDetailsRouteToPanes } from './shouldRedirectDetailsRouteToPanes';
 
 describe('shouldRedirectDetailsRouteToPanes', () => {
+    it('uses the live pane owner rather than the outer window when mounted', () => {
+        expect(shouldRedirectDetailsRouteToPanes({ containerWidthPx: 1600, deviceType: 'tablet', multiPaneEnabled: true, detailsAvailable: false })).toBe(false);
+        expect(shouldRedirectDetailsRouteToPanes({ containerWidthPx: 800, deviceType: 'tablet', multiPaneEnabled: true, detailsAvailable: true })).toBe(true);
+    });
     it('returns true when multi-pane is enabled and the viewport can show details', () => {
         expect(shouldRedirectDetailsRouteToPanes({
             containerWidthPx: 1200,

@@ -6,14 +6,18 @@ export type PaneLayoutKind = 'single' | 'overlayStack' | 'twoPane' | 'threePane'
  */
 export type DetailsOpenerRegion = 'main' | 'side';
 export type PanePresentation = 'hidden' | 'docked' | 'overlay';
+export type PaneArrangement = 'session' | 'editor';
 
 export type ResolvedPaneLayout = Readonly<{
     kind: PaneLayoutKind;
+    main: 'docked' | 'overlay';
     right: PanePresentation;
     details: PanePresentation;
 }>;
 
 export type ResolvePaneLayoutInput = Readonly<{
+    arrangement?: PaneArrangement;
+    sessionWidthPx?: number;
     containerWidthPx: number;
     deviceType: 'phone' | 'tablet';
     multiPaneEnabled: boolean;
@@ -48,6 +52,9 @@ export type ResolvePaneLayoutInput = Readonly<{
  * number instead of guessing a second Chat minimum.
  */
 export const DEFAULT_MAIN_MIN_PX = 420;
+export const DEFAULT_EDITOR_MIN_PX = 480;
+export const DEFAULT_SESSION_MIN_PX = 360;
+export const DEFAULT_SESSION_WIDTH_PX = 440;
 /** The narrowest docked right sidebar and details pane. `PANE_SIZING_DEFAULTS` re-exports these. */
 export const DEFAULT_RIGHT_MIN_PX = 260;
 export const DEFAULT_DETAILS_MIN_PX = 320;
@@ -58,6 +65,18 @@ export const DEFAULT_DETAILS_MIN_PX = 320;
 export const DEFAULT_RIGHT_PREFERRED_PX = 340;
 
 export function resolvePaneLayout(input: ResolvePaneLayoutInput): ResolvedPaneLayout {
+    const width = input.containerWidthPx;
+    if (input.arrangement === 'editor' && input.deviceType !== 'phone' && input.multiPaneEnabled && Number.isFinite(width) && width > 0) {
+        const session = Math.max(DEFAULT_SESSION_MIN_PX, input.sessionWidthPx ?? DEFAULT_SESSION_WIDTH_PX);
+        const right = input.rightMinPx ?? DEFAULT_RIGHT_MIN_PX;
+        const main = width >= DEFAULT_EDITOR_MIN_PX + session ? 'docked' : 'overlay';
+        const side = !input.rightOpen ? 'hidden' : main === 'docked' && width >= DEFAULT_EDITOR_MIN_PX + session + right ? 'docked' : 'overlay';
+        return { main, kind: side === 'docked' ? 'threePane' : 'twoPane', right: side, details: 'docked' };
+    }
+    return { main: 'docked', ...resolveSessionPaneLayout(input) };
+}
+
+function resolveSessionPaneLayout(input: ResolvePaneLayoutInput): Omit<ResolvedPaneLayout, 'main'> {
     const mainMinPx = input.mainMinPx ?? DEFAULT_MAIN_MIN_PX;
     const mainMinPxThreePane = input.mainMinPxThreePane ?? mainMinPx;
     const rightMinPx = input.rightMinPx ?? DEFAULT_RIGHT_MIN_PX;
