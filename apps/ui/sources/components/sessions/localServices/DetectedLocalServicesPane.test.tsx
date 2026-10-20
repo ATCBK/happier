@@ -135,13 +135,13 @@ describe('DetectedLocalServicesPane', () => {
             deviceState.type = 'phone';
             await screen.update(pane(worker));
             expect(screen.findByTestId('continuity-detail')).toBeTruthy();
-            expect(screen.findAllByTestId('placement-probe')).toHaveLength(1);
+            expect(screen.findAllByType(PlacementProbe)).toHaveLength(1);
             await screen.update(pane(declaration));
             expect(screen.findByTestId('continuity-detail')).toBeTruthy();
             deviceState.type = 'tablet';
             await screen.update(pane(declaration));
             expect(screen.findByTestId('continuity-row:source-web-expansion')).toBeTruthy();
-            expect(screen.findAllByTestId('placement-probe')).toHaveLength(1);
+            expect(screen.findAllByType(PlacementProbe)).toHaveLength(1);
             deviceState.type = 'phone';
             await screen.update(pane(declaration));
             await pressTestInstanceAsync(screen.findByTestId('continuity-detail-back'), 'back');

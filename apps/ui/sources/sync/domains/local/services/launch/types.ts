@@ -71,4 +71,6 @@ export type LocalServiceLauncherState = Readonly<{
     refreshError: string | null;
     targetIds: readonly string[];
     targetsById: ReadonlyMap<string, LocalServiceLaunchTarget>;
+    /** UI-only declaration identity; native target ids remain intact for Actions. */
+    rowIdsByTargetId?: ReadonlyMap<string, string>;
 }>;

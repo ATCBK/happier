@@ -970,7 +970,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     });
     await vi.waitFor(() => expect(screen.findByTestId('placement.move.inspect')).toBeTruthy());
     expect(screen.getTextContent()).toContain('projectServices.moveUnknown');
-    expect(screen.getTextContent()).toContain('Starting service');
+    expect(screen.getTextContent()).not.toContain('Starting service');
     expect(runsOn().props.disabled).toBe(true);
     expect(runsOn().props.subtitle).not.toBe('projectServices.moveFailedStopped');
     await choose('hz-build-1');

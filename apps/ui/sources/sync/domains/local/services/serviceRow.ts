@@ -16,7 +16,7 @@ export type ServiceRowScope = 'thisSession' | 'workspace' | 'machine' | 'suggest
 export type ServiceRowStatus = 'loading' | 'running' | 'starting' | 'stopping' | 'stale' | 'stopped' | 'failed' | 'unavailable';
 
 export type ServiceRow = Readonly<{
-    id: string; // stable identity (inventory:<id> | package:<id> | ...)
+    id: string; // stable presentation identity; target.id retains native Action identity
     scope: ServiceRowScope; // ranking band
     title: string;
     portLabel: string | null; // ":<port>" or null (single port-token authority)
@@ -328,6 +328,7 @@ function dedupeLocalBindings(entries: readonly Readonly<{
 export function buildLocalServiceRows(input: Readonly<{
     inventoryRows: readonly LocalServiceInventoryRow[];
     launchTargets: readonly LocalServiceLaunchTarget[];
+    rowIdsByTargetId?: ReadonlyMap<string, string>;
     sessionId: string | null;
     scope: 'workspace' | 'machine';
 }>): readonly ServiceRow[] {
@@ -350,7 +351,7 @@ export function buildLocalServiceRows(input: Readonly<{
             ?? readString(target.browserTarget?.display?.addressLabel)
             ?? readEndpointAddressLabel(target.endpointUrl);
         const row: ServiceRow = {
-            id: target.id,
+            id: input.rowIdsByTargetId?.get(target.id) ?? target.id,
             scope: resolveBand(target, input.sessionId, input.scope),
             title,
             portLabel,
@@ -421,7 +422,8 @@ export function selectRunningOpenTargetOnPort(
     if (root === null) return null;
     for (const row of rows) {
         const candidate = row.target.workspace;
-        if (row.id !== failedTarget.id && row.status === 'running' && row.portLabel === `:${port}` && row.primaryAction?.kind === 'open'
+        if (row.id !== failedTarget.id && row.target.id !== failedTarget.id
+            && row.status === 'running' && row.portLabel === `:${port}` && row.primaryAction?.kind === 'open'
             && row.target.machineId === failedTarget.machineId && candidate?.machineId === row.target.machineId
             && candidate.serverId === workspace.serverId && candidate.workspaceId === workspace.workspaceId
             && normalizeWorkspaceRootPathV1(candidate.rootPath) === root) {

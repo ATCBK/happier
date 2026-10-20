@@ -683,7 +683,7 @@ describe('ServiceRowView', () => {
         expect(text).toContain('yarn storybook');
         // One quiet line: the command, then the declaring file as the same source chip a running row
         // draws (lab s-services), and "Ready to start" (the section) says it has not started.
-        expect(screen.findAllByTestId('row-source')).toHaveLength(1);
+        expect(screen.findByTestId('row-source')).toBeTruthy();
         expect(text).toContain('yarn storybook ·');
         expect(text).toContain('package.json');
         expect(text).not.toContain('not started');

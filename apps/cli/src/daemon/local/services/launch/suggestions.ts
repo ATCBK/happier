@@ -298,8 +298,10 @@ function targetFromRunTarget(target: LocalServiceLauncherRunTarget, machineId: s
                 commandPreview: `${target.packageScript.packageManager} run ${target.packageScript.scriptName}`,
                 confidence: 'high', state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [] };
         }
+        const command = target.displayMatch?.command?.trim();
         return { id: target.id, source: 'managed_service', machineId, cwd: target.cwd,
             workspaceId: target.workspaceId, workspace: target.workspace, declaration: target.declaration, title: formatLocalServiceLauncherTitle(target.title),
+            ...(command ? { commandPreview: clipLauncherText(command, LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH) } : {}),
             subtitle: target.cwd, confidence: 'high', state: 'unavailable',
             unavailableReason: 'launch_unavailable', actions: [] };
     }

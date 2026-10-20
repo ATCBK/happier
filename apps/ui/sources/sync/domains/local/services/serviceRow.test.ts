@@ -134,6 +134,9 @@ describe('buildLocalServiceRows', () => {
             LocalServiceLaunchTargetV1Schema.parse({ ...listening, workspace: undefined }), declared,
         ], sessionId: null, scope: 'workspace' }), 5173, declared)).toBeNull();
         expect(selectRunningOpenTargetOnPort(rows, 5173, listening)).toBeNull();
+        const projectedRows = buildLocalServiceRows({ inventoryRows: [], launchTargets: [listening],
+            rowIdsByTargetId: new Map([[listening.id, 'source-declaration']]), sessionId: null, scope: 'workspace' });
+        expect(selectRunningOpenTargetOnPort(projectedRows, 5173, listening)).toBeNull();
     });
     it('carries the detected service identity and address instead of exposing its raw process command', () => {
         const rows = buildLocalServiceRows({ inventoryRows: [inventoryRow()], launchTargets: [openableTarget()], sessionId: 'session-a', scope: 'workspace' });

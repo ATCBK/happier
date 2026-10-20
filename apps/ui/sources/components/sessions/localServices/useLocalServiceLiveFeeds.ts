@@ -186,10 +186,16 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const state = React.useMemo(() => {
         if (!enabled || !sourceState || !declarations.length) return sourceState;
         const values = canObserve && observation?.subscriptions === subscriptions && observation.declarations === declarations ? observation.values : null;
+        const rowIdsByTargetId = new Map<string, string>();
         const targets = sourceTargets.flatMap(target => {
             if (!declarations.includes(target)) return [target];
             const actual = values?.get(target.id);
-            if (actual?.status === 'present') return [actual.target];
+            if (actual?.status === 'present') {
+                // Moving changes native custody, not the declared Service the person opened.
+                // Keep presentation identity separate from the native target used by Actions.
+                rowIdsByTargetId.set(actual.target.id, target.id);
+                return [actual.target];
+            }
             if (actual?.status === 'ambiguous') return [...actual.targets];
             if (actual?.status === 'absent') return [target];
             // A pending read offers no Start authority, but is not a failed observation.
@@ -199,7 +205,8 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
         });
         const projected = applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
             ...(sourceState.sessionId ? { sessionId: sourceState.sessionId } : {}), updatedAt: sourceState.updatedAt!, targets });
-        return !values && canObserve && sourceState.refreshStatus !== 'error' ? { ...projected, refreshStatus: 'refreshing' as const } : projected;
+        return { ...projected, rowIdsByTargetId,
+            ...(!values && canObserve && sourceState.refreshStatus !== 'error' ? { refreshStatus: 'refreshing' as const } : {}) };
     }, [canObserve, declarations, enabled, observation, sourceState, sourceTargets, subscriptions]);
     const refresh = React.useCallback(async (sourceMachineId: string, sourceRefreshed: boolean) => {
         const refreshed = new Map<string, boolean>([[sourceMachineId, sourceRefreshed]]);

@@ -374,10 +374,11 @@ export function DetectedLocalServicesPane(props: Readonly<{
         () => buildLocalServiceRows({
             inventoryRows: viewModel.rows,
             launchTargets: launcherTargets,
+            rowIdsByTargetId: launcherState.rowIdsByTargetId,
             sessionId: activeSessionId,
             scope,
         }),
-        [activeSessionId, launcherTargets, scope, viewModel.rows],
+        [activeSessionId, launcherTargets, launcherState.rowIdsByTargetId, scope, viewModel.rows],
     );
 
     const sections = React.useMemo(() => groupLocalServiceRowsBySection(rows), [rows]);
@@ -391,19 +392,18 @@ export function DetectedLocalServicesPane(props: Readonly<{
     // keeps today's behaviour rather than claiming an outage.
     const offline = props.machine?.reachability === 'unreachable';
 
-    // One expanded row at a time (lab S signature). A row that leaves the list takes its expansion.
+    // One selected Service, presented inline on wide layouts or as a pushed detail on phones.
+    // Responsive changes and native placement handoffs do not change the person's selection.
     const [expandedRowId, setExpandedRowId] = React.useState<string | null>(null);
-    // Phone (lab PAGEp): a row pushes its detail instead; a row that leaves the list closes it.
     const phone = useDeviceType() === 'phone';
-    const [detailRowId, setDetailRowId] = React.useState<string | null>(null);
-    const detailRow = phone && detailRowId ? rows.find((row) => row.id === detailRowId) ?? null : null;
+    const detailRow = phone && expandedRowId ? rows.find((row) => row.id === expandedRowId) ?? null : null;
     const rowFocusTargets = React.useRef(new Map<string, FocusReturnTarget>());
     const returnFocusTarget = React.useRef<FocusReturnTarget>(null);
     const focusReturnPending = React.useRef(false);
     const restoreFocus = useRestoreFocusToTrigger(returnFocusTarget);
     const closeDetail = React.useCallback(() => {
         focusReturnPending.current = true;
-        setDetailRowId(null);
+        setExpandedRowId(null);
     }, []);
     React.useLayoutEffect(() => {
         if (!detailRow && focusReturnPending.current) {
@@ -485,11 +485,11 @@ export function DetectedLocalServicesPane(props: Readonly<{
             publicPreviewState={props.publicPreviewState}
             publicPreviewActions={props.publicPreviewActions}
             publicPreviewCapabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
-            expanded={expandedId === row.id}
+            expanded={!phone && expandedId === row.id}
             onExpandedChange={(next) => setExpandedRowId(next ? row.id : null)}
             onOpenDetail={phone ? () => {
                 returnFocusTarget.current = rowFocusTargets.current.get(row.id) ?? null;
-                setDetailRowId(row.id);
+                setExpandedRowId(row.id);
             } : undefined}
             animationEnabled={animationEnabled}
             testID={`${testID}-row:${row.id}`}
