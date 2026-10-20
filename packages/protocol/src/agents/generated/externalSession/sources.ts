@@ -287,6 +287,108 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
     "sourceKind": "antigravityCliPrint"
   },
   {
+    "agentId": "gemini",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "geminiConfigDir"
+        },
+        {
+          "field": "configDir",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "geminiConfigDir"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "configDir",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "geminiConfigDir"
+  },
+  {
+    "agentId": "grok",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "grokHome"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "grokHome"
+        }
+      ]
+    },
+    "sourceKind": "grokHome"
+  },
+  {
+    "agentId": "auggie",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "auggieHome"
+        },
+        {
+          "field": "augmentHome",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "auggieHome"
+        },
+        {
+          "kind": "string",
+          "min": 1,
+          "name": "augmentHome",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "auggieHome"
+  },
+  {
     "agentId": "qwen",
     "instances": [
       {
@@ -298,7 +400,11 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
       "segments": [
         {
           "kind": "literal",
-          "value": "qwenAcpSessionList"
+          "value": "qwenRuntimeDir"
+        },
+        {
+          "field": "runtimeDir",
+          "kind": "field"
         }
       ]
     },
@@ -307,11 +413,18 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
         {
           "kind": "literal",
           "name": "kind",
-          "value": "qwenAcpSessionList"
+          "value": "qwenRuntimeDir"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "runtimeDir",
+          "nullish": true
         }
       ]
     },
-    "sourceKind": "qwenAcpSessionList"
+    "sourceKind": "qwenRuntimeDir"
   },
   {
     "agentId": "kimi",
@@ -325,7 +438,7 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
       "segments": [
         {
           "kind": "literal",
-          "value": "kimiAcpSessionList"
+          "value": "kimiCodeHome"
         }
       ]
     },
@@ -334,11 +447,91 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
         {
           "kind": "literal",
           "name": "kind",
-          "value": "kimiAcpSessionList"
+          "value": "kimiCodeHome"
+        },
+        {
+          "kind": "string",
+          "name": "homeDir",
+          "nullish": true
         }
       ]
     },
-    "sourceKind": "kimiAcpSessionList"
+    "sourceKind": "kimiCodeHome"
+  },
+  {
+    "agentId": "kilo",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "kiloStorage"
+        },
+        {
+          "field": "storageRoot",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "kiloStorage"
+        },
+        {
+          "kind": "string",
+          "min": 1,
+          "name": "storageRoot",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "kiloStorage"
+  },
+  {
+    "agentId": "kiro",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "kiroChatStore"
+        },
+        {
+          "field": "kiroHome",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "kiroChatStore"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "kiroHome",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "kiroChatStore"
   },
   {
     "agentId": "fx",
@@ -352,7 +545,7 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
       "segments": [
         {
           "kind": "literal",
-          "value": "fxAcpSessionList"
+          "value": "fxHome"
         }
       ]
     },
@@ -361,11 +554,139 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
         {
           "kind": "literal",
           "name": "kind",
-          "value": "fxAcpSessionList"
+          "value": "fxHome"
         }
       ]
     },
-    "sourceKind": "fxAcpSessionList"
+    "sourceKind": "fxHome"
+  },
+  {
+    "agentId": "droid",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "droidFactoryDir"
+        },
+        {
+          "field": "factoryDir",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "droidFactoryDir"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "factoryDir",
+          "nullish": true
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "sessionFilePath",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "droidFactoryDir"
+  },
+  {
+    "agentId": "codebuddy",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "codebuddyHome"
+        },
+        {
+          "field": "homeDir",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "codebuddyHome"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "homeDir",
+          "nullish": true
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "sessionFile",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "codebuddyHome"
+  },
+  {
+    "agentId": "cursor",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "cursorHome"
+        },
+        {
+          "field": "homeDir",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "cursorHome"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "homeDir",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "cursorHome"
   },
   {
     "agentId": "ohMyPi",
@@ -481,5 +802,43 @@ export const GENERATED_EXTERNAL_SESSIONS_SOURCE_DECLARATIONS = [
       ]
     },
     "sourceKind": "piAgentDir"
+  },
+  {
+    "agentId": "copilot",
+    "instances": [
+      {
+        "constants": {},
+        "kind": "default"
+      }
+    ],
+    "key": {
+      "segments": [
+        {
+          "kind": "literal",
+          "value": "copilotHome"
+        },
+        {
+          "field": "homeDir",
+          "kind": "field"
+        }
+      ]
+    },
+    "schema": {
+      "fields": [
+        {
+          "kind": "literal",
+          "name": "kind",
+          "value": "copilotHome"
+        },
+        {
+          "kind": "string",
+          "max": 10000,
+          "min": 1,
+          "name": "homeDir",
+          "nullish": true
+        }
+      ]
+    },
+    "sourceKind": "copilotHome"
   },
 ] as const;

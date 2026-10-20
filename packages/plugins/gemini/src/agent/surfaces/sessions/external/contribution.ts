@@ -137,7 +137,9 @@ export const geminiExternalSessionsContribution: AgentExternalSessionsContributi
           ...(!transcript.partial ? { messageCount: transcript.items.length } : {}),
           ...(transcript.subagent ? { thread: { kind: 'subagent', parentRemoteSessionId: null } as const } : {}) };
         if (content) {
-          const result = await searchExternalSessionContent({ query, paths: [file.filePath], ripgrep: request.ripgrep, control,
+          // Replay already read the native file. Raw JSON cannot safely
+          // prefilter text joined across native parts or patch fragments.
+          const result = await searchExternalSessionContent({ query, control,
             isScanComplete: () => true,
             decode: async match => ({ records: transcript.items.map(item => {
               const text = geminiItemText(item); const snippet = text === null ? null : match(text);

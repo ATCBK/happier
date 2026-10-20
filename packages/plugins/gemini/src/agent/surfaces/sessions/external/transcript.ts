@@ -29,6 +29,9 @@ function parts(value: unknown): { text: string; partial: boolean } {
   let partial = false;
   const text = values.map(part => {
     if (typeof part === 'string') return part;
+    // @google/genai 1.30.0 Part, pinned by Gemini CLI v0.64.0.
+    if (isRecord(part) && Object.keys(part).some(key => !['mediaResolution', 'codeExecutionResult', 'executableCode',
+      'fileData', 'functionCall', 'functionResponse', 'inlineData', 'text', 'thought', 'thoughtSignature', 'videoMetadata'].includes(key))) partial = true;
     if (isRecord(part) && typeof part.text === 'string' && part.thought !== true) return part.text;
     // Characterized non-text Google GenAI parts are not transcript prose.
     if (isRecord(part) && (part.thought === true || 'inlineData' in part || 'fileData' in part || 'functionCall' in part)) return '';
@@ -62,11 +65,13 @@ export async function readGeminiTranscript(filePath: string, signal: AbortSignal
   };
   const patch = (value: unknown) => {
     if (!isRecord(value) || typeof value.id !== 'string') { partial = true; return; }
+    if (Object.keys(value).some(key => !['id', 'content', 'toolCalls'].includes(key))) partial = true;
     const message = messages.get(value.id);
     if (!message) return;
     if ('content' in value) message.content = value.content;
     if (Array.isArray(value.toolCalls) && Array.isArray(message.toolCalls)) {
       const patches = value.toolCalls;
+      if (patches.some(entry => !isRecord(entry) || Object.keys(entry).some(key => !['id', 'result'].includes(key)))) partial = true;
       message.toolCalls = message.toolCalls.map(tool => {
         if (!isRecord(tool)) { partial = true; return tool; }
         const update = patches.find(entry => isRecord(entry) && entry.id === tool.id);
@@ -148,6 +153,8 @@ export async function readGeminiTranscript(filePath: string, signal: AbortSignal
     if (text.partial) items.push(createExternalSessionUnsupportedTranscriptItem({ agentId: 'gemini', id: `${id}:unsupported`, createdAtMs: createdAt }));
     if (message.type === 'gemini' && Array.isArray(message.toolCalls)) for (const tool of message.toolCalls) {
       if (!isRecord(tool) || typeof tool.id !== 'string') { partial = true; continue; }
+      if (Object.keys(tool).some(key => !['id', 'name', 'args', 'result', 'status', 'timestamp', 'agentId', 'displayName',
+        'description', 'resultDisplay', 'renderOutputAsMarkdown'].includes(key))) partial = true;
       if (tool.result === undefined || tool.result === null) continue;
       const output = parts(tool.result);
       partial ||= output.partial;

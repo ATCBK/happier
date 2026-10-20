@@ -58,6 +58,12 @@ describe('Gemini v0.64 native conversation reader', () => {
         .toMatchObject({ ok: true, value: { candidates: [] } });
       expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'visible cyan' }))
         .toMatchObject({ ok: true, value: { candidates: [{ match: { sourceItemId: 'display' } }] } });
+      await appendFile(path, jsonl([{ ...gemini('parts', ''), content: [{ text: 'joined opal' }, { text: 'mercury body' }] }]));
+      // The OS prefilter correctly finds no contiguous raw JSON spelling.
+      // Search must nevertheless match the native visible concatenation.
+      request.ripgrep.run.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+      expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'opalmercury' }))
+        .toMatchObject({ ok: true, value: { candidates: [{ match: { sourceItemId: 'parts' } }] } });
     } finally { await kit.dispose(); }
   });
 
@@ -136,6 +142,22 @@ describe('Gemini v0.64 native conversation reader', () => {
         .toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: sessionId }], contentCoverage: 'partial' } });
       expect(await reader.pageTranscript({ ...request, remoteSessionId: 'future', direction: 'older' }))
         .toMatchObject({ ok: false, code: 'unsupported' });
+      await rm(join(chats, 'session-future.jsonl'));
+      await writeFile(path, jsonl([...records, { $patch: { updates: [{ id: 'a1', content: body, futureProjection: true }] } }]));
+      expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'sapphire' }))
+        .toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: sessionId }], contentCoverage: 'partial', searchIncomplete: true } });
+      for (const message of [
+        { ...gemini('a1', ''), content: [{ text: body, futureProjection: true }] },
+        { ...gemini('a1', body), toolCalls: [{ id: 'call', name: 'shell', args: {}, status: 'success',
+          timestamp: header.startTime, result: 'visible output', futureProjection: true }] },
+      ]) {
+        await writeFile(path, jsonl([header, message]));
+        expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'sapphire' }))
+          .toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: sessionId }], contentCoverage: 'partial' } });
+      }
+      await writeFile(path, jsonl([header, { ...gemini('a1', ''), content: [{ text: body, thoughtSignature: 'opaque' }] }]));
+      expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'sapphire' }))
+        .toMatchObject({ ok: true, value: { contentCoverage: 'complete' } });
     } finally { await kit.dispose(); }
   });
 

@@ -137,7 +137,7 @@ export const GEMINI_PLUGIN = definePlugin({
             externalLinkedTakeover: { writerSafety: 'unsupported' },
             sources: [{
               sourceKind: 'geminiConfigDir',
-              contentSearch: false,
+              contentSearch: true,
               schema: { fields: [{ kind: 'literal', name: 'kind', value: 'geminiConfigDir' },
                 { kind: 'string', name: 'configDir', min: 1, max: 10_000, nullish: true }] },
               key: { segments: [{ kind: 'literal', value: 'geminiConfigDir' }, { kind: 'field', field: 'configDir' }] },
@@ -195,6 +195,7 @@ export const GEMINI_PLUGIN = definePlugin({
       sessionRunnerFactory: {
         module: './agent/runtime/factory',
         export: 'createGeminiAgentRuntime',
+        externalSessionsExport: 'geminiExternalSessionsContribution',
         runtimeApiVersion: 1,
       },
     },

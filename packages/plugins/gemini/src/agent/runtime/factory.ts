@@ -12,6 +12,8 @@ import {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { isRecord } from '@happier-dev/plugin-sdk';
 
+export { geminiExternalSessionsContribution } from '../surfaces/sessions/external/contribution.js';
+
 import { GEMINI_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import { buildGeminiAcpToolNameResolver } from '../acp/toolNames.js';
 import {
