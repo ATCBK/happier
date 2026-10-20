@@ -19622,7 +19622,7 @@ const enUsage = {
   leaders: 'Leaders',
   activeDays: 'Active days',
   modelsTried: 'Models tried',
-  favoriteModelChanges: 'Favorite model changes',
+  modelSwitches: 'model switches',
   busiestWindow: 'Busiest window',
   activityCalendarSubtitle: 'Calendar heatmap',
   mostActiveMonths: 'Most active months of the selected period',

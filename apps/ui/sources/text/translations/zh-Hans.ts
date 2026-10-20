@@ -15670,7 +15670,7 @@ settingsSession: {
     leaders: "排行榜",
     activeDays: "活跃天数",
     modelsTried: "已尝试模型",
-    favoriteModelChanges: "常用模型变化",
+    modelSwitches: "模型切换",
     busiestWindow: "最活跃时段",
     activityCalendarSubtitle: "日历热力图",
     mostActiveMonths: "所选时段内最活跃的月份",

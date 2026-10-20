@@ -15911,7 +15911,7 @@ settingsSession: {
     leaders: "En tête",
     activeDays: "Jours actifs",
     modelsTried: "Modèles essayés",
-    favoriteModelChanges: "Changements de modèle favori",
+    modelSwitches: "changements de modèle",
     busiestWindow: "Créneau le plus chargé",
     activityCalendarSubtitle: "Carte de chaleur du calendrier",
     mostActiveMonths: "Mois les plus actifs de la période sélectionnée",

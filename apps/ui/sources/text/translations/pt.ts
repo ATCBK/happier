@@ -16150,7 +16150,7 @@ settingsSession: {
     leaders: "Líderes",
     activeDays: "Dias ativos",
     modelsTried: "Modelos testados",
-    favoriteModelChanges: "Mudanças do modelo favorito",
+    modelSwitches: "trocas de modelo",
     busiestWindow: "Período mais movimentado",
     activityCalendarSubtitle: "Mapa de calor do calendário",
     mostActiveMonths: "Meses mais ativos do período selecionado",

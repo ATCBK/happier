@@ -14059,7 +14059,7 @@ settingsSession: {
         leaders: 'Líders',
         activeDays: 'Dies actius',
         modelsTried: 'Models provats',
-        favoriteModelChanges: 'Canvis del model preferit',
+        modelSwitches: 'canvis de model',
         busiestWindow: 'Franja més activa',
         activityCalendarSubtitle: 'Mapa de calor del calendari',
         mostActiveMonths: 'Mesos més actius del període seleccionat',

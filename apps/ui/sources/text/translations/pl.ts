@@ -15063,7 +15063,7 @@ settingsSession: {
     leaders: "Liderzy",
     activeDays: "Aktywne dni",
     modelsTried: "Wypróbowane modele",
-    favoriteModelChanges: "Zmiany ulubionego modelu",
+    modelSwitches: "przełączeń modelu",
     busiestWindow: "Najaktywniejsze okno",
     activityCalendarSubtitle: "Mapa cieplna kalendarza",
     mostActiveMonths: "Najaktywniejsze miesiące wybranego okresu",

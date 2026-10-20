@@ -12439,7 +12439,7 @@ settingsSession: {
         leaders: '排行榜',
         activeDays: '活躍天數',
         modelsTried: '已嘗試的模型',
-        favoriteModelChanges: '常用模型變更',
+        modelSwitches: '模型切換',
         busiestWindow: '最繁忙時段',
         activityCalendarSubtitle: '日曆熱圖',
         mostActiveMonths: '所選期間內最活躍的月份',

@@ -16193,7 +16193,7 @@ settingsSession: {
         leaders: 'Spitzenreiter',
         activeDays: 'Aktive Tage',
         modelsTried: 'Ausprobierte Modelle',
-        favoriteModelChanges: 'Wechsel des Lieblingsmodells',
+        modelSwitches: 'Modellwechsel',
         busiestWindow: 'Aktivste Zeit',
         activityCalendarSubtitle: 'Kalender-Heatmap',
         mostActiveMonths: 'Aktivste Monate im gewählten Zeitraum',

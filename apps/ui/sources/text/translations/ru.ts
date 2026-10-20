@@ -15979,7 +15979,7 @@ settingsSession: {
     leaders: "Лидеры",
     activeDays: "Активные дни",
     modelsTried: "Опробованные модели",
-    favoriteModelChanges: "Изменения любимой модели",
+    modelSwitches: "переключений модели",
     busiestWindow: "Самый активный период",
     activityCalendarSubtitle: "Тепловая карта календаря",
     mostActiveMonths: "Самые активные месяцы выбранного периода",

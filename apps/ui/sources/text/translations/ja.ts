@@ -16312,7 +16312,7 @@ settingsSession: {
     leaders: "ランキング",
     activeDays: "アクティブ日数",
     modelsTried: "試したモデル",
-    favoriteModelChanges: "よく使うモデルの変化",
+    modelSwitches: "モデルの切り替え",
     busiestWindow: "最も活発な時間帯",
     activityCalendarSubtitle: "カレンダーヒートマップ",
     mostActiveMonths: "選択期間で最も活発だった月",
