@@ -543,6 +543,10 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         sectionPresentation.profiles,
         profiles.length > 8 ? 'compact' : 'expanded',
     );
+    const profileSection = {
+        title: t('newSession.wizardSection.profile'),
+        description: t('newSession.selectAiProfileDescription'),
+    };
     const canonicalBackendPickerOptions = React.useMemo(
         () => (agentPickerOptions ?? []).filter(isWizardBackendPickerOption),
         [agentPickerOptions],
@@ -829,27 +833,23 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                         <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
                                 {useProfiles && (
                                     <View onLayout={registerWizardSectionOffset('profile')}>
-                                        <ItemGroup
-                                            title={t('newSession.wizardSection.profile')}
-                                            description={t('newSession.selectAiProfileDescription')}
-                                            surface={profilePresentation === 'expanded' ? 'none' : 'sheet'}
-                                        >
-                                            <AdaptiveSelectionSection
-                                                presentation={profilePresentation}
-                                                expandedContent={(
-                                                    <NewSessionProfilesBrowserContent
-                                                        profilesListProps={sharedProfilesListProps}
-                                                        machineId={selectedMachineId}
-                                                        serverId={serverId}
-                                                        machineName={machineDisplayName}
-                                                        previewDisplay="below-list"
-                                                        inlinePreviewSpacingTop={16}
-                                                        renderListContent={(profilesListProps) => (
-                                                            <ProfilesList {...profilesListProps} />
-                                                        )}
-                                                    />
-                                                )}
-                                                compactContent={(
+                                        <AdaptiveSelectionSection
+                                            presentation={profilePresentation}
+                                            expandedContent={(
+                                                <NewSessionProfilesBrowserContent
+                                                    profilesListProps={sharedProfilesListProps}
+                                                    machineId={selectedMachineId}
+                                                    serverId={serverId}
+                                                    machineName={machineDisplayName}
+                                                    previewDisplay="below-list"
+                                                    inlinePreviewSpacingTop={16}
+                                                    renderListContent={(profilesListProps) => (
+                                                        <ProfilesList {...profilesListProps} presentation="embedded" section={profileSection} />
+                                                    )}
+                                                />
+                                            )}
+                                            compactContent={(
+                                                <ItemGroup title={profileSection.title} description={profileSection.description}>
                                                     <NewSessionWizardPopoverItem
                                                         testID="new-session-profile-dropdown-trigger"
                                                         title={
@@ -860,9 +860,9 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                         popover={profilePopover}
                                                         boundaryRef={props.popoverBoundaryRef}
                                                     />
-                                                )}
-                                            />
-                                        </ItemGroup>
+                                                </ItemGroup>
+                                            )}
+                                        />
                                     </View>
                                 )}
 

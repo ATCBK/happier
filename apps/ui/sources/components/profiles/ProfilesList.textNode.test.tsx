@@ -276,4 +276,49 @@ describe('ProfilesList', () => {
             expect(pageRow?.props.showChevron).toBe(true);
         }
     });
+    it('embeds in a page section as one flat run of picker rows, with no list chrome or sub-headings of its own', async () => {
+        profilesListState.groups = {
+            favoriteIds: new Set<string>(['anthropic']),
+            favoriteProfiles: [
+                { id: 'anthropic', name: 'Anthropic', isBuiltIn: true, compatibility: {}, compatibilityByTargetKey: {}, environmentVariables: [] },
+            ],
+            customProfiles: [
+                { id: 'mine', name: 'Mine', isBuiltIn: false, compatibility: {}, compatibilityByTargetKey: {}, environmentVariables: [] },
+            ],
+            sharedProfiles: [],
+            builtInProfiles: [
+                { id: 'openai', name: 'OpenAI', isBuiltIn: true, compatibility: {}, compatibilityByTargetKey: {}, environmentVariables: [] },
+            ],
+        };
+        const { ProfilesList } = await import('./ProfilesList');
+        const screen = await renderScreen(
+            <ProfilesList
+                presentation="embedded"
+                section={{ title: 'Profile', description: 'What the session starts with.' }}
+                customProfiles={[]}
+                favoriteProfileIds={[]}
+                onFavoriteProfileIdsChange={() => {}}
+                selectedProfileId={null}
+                onPressDefaultEnvironment={() => {}}
+                machineId={null}
+                includeDefaultEnvironmentRow
+                includeAddProfileRow
+                onAddProfilePress={() => {}}
+            />,
+        );
+
+        // The list is the page section itself: no list of its own, and one sheet
+        // holding every row, so no sub-heading ("Built-in profiles") is indented off the section's edge.
+        expect(screen.findAll((node) => (node.type as unknown) === 'ItemList')).toHaveLength(0);
+        const sheets = screen.findAll((node) => (node.type as unknown) === 'ItemGroup');
+        expect(sheets).toHaveLength(1);
+        expect(sheets[0]!.props.title).toBe('Profile');
+        for (const id of ['default-environment', 'anthropic', 'mine', 'openai']) {
+            expect(screen.findAllByProps({ testID: `profiles-list-row:${id}` }).length).toBeGreaterThan(0);
+        }
+        expect(screen.findAllByProps({ testID: 'profiles-list-add-profile' }).length).toBeGreaterThan(0);
+        // It still chooses a profile like a picker.
+        const selected = screen.findAll((node) => node.props?.selected === true && typeof node.props?.testID === 'string');
+        expect(selected.map((node) => node.props.testID)).toContain('profiles-list-row:default-environment');
+    });
 });
