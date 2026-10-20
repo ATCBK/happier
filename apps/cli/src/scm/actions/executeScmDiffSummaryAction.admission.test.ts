@@ -9,7 +9,7 @@ import { Server } from 'socket.io';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, PluginManifestV2Schema,
     createActionExecutor, accountSettingsParse,
-    type ActionExecuteResult, type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
+    type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputAdmissionReceiptV1Schema,
     settleSessionInputRequestV1, settleSessionInputRequestV2, withSessionInputAuthority,
@@ -61,6 +61,8 @@ import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerE
 import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/input/providerInputOutcome';
 import { ExecutionRunListResponseSchema, ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
+import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
+import { SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
 // Reuse the composed journey's UI platform setup before loading the real producer.
 // Runtime URLs keep UI-only platform declarations out of CLI compilation.
 await import(new URL('../../../../ui/sources/dev/vitestSetup.ts', import.meta.url).href);
@@ -235,7 +237,8 @@ describe('SCM generation through real host admission', () => {
             const observedSnapshots: Array<{ directory: string; before: string | null; after: string | null }> = [];
             let checkPermissions: (() => Promise<void>) | undefined;
             const machineId = 'fixture-machine';
-            const token = 'scm-generation-fixture';
+            const accountId = 'scm-generation-account';
+            const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
             const controlToken = 'scm-generation-daemon-fixture';
             const admissionDrain = createDaemonAdmissionDrain();
             const parentRegistry = new ConnectedServiceRuntimeRegistry();
@@ -259,6 +262,10 @@ describe('SCM generation through real host admission', () => {
                             runtimeDescriptorV1: { v: 1, agentId: backendTarget.backendId, agent: {} } }), share: null }) }
                     : path === '/v1/account/encryption/currentness'
                         ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
+                        : path === '/v2/account/session-follow-preferences'
+                            ? SessionAutoFollowPreferencesResponseSchema.parse({ assigned: true, direct: false, team: false, group: false,
+                                managerPolicy: { preset: 'important' }, runReportPolicy: { preset: 'important' },
+                                discussionReceivePolicy: { preset: 'important' } })
                         : undefined;
                 response.writeHead(data ? 200 : 404, { 'content-type': 'application/json' });
                 response.end(JSON.stringify(data ?? { error: 'not_found' }));
@@ -439,6 +446,9 @@ describe('SCM generation through real host admission', () => {
                 const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
                 registerExecutionRunHandlers(rpc, { sessionId, cwd: fixture.rootPath,
                         parentProvider: 'claude', sendAcp: async () => {},
+                        resolveRunReportPolicy: createSessionRunReportPolicyReader({ serverId: configuration.activeServerId,
+                            serverHttpBaseUrl: serverUrl, accountId, readCredentials: async () => ({ token, encryption: null }),
+                            isCurrent: () => true }),
                         sessionInteractionHost: { machineId: 'fixture-machine',
                             // The parent Agent model is a native boundary fact;
                             // its route comes from the real scoped daemon reader.
@@ -709,7 +719,7 @@ describe('SCM generation through real host admission', () => {
             getNowMs: Date.now, finishRun, sendAcp: async () => {}, parentProvider: 'claude',
             streamedTranscriptSession: null, writeActivityMarker: async () => {},
         });
-        const execute = (client: string) => async (_action: 'execution.run.start', input: unknown): Promise<ActionExecuteResult> => {
+        const execute = (client: string): Parameters<typeof executeScmDiffSummaryAction>[0]['executeCanonicalAction'] => async (_action, input) => {
             const request = ExecutionRunStartRequestSchema.parse(input);
             const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
             const result = await startExecutionRun({

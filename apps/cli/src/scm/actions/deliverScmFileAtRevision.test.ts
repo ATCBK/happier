@@ -3,9 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { ScmFileReadResponseSchema } from '@happier-dev/protocol/scm';
 import { isExternalActionResultWithinResponseEnvelopeLimitV1 } from '@happier-dev/protocol/actions/externalActionLimits';
-import { deliverScmFileAtRevision } from './deliverScmFileAtRevision';
+import { deliverScmFileAtRevision, prepareScmFileBytesExport } from './deliverScmFileAtRevision';
 
 describe('revision file delivery', () => {
+    it('rejects endpoints outside the prepared filesystem contract and releases the publication', async () => {
+        let capturedPath: string | undefined;
+        let clearedTransferId: string | undefined;
+        await expect(prepareScmFileBytesExport({ bytes: Buffer.from('content'), name: 'file.txt',
+            lifecycle: {
+                clearPublishedTransfer: transferId => { clearedTransferId = transferId; return true; },
+                publishTransferWhenReady: async input => {
+                    if (input.payloadSource?.kind !== 'file') throw new Error('File-backed publication required');
+                    capturedPath = input.payloadSource.filePath;
+                    return { transferId: input.transferId, transferToken: 'token', expiresAt: Date.now() + 60_000,
+                        endpointCandidates: [{ kind: 'tcp', url: 'tcp://127.0.0.1:1234', expiresAt: Date.now() + 60_000 }] };
+                },
+            } })).rejects.toThrow();
+        expect(clearedTransferId).toMatch(/^scm-file-read:/);
+        await expect(access(capturedPath!)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('keeps small reads inline and publishes larger allowed reads with the existing disposable file source', async () => {
         const inline = { success: true as const, contentBase64: 'AP+A', sizeBytes: 3, sha256: 'a'.repeat(64) };
         expect(await deliverScmFileAtRevision({ request: { path: 'image.png', selector: { blobId: 'a'.repeat(40) } }, response: inline })).toBe(inline);

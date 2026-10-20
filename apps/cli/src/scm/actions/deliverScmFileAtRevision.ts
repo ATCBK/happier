@@ -5,6 +5,7 @@ import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cl
 import { isExternalActionResultWithinResponseEnvelopeLimitV1 } from '@happier-dev/protocol/actions/externalActionLimits';
 import type { ScmFileAtRevisionRequest, ScmFileAtRevisionResponse, ScmFileReadResponse } from '@happier-dev/protocol/scm';
 import type { FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemPreparedExportSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import type { DirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import { createFileTransferPayloadSource, resolveTransferPayloadManifestHash } from '@/machines/transfer/transferPayloadSource';
 
@@ -31,8 +32,13 @@ export async function prepareScmFileBytesExport(params: ScmFileBytesExportInput 
             params.lifecycle.clearPublishedTransfer(published.transferId);
             params.signal.throwIfAborted();
         }
-        return { transferId: published.transferId, endpointCandidates: [...published.endpointCandidates],
-            expiresAt: published.expiresAt, name: params.name, sizeBytes: params.bytes.byteLength, manifestHash };
+        try {
+            return FilesystemPreparedExportSchema.parse({ transferId: published.transferId, endpointCandidates: [...published.endpointCandidates],
+                expiresAt: published.expiresAt, name: params.name, sizeBytes: params.bytes.byteLength, manifestHash });
+        } catch (error) {
+            params.lifecycle.clearPublishedTransfer(published.transferId);
+            throw error;
+        }
     } catch (error) {
         await removeHappierTempDirAsync(directory);
         throw error;

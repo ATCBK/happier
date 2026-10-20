@@ -161,6 +161,7 @@ describe('executeScmDiffSummaryAction', () => {
                 expect(prepared?.instructions).toContain('no claim that it passed');
                 expect(prepared?.instructions).not.toContain('User instructions:\nPull request drafting evidence:');
                 const run = { ...start, ...prepared, sessionId, runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain',
+                    modelSelection: prepared?.modelSelection ?? start.modelSelection ?? undefined,
                     backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
                     backendId: 'codex', instructions: prepared?.instructions ?? '', startedAtMs: 1,
                     intent: 'scm_diff_summary' as const, retentionPolicy: 'resumable' as const,

@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, AccountSettingsV2GetResponseSchema, ActionIdSchema, ApprovalRequestSchema, createActionExecutor, FeaturesResponseSchema, RPC_METHODS } from '@happier-dev/protocol';
+import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, AccountProfileSchema, AccountSettingsV2GetResponseSchema, ActionIdSchema, ApprovalRequestSchema, createActionExecutor, FeaturesResponseSchema, RPC_METHODS } from '@happier-dev/protocol';
 import type { RpcHandler } from '@/api/rpc/types';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import { createBlockingApprovalCoordinator } from '@happier-dev/protocol/actions';
@@ -184,6 +184,9 @@ describe('SCM Action execution at the Git backend', () => {
       throw new Error(`Unexpected Home HTTP request: ${url}`);
     });
     vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (String(url) === `${serverApiUrl}/v1/account/profile`) {
+        return { status: 200, data: AccountProfileSchema.parse({ id: 'account-action-test' }) };
+      }
       if (String(url) === `${serverApiUrl}/v1/account/encryption/currentness`) {
         return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
       }
