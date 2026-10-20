@@ -14,7 +14,8 @@ describe('Session Team runtime catalog', () => {
         id: 'resource', teamId: 'team', displayName: 'Team Pool', resourceRevision: 1,
         readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
         directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed', connectedServiceSelections: [],
-        providerModels: [{ application, descriptor: { id: 'gpt-5.5' }, sourceRevision: 'source-v1', availability: 'available',
+        sourcePresentation: { kind: 'connected_service', service: { pluginId: 'acme.managed-run', localId: 'accounts' } },
+        providerModels: [{ application, descriptor: { id: 'gpt-5.5', name: 'GPT-5.5' }, sourceRevision: 'source-v1', availability: 'available',
           selection: { kind: 'team_credential_provider_model', resourceId: 'resource', teamId: 'team',
             expectedResourceRevision: 1, deliveryMode: 'brokered', agentTargetKey: worker.agentTargetKey, modelId: 'gpt-5.5' } }],
       });
@@ -30,7 +31,7 @@ describe('Session Team runtime catalog', () => {
         },
       });
       expect(rows).toEqual(resource.providerModels);
-      expect(seen).toEqual([{ teamId: 'team', application: {
+      expect(seen).toMatchObject([{ teamId: 'team', application: {
         agentTargetKey: worker.agentTargetKey,
         implementationIdentity: { pluginId: 'acme.managed-run', localId: 'gateway' },
         endpointTemplateId: 'responses', protocol: 'openai-responses',

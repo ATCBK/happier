@@ -10,8 +10,8 @@ import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, FeaturesResponseSc
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { TEAM_CREDENTIAL_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
-import { TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderTeamCredentialBrokerEligibilityRequestV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGatewayRegistry.testkit';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -63,12 +63,10 @@ const { createAuthenticatedTestApp }: typeof import('../../../../server/sources/
 const { registerSessionCreateOrLoadRoute }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionCreateOrLoadRoute') = await import(server + 'app/api/routes/session/registerSessionCreateOrLoadRoute');
 const { registerSessionListingRoutes }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionListingRoutes') = await import(server + 'app/api/routes/session/registerSessionListingRoutes');
 const { db }: typeof import('../../../../server/sources/storage/db') = await import(server + 'storage/db');
-const { inTx }: typeof import('../../../../server/sources/storage/inTx') = await import(server + 'storage/inTx');
-const { readTeamCredentialCatalogInTx }: typeof import('../../../../server/sources/app/teams/credentials/resourceRead') = await import(server + 'app/teams/credentials/resourceRead');
-const { projectTeamCredentialProviderModels }: typeof import('../../../../server/sources/app/teams/credentials/providerModelProjection') = await import(server + 'app/teams/credentials/providerModelProjection');
+const { registerTeamRoutes }: typeof import('../../../../server/sources/app/teams/registerTeamRoutes') = await import(server + 'app/teams/registerTeamRoutes');
 const { openTeamCredentialProviderBroker }: typeof import('../../../../server/sources/app/teams/credentials/providerBrokerAdmission') = await import(server + 'app/teams/credentials/providerBrokerAdmission');
-const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest }: typeof import('../../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/identity') = await import(server + 'app/api/routes/connect/qualifiedConnectedAccounts/identity');
-const { listTeamsForActorInTx }: typeof import('../../../../server/sources/app/teams/queries') = await import(server + 'app/teams/queries');
+const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest,
+  createQualifiedConnectedAccountIdentityDigest, createServiceAccountTokenIdentityFields }: typeof import('../../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/identity') = await import(server + 'app/api/routes/connect/qualifiedConnectedAccounts/identity');
 
 afterEach(() => { os.runner = null; resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks(); });
 
@@ -105,7 +103,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     const carrierAddress = carrier.address();
     if (!carrierAddress || typeof carrierAddress === 'string') throw new Error('Missing controlled carrier');
     const app = createAuthenticatedTestApp();
-    const authentication = { env: process.env, authority: 'present_user', authenticationEvidence: [] } as const;
+    const authentication = { env: process.env, authority: 'present_user', authenticationEvidence: [], tokenEpoch: 0 } as const;
     try {
       await source.install(source.pluginId, '1.0.0', true);
       const sourceLease = await source.controller.acquireRuntimeRegistry({ resolveRuntimeRegistry: () => source.createRegistry(new Set()) });
@@ -122,6 +120,15 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       const pool = await db.connectedServiceAuthGroup.create({ data: { accountId: custodian.id, servicePluginId: service.pluginId,
         serviceLocalId: service.localId, qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(service),
         qualifiedGroupDigest: createQualifiedConnectedAccountGroupDigest({ service, groupId: 'pool' }), groupId: 'pool', policyJson: '{}' } });
+      const sourceAccount = { service, accountId: 'synthetic-pool-member' };
+      const credential = await db.serviceAccountToken.create({ data: { accountId: custodian.id,
+        ...createServiceAccountTokenIdentityFields({ ref: sourceAccount, authenticationModeId: 'manual' }),
+        token: Buffer.from('synthetic-source-credential'), metadata: { v: 4, storage: 'stored_envelope_v1',
+          credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', values: { scopes: [] } } } });
+      await db.connectedServiceAuthGroupMember.create({ data: { groupDbId: pool.id, accountId: custodian.id,
+        credentialId: credential.id, qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(service),
+        qualifiedGroupDigest: createQualifiedConnectedAccountGroupDigest({ service, groupId: 'pool' }),
+        qualifiedIdentityDigest: createQualifiedConnectedAccountIdentityDigest(sourceAccount), priority: 0, enabled: true } });
       const target = { kind: 'group' as const, service, groupId: 'pool' };
       const binding = { v: 1 as const, kind: 'connected_pool' as const, target, poolIncarnation: pool.id };
       const resource = await db.teamCredentialResource.create({ data: { teamId: team.id, custodianAccountId: custodian.id,
@@ -138,33 +145,27 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => recipientSnapshot,
         acquireRuntimeLease: async () => ({ ...sourceLease, release: async () => {} }), modelSettingsMutation: unavailable,
         resolveManagedPurposeBindingIntentSelection: source.purposeBindingOwner.resolveBindingIntentSelection });
-      const project = (application: Parameters<typeof projectTeamCredentialProviderModels>[0]['application']) => sourceRuntime.projectModels({
+      const project = (application: import('@happier-dev/protocol').ProviderBrokerApplicationBindingV1) => sourceRuntime.projectModels({
         machineId: broker.id, agentTargetKey: worker.agentTargetKey, connectedAccountTarget: target,
         sourceCatalog: true, application, refreshPolicy: 'current_only' });
       app.addHook('onRequest', async request => { request.headers['x-test-user-id'] = recipient.id; });
+      // RPC is the cross-Machine boundary; retain the real Home route and
+      // source runtime beneath it, including their strict request consumers.
+      app.decorate('forwardRpcForUser', async (request: Readonly<{ method: string; params: unknown }>) => {
+        if (request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`)) return {
+          ok: true, result: await sourceRuntime.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request.params)) };
+        if (request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY}`)) return {
+          ok: true, result: await sourceRuntime.resolveTeamCredentialBrokerEligibility(DaemonProviderTeamCredentialBrokerEligibilityRequestV1Schema.parse(request.params)) };
+        throw new Error(`Unexpected source RPC ${request.method}`);
+      });
       registerSessionCreateOrLoadRoute(app); registerSessionListingRoutes(app);
-      app.get('/v1/features', async () => FeaturesResponseSchema.parse({ features: { providers: { enabled: true } },
+      registerTeamRoutes(app);
+      app.get('/v1/features', async () => FeaturesResponseSchema.parse({ features: { providers: { enabled: true },
+        teams: { enabled: true, credentialResources: { enabled: true } } },
         capabilities: { encryption: { storagePolicy: 'optional' } } }));
       app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
       app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
       app.post('/v2/sessions/lookup-by-tags', async () => ({ sessions: [] }));
-      app.post('/v1/teams/list', async () => {
-        const result = await inTx(tx => listTeamsForActorInTx(tx, { actorAccountId: recipient.id,
-          scope: 'member', archived: 'active', authentication }));
-        if (!result.ok) throw new Error(result.error);
-        return result.page;
-      });
-      app.post(TEAM_CREDENTIAL_ACTION_PATHS_V1['teams.credentials.entitled.list'], async request => {
-        const input = TeamCredentialResourceReadInputV1Schema.parse(request.body);
-        const read = await inTx(tx => readTeamCredentialCatalogInTx(tx, { ...input, actorAccountId: recipient.id, authentication }));
-        if (!read.ok) throw new Error(read.error);
-        if (!input.application) return read.page;
-        const projected = projectTeamCredentialProviderModels({ response: await project(input.application), resourceId: resource.id,
-          teamId: team.id, resourceRevision: resource.revision, agentTargetKey: worker.agentTargetKey,
-          application: input.application, allowedModelIds: null, source: binding, deliveryMode: 'brokered' });
-        if (projected.status !== 'success') throw new Error(projected.reason);
-        return { ...read.page, resources: read.page.resources.map(row => ({ ...row, providerModels: projected.models })) };
-      });
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
       if (!address || typeof address === 'string') throw new Error('Missing Home address');
@@ -232,7 +233,8 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           const presentation = createCurrentSessionPresentationHost({ session, signal: lifetime.signal });
           const runtime = await plan.config.createSessionRuntime?.({ directory, metadata: {}, machineId: worker.machineId,
             session, currentSessionPresentation: presentation.bindCurrentSession, transcriptSession: {}, messageBuffer: {},
-            mcpServers: {}, permissionHandler: {}, getPermissionMode: () => 'safe-yolo', memoryRecallGuidanceEnabled: false } as never);
+            mcpServers: {}, permissionHandler: { cancelByPluginTurn: async () => undefined },
+            getPermissionMode: () => 'safe-yolo', memoryRecallGuidanceEnabled: false } as never);
           if (!runtime) throw new Error('External runtime unavailable');
           const operations = (runtime as Readonly<{ operations: Readonly<{
             sendTurnPrompt(text: string, input: Readonly<{ turnId: string; localId: string; userMessageSeq: number }>): Promise<void>;
