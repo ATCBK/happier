@@ -8,7 +8,7 @@ import { useRouter, type Href } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import { setTranscriptJumpHighlight, type TranscriptJumpHighlightRowIdentity } from '@/components/sessions/transcript/navigation/transcriptJumpHighlightStore';
-import { useOptionalPaneFocusReturnOwner } from '@/components/appShell/panes/AppPaneProvider';
+import { useOptionalPaneFocusReturnOwner } from '@/components/appShell/panes/AppPaneContext';
 import { DestinationInstanceContext } from '@/components/appShell/workspace/destinationInstanceContext';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';

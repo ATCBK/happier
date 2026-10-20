@@ -81,10 +81,26 @@ export function loadLocalSettings(): LocalSettings {
     return loadLocalSettingsSnapshot().settings;
 }
 
+/** Only the storage adapter rejected a fully serialized local-settings write. */
+export class LocalSettingsPersistenceError extends Error {
+    readonly cause: unknown;
+
+    constructor(cause: unknown) {
+        super(cause instanceof Error ? cause.message : 'Failed to write local settings');
+        this.name = 'LocalSettingsPersistenceError';
+        this.cause = cause;
+    }
+}
+
 export function saveLocalSettings(settings: LocalSettings) {
     const mmkv = getPersistenceStorage();
     const previous = loadLocalSettings();
-    mmkv.set(localSettingsKey(), JSON.stringify(settings));
+    const serialized = JSON.stringify(settings);
+    try {
+        mmkv.set(localSettingsKey(), serialized);
+    } catch (error) {
+        throw new LocalSettingsPersistenceError(error);
+    }
     if (
         previous.deviceRemoteAlertsEnabled !== settings.deviceRemoteAlertsEnabled
         || JSON.stringify(previous.attentionDeviceOverridesV1) !== JSON.stringify(settings.attentionDeviceOverridesV1)

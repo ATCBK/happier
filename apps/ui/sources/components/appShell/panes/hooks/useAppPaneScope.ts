@@ -51,6 +51,8 @@ export type NativeOverlayFocusReturnCaptureProps = Readonly<{
 export type AppPaneScopeApi = {
     scopeId: string;
     scopeState: AppPaneScopeStateView | null;
+    /** The current pane state is retained in memory but its device write failed. */
+    persistenceFailed?: boolean;
     /** Native input capture props for the scope root that contains a pane opener. */
     overlayFocusReturnCaptureProps?: NativeOverlayFocusReturnCaptureProps;
     /** Ephemeral command-time focus for a Right overlay presentation. */
@@ -115,7 +117,7 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
 }
 
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
-    const { state, dispatch, overlayFocusReturnOwner } = useAppPaneContext();
+    const { state, dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext();
     const scopeState = getScopeState(state, scopeId);
     const presentPane = usePanePresentation();
     const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);
@@ -314,6 +316,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     return React.useMemo(() => ({
         scopeId,
         scopeState,
+        persistenceFailed,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,
@@ -349,6 +352,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     }), [
         scopeId,
         scopeState,
+        persistenceFailed,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,

@@ -74,6 +74,114 @@ function PaneScopeProbe(props: Readonly<{ triggerOpenDetails?: boolean }>) {
 }
 
 describe('AppPaneProvider persistence', () => {
+    it('does not disguise a pane serialization programmer error as a storage failure', async () => {
+        const { AppPaneProvider } = await import('./AppPaneProvider');
+        const wrapper = ({ children }: React.PropsWithChildren) => <AppPaneProvider>{children}</AppPaneProvider>;
+        const pane = await renderHook(() => useAppPaneScope('project:wr_1'), { wrapper });
+        const tabKey = 'file:/repo/invalid.ts';
+        await act(async () => pane.getCurrent().openDetailsTab({ key: tabKey, kind: 'file', title: 'invalid.ts',
+            resource: { kind: 'file', path: '/repo/invalid.ts' } }, { intent: 'pinned' }));
+        const programmerError = new Error('Invalid draft serialization');
+        try {
+            await expect(Promise.resolve(act(async () => pane.getCurrent().setDetailsTabState(tabKey, {
+                toJSON() { throw programmerError; },
+            })))).rejects.toBe(programmerError);
+        } finally {
+            await pane.unmount();
+        }
+    });
+
+    it('keeps editing pane drafts in memory when MMKV rejects a write and clears the warning after the next successful write', async () => {
+        const { AppPaneProvider } = await import('./AppPaneProvider');
+        const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+        const { loadLocalSettings, saveLocalSettings, LocalSettingsPersistenceError } = await import('@/sync/domains/state/settingsPersistence');
+        const { useWorkspaceFileEditorState } = await import('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState');
+        const { readWorkspaceFileEditorDraft } = await import('@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft');
+        const wrapper = ({ children }: React.PropsWithChildren) => <AppPaneProvider>{children}</AppPaneProvider>;
+        const tabKey = 'file:/repo/quota.ts';
+        const originalText = 'const answer = 0;';
+        const scope = { serverId, machineId: 'machine-a', rootPath: '/repo' };
+        const encoding = { hasBom: false, editable: true, eol: 'lf' as const, mixedEol: false };
+        const pane = await renderHook(() => {
+            const currentPane = useAppPaneScope('project:wr_1');
+            const persistDraft = React.useCallback((draft: Parameters<typeof useWorkspaceFileEditorState>[0]['persistedDraft']) => {
+                currentPane.patchDetailsTabState(tabKey, draft ?? { accountId: null, isEditingFile: false,
+                    editorOriginalHash: undefined, editorText: undefined });
+            }, [currentPane.patchDetailsTabState]);
+            const [fileWriteSupported, setFileWriteSupported] = React.useState(true);
+            const editor = useWorkspaceFileEditorState({
+                scope, accountId: 'account-a',
+                filePath: 'quota.ts', displayMode: 'file', fileText: originalText, fileHash: 'base-hash',
+                encoding,
+                fileWriteSupported, setFileWriteSupported, fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true, filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false, filesEditorChangeDebounceMs: 0, mountedRef: { current: true },
+                refreshAll: async () => {}, persistDraft,
+                persistedDraft: readWorkspaceFileEditorDraft(currentPane.scopeState?.details.tabState[tabKey], 'account-a'),
+                panePersistenceFailed: currentPane.persistenceFailed,
+            });
+            return { ...currentPane, editor };
+        }, { wrapper });
+        await act(async () => pane.getCurrent().openDetailsTab({ key: tabKey, kind: 'file', title: 'quota.ts',
+            resource: { kind: 'file', path: '/repo/quota.ts' } }, { intent: 'pinned' }));
+        await act(async () => pane.getCurrent().editor.startEditingFile());
+        expect(pane.getCurrent().editor.draftPersistenceFailed).toBe(false);
+        const mmkv = getPersistenceStorage();
+        const write = mmkv.set.bind(mmkv);
+        const quota = new Error('MMKV quota exceeded');
+        const set = vi.spyOn(mmkv, 'set').mockImplementation((key, value) => {
+            if (key === 'local-settings') throw quota;
+            write(key, value);
+        });
+        const firstDraft = { accountId: 'account-a', isEditingFile: true, editorOriginalHash: 'base-hash', editorText: 'const answer = 1;' };
+        const continuedDraft = { ...firstDraft, editorText: 'const answer = 2;' };
+        try {
+            let writeError: unknown;
+            try { saveLocalSettings(loadLocalSettings()); } catch (error) { writeError = error; }
+            expect(writeError).toBeInstanceOf(LocalSettingsPersistenceError);
+            expect(writeError).toMatchObject({ message: quota.message, cause: quota });
+            await act(async () => pane.getCurrent().editor.onEditorChange(firstDraft.editorText));
+            expect(pane.getCurrent().scopeState?.details.tabState[tabKey]).toEqual(firstDraft);
+            expect(pane.getCurrent().persistenceFailed).toBe(true);
+            expect(pane.getCurrent().editor.draftPersistenceFailed).toBe(true);
+            expect(pane.getCurrent().editor.getEditorText()).toBe(firstDraft.editorText);
+            expect(pane.getCurrent().editor.isEditingFile).toBe(true);
+            expect(pane.getCurrent().editor.editorStatus).toBe('dirty');
+            await act(async () => pane.getCurrent().editor.onEditorChange(continuedDraft.editorText));
+            expect(pane.getCurrent().scopeState?.details.tabState[tabKey]).toEqual(continuedDraft);
+            expect(pane.getCurrent().persistenceFailed).toBe(true);
+            expect(pane.getCurrent().editor.draftPersistenceFailed).toBe(true);
+            expect(pane.getCurrent().editor.getEditorText()).toBe(continuedDraft.editorText);
+            expect(loadLocalSettings().appPaneScopesV1['project:wr_1'].details.tabState[tabKey]).toBeUndefined();
+            set.mockImplementation(write);
+            const recoveredDraft = { ...firstDraft, editorText: 'const answer = 3;' };
+            await act(async () => pane.getCurrent().editor.onEditorChange(recoveredDraft.editorText));
+            expect(pane.getCurrent().scopeState?.details.tabState[tabKey]).toEqual(recoveredDraft);
+            expect(pane.getCurrent().persistenceFailed).toBe(false);
+            expect(pane.getCurrent().editor.draftPersistenceFailed).toBe(false);
+            expect(pane.getCurrent().editor.editorDirty).toBe(true);
+            expect(pane.getCurrent().editor.isEditingFile).toBe(true);
+            expect(pane.getCurrent().editor.getEditorText()).toBe(recoveredDraft.editorText);
+            expect(loadLocalSettings().appPaneScopesV1['project:wr_1'].details.tabState[tabKey]).toEqual(recoveredDraft);
+            expect(readWorkspaceFileEditorDraft(loadLocalSettings().appPaneScopesV1['project:wr_1'].details.tabState[tabKey], 'account-a')).toEqual(recoveredDraft);
+            const stored: unknown = JSON.parse(mmkv.getString('local-settings') ?? 'null');
+            expect(LOCAL_SETTING_DEFINITIONS.appPaneScopesV1.schema.parse(
+                (stored as { appPaneScopesV1: unknown }).appPaneScopesV1,
+            )['project:wr_1'].details.tabState[tabKey]).toEqual(recoveredDraft);
+            set.mockImplementation((key, value) => {
+                if (key === 'local-settings') throw quota;
+                write(key, value);
+            });
+            await act(async () => pane.getCurrent().editor.onEditorChange(originalText));
+            expect(pane.getCurrent().persistenceFailed).toBe(true);
+            expect(pane.getCurrent().editor.editorDirty).toBe(false);
+            expect(pane.getCurrent().editor.draftPersistenceFailed).toBe(false);
+        } finally {
+            set.mockRestore();
+            await pane.unmount();
+        }
+    });
+
     it('persists a generic main-column preference and restores it with the same scope', async () => {
         const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
         const wrapper = ({ children }: React.PropsWithChildren) => <AppPaneProvider>{children}</AppPaneProvider>;

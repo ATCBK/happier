@@ -89,6 +89,10 @@ file content to edit. Saving still attempts the Machine write and keeps the
 draft on failure. The existing checkout reachability owner supplies retry and
 reconnection facts; the editor adds no second poller or retry policy. A device
 storage failure must be visible while the in-memory buffer remains editable.
+The pane persistence owner reports asynchronous device-write failures through
+`persistenceFailed`; the editor projects that into its dirty-draft warning. Only
+storage-adapter write errors are caught, not serialization errors. The existing
+next successful pane write clears the warning; there is no new retry loop.
 
 ## Guarded writes and byte identity
 

@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
-import { AppPaneProvider, useAppPaneContext } from '../AppPaneProvider';
+import { AppPaneProvider } from '../AppPaneProvider';
 import { useAppPaneScope, type AppPaneScopeApi } from '../hooks/useAppPaneScope';
+import { useFileTabFront } from './useFileTabFront';
 
 const initialState = storage.getState();
 beforeEach(() => storage.setState(initialState, true));
@@ -21,8 +22,7 @@ describe('file tab front subscription', () => {
             return null;
         }
         const Chip = React.memo(function Chip({ path }: { path: string }) {
-            const state = useAppPaneContext().state.scopes['session:continuity']?.details;
-            const front = state?.isOpen === true && state.focusedGroupId !== null && state.groupsById[state.focusedGroupId]?.activeTabKey === `file:${path}`;
+            const front = useFileTabFront('session:continuity', path);
             renders.set(path, (renders.get(path) ?? 0) + 1);
             selected.set(path, front);
             return null;

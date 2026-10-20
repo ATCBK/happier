@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { createContext, useContext, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { getStorage, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
 import type { PaneDriver, PaneScopeId } from './types';
 import { registerSessionTerminalWorkspaceOwner, notifySessionTerminalWorkspaceChanged, retireProjectTerminalPresentationForHome } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
@@ -15,7 +15,7 @@ import {
     type PaneOverlayFocusReturnOwner,
     type PaneOverlayFocusSurface,
 } from './paneOverlayFocusReturn';
-import { createFileFindSeedHandoff, type FileFindSeedHandoff } from './fileFindSeedHandoff';
+import { createFileFindSeedHandoff } from './fileFindSeedHandoff';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeBindings, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -27,6 +27,10 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { isTerminalDetailsTab } from '@/components/terminal/terminalDetailsTabModel';
 import { applyCloseDetailsTab } from './details/workspace/detailsWorkspaceReducer';
+import { LocalSettingsPersistenceError } from '@/sync/domains/state/settingsPersistence';
+import { AppPaneContext, AppPaneFindSeedContext, AppPaneFocusReturnContext, AppPaneFileFrontContext, createFileTabFrontSubscription, type AppPaneContextValue } from './AppPaneContext';
+
+export { useAppPaneContext, useOptionalAppPaneContext, useOptionalAppPaneFindSeedContext, useOptionalPaneFocusReturnOwner } from './AppPaneContext';
 
 /** Private terminal labels/paths become visible only under their actual persisted Account owner. */
 function qualifyProjectTerminalPane(scopeId: string, pane: PaneScopeState, scope: ServerAccountScope | null): PaneScopeState {
@@ -43,24 +47,6 @@ function qualifyProjectTerminalPane(scopeId: string, pane: PaneScopeState, scope
     return { ...pane, details, bottom: { ...pane.bottom,
         tabState: { ...pane.bottom.tabState, terminal: EMPTY_TERMINAL_WORKSPACE } } };
 }
-
-type AppPaneContextValue = Readonly<{
-    state: AppPaneState;
-    dispatch: (action: AppPaneAction) => void;
-    registerDriver: (driver: PaneDriver) => () => void;
-    getDriver: (scopeId: PaneScopeId) => PaneDriver | null;
-    driverRegistryVersion: number;
-    overlayFocusReturnOwner: PaneOverlayFocusReturnOwner;
-    fileFindSeedHandoff: FileFindSeedHandoff;
-    fileFindSeedAccountBindings: ReadonlyMap<string, ServerCredentialAccountScopeBinding>;
-}>;
-
-const AppPaneContext = createContext<AppPaneContextValue | null>(null);
-type AppPaneFindSeedContextValue = Pick<AppPaneContextValue, 'fileFindSeedHandoff' | 'fileFindSeedAccountBindings'>;
-// Launch consumers need credential/handoff changes, not every pane reducer tick.
-const AppPaneFindSeedContext = createContext<AppPaneFindSeedContextValue | null>(null);
-// File origins need the stable transient focus owner, rather than every pane-state update.
-const AppPaneFocusReturnContext = createContext<PaneOverlayFocusReturnOwner | null>(null);
 
 type PersistedPaneSlot = Readonly<{
     isOpen: boolean;
@@ -208,6 +194,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         maxScopesInMemory: 12,
         persistedScopes: persistedScopes ?? {},
     }));
+    const [persistenceFailed, setPersistenceFailed] = useState(false);
     const stateRef = useRef(state);
     const driversRef = useRef<Map<PaneScopeId, PaneDriver>>(new Map());
     const [fileFindSeedHandoff] = useState(createFileFindSeedHandoff);
@@ -235,6 +222,10 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         return scopes === raw.scopes ? raw : { ...raw, scopes };
     }, [readPaneAccountScope]);
     const qualifiedState = React.useMemo(() => readQualifiedState(), [state, activeAccountScope, fileFindSeedAccountBindings, readQualifiedState]);
+    const qualifiedStateRef = useRef(qualifiedState);
+    qualifiedStateRef.current = qualifiedState;
+    const [fileFrontSubscription] = useState(() => createFileTabFrontSubscription(() => qualifiedStateRef.current));
+    React.useLayoutEffect(() => fileFrontSubscription.notify(), [fileFrontSubscription, qualifiedState]);
     React.useEffect(() => () => fileFindSeedHandoff.dispose(), [fileFindSeedHandoff]);
     const overlayFocusReturnOwnerRef = useRef<PaneOverlayFocusReturnOwner | null>(null);
     if (overlayFocusReturnOwnerRef.current === null) {
@@ -342,7 +333,14 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     }, [dispatch, persistedScopes]);
 
     React.useEffect(() => {
-        getStorage().getState().applyLocalSettings({ appPaneScopesV1: serializePersistedPaneScopes(state.scopes) }, { source: 'ui' });
+        const appPaneScopesV1 = serializePersistedPaneScopes(state.scopes);
+        try {
+            getStorage().getState().applyLocalSettings({ appPaneScopesV1 }, { source: 'ui' });
+            setPersistenceFailed(false);
+        } catch (error) {
+            if (!(error instanceof LocalSettingsPersistenceError)) throw error;
+            setPersistenceFailed(true);
+        }
     }, [state.scopes]);
 
     const registerDriver = React.useCallback((driver: PaneDriver) => {
@@ -363,6 +361,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
 
     const value: AppPaneContextValue = useMemo(() => ({
         state: qualifiedState,
+        persistenceFailed,
         dispatch,
         registerDriver,
         getDriver,
@@ -370,29 +369,11 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         overlayFocusReturnOwner,
         fileFindSeedHandoff,
         fileFindSeedAccountBindings,
-    }), [driverRegistryVersion, dispatch, fileFindSeedHandoff, fileFindSeedAccountBindings, getDriver, overlayFocusReturnOwner, registerDriver, qualifiedState]);
+    }), [driverRegistryVersion, dispatch, fileFindSeedHandoff, fileFindSeedAccountBindings, getDriver, overlayFocusReturnOwner, persistenceFailed, registerDriver, qualifiedState]);
 
     const findSeedValue = useMemo(() => ({ fileFindSeedHandoff, fileFindSeedAccountBindings }),
         [fileFindSeedHandoff, fileFindSeedAccountBindings]);
-    return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}>
+    return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}><AppPaneFileFrontContext.Provider value={fileFrontSubscription}>
         {props.children}
-    </AppPaneFocusReturnContext.Provider></AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
+    </AppPaneFileFrontContext.Provider></AppPaneFocusReturnContext.Provider></AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
 });
-
-export function useAppPaneContext(): AppPaneContextValue {
-    const ctx = useContext(AppPaneContext);
-    if (!ctx) throw new Error('useAppPaneContext must be used within <AppPaneProvider>');
-    return ctx;
-}
-
-export function useOptionalAppPaneContext(): AppPaneContextValue | null {
-    return useContext(AppPaneContext);
-}
-
-export function useOptionalAppPaneFindSeedContext(): AppPaneFindSeedContextValue | null {
-    return useContext(AppPaneFindSeedContext);
-}
-
-export function useOptionalPaneFocusReturnOwner(): PaneOverlayFocusReturnOwner | null {
-    return useContext(AppPaneFocusReturnContext);
-}
