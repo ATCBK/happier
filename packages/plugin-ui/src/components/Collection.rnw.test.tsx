@@ -2409,6 +2409,30 @@ describe('list row lines (title meta, description, status takes the facts line)'
 });
 
 describe('render scope', () => {
+  it.each([
+    { presentation: 'table', scroll: undefined },
+    { presentation: 'list', scroll: undefined },
+    { presentation: 'table', scroll: 'page' },
+  ] as const)('updates only the changed $presentation item when the data window publishes ($scroll)', async ({ presentation, scroll }) => {
+    const renders = new Map<string, number>();
+    const counting: CollectionAnatomy<Entry> = {
+      ...anatomy,
+      title: entry => {
+        renders.set(entry.id, (renders.get(entry.id) ?? 0) + 1);
+        return entry.title;
+      },
+    };
+    const view = mount({ presentation, anatomy: counting, scroll });
+    try {
+      view.measure(1440);
+      renders.clear();
+      await view.update({ items: entries.map(entry => entry.id === 'a' ? { ...entry, title: 'Updated title' } : entry) });
+      expect(view.query('row:a')?.textContent).toContain('Updated title');
+      expect(renders.get('a')).toBeGreaterThan(0);
+      expect(renders.get('b') ?? 0).toBe(0);
+      expect(renders.get('c') ?? 0).toBe(0);
+    } finally { view.unmount(); }
+  });
   it.each(['table', 'list', 'board', 'grid'] as const)(
     'keeps unrelated mounted %s rows quiet when the controlled choice changes',
     async (presentation) => {

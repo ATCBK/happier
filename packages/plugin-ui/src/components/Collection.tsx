@@ -1667,27 +1667,41 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
 
   // ---- the List's cells: rows, and each open peek right below its row (table only) ----
   const expanded = model.expanded;
-  const sections = useMemo(() => drawnSections.map((section, index): ListSectionData<CollectionCell<Item>> => {
-    const data: CollectionCell<Item>[] = [];
-    for (const item of section.items) {
-      const key = model.keyOf(item);
-      data.push({ kind: 'item', key, item });
-      if ((expandable || ghostPeeks) && (expanded.has(key) || closingPeeks.has(key))) {
-        data.push({ kind: 'peek', key: peekCellKey(key), itemKey: key, item });
-      }
-    }
-    const group = section.group;
-    return {
-      key: group?.key ?? `collection-${index}`,
-      title: group?.title ?? '',
-      // A page section names its rows; a dense list's caption band counts them (a nested group every item
-      // it holds, open or not, but not the owners shown only to place a match).
-      ...(pageSections ? {} : { count: tree === null ? section.items.length
-        : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
-      ...(group?.description === undefined ? {} : { description: group.description }),
-      data,
+  const previousCells = useRef<ReadonlyMap<string, CollectionCell<Item>>>(new Map());
+  const sections = useMemo(() => {
+    const nextCells = new Map<string, CollectionCell<Item>>();
+    const retainCell = (cell: CollectionCell<Item>): CollectionCell<Item> => {
+      const previous = previousCells.current.get(cell.key);
+      // The caller owns item identity. Preserve it through this wrapper so the
+      // List's existing PureComponent row sees only its own data changes.
+      const retained = previous?.kind === cell.kind && previous.item === cell.item ? previous : cell;
+      nextCells.set(cell.key, retained);
+      return retained;
     };
-  }), [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
+    const nextSections = drawnSections.map((section, index): ListSectionData<CollectionCell<Item>> => {
+      const data: CollectionCell<Item>[] = [];
+      for (const item of section.items) {
+        const key = model.keyOf(item);
+        data.push(retainCell({ kind: 'item', key, item }));
+        if ((expandable || ghostPeeks) && (expanded.has(key) || closingPeeks.has(key))) {
+          data.push(retainCell({ kind: 'peek', key: peekCellKey(key), itemKey: key, item }));
+        }
+      }
+      const group = section.group;
+      return {
+        key: group?.key ?? `collection-${index}`,
+        title: group?.title ?? '',
+        // A page section names its rows; a dense list's caption band counts them (a nested group every item
+        // it holds, open or not, but not the owners shown only to place a match).
+        ...(pageSections ? {} : { count: tree === null ? section.items.length
+          : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
+        ...(group?.description === undefined ? {} : { description: group.description }),
+        data,
+      };
+    });
+    previousCells.current = nextCells;
+    return nextSections;
+  }, [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
   const dividedKeys = useMemo(() => (pageSections
     ? new Set(drawnSections.flatMap((section) => section.items.slice(0, -1).map(model.keyOf)))
     : null), [drawnSections, model.keyOf, pageSections]);
