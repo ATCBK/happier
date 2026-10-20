@@ -3,11 +3,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'socket.io';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import codexManifest from '../../../assets/bundled-plugin-manifests/codex.json';
 import gatewayManifest from '../../../assets/bundled-plugin-manifests/cliproxyapi.json';
 import { CODEX_PROVIDER_BINDING_ADAPTER_V1 } from '../../../../../packages/plugins/codex/src/agent/providerBinding/adapter';
+import { CLIPROXYAPI_PROVIDER_CONTRIBUTION } from '../../../../../packages/plugins/cliproxyapi/src/provider/contribution';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
@@ -74,20 +77,28 @@ function createTransport(manager: RpcHandlerManager, replies: unknown[] = []) {
 }
 
 describe('server-origin Machine reads across the E2EE RPC seam', () => {
-    it('admits a connected Codex source through the real model projector without a saved Provider connection', async () => {
+    const verifyConnectedSource = async (scenario: 'admit' | 'admit_pool' | 'account' | 'pool' | 'installed' | 'saved_gateway' | 'revoked' | 'removed' | 'different_service' | 'no_selection') => {
         const home = await mkdtemp(join(tmpdir(), 'connected-codex-eligibility-'));
         try {
             // OPS8/OPS9's source picker selects this qualified Connected Account.
             // resourceSourceCandidates pins the credential row id as its incarnation.
-            const source = TeamCredentialSourceBindingV1Schema.parse({
+            const service = { pluginId: 'happier.agent.codex', localId: scenario === 'different_service' ? 'other-service' : 'openai-codex' };
+            const selectedAccount = { service, accountId: '97bd5614-8970-4068-87f2-1447de69d604' };
+            const source = TeamCredentialSourceBindingV1Schema.parse(scenario === 'admit_pool' || scenario === 'pool' || scenario === 'removed' ? {
+                v: 1, kind: 'connected_pool', target: { kind: 'group', service, groupId: 'pool-1' }, poolIncarnation: 'pool-incarnation-1',
+            } : {
                 v: 1, kind: 'connected_account',
-                target: { kind: 'account', account: {
-                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-                    accountId: '97bd5614-8970-4068-87f2-1447de69d604',
-                } },
+                target: { kind: 'account', account: selectedAccount },
                 credentialIncarnation: 'cmuwo1t4m000etm32p8ydij7j',
             });
-            const { catalog } = splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1);
+            if (source.kind === 'provider_connection') throw new Error('Expected Connected Account/Pool source');
+            const { catalog } = splitProviderSettingsV1(ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
+                ...(scenario === 'saved_gateway' ? { connections: [{ v: 1, id: 'saved-gateway',
+                    source: { kind: 'contribution', contributionKey: `${gatewayManifest.id}/${CLIPROXYAPI_PROVIDER_CONTRIBUTION.id}` },
+                    role: 'default', displayName: 'Gateway', displayNameMode: 'automatic', deployment: { kind: 'managedLocal' },
+                    purposeBindingDefaults: { 'openai-upstream': source.target }, revision: 1, createdAt: 1, updatedAt: 1,
+                }] } : {}),
+            }));
             const snapshot = {
                 source: 'cache' as const, settings: AccountSettingsSchema.parse({}),
                 providerConnectionsCatalog: { status: 'ready' as const, revision: 1, catalog },
@@ -96,7 +107,7 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             };
             setActiveAccountSettingsSnapshot(snapshot);
             const agent = codexManifest.contributes.agents.find(candidate => candidate.id === 'codex')!;
-            const gateway = gatewayManifest.contributes.providers[0]!;
+            const gateway = CLIPROXYAPI_PROVIDER_CONTRIBUTION;
             // Loaded-plugin and OS/storage boundaries only: use the actual bundled
             // declarations and Codex adapter, with no mocked projector/eligibility.
             const executable = {
@@ -106,7 +117,7 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                         identity: { pluginId: codexManifest.id, localId: 'codex' }, definition: agent }]]),
                     providersByContributionKey: new Map([[`${gatewayManifest.id}/${gateway.id}`, {
                         identity: { pluginId: gatewayManifest.id, localId: gateway.id }, pluginId: gatewayManifest.id,
-                        definition: gateway, provenance: 'bundled', source: { kind: 'path' },
+                        definition: gateway, provenance: scenario === 'installed' ? 'installed' : 'bundled', source: { kind: 'path' },
                     }]]),
                 },
                 activateContributionsOnDemand: async () => [],
@@ -117,14 +128,17 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 }]]),
             } as unknown as ResolvedExecutablePluginRuntimeRegistry;
             const unused = async (): Promise<never> => { throw new Error('Unexpected effect during eligibility'); };
-            if (source.kind !== 'connected_account') throw new Error('Expected Connected Account source');
+            let targetReads = 0;
             const connectedAccounts = createConnectedAccountPurposeBindingOwner({
                 store: { read: async () => ({ v: 1, bindings: [] }), update: unused, subscribe: () => ({ dispose() {} }) },
                 selectTarget: unused,
                 resolveTarget: async (target, signal) => {
                     signal.throwIfAborted();
-                    return target.kind === 'account' && target.account.accountId === source.target.account.accountId
-                        ? { account: source.target.account, displayName: 'Happier Devs' } : null;
+                    targetReads += 1;
+                    if (scenario === 'no_selection' || ((scenario === 'revoked' || scenario === 'removed') && targetReads > 1)) return null;
+                    return { account: selectedAccount, displayName: 'Happier Devs',
+                        ...(target.kind === 'group' ? { group: { groupId: target.groupId, generation: 1 } } : {}),
+                    };
                 },
                 materializeAccount: unused, projectTargetAccounts: unused, assertTargetAccountMaterializable: unused,
             });
@@ -133,8 +147,41 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 runtimeStore: createProviderRuntimeStateStore({ happyHomeDir: home, machineId }),
                 acquireRuntimeLease: async () => ({ registry: executable, source: 'active', durableRevision: -1, release: async () => {} }),
                 resolveManagedPurposeBindingIntent: connectedAccounts.resolveBindingIntent,
+                resolveManagedPurposeBindingIntentSelection: connectedAccounts.resolveBindingIntentSelection,
                 modelSettingsMutation: unused,
             });
+            const agentTargetKey = `agent:${codexManifest.id}/${agent.id}`;
+            if (scenario === 'admit' || scenario === 'admit_pool') {
+                const before = await runtime.projectModels({ machineId, agentTargetKey,
+                    connectedAccountTarget: source.target, refreshPolicy: 'current_only', mode: 'management' });
+                if (before.status !== 'success') throw new Error('Expected source catalog before confirmation');
+                const group = before.groups[0]!;
+                const row = group.rows.find(candidate => candidate.ref.modelId === 'gpt-5.5')!;
+                expect(row.compatibility).toMatchObject({ result: { status: 'experimental' }, confirmed: false });
+                await expect(runtime.resolveTeamCredentialResourceTestCandidate({ machineId,
+                    teamId: input.teamId, resourceId: input.resourceId, expectedResourceRevision: 1,
+                    source, refreshPolicy: 'current_only',
+                })).resolves.toMatchObject({ status: 'unavailable' });
+                // The Account-row transport is in-memory; the actual Action parser,
+                // confirmation semantics, strict catalog and CAS writer stay real.
+                const confirm = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 2,
+                    readCatalog: async () => snapshot.providerConnectionsCatalog,
+                    readDefinitions: async () => [],
+                    writeCatalog: async value => {
+                        expect(value.expectedRevision).toBe(snapshot.providerConnectionsCatalog.revision);
+                        snapshot.providerConnectionsCatalog = { status: 'ready',
+                            revision: value.expectedRevision + 1, catalog: value.catalog };
+                        return { status: 'updated' };
+                    },
+                });
+                expect(await confirm(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+                    action: 'confirmExperimental', connectionId: group.connectionId,
+                    expectedConnectionRevision: group.connectionRevision, connectedAccountTarget: source.target,
+                    agentTargetKey, modelId: row.ref.modelId,
+                    compatibilityFingerprint: row.compatibility.compatibilityFingerprint,
+                }), {})).toMatchObject({ ok: true, result: { status: 'success' } });
+                expect(snapshot.providerConnectionsCatalog.catalog.connections).toEqual([]);
+            }
             const daemon = createDaemon();
             registerMachineProviderRpcHandlers({ rpcHandlerManager: daemon.manager, machineId,
                 featureGate: { isEnabled: () => true }, services: { ...runtime,
@@ -149,10 +196,29 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             const result = await readEligibility({ custodianAccountId: accountId, machineIds: [machineId],
                 teamId: input.teamId, resourceId: input.resourceId, resourceRevision: 1, source,
                 scope: 'source_any', signal: new AbortController().signal });
-            const agentTargetKey = `agent:${codexManifest.id}/${agent.id}`;
             const projection = await runtime.projectModels({ machineId, agentTargetKey,
                 connectedAccountTarget: source.target, refreshPolicy: 'current_only', mode: 'picker' });
+            if (scenario === 'revoked' || scenario === 'removed' || scenario === 'different_service' || scenario === 'no_selection') {
+                expect(projection).toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable' } });
+                expect(replies).toEqual([{ status: 'unavailable', reason: 'model_unavailable' }]);
+                expect([...result.eligibleMachineIds]).toEqual([]);
+                return;
+            }
             expect(projection).toMatchObject({ status: 'success', agentTargetKey });
+            if (scenario !== 'admit' && scenario !== 'admit_pool') {
+                if (projection.status !== 'success') throw new Error('Expected source model projection');
+                if (scenario === 'account' || scenario === 'pool' || scenario === 'installed' || scenario === 'saved_gateway') {
+                    expect(projection.groups.length).toBeGreaterThan(0);
+                    expect(projection.groups.every(group => group.authorization.authorized && group.rows.length > 0)).toBe(true);
+                    expect(projection.groups.flatMap(group => group.rows).every(row => row.confidence === 'account_unverified'
+                        && row.compatibility.result.status === 'experimental' && row.compatibility.confirmed === false)).toBe(true);
+                    expect(projection.groups.map(group => group.connectionId)).not.toContain('saved-gateway');
+                    expect(new Set(projection.groups.map(group => JSON.stringify(group.rows[0]?.application))).size).toBe(projection.groups.length);
+                }
+                expect(replies).toEqual([{ status: 'unavailable', reason: 'model_unavailable' }]);
+                expect([...result.eligibleMachineIds]).toEqual([]);
+                return;
+            }
             const application = projectManagedProviderBrokerApplication({
                 registry: resolveProviderContributionRegistryView(executable.contributes, executable.generation!),
                 implementationIdentity: { pluginId: gatewayManifest.id, localId: gateway.id },
@@ -162,12 +228,12 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
             if (!application) throw new Error('Expected admitted managed broker application');
             const family = resolveManagedProviderBrokerPurpose({
                 registry: resolveProviderContributionRegistryView(executable.contributes, executable.generation!),
-                application, service: source.target.account.service,
+                application, service,
             });
             if (!family) throw new Error('Expected the declared Connected Account purpose');
             const selection = await connectedAccounts.resolveBindingIntentSelection({
                 purpose: { consumer: application.implementationIdentity, purpose: family.purpose },
-                target: source.target, serviceRefs: [source.target.account.service], signal: new AbortController().signal,
+                target: source.target, serviceRefs: [service], signal: new AbortController().signal,
             });
             expect(await selection.isCurrent()).toBe(true);
             expect(replies).toEqual([eligible]);
@@ -188,7 +254,13 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
         } finally {
             await rm(home, { recursive: true, force: true });
         }
-    });
+    };
+
+    it('admits a connected Codex source through the real model projector without a saved Provider connection', () => verifyConnectedSource('admit'));
+    it('admits a confirmed connected Codex Pool through the same real projector', () => verifyConnectedSource('admit_pool'));
+    it.each(['account', 'pool', 'installed', 'saved_gateway', 'revoked', 'removed', 'different_service', 'no_selection'] as const)(
+        'projects only the current source-qualified SDK catalog, preserving experimental confirmation: %s', verifyConnectedSource,
+    );
 
     it('composes the real server eligibility caller and forwarder with the E2EE daemon', async () => {
         const daemon = createDaemon();
