@@ -1,9 +1,10 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import ts from 'typescript';
+import { fixtureCommandTimeoutMs, runBoundedFixtureCommand } from './test-support/boundedFixtureCommand.js';
 
 import type {
     AgentSessionCompactRequest as CanonicalAgentSessionCompactRequest,
@@ -284,7 +285,7 @@ describe('native Voice public declaration boundary', () => {
 
     it('checks the public native client without daemon-only declaration owners', async () => {
         const sdkRoot = fileURLToPath(new URL('..', import.meta.url));
-        const distRoot = resolve(sdkRoot, 'dist');
+        const compilerRunner = fileURLToPath(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url));
         const configPath = fileURLToPath(new URL('../../plugin-ui/fixtures/external-authoring/tsconfig.voice-native.json', import.meta.url));
         const native = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
             ...ts.sys,
@@ -294,72 +295,95 @@ describe('native Voice public declaration boundary', () => {
         });
         if (!native) throw new Error(`Unable to parse ${configPath}`);
         const manifest = JSON.parse(await readFile(resolve(sdkRoot, 'package.json'), 'utf8'));
-        const entry = resolve(sdkRoot, manifest.exports['./voice/client'].types);
-        const declarations = (() => {
-            const parsed = ts.getParsedCommandLineOfConfigFile(resolve(sdkRoot, 'tsconfig.json'), {}, {
-                ...ts.sys, onUnRecoverableConfigFileDiagnostic: diagnostic => {
-                    throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
-                },
-            });
-            if (!parsed) throw new Error('Missing SDK declaration configuration');
-            const producer = ts.createProgram({
-                rootNames: [resolve(sdkRoot, manifest.exports['./voice/client']['happier-source'])],
-                options: { ...parsed.options, declaration: true, declarationMap: false,
-                    emitDeclarationOnly: true, incremental: false },
-            });
-            const emitted = new Map<string, string>();
-            const result = producer.emit(undefined, (path, contents) => {
-                if (path.endsWith('.d.ts')) emitted.set(resolve(path), contents);
-            }, undefined, true);
-            expect(result.diagnostics.map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
-            return emitted;
-        })();
-        expect(declarations.has(entry)).toBe(true);
-        const inSdkDist = (path: string) => {
-            const suffix = relative(distRoot, resolve(path));
+        const root = await mkdtemp(resolve(sdkRoot, '.tmp.native-voice-declarations-'));
+        const distRoot = resolve(root, 'dist');
+        const isWithin = (directory: string, path: string) => {
+            const suffix = relative(directory, resolve(path));
             return !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`);
         };
-        const host = ts.createCompilerHost(native.options);
-        const originalReadFile = host.readFile.bind(host);
-        const originalFileExists = host.fileExists.bind(host);
-        const originalDirectoryExists = host.directoryExists!.bind(host);
-        host.fileExists = path => inSdkDist(path) ? declarations.has(resolve(path)) : originalFileExists(path);
-        host.directoryExists = path => originalDirectoryExists(path) || (inSdkDist(path)
-            && originalDirectoryExists(resolve(sdkRoot, 'src', relative(distRoot, path))));
-        host.readFile = path => inSdkDist(path) ? declarations.get(resolve(path)) : originalReadFile(path);
-        host.getSourceFile = (path, languageVersion) => {
-            const contents = host.readFile(path);
-            return contents === undefined ? undefined : ts.createSourceFile(path, contents, languageVersion, true);
-        };
-        // Resolve the real public export to freshly emitted source declarations,
-        // rather than whichever prior dist happens to be prepared in this checkout.
-        host.resolveModuleNames = (names, containingFile) => names.map(name => name === '@happier-dev/plugin-sdk/voice/client'
-            ? { resolvedFileName: entry, extension: ts.Extension.Dts, isExternalLibraryImport: true }
-            : ts.resolveModuleName(name, containingFile, native.options, host).resolvedModule);
-        const program = ts.createProgram({ rootNames: native.fileNames, options: native.options, host });
-        const sdkFiles = program.getSourceFiles().map(source => relative(distRoot, source.fileName).replaceAll('\\', '/'));
-        expect(sdkFiles).toContain('voice/client/index.d.ts');
-        expect(sdkFiles.filter(path => [
-            'externalSessions.d.ts', 'managed-services/contract.d.ts', 'activation.d.ts',
-            'services/index.d.ts', 'services/sessions.d.ts', 'agentRuntime/session.d.ts',
-        ].includes(path))).toEqual([]);
-        expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')))
-            .toEqual([]);
-        const voiceModule = program.getSourceFile(resolve(distRoot, 'voice/client.d.ts'));
-        if (!voiceModule) throw new Error('Missing native Voice client declarations');
-        const checker = program.getTypeChecker();
-        const moduleSymbol = checker.getSymbolAtLocation(voiceModule);
-        if (!moduleSymbol) throw new Error('Missing native Voice module');
-        const micSymbol = checker.getExportsOfModule(moduleSymbol).find(symbol => symbol.name === 'VoiceMicSession');
-        if (!micSymbol) throw new Error('Missing native microphone contract');
-        const mic = checker.getDeclaredTypeOfSymbol(micSymbol);
-        expect(mic.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)).toBe(0);
-        const getStream = mic.getProperty('getStream');
-        if (!getStream) throw new Error('Missing typed microphone stream reader');
-        const streamReaders = checker.getSignaturesOfType(checker.getTypeOfSymbolAtLocation(getStream, voiceModule), ts.SignatureKind.Call);
-        expect(streamReaders).toHaveLength(1);
-        expect(checker.getReturnTypeOfSignature(streamReaders[0]!).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)).toBe(0);
-    }, 30_000);
+        try {
+            // A self-referencing package exercises the actual public export map.
+            // Only fresh compiler output lives here; no host/dependency tree is copied.
+            await writeFile(resolve(root, 'package.json'), JSON.stringify(manifest));
+            const producerConfig = resolve(root, 'tsconfig.producer.json');
+            await writeFile(producerConfig, JSON.stringify({
+                extends: resolve(sdkRoot, 'tsconfig.json'),
+                compilerOptions: { rootDir: resolve(sdkRoot, 'src'), outDir: distRoot,
+                    declaration: true, declarationMap: false, emitDeclarationOnly: true,
+                    tsBuildInfoFile: resolve(root, 'producer.tsbuildinfo') },
+                files: [resolve(sdkRoot, manifest.exports['./voice/client']['happier-source'])],
+                include: [],
+            }));
+            await runBoundedFixtureCommand('Voice source declaration emission', sdkRoot, [
+                compilerRunner, '-p', producerConfig, '--pretty', 'false',
+            ]);
+
+            const consumerFiles: string[] = [];
+            for (const source of native.fileNames) {
+                const target = resolve(root, relative(dirname(configPath), source));
+                if (!isWithin(root, target)) throw new Error(`Native fixture is outside its project: ${source}`);
+                await mkdir(dirname(target), { recursive: true });
+                await writeFile(target, await readFile(source, 'utf8'));
+                consumerFiles.push(target);
+            }
+            const assertions = resolve(root, 'nativeMicAssertions.ts');
+            await writeFile(assertions, [
+                "import type { VoiceMicSession } from '@happier-dev/plugin-sdk/voice/client';",
+                'type Concrete<T> = 0 extends (1 & T) ? false : unknown extends T ? false : true;',
+                'type Assert<T extends true> = T;',
+                'type MicrophoneIsConcrete = Assert<Concrete<VoiceMicSession>>;',
+                "type StreamReaderIsCallable = Assert<VoiceMicSession['getStream'] extends (...args: never[]) => unknown ? true : false>;",
+                "type DeclaredStreamIsConcrete = Assert<Concrete<ReturnType<VoiceMicSession['getStream']>>>;",
+                'declare const nativeMic: VoiceMicSession;',
+                'const nativeStream = nativeMic.getStream();',
+                'type StreamIsConcrete = Assert<Concrete<typeof nativeStream>>;',
+            ].join('\n'));
+            const consumerConfig = resolve(root, 'tsconfig.native.json');
+            await writeFile(consumerConfig, JSON.stringify({
+                extends: configPath, files: [...consumerFiles, assertions], include: [],
+            }));
+            const compileNative = () => runBoundedFixtureCommand('Strict native Voice declaration consumer', root, [
+                compilerRunner, '-p', consumerConfig, '--pretty', 'false', '--listFiles',
+            ]);
+            const files = (await compileNative()).split(/\r?\n/u).map(line => line.trim()).filter(isAbsolute).map(path => resolve(path));
+            expect(files).toContain(resolve(root, manifest.exports['./voice/client'].types));
+            expect(files.filter(path => isWithin(resolve(sdkRoot, 'dist'), path))).toEqual([]);
+            const sdkFiles = files.filter(path => isWithin(distRoot, path)).map(path => relative(distRoot, path).replaceAll('\\', '/'));
+            expect(sdkFiles.filter(path => [
+                'externalSessions.d.ts', 'managed-services/contract.d.ts', 'activation.d.ts',
+                'services/index.d.ts', 'services/sessions.d.ts', 'agentRuntime/session.d.ts',
+            ].includes(path))).toEqual([]);
+
+            // The parser only locates mutation spans; TS7 owns all semantic checks.
+            const voiceDeclaration = resolve(distRoot, 'voice/client.d.ts');
+            const declaration = await readFile(voiceDeclaration, 'utf8');
+            const voiceModule = parseSource(voiceDeclaration, declaration);
+            const mic = exportedTypeAlias(voiceModule, 'VoiceMicSession');
+            if (!mic) throw new Error('Missing native microphone contract');
+            const streamReaders: ts.MethodSignature[] = [];
+            const collectStreamReaders = (node: ts.Node) => {
+                if (ts.isMethodSignature(node) && ts.isIdentifier(node.name) && node.name.text === 'getStream') streamReaders.push(node);
+                ts.forEachChild(node, collectStreamReaders);
+            };
+            collectStreamReaders(mic.type);
+            expect(streamReaders).toHaveLength(1);
+            const streamType = streamReaders[0]!.type;
+            if (!streamType) throw new Error('Missing typed microphone stream reader');
+            // Positive assignment alone accepts any. Both independent erasures
+            // must fail the real native compilation with a type-constraint error.
+            for (const erased of [mic.type, streamType]) {
+                try {
+                    await writeFile(voiceDeclaration, declaration.slice(0, erased.getStart(voiceModule)) + 'any' + declaration.slice(erased.end));
+                    await expect(compileNative()).rejects.toThrow(/nativeMicAssertions\.ts[^\r\n]*TS2344/u);
+                } finally {
+                    await writeFile(voiceDeclaration, declaration);
+                }
+            }
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+        // One emission, one strict consumer and two erasure controls share the existing command budget.
+    }, fixtureCommandTimeoutMs * 4 + 5_000);
 });
 
 function emittedIsolatedDeclaration(fileName: string, sourceText: string): string {
