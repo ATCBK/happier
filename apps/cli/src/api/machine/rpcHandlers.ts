@@ -1084,7 +1084,8 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       const snapshot = await readProcessCensus({ freshness: 'shared', pids: markers.map(marker => marker.pid),
         fields: ['memory', 'cpuTimeUs'] });
       if (snapshot.status === 'ok') {
-        const cpu = executionRunCpu.sample(snapshot);
+        // Runs are requested on demand, without a periodic sampling cadence.
+        const cpu = executionRunCpu.sample(snapshot, 0);
         processIndex = new Map(snapshot.rows.map(row => [row.pid, {
           pid: row.pid,
           name: row.name,
