@@ -6,6 +6,7 @@ import type { AgentContribution } from '../agents.js';
 import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionSkillDelivery } from '../agentRuntime/session.js';
 import type { ObservedAgentLaunch } from './observeAgentLaunch.js';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { resolveSessionSkillPlanV1, SessionSkillPlanV1Schema } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 
 export type AgentSkillDeliveryContractInput = Readonly<{
     agent: AgentContribution;
@@ -18,6 +19,9 @@ export type AgentSkillDeliveryContractInput = Readonly<{
         expect: 'delivers' | 'restart_required' | 'unsupported';
     }>[];
 }>;
+
+type AgentSkillDeclarationContractInput = Pick<AgentSkillDeliveryContractInput, 'agent'>
+    & Partial<Record<Exclude<keyof AgentSkillDeliveryContractInput, 'agent'>, never>>;
 
 function launchStrings(launch: ObservedAgentLaunch): string[] {
     const strings: string[] = [...launch.argv, ...Object.values(launch.env)];
@@ -69,12 +73,46 @@ function comparableLaunch(launch: ObservedAgentLaunch): unknown {
         appServerRequests: launch.appServerRequests });
 }
 
-/** Register the manifest's observable launch contracts; the plugin supplies genuine boundary adapters. */
-export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractInput): void {
+/**
+ * Register the manifest's projection and launch contracts with genuine boundary adapters.
+ * No-delivery declarations can check their projection without a vendor launch adapter.
+ */
+export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractInput | AgentSkillDeclarationContractInput): void {
     const { afterEach, beforeEach, describe, expect, it } = requireVitestContractRunner();
     const capability = 'skills' in input.agent.capabilities ? input.agent.capabilities.skills : undefined;
     const acpDefinition = 'runtime' in input.agent && input.agent.runtime.kind === 'acp' ? input.agent.runtime.definition : undefined;
     const acpDelivery = acpDefinition?.skills?.sessionDelivery;
+    describe(`${input.agent.id} skill declaration contract`, () => {
+        it('K0 projects native, index and unavailable outcomes through the canonical skill plan', () => {
+            const tools = 'tools' in input.agent.capabilities ? input.agent.capabilities.tools : undefined;
+            const hasActionChannel = tools !== undefined;
+            // Loss of the Action channel must not turn an index fallback into native delivery.
+            for (const agentHasActionChannel of hasActionChannel ? [true, false] : [false]) {
+                const plan = SessionSkillPlanV1Schema.parse(resolveSessionSkillPlanV1({
+                    items: [{ skillId: 'contract:skill', name: 'contract-skill', digest: 'sha256:contract',
+                        description: 'Contract skill', disableModelInvocation: false, userInvocable: true }],
+                    selected: [{ kind: 'skill', id: 'contract:skill', name: 'contract-skill', selected: true,
+                        selectable: true, reason: 'rule_on', decidedBy: null, sessionOverride: null }],
+                    excludeNativeSkillNames: [], agentSkills: capability ?? null, agentHasActionChannel,
+                    nativeSkills: { status: 'ok', names: [] },
+                }));
+                const expected = capability?.delivery === 'session_dir' ? 'session_dir' : agentHasActionChannel ? 'index' : 'none';
+                expect(plan.plan).toBe(expected);
+                expect(plan.items).toEqual([{ skillId: 'contract:skill', name: 'contract-skill', digest: 'sha256:contract',
+                    state: expected === 'none' ? 'unavailable' : 'delivered',
+                    reason: expected === 'none' ? 'agent_unsupported' : 'rule_on' }]);
+                expect(plan.nativeDisables).toEqual([]);
+                expect(plan.diagnostics).toEqual([]);
+            }
+            if (capability?.delivery !== 'session_dir') {
+                expect(acpDelivery, 'K0: a no-delivery declaration must not configure a native skill carrier').toBeUndefined();
+            }
+        });
+    });
+    if (!input.openSession) {
+        if (capability?.delivery === 'session_dir') throw new Error('Native skill delivery requires launch contract adapters.');
+        return;
+    }
     describe(`${input.agent.id} skill delivery contract`, () => {
         let directory: string;
         let skills: AgentSessionSkillDelivery;

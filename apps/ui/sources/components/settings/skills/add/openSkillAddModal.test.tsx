@@ -17,13 +17,108 @@ const { WhereItsOnControl } = await import('@/components/capabilities/where/Wher
 const { SkillAddModal } = await import('./openSkillAddModal');
 
 describe('Skills Add modal through the real Account and registry owners', () => {
+    it('keeps a shelf partial acknowledgment recoverable even when the new content is already in the library', async () => {
+        let phase = 'create Home';
+        onTestFailed(() => console.error('Shelf recovery phase:', phase));
+        const { home, sourceId, skill, catalog, setRulesUnavailable } = await createRegistrySourcesUiHome('shelf-partial');
+        const { SkillsRegistryShelf } = await import('../SkillsRegistryShelf');
+        const { useSkillsLibrary } = await import('@/sync/domains/skills/useSkillsLibrary');
+        function Shelf() {
+            const library = useSkillsLibrary();
+            return <SkillsRegistryShelf library={library} shelf={{ items: [skill.item.summary], sourceId, loading: false }} brandNew={false} />;
+        }
+        phase = 'render';
+        const screen = await renderScreen(<Shelf />);
+        const { RegistryShelf } = await import('@/components/capabilities/add/RegistryShelf');
+        // The renderer's native Collection has no measured grid viewport. Render its real action slot explicitly.
+        const actionElement = () => <>{screen.findByType(RegistryShelf).props.action(skill.item.summary)}</>;
+        const action = await renderScreen(actionElement());
+        setRulesUnavailable(true);
+        phase = 'press Add';
+        await action.pressByTestIdAsync('skills.home.shelf.review.add');
+        phase = 'wait content';
+        await waitForHomeGovernance(() => expect(home.boundary.list()).toHaveLength(1));
+        await action.update(actionElement());
+        expect(action.findByTestId('skills.home.shelf.review.partial')).not.toBeNull();
+        expect(action.findByTestId('skills.home.shelf.review.added')).toBeNull();
+        const skillId = home.boundary.list()[0]!.id;
+        setRulesUnavailable(false);
+        await action.pressByTestIdAsync('skills.home.shelf.review.partial-action');
+        await waitForHomeGovernance(() => expect(catalog.read('skill-rules').value).toMatchObject({ rules: [expect.objectContaining({ skillId, enabled: true })] }));
+        await action.update(actionElement());
+        expect(action.findByTestId('skills.home.shelf.review.added')).not.toBeNull();
+        expect(home.boundary.list().map(row => row.id)).toEqual([skillId]);
+        expect(catalog.read('skill-rules').value).toMatchObject({ rules: [expect.objectContaining({ skillId, enabled: true })] });
+    });
+
+    it('retains and repairs all sibling rule acknowledgments through the real install Action', async () => {
+        let phase = 'create Home';
+        onTestFailed(() => console.error('Sibling recovery phase:', phase));
+        const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+        const sibling = createPromptRegistrySkillFixture({ sourceId: 'fixture', itemId: 'lint', title: 'lint', files: [
+            { path: 'SKILL.md', content: '---\nname: lint\ndescription: Check style\n---\nCheck the style.' },
+        ] });
+        if (sibling.item.payload.kind !== 'skill') throw new Error('Expected skill');
+        const siblingPayload = sibling.item.payload.skill;
+        const primary = createPromptRegistrySkillFixture({ sourceId: 'fixture', itemId: 'review', title: 'review', files: [
+            { path: 'SKILL.md', content: '---\nname: review\ndescription: Review changes\n---\nUse [lint](../lint/SKILL.md).' },
+            { path: 'check.sh', content: '#!/bin/sh\nexit 0', unixMode: 0o755 },
+        ] });
+        if (primary.item.payload.kind !== 'skill') throw new Error('Expected skill');
+        const main = primary.item.payload.skill;
+        const fixture = await createRegistrySourcesUiHome('modal-sibling-partial', { external: async url => {
+            if (url.includes('/git/trees/')) {
+                return Response.json({ sha: main.ref.treeSha, tree: [
+                    { path: 'review', type: 'tree', mode: '040000', sha: main.ref.treeSha },
+                    ...main.files.map(file => ({ path: `review/${file.path}`, type: 'blob', mode: file.unixMode === 0o755 ? '100755' : '100644', sha: file.blobSha, size: file.size })),
+                    { path: 'lint', type: 'tree', mode: '040000', sha: siblingPayload.ref.treeSha },
+                    ...siblingPayload.files.map(file => ({ path: `lint/${file.path}`, type: 'blob', mode: '100644', sha: file.blobSha, size: file.size })),
+                ] });
+            }
+            if (url.startsWith('https://raw.githubusercontent.com/fixture/skills/') && url.endsWith('/review/SKILL.md'))
+                return new Response('---\nname: review\ndescription: Review changes\n---\nUse [lint](../lint/SKILL.md).');
+            if (url.startsWith('https://raw.githubusercontent.com/fixture/skills/') && url.endsWith('/lint/SKILL.md'))
+                return new Response(Buffer.from(sibling.files[0]!.contentBase64, 'base64').toString('utf8'));
+            return null;
+        } });
+        const onClose = vi.fn();
+        const onAdded = vi.fn();
+        phase = 'render';
+        const screen = await renderScreen(<SkillAddModal onClose={onClose} params={{ sourceId: fixture.sourceId, onWrite() {}, onAdded }} />);
+        const collection = () => screen.find(node => node.props.testID === 'skills.add:collection' && typeof node.props.model?.actions?.open === 'function');
+        phase = 'wait catalog';
+        await waitForHomeGovernance(() => expect(collection().props.model.keys).toContain(`${fixture.sourceId}|review`));
+        phase = 'open detail';
+        await React.act(async () => { collection().props.model.actions.open(`${fixture.sourceId}|review`); });
+        phase = 'wait detail';
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add:primary')?.props.disabled).toBe(false));
+        fixture.setRulesUnavailable(true);
+        phase = 'install';
+        await screen.pressByTestIdAsync('skills.add:primary');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add:primary-error')).not.toBeNull());
+        expect(fixture.home.boundary.list()).toHaveLength(2);
+        const ids = fixture.home.boundary.list().map(row => row.id).sort();
+        // Re-pressing the main action is also recovery: it must never recreate either acknowledged skill.
+        phase = 'repeat primary';
+        await screen.pressByTestIdAsync('skills.add:primary');
+        expect(fixture.home.boundary.list().map(row => row.id).sort()).toEqual(ids);
+        fixture.setRulesUnavailable(false);
+        await screen.pressByTestIdAsync('skills.add:primary');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add:primary-error')).toBeNull());
+        const row = fixture.catalog.read('skill-rules');
+        expect(row.key).toBe('skill-rules');
+        if (row.key !== 'skill-rules') throw new Error('Expected rules');
+        expect(row.value.rules.map(rule => rule.skillId).sort()).toEqual(ids);
+        expect(fixture.home.boundary.list().map(row => row.id).sort()).toEqual(ids);
+        expect(onClose).not.toHaveBeenCalled();
+        expect(onAdded).not.toHaveBeenCalled();
+    });
+
     it('installs the reviewed pin, keeps a partial add selected, and retries only its changed rules', async () => {
         let phase = 'admit Home';
-        let requests: unknown;
-        onTestFailed(() => console.error('Skill Add phase:', phase, 'HTTP:', requests));
+        onTestFailed(() => console.error('Skill Add phase:', phase));
         const { home, sourceId, skill, catalog, setRulesUnavailable, moveBranch, externalRequests } =
             await createRegistrySourcesUiHome('modal-partial');
-        requests = home.requests;
         const onAdded = vi.fn();
         const onClose = vi.fn();
         phase = 'render';
@@ -46,7 +141,7 @@ describe('Skills Add modal through the real Account and registry owners', () => 
         setRulesUnavailable(true);
         phase = 'install';
         await screen.pressByTestIdAsync('skills.add:primary');
-        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add.partial.retry')).not.toBeNull());
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add:primary-error')).not.toBeNull());
         expect(onClose).not.toHaveBeenCalled();
         expect(onAdded).not.toHaveBeenCalled();
         const created = home.boundary.list();
@@ -59,8 +154,8 @@ describe('Skills Add modal through the real Account and registry owners', () => 
         expect(externalRequests.some(url => url.endsWith(`/commits/${'b'.repeat(40)}`))).toBe(false);
         setRulesUnavailable(false);
         phase = 'retry rules';
-        await screen.pressByTestIdAsync('skills.add.partial.retry');
-        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add.partial.retry')).toBeNull());
+        await screen.pressByTestIdAsync('skills.add:primary');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add:primary-error')).toBeNull());
         expect(home.boundary.list().map(row => row.id)).toEqual([skillId]);
         expect(catalog.read('skill-rules').value).toMatchObject({ rules: [
             expect.objectContaining({ skillId, target: { t: 'allMachines' }, enabled: true }),
