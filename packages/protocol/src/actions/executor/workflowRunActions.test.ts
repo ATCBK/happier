@@ -86,6 +86,32 @@ function ownerDeps(storage: WorkflowAccountRunActionDeps['storage']): WorkflowAc
 }
 
 describe('shared Account workflow run owner', () => {
+  it.each([401, 403])('preserves an untyped HTTP %s history refusal as access denied during Another round', async status => {
+    if (!acceptedSnapshotResult.ok) throw new Error('snapshot_fixture_failed');
+    const rounds = { ...definition, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false }] };
+    const original = runSnapshot();
+    original.run.state = 'cancelled';
+    original.acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId },
+      acceptedSnapshot: { ...acceptedSnapshotResult.snapshot, definition: rounds, authoredDefinition: rounds },
+    }));
+    const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async operation => {
+      if (operation.operation === 'get') return original;
+      if (operation.operation === 'invocations.list') throw Object.assign(new Error('HTTP refusal'), {
+        code: 'ERR_BAD_REQUEST', response: { status, data: null },
+      });
+      throw new Error('refused_history_must_not_admit');
+    } }));
+    try {
+      await owner.execute({ actionId: 'workflow.run.start', input: WorkflowRunStartRequestV1Schema.parse({
+        runId: '22222222-2222-4222-8222-222222222222', source: { kind: 'inline', definition: rounds,
+          replay: { runId, intent: 'another_round' } },
+      }), context: { surface: 'ui', authority: 'present_user' } });
+      expect.fail('The refused source history must prevent admission');
+    } catch (error) {
+      expect(normalizeWorkflowActionThrownError(error)).toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+    }
+  });
   it('discovers Discussion runs after an irrelevant first page without forwarding a private origin filter to storage', async () => {
     const first = runSnapshot();
     const targetId = '22222222-2222-4222-8222-222222222222';
@@ -1543,7 +1569,7 @@ describe('shared Account workflow run owner', () => {
     await expect(owner.execute({ actionId: 'workflow.run.start', input, context: actionContext }))
       .resolves.toMatchObject({ admission: 'existing' });
   });
-  it('starts Another round from accepted inputs and durable outcomes, and rejoins the same new Run', async () => {
+  it.each(['succeeded', 'cancelled'] as const)('starts Another round from a %s source with accepted inputs and durable outcomes, and rejoins the same new Run', async state => {
     if (!acceptedSnapshotResult.ok) throw new Error('snapshot_fixture_failed');
     const roundDefinition = { ...definition, inputs: [
       { name: 'question', valueType: 'string' as const, required: true },
@@ -1556,7 +1582,7 @@ describe('shared Account workflow run owner', () => {
       authorization: { ...acceptedSnapshotResult.snapshot.authorization,
         principal: { kind: 'session', sessionId: 'retired-starter' } },
     });
-    const original = { ...runSnapshot(), run: { ...runSnapshot().run, state: 'succeeded' as const },
+    const original = { ...runSnapshot(), run: { ...runSnapshot().run, state },
       acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
         mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId },
         acceptedSnapshot: originalAccepted,
@@ -1611,7 +1637,7 @@ describe('shared Account workflow run owner', () => {
     await expect(owner.execute({ actionId: 'workflow.run.start', input, context })).resolves.toMatchObject({ admission: 'created' });
     const opened = await owner.execute({ actionId: 'workflow.run.get', input: { runId: nextId }, context });
     expect(opened).toMatchObject({ acceptedContext: { inputs: {
-      ...originalAccepted.inputs, previousRoundContext: { runId, state: 'succeeded', outcomes: rows.map(({ index, progress }) => ({
+      ...originalAccepted.inputs, previousRoundContext: { runId, state, outcomes: rows.map(({ index, progress }) => ({
         invocationRecordId: index.id, attempt: '0', blockId: 'work', lifecycle: index.lifecycle,
         ...(progress.result ? { result: progress.result } : { reason: progress.reason }),
       })) },

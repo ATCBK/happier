@@ -1985,6 +1985,13 @@ The shared presenter explains that Account role settings could not be read and
 offers Retry; this is separate from an unusable selected role. The diagnostic
 retains `account_role_overrides_unavailable` as the original code.
 
+Accepted replay and Another round spend the original `workflow.run.start`
+authorization on invocation-history reads before admitting the next Run. The
+server's Workflow HTTP-purpose owner permits those reads with the same exact
+publisher and request-signature checks as snapshot reads; it grants no worker
+mutation authority. An untyped HTTP 401/403 from Run storage projects
+`run_access_denied`, while recognized typed domain refusals keep their code.
+
 A transient requester-Home read failure before an external Action envelope opens
 is `storage_unavailable` with HTTP 503, not `target_unavailable`. The daemon,
 generic relay parser and HTTP error projection share that closed pre-open code.

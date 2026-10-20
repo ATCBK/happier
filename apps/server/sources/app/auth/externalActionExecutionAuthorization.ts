@@ -1459,7 +1459,9 @@ function isWorkflowRunActionHttpPurpose(verified: VerifiedExternalActionExecutio
     const reads = ['get', 'run-key.census', 'run-key.commit'];
     const invocationReads = [...reads, 'invocations.list', 'invocations.get', 'invocations.current'];
     const purposes: Readonly<Record<string, readonly string[]>> = {
-        'workflow.run.start': [...reads, 'admit'],
+        // Accepted replay / Another round reads the prior Run's exact outcomes
+        // before admission. These are Account reads, not worker mutations.
+        'workflow.run.start': [...invocationReads, 'admit'],
         'workflow.run.get': invocationReads,
         'workflow.run.list': ['list', 'run-key.commit'],
         'workflow.run.summaries': ['summaries'],

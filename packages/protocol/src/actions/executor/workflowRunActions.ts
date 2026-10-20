@@ -453,15 +453,20 @@ function translateStorageError(error: unknown, options: Readonly<{ unconfirmedWr
   if (error instanceof zodMiniCore0.core.$ZodError) throw workflowError('content_unavailable');
   const code = (error as { code?: unknown })?.code;
   if (code === 'ERR_CANCELED' || (error instanceof Error && error.name === 'AbortError')) throw error;
-  const response = (error as { response?: { data?: { error?: unknown } } })?.response;
+  const response = (error as { response?: { status?: unknown; data?: { error?: unknown } } })?.response;
   const status = (error as { status?: unknown })?.status;
   const responseError = response?.data?.error;
   const typedCode = WorkflowOperationErrorCodeV1Schema.safeParse(responseError ?? code);
   if (typedCode.success && code === typedCode.data) throw error;
+  const httpStatus = response?.status ?? status;
+  // Authentication middleware can refuse a signed storage phase with no JSON
+  // error body. That is a permanent access refusal, not a storage outage.
+  const accessDenied = httpStatus === 401 || httpStatus === 403;
   // A received HTTP response must stay distinguishable from a lost write
   // response; review/recovery use that fact to decide whether to rejoin.
   const unconfirmed = options.unconfirmedWrite !== undefined && !typedCode.success && isIndeterminateWrite(error);
-  throw Object.assign(workflowError(typedCode.success ? typedCode.data : unconfirmed ? options.unconfirmedWrite! : 'storage_unavailable'),
+  throw Object.assign(workflowError(typedCode.success ? typedCode.data : accessDenied ? 'run_access_denied'
+    : unconfirmed ? options.unconfirmedWrite! : 'storage_unavailable'),
     { cause: error }, response === undefined ? {} : { response }, typeof status === 'number' ? { status } : {});
 }
 
