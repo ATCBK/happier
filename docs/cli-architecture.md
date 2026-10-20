@@ -50,6 +50,22 @@ retain that call's own ACK for partial results and Undo edits. The existing
 deadline and transport-loss handling still apply; ordinary callers keep their
 immediate cancellation behavior.
 
+## On-demand language intelligence (0.3 development source)
+
+`src/lsp/languageServerDefinitions.ts` reads `languageServers` from the current
+admitted contribution registry, retaining every matching definition in qualified
+plugin/id order. Bundled and externally installed plugins follow that same
+normalization and projection path. A reload changes the registry supplied to the
+reader; the definitions reader does not retain an installed-plugin snapshot.
+
+`src/lsp/languageServerHost.ts` owns Machine-local language-server sessions,
+document synchronization, queries and diagnostics. Explicit language requests
+start the managed process on demand. File opening alone does not start a server,
+and declaration discovery does not activate a plugin. The host uses the existing
+managed protocol client and process supervisor, rather than a separate spawn or
+JSON-RPC implementation. Native acquisition and companion-file layout are owned
+by the [binary runtime](binary-runtime.md#native-language-server-acquisition-03-development-source).
+
 ## Explicit session creation targets (0.3 development)
 
 Session creation and spawn-nonce recovery use the exact-machine RPC transport.

@@ -517,24 +517,54 @@ agent's tool call, so it shows the edit location rather than individual keystrok
 ### Code navigation and outline
 
 <Callout type="info">
-  Code navigation below describes **unreleased Happier 0.3 development source**.
-  These controls are not promised in released stable or preview clients.
+  Language features below are under integration in **unreleased Happier 0.3
+  development source**. Their desktop and phone surfaces and composed live
+  journey are not yet verified. They are not promised in released stable or
+  preview clients.
 </Callout>
 
-Go to definition searches for declarations with the selected name, preferring
+Language servers run on the Machine holding the workspace, not on the device
+where you read it. Opening a file does not start one. The first explicit hover,
+Go to definition, Find references or **Check problems** starts the managed
+server. The last open document closing stops it. A large project can take time
+and substantial Machine memory to load; a loading answer is not an empty result.
+
+TypeScript and JavaScript use the bundled native TypeScript server. It is a
+managed dependency, not a program from the workspace, and automatic package
+acquisition is disabled. Plugins can declare other language servers on the
+Machine. With a capable server, hover supplies signatures and documentation,
+F12 opens definitions, and Shift+F12 lists references. Definition targets outside
+the workspace remain non-navigable paths rather than widening file-read access.
+
+Diagnostics begin only after **Check problems**. Problems concerns open
+documents, not a project-wide type check. While checking or loading, no confirmed
+problem count is shown. **Ask to fix** prepares context in the existing composer;
+problems in unsaved text require saving successfully before that context is made.
+On phones, the integration uses tap-to-name in reading views and caret commands
+in Edit; long-press selection and comments remain separate.
+
+For a file without a capable server, Go to definition searches for declarations
+with the selected name, preferring
 the current file and then nearby files. References lists **Text matches** of
 that name across searchable workspace files. These are navigation candidates:
 two unrelated symbols can share a name, and a declaration can be missed when
 its syntax is not recognized. A partial search does not establish that all
 references were found. Connect to the file's Machine to search its saved files.
 
-In the active file, `@` search lists an approximate outline from syntax
-highlighting, including Markdown headings. Choose an entry to jump to its line.
-The outline does not resolve types or imports.
+In the active file, `@` uses an existing server's authoritative symbols when
+available, otherwise an approximate outline from syntax highlighting, including
+Markdown headings. It does not start a server. The baseline does not resolve
+types or imports, and can omit declarations. Its active-editor connection is
+still being integrated with Search.
 
-This delivery uses text search and syntax highlighting. Semantic hover,
-compiler diagnostics, a Problems panel and language-server Install or Restart
-controls are not included.
+#### When language features are unavailable
+
+Keep the workspace Machine online. A missing managed server uses the existing
+dependency-install flow; a failed start or crash stays visible until **Restart**
+or the last document closes and a new request opens it again. Restart is also
+useful after external file changes the Machine's file-change feed cannot see.
+Happier does not substitute text search for a server that crashed or failed to
+start. Other file reading and editing remain available independently.
 
 ### Find in files, diffs and review
 

@@ -1037,6 +1037,38 @@ looks through PlanetCanvas's Brand scene core, preserving explicit `0` and
 Placement, ground clipping and the one-shot rise remain scene-owned; rendering
 stays with the same host canvas, with no additional SDK planet component.
 
+### Language servers (0.3 development source)
+
+`definePlugin.languageServers` is a descriptor-only record keyed by local id.
+It projects to the strict `contributes.languageServers` family. The Machine
+that holds the workspace reads its current admitted registry through
+`lsp/languageServerDefinitions.ts`; installed external and bundled declarations
+use the same projection and qualified identity. Discovery does not activate
+plugin code. The host owns on-demand startup, document state, queries,
+diagnostics and disposal in `lsp/languageServerHost.ts`.
+
+Each declaration supplies `title`, a `languageIds` map from UI/highlighter ids
+to LSP ids, `executable` and `args`. Optional `filePatterns` provide matching
+fallbacks. Omitted or empty `rootMarkers` select the workspace root; markers
+are for servers that require a narrower root. `initializationOptions` are
+opaque JSON sent at initialization, while optional `settings` answer the
+server's dotted-section configuration requests. These configuration bags carry
+server options, not host authority.
+
+Executable declarations reuse `PluginDeclaredExecutableRefSchema`: a reference
+to `managedDependencies` or `systemTools`. The manifest reference owner rejects
+missing dependencies. There is no command string, project-local executable,
+resolver callback, environment override or separate timeout policy. The bundled
+`lang-typescript` plugin uses the pinned native TypeScript archive with automatic
+type acquisition disabled. The archive keeps the standard-library declarations
+beside its executable; see [binary runtime](binary-runtime.md#native-language-server-acquisition-03-development-source).
+
+The approved 0.3 delivery starts a server only for an explicit language query;
+opening a file alone does not start it. A plugin supplies definitions only on
+the Machine where it is installed and enabled. Public source availability,
+loaded-runtime proof and released SDK availability remain separate facts in the
+generated capability matrix. See the [author declaration](../apps/docs/content/docs/plugins/manifest/contributions.mdx#language-servers-in-development).
+
 ## Public seam and authority
 
 In 0.3 development source, Session-targeted Action declarations project the

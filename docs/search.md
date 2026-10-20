@@ -485,25 +485,31 @@ transport alone does not prove the composed loaded Search-to-Find journey.
 
 ## Code navigation and document symbols (0.3 development source)
 
-Code navigation reuses workspace content search. Go to definition searches
-language-specific declaration forms for the selected name and ranks candidates
-from the current file before nearby paths. References are whole-identifier text
-matches, labelled as text matches rather than semantic references. Both use the
-same workspace root, exclusions, cancellation and coverage reporting as Text in
-files. A textual occurrence can refer to a different symbol with the same name;
-a declaration that the syntax patterns do not recognize can be missed.
+The Files & Editor development source implements on-demand language intelligence.
+Opening a file or requesting `@` alone does not start a language server. An
+explicit definition, hover, references or Check problems request activates the
+Machine-side session; files without a capable server retain name-based lookup
+through workspace content search. Those fallback references are labelled text
+matches, not semantic references, and retain Text in files' exclusions,
+cancellation and coverage reporting. Same-named symbols can produce false
+matches and unrecognized declaration forms can be missed.
 
-The active file's `@` search uses an approximate outline extracted from syntax
-highlighting scopes, including Markdown headings. It is not a workspace symbol
-index or a compiler answer. Choosing an entry goes through the existing file
-opener with its line anchor. The outline remains client-side; name lookup uses
-the Machine's searchable saved files.
+The document-symbol source uses the existing Shiki highlighter's syntax scopes,
+including Markdown headings, as an approximate client-side baseline. A passive
+controller read may query an already activated, capable server. The single
+`documentOutline.ts#selectDocumentOutline` owner prefers a nonempty usable server
+answer, or an empty answer from a ready session that is not loading. Cold,
+loading-empty, missing, failed or incapable answers retain the baseline; an
+authoritative empty answer remains empty. Server selection positions become
+1-based file-line anchors through the existing file opener. This is active-file
+outline data, not a workspace symbol index.
 
-This is the Files & Editor fallback in unreleased 0.3 source.
-There is no language-server host, bundled server, or `languageServers` plugin
-family in this delivery. Semantic hover, diagnostics, Problems and server
-restart are outside this branch. Source integration and the composed UI checks
-remain distinct from released availability.
+These are unreleased source contracts, not a claim that `@` is wired end to end.
+PAGE/P3 must still connect the active P4 live-buffer getter and editor flush,
+plus the passive controller outline read, to Universal Search's symbol source.
+The current symbols-unavailable placeholder must not be replaced with saved
+disk text, a persisted draft or a second active-editor registry. Loaded UI
+acceptance and released availability remain separate checks.
 
 ## Search, Find and external History (0.3 development)
 

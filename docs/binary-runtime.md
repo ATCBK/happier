@@ -2,6 +2,25 @@
 
 Happier ships binary installers. First-party runtime paths must work on machines that do not have system `node`, `npm`, `npx`, `pnpm`, `yarn`, or `bunx`.
 
+## Native language-server acquisition (0.3 development source)
+
+The bundled `lang-typescript` plugin declares native TypeScript 7.0.2 as a
+managed-first internal prerequisite through the existing `managedDependencies`
+family. Each Linux, macOS and Windows x64/arm64 npm platform archive has a pinned
+SHA-256 digest. The pinned-archive installer verifies that digest and retains the
+complete archive root. The selected executable is `package/lib/tsc`, or
+`package/lib/tsc.exe` on Windows; its adjacent `lib.*.d.ts` files remain available
+to the native server. It is not a package-manager launcher or project binary.
+
+`contributes.languageServers` references that dependency and declares
+`['--lsp', '--stdio']`. Automatic type acquisition is disabled through its
+initialization options; external-code execution and telemetry are not enabled.
+The Machine host starts the process only after an explicit language query,
+using the existing managed executable resolver, protocol client and supervisor.
+Opening a file alone neither launches this server nor authorizes project code.
+Declaration and acquisition ownership apply equally to external plugins; a
+`systemTools` reference uses the existing declared system-tool owner instead.
+
 ## Runtime contract
 
 In current development source, `scripts/pipeline/release/bun-standalone.entitlements.plist`

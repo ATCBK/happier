@@ -2654,18 +2654,44 @@ available through Monaco's public API.
 
 ### Code navigation (0.3 development source)
 
-`code.definition.get` and `code.references.list` are safe, read-only navigation
-Actions in unreleased 0.3 source, using the existing workspace content-search owner.
-Definition lookup searches declaration forms for the symbol's name; references
-are text matches of that name. These results are search candidates, not
-compiler-resolved definitions or semantic references. They inherit workspace
-search's authorization, exclusions, partial coverage and unavailable outcomes.
+Unreleased 0.3 source declares `code.hover.get`, `code.definition.get`,
+`code.references.list`, `code.symbols.list`, `code.diagnostics.list` and
+`code.restart` through the canonical Action catalog and Machine transport.
+All six are safe and available to plugin callers by default. The five queries
+are reads; Restart is a reversible write that changes no workspace files.
+Their required result custody does not request a prompt: no surface, including
+Agent, MCP, CLI or plugins, asks by default. Explicit Action approval settings
+still apply.
 
-The fallback has no language-server process to install or restart. It adds no
-semantic hover, diagnostics or Problems Action. The active-file syntax outline
-is a separate client-side search source; it does not establish semantic symbol
-identity. See [Search](search.md#code-navigation-and-document-symbols-03-development-source)
-for the shared search path and its limits.
+Queries use disk text, not an editor buffer, and successful semantic results
+include `fileHash`. Unsaved editor changes are refused with
+`unsaved_editor_changes` and the current `diskHash`. Position-bearing Actions
+accept a one-based `line` with either an explicit `symbol` (and optional
+one-based `occurrence`) or a zero-based UTF-16 `character`. Invalid positions
+and unresolved symbols remain typed errors; symbol lookup reports candidates
+instead of guessing a column. A cold project returns `loading`, never an
+authoritative empty result. Diagnostics explicitly request a fresh check.
+Queries and Restart retain caller cancellation without a separate operation
+deadline; transport connection and setup keep their canonical finite budgets.
+
+When no server is capable of definition or reference lookup, an explicit symbol
+uses the existing workspace content-search owner. Definitions are approximate
+declaration candidates and references are identifier text matches, labeled
+`text_matches`; search authorization, exclusions, partial coverage and
+unavailable outcomes remain intact. A character-only query without a capable
+server returns `unavailable/no_capable_server`, not `invalid_position`.
+Server crashes, missing methods and transport failures do not become text
+search. Older Machines without the new operation return an operation-scoped
+`update_required` result.
+
+The app's Restart helper re-enters `code.restart`, preserving Action admission
+and the distinction between the routing Home and the optional language-server
+definition id. File opening and passive `@` outline requests do not activate a
+server; explicit semantic queries do. The syntax outline remains available
+without semantic symbol identity. See
+[Search](search.md#code-navigation-and-document-symbols-03-development-source)
+for its shared search path and limits. These source contracts do not claim
+released availability or completed UI/live validation.
 
 ### Next pending request (development)
 
