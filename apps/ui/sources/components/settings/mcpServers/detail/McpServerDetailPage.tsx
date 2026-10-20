@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
 
 import { CapabilityDetailHeader } from '@/components/capabilities/detail/CapabilityDetailHeader';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
@@ -9,6 +10,7 @@ import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { t } from '@/text';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useRegistrySources } from '@/registries/useRegistrySources';
 import { Modal } from '@/modal';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
@@ -116,13 +118,18 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
   const list = detail.tools.list;
   const toolCount =
     list?.snapshot?.tools.length ?? server.toolsSnapshot?.tools.length;
+  // The registry by its name ("MCP Registry"), never its id; a built-in one is named before the list is read.
+  const { sources: registrySources } = useRegistrySources('mcpServer');
+  const registrySourceId = server.origin?.kind === 'registry' ? server.origin.provenance.sourceId : null;
+  const registryTitle = registrySourceId === null ? null
+    : ([...registrySources, ...BUILT_IN_REGISTRY_SOURCES_V1].find((source) => source.id === registrySourceId)?.title ?? registrySourceId);
   const facts = React.useMemo(
     () => ({
       source:
         server.origin?.kind === 'registry'
           ? {
               kind: 'registry' as const,
-              label: server.origin.provenance.sourceId,
+              label: registryTitle ?? server.origin.provenance.sourceId,
             }
           : server.origin?.kind === 'machine'
             ? {
@@ -144,7 +151,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
           }
         : {}),
     }),
-    [detail.names, list?.tokens, server.origin, server.transport, toolCount],
+    [detail.names, list?.tokens, registryTitle, server.origin, server.transport, toolCount],
   );
   const registryId =
     server.origin?.kind === 'registry'

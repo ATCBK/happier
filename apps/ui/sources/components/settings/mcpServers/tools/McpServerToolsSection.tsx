@@ -16,6 +16,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { Typography } from '@/constants/Typography';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { StatusDot } from '@/components/ui/status/StatusDot';
@@ -189,12 +190,10 @@ export const McpServerToolsSection = React.memo(function McpServerToolsSection(
         description={t('capabilities.mcp.tools.description')}
       >
         {props.status === 'loading' ? (
-          <Item
-            testID={`${props.testID}:loading`}
-            title="—"
-            subtitle=" "
-            showChevron={false}
-          />
+          // The tools are being listed: placeholder rows in their place, never a dash that reads as data.
+          <View testID={`${props.testID}:loading`}>
+            <SkeletonRows rows={2} />
+          </View>
         ) : (
           <SurfaceStateCard
             testID={`${props.testID}:unavailable`}
