@@ -7,6 +7,33 @@ open; the presentation gaps below must not be documented as completed flows.
 
 ## Owners and data flow
 
+### Pull request description drafts (unreleased 0.3)
+
+`scm.diffSummary.draftPullRequest` requests a summary whose `suggestedPrBody` is
+an editable description. It uses the existing summary model and prose-language
+selection, captured comparison, and the latest readable summary for that same
+comparison and Session scope. The Git backend's existing compose read accepts
+`includeTemplate` to read the committed base template through the same reader
+used by ordinary PR creation. Missing or ambiguous template evidence refuses
+drafting; an absent template permits a Changes/Testing draft. A backend that
+does not return the requested template evidence remains unsupported for this
+operation.
+
+Testing context comes from the selected Session's paged transcript and canonical
+command/result projection. Prose claims and template checkboxes do not prove a
+test ran. Failed or unfinished commands and unavailable or incomplete transcript
+reads remain explicit evidence. A command from the Session does not, by itself,
+prove that it validated the captured comparison.
+
+Template text, saved summaries and command output enter the existing prompt's
+evidence context, never its user-instructions field. The machine result retains
+that evidence privately for replacement generation and keeps the description
+under the existing summary edit/revision/Undo contract. Draft requests bypass
+analysis-cache reuse because the Session's testing context can change without a
+code change. They never invoke PR creation, push or browser navigation. The PR
+form's visible drafting control and composed loaded-runtime verification remain
+integration work; this contract is not a claim of released UI availability.
+
 ### Demanded entry history (unreleased 0.3)
 
 `scm.history.entries` reads the latest reachable commit touching each demanded
@@ -691,10 +718,10 @@ over manual edits or refreshing unrelated pending inputs.
 Results survive Run termination/cache eviction until explicit deletion. Personal
 marks use `workspace:scm-reviewed:scope:<encoded scopeId>` with
 `{ v: 1, scopeId, reviewedChangeKeys }`. The scope identifies the repository root
-and source selector. Working-tree, Session and qualified-turn scopes do not
-depend on captured endpoint revisions. The current PR arm still includes request
-witnesses in its scope key, so a PR witness refresh can lose the visible marks;
-that endpoint-independence gap remains unresolved in this development work. Each change
+and source selector, independently of captured endpoint revisions. PR reviewed
+scopes reuse the existing comparison identity without endpoint or request-witness
+inputs; request freshness still uses its unchanged, witness-sensitive source key.
+Each change
 key identifies path, layer and exact removed/added line content, with an ordinal
 for identical runs. `buildReviewUnits`, `buildScmFileReviewUnits` and
 `buildScmChangeKeys` in Protocol's occurrence owner supply that identity to the

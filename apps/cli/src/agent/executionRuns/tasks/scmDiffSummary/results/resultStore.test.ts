@@ -62,6 +62,32 @@ async function setupPartialApplication() {
 }
 
 describe('saved SCM result owner', () => {
+  it('keeps PR drafting evidence private and requires the requested body before publishing a complete summary', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-scm-pr-draft-'));
+    const store = createScmDiffSummaryResultStore({ directory });
+    const saved = await store.create({ cwd, output, pullRequestDraftEvidence: '{"testing":{"state":"unavailable"}}' });
+    const scope = { cwd, resultId: saved.resultId };
+    const admission = { cwd, key: 'same-comparison-and-model', outputs: ['summary'] as const };
+    await store.admitGeneration({ ...admission, bypass: true }, async () => saved.output);
+    const ordinary = await store.admitGeneration(admission, async () => (await store.create({ cwd, output })).output);
+    expect(ordinary.resultId).not.toBe(saved.resultId);
+    expect(await store.readStoredScope(scope)).toMatchObject({ pullRequestDraftEvidence: '{"testing":{"state":"unavailable"}}' });
+    expect(await store.read(scope)).not.toHaveProperty('result.pullRequestDraftEvidence');
+    await store.beginInput({ ...scope, inputId: 'draft', expectedRevision: 0, outputs: ['summary'] });
+    expect(await store.publish({ ...scope, inputId: 'draft', modelOutput: { summaryMarkdown: 'No body' } }))
+      .toMatchObject({ success: false, errorCode: 'invalid_output' });
+    expect(await store.publishProgress({ ...scope, expectedRevision: 0, output }))
+      .toMatchObject({ success: false, errorCode: 'invalid_output' });
+    const body = '## Changes\nCaptured change\n## Testing\nTesting evidence is unavailable.';
+    expect(await store.publish({ ...scope, inputId: 'draft', modelOutput: { summaryMarkdown: 'Summary', suggestedPrBody: body } }))
+      .toMatchObject({ success: true, result: { revision: 1, output: { outputs: { summary: { value: { suggestedPrBody: body } } } } } });
+    expect(await store.edit({ ...scope, expectedRevision: 1, edit: { kind: 'replaceSummary',
+      value: { summaryMarkdown: 'Edited', suggestedPrBody: `${body}\nHuman edit` } } })).toMatchObject({ success: true });
+    expect(await store.undo({ ...scope, expectedRevision: 2 })).toMatchObject({ success: true,
+      result: { output: { outputs: { summary: { value: { suggestedPrBody: body } } } } } });
+    expect(await createScmDiffSummaryResultStore({ directory }).readStoredScope(scope))
+      .toMatchObject({ pullRequestDraftEvidence: '{"testing":{"state":"unavailable"}}' });
+  });
   it('carries suggested questions through publication, revisioned edits, merge and Undo', async () => {
     const { directory, store, request } = await setup();
     const questions = ['Why keep the selected change?', 'Which test covers the second change?'];

@@ -19,6 +19,8 @@ import {
 import type { ScmBackendContext } from '../types.js';
 import { createPrStatusCache } from '../hostingProviders/prStatusCache.js';
 import { createGitPullRequestOpenOrReuseOperation as createOperation } from './pullRequestOpenOrReuseOperation.js';
+import { createGitPullRequestReadOperations } from './pullRequestReadOperations.js';
+import { ScmPullRequestOpenComposeResponseSchema } from '@happier-dev/protocol/scm/pullRequests';
 import { createEmptyScmHostingProviderRegistry, runWithGitScmCommandRunner, runWithRealGitScmRuntime } from '../testkit/scmRuntime.test-support.js';
 import { createGithubRestAdapter } from '../../../scm-github/src/pullRequests/restAdapter.js';
 
@@ -285,6 +287,12 @@ describe('git pull request open-or-reuse operation', () => {
                 ...(kind === 'gitlab' ? { url: 'https://gitlab.com/happier-dev/happier/-/merge_requests/42' } : {}) }));
             const operation = createGitPullRequestOpenOrReuseOperation();
             const runtimeOptions = { hostingProviderRuntimeServices: templateHostingServices({ supportsDraftCreate: true, createPullRequest: create }, hostingProvider) };
+            const prepared = await runWithRealGitScmRuntime(() => createGitPullRequestReadOperations().openCompose({
+                context: localContext, request: { base: 'main', head: 'feature/scm-pr-6', includeTemplate: true },
+            }), runtimeOptions);
+            expect(ScmPullRequestOpenComposeResponseSchema.parse(prepared)).toMatchObject({ success: true,
+                template: { kind: 'ready', body: 'Base template\n' } });
+            expect(create).not.toHaveBeenCalled();
             await runWithRealGitScmRuntime(() => operation.openOrReuse({
                 context: localContext, request: { base: 'main', draft: true },
             }), runtimeOptions);

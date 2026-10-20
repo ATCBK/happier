@@ -71,6 +71,8 @@ export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z.strictObj
     cachePolicy: z.optional(ScmDiffSummaryCachePolicySchema),
     investigateSurroundingFiles: z.optional(z.boolean()),
     outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+    /** The host supplies template and Session evidence; callers never submit test claims. */
+    pullRequestDraft: z.optional(z.strictObject({ providerId: z.optional(z.string().check(z.minLength(1))) })),
     outputs: z.optional(z.array(z.enum(['summary', 'walkthrough', 'commitPlan'])).check(z.minLength(1))),
   }).check(z.superRefine((value, ctx) => {
     if (value.source.kind === 'turnCheckpoint') {

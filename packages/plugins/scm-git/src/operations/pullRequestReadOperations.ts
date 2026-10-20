@@ -24,6 +24,7 @@ import { defaultPrStatusCache, type PrStatusCache, type PrStatusCacheKey } from 
 import { classifyHostingProviderError } from '../hostingProviders/providerFailure.js';
 import type { ResolvedScmHostingProviderRegistry } from '../hostingProviders/types.js';
 import { createValidatedPullRequestFollowupAction } from './pullRequestFollowupAction.js';
+import { readPullRequestTemplate } from './pullRequestTemplate.js';
 import {
     resolveDefaultPullRequestStatusProjectionRegistry,
     resolvePullRequestBaseBranch,
@@ -275,6 +276,10 @@ export function createGitPullRequestReadOperations(
             return {
                 success: true,
                 composeUrl: compareUrl.url,
+                ...(request.includeTemplate ? { template: await readPullRequestTemplate({
+                    cwd: resolved.snapshot.repo.rootPath ?? context.cwd, base: request.base,
+                    remoteName: resolved.provider.remoteName, providerKind: resolved.provider.kind,
+                }) } : {}),
                 nextAction: createValidatedPullRequestFollowupAction({
                     provider: resolved.provider,
                     purpose: 'compose',

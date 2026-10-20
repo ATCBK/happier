@@ -402,6 +402,7 @@ describe('git pull request read operations', () => {
         expect(listPullRequests).not.toHaveBeenCalled();
     });
 
+
     it('does not return open-url follow-up actions for unsafe compose URLs', async () => {
         const operations = createGitPullRequestReadOperations({
             cache: createPrStatusCache({ now: () => 1000 }),

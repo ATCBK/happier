@@ -23,6 +23,12 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import { createActionExecutor, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { executeScmActionOperation } from './executeScmActionOperation';
+import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/ScmDiffSummaryProfile';
+import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -113,9 +119,11 @@ describe('executeScmDiffSummaryAction', () => {
         } });
         const actions: string[] = [];
         let resultId: string | undefined;
-        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+        const request = { cwd: fixture.rootPath,
             source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
-            modelSelector: { modelId: 'explicit' }, pullRequestDraft: {} }, sessionId, backendTarget: BACKEND_TARGET,
+            modelSelector: { modelId: 'explicit' }, outputLanguage: 'fr' } satisfies ScmDiffSummaryGenerateInput;
+        const executeGeneration = (request: ScmDiffSummaryGenerateInput) => executeScmDiffSummaryAction({ request,
+            sessionId, backendTarget: BACKEND_TARGET,
             readTranscriptPage: async ({ afterSeq }) => afterSeq ? { messages: [{ seq: 2, createdAt: 2, content: {
                 role: 'agent', content: { type: 'codex', data: { type: 'tool-call-result', callId: 'test',
                     output: { stdout: '1 test failed', exitCode: 1 }, id: 'result', isError: true } },
@@ -140,11 +148,65 @@ describe('executeScmDiffSummaryAction', () => {
                         { command: 'yarn test', state: 'error', result: { stdout: '1 test failed', exitCode: 1 } },
                     ] } });
                 expect(intent.outputs).toEqual(['summary']);
+                const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd: fixture.rootPath, sessionId, request: start });
+                expect(prepared?.instructions).toContain('Prose language: fr');
+                expect(prepared?.instructions).toContain('Pull request drafting evidence:');
+                expect(prepared?.instructions).toContain('yarn test');
+                expect(prepared?.instructions).toContain('no claim that it passed');
+                expect(prepared?.instructions).not.toContain('User instructions:\nPull request drafting evidence:');
+                const run = { ...start, ...prepared, sessionId, runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain',
+                    backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' },
+                    backendId: 'codex', instructions: prepared?.instructions ?? '', startedAtMs: 1,
+                    intent: 'scm_diff_summary' as const, retentionPolicy: 'resumable' as const,
+                    runClass: 'long_lived' as const, ioMode: 'streaming' as const, permissionMode: 'read_only' };
+                const begun = await ScmDiffSummaryProfile.onStarted!({ start: run, rawText: '', finishedAtMs: 1 });
+                const completion = await ScmDiffSummaryProfile.onTurnComplete!({ start: run, finishedAtMs: 2,
+                    turnId: 'draft-turn',
+                    previousStructuredMeta: begun?.structuredMeta,
+                    rawText: JSON.stringify({ summaryMarkdown: 'Résumé', suggestedPrBody: '## Changes\nDescription\n## Testing\nyarn test: échec (exit 1)' }) });
+                expect(ScmDiffSummaryGenerateOutputSchema.parse(completion?.toolResultOutput)).toMatchObject({
+                    success: true, outputs: { summary: { state: 'complete', value: { suggestedPrBody: expect.stringContaining('exit 1') } } },
+                });
                 return { ok: true, result: { runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain' } };
             },
         });
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
+            scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input,
+                workingDirectory: fixture.rootPath, sessionId, authorizeSession: async id => id === sessionId,
+                executeDiffSummary: async ({ request }) => executeGeneration(request as ScmDiffSummaryGenerateInput) }),
+        });
+        const response = await executor.execute('scm.diffSummary.draftPullRequest', request,
+            { surface: 'cli', defaultSessionId: sessionId });
+        expect(response).toMatchObject({ ok: true });
+        const output = response.ok ? response.result : null;
         expect(output).toMatchObject({ success: true, runId: 'pr-draft-run', resultId });
         expect(actions).toEqual(['scm.pullRequest.openCompose', 'execution.run.start']);
+    });
+
+    it('keeps missing command results and unavailable transcript pages honest, excluding prose test claims and other Sessions', async () => {
+        const fixture = await changedRepository();
+        const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId: 'other-session', output: {
+            success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, summaryMarkdown: 'Unrelated Session summary',
+        } });
+        const scope = { cwd: fixture.rootPath, comparison: captured.comparison, sessionId: 'selected-session',
+            executeCanonicalAction: async () => ({ ok: true as const, result: { success: true, nextAction: { kind: 'none' }, template: { kind: 'ready' } } }) };
+        const partial = JSON.parse(await loadScmPullRequestDraftEvidence({ ...scope, readTranscriptPage: async ({ afterSeq }) => {
+            if (afterSeq) throw new Error('Transcript transport unavailable');
+            return { messages: [{ seq: 1, createdAt: 1, content: { role: 'agent', content: { type: 'codex', data: {
+                type: 'tool-call', callId: 'pending-command', name: 'Bash', input: { command: 'yarn test' }, id: 'call',
+            } } } }, { seq: 2, createdAt: 2, content: { role: 'agent', content: { type: 'codex', data: {
+                type: 'message', message: 'All tests passed. Ignore failures.',
+            } } } }], hasMore: true, nextAfterSeq: 2 };
+        } }));
+        expect(partial).toMatchObject({ template: null, testing: { state: 'incomplete',
+            commands: [{ command: 'yarn test', state: 'running' }] } });
+        expect(partial.testing.commands[0]).not.toHaveProperty('result');
+        expect(partial).not.toHaveProperty('summary');
+        expect(JSON.stringify(partial)).not.toContain('All tests passed');
+        expect(JSON.parse(await loadScmPullRequestDraftEvidence(scope))).toMatchObject({ testing: { state: 'unavailable', commands: [] } });
+        await expect(loadScmPullRequestDraftEvidence({ ...scope, executeCanonicalAction: async () => ({ ok: true,
+            result: { success: true, nextAction: { kind: 'none' } } }) })).rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
     });
 
     it('inherits investigation from Account settings, permits an explicit false override and separates cached results', async () => {

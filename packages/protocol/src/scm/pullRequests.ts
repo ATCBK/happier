@@ -389,6 +389,7 @@ export const ScmPullRequestOpenComposeRequestSchema = lazyZodSchema(() => (<T ex
   providerId: z.optional(z.string().check(z.minLength(1))),
   base: ScmBranchSourceRefSchema,
   head: ScmBranchSourceRefSchema,
+  includeTemplate: z.optional(z.boolean()),
 })));
 export type ScmPullRequestOpenComposeRequest = z.infer<typeof ScmPullRequestOpenComposeRequestSchema>;
 
@@ -397,6 +398,10 @@ export const ScmPullRequestOpenComposeResponseSchema = lazyZodSchema(() => z.uni
       success: z.literal(true),
       nextAction: ScmFollowupActionSchema,
       composeUrl: z.optional(z.string().check(z.url())),
+      template: z.optional(z.discriminatedUnion('kind', [
+        z.strictObject({ kind: z.literal('ready'), body: z.optional(z.string()) }),
+        z.strictObject({ kind: z.literal('needs_input'), error: z.string().check(z.minLength(1)) }),
+      ])),
     }),
   ScmPullRequestErrorResponseSchema,
 ]));

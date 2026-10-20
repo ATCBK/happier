@@ -15,9 +15,10 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { resolveScmDiffSummaryModelSelection, resolveScmDiffSummarySettings, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import type { StoredCredentials } from '@/persistence';
+import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
 
 type ExecuteCanonicalAction = (
-    actionId: 'execution.run.start',
+    actionId: 'execution.run.start' | 'scm.pullRequest.openCompose',
     input: unknown,
 ) => Promise<ActionExecuteResult>;
 
@@ -51,7 +52,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         ...(params.readTranscriptPage ? { readTranscriptPage: params.readTranscriptPage } : {}),
         ...(params.readPullRequestComparisonPage ? { readPullRequestComparisonPage: params.readPullRequestComparisonPage } : {}),
     });
-    const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = params.request.outputs ?? ['summary'];
+    const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = params.request.pullRequestDraft ? ['summary'] : params.request.outputs ?? ['summary'];
     const outputLanguage = params.request.outputLanguage ?? resolvedSettings.outputLanguage;
     const investigateSurroundingFiles = params.request.investigateSurroundingFiles ?? resolvedSettings.investigateSurroundingFiles;
     let selector = params.request.modelSelector;
@@ -88,7 +89,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             modelId: selector?.modelId ?? 'default', ...(selector?.profileId ? { profileId: selector.profileId } : {}) }) },
     });
     return scmDiffSummaryResultStore.admitGeneration({ cwd: params.request.cwd, ...(sessionId ? { sessionId } : {}), key, outputs: requestedOutputs,
-        bypass: params.request.cachePolicy?.mode === 'bypass', ...(params.signal ? { signal: params.signal } : {}) }, async () => {
+        bypass: Boolean(params.request.pullRequestDraft) || params.request.cachePolicy?.mode === 'bypass', ...(params.signal ? { signal: params.signal } : {}) }, async () => {
         const remainingChangeRefs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id));
         const envelope = (state: 'pending' | 'failed', reason?: string, runId?: string): ScmDiffSummaryGenerateOutput => {
             const outputs: ScmDiffSummaryOutputs = {};
@@ -105,8 +106,23 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 ...(runId ? { runId } : {}),
             });
         };
+        let pullRequestDraftEvidence: string | undefined;
+        if (params.request.pullRequestDraft) {
+            try {
+                pullRequestDraftEvidence = await loadScmPullRequestDraftEvidence({ cwd: params.request.cwd,
+                    comparison: captured.comparison, sessionId, providerId: params.request.pullRequestDraft.providerId,
+                    readTranscriptPage: params.readTranscriptPage, signal: params.signal,
+                    executeCanonicalAction: params.executeCanonicalAction });
+            } catch (error) {
+                params.signal?.throwIfAborted();
+                return ScmDiffSummaryGenerateOutputSchema.parse({ success: false, errorCode: 'DIFF_UNAVAILABLE',
+                    error: error instanceof Error ? error.message : 'Pull request draft evidence is unavailable',
+                    comparison: captured.comparison, metadata: captured.metadata, sourceKey: captured.metadata.sourceKey });
+            }
+        }
         const saved = await scmDiffSummaryResultStore.create({ cwd: params.request.cwd,
             ...(sessionId ? { sessionId } : {}), output: envelope('pending'),
+            ...(pullRequestDraftEvidence !== undefined ? { pullRequestDraftEvidence } : {}),
             ...(backendTarget ? { generator: { backendTarget,
                 ...(investigateSurroundingFiles ? { investigateSurroundingFiles: true } : {}),
                 ...(selector?.profileId ? { profileId: selector.profileId } : {}),
@@ -146,7 +162,9 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             // parent supplies its applied model at the runner admission owner.
             ...(selector?.modelId && (!sessionId || params.request.modelSelector?.modelId) ? { modelId: selector.modelId } : {}),
             // Only a host-owned saved evidence id crosses admission, never client diff bytes.
-            intentInput: { ...params.request, investigateSurroundingFiles, ...(outputLanguage ? { outputLanguage } : {}), ...(selector ? { modelSelector: selector } : {}), ...(sessionId ? { sessionId } : {}), comparisonId: captured.comparison.id,
+            intentInput: { ...params.request, outputs: requestedOutputs, investigateSurroundingFiles,
+                ...(params.request.pullRequestDraft ? { cachePolicy: { mode: 'bypass' } } : {}),
+                ...(outputLanguage ? { outputLanguage } : {}), ...(selector ? { modelSelector: selector } : {}), ...(sessionId ? { sessionId } : {}), comparisonId: captured.comparison.id,
                 resultId: saved.resultId, expectedRevision: saved.revision },
             waitForCompletion: false,
         };

@@ -4,7 +4,7 @@ import { scmPathMatchesScopePath } from '@happier-dev/protocol/scm/pathScope';
 import { logger } from '@/ui/logger';
 import type { ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 import { SCM_OPERATION_ERROR_CODES, ScmOperationErrorCodeSchema } from '@happier-dev/protocol/scm/operationError';
-import { ScmDiffSummaryErrorCodeSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryErrorCodeSchema, ScmDiffSummaryGenerateInputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmDiffSummaryResultClearInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import type { ScmReviewedMarksSource } from '@happier-dev/protocol/scm/reviewedMarks';
@@ -42,7 +42,7 @@ import {
     runScmRepositoryRemoveIndexLockRoute,
 } from '@/scm/rpc/repositoryProvisioningDispatch';
 
-type ScmDiffSummaryActionId = Extract<ScmActionId, 'scm.diffSummary.generate'>;
+type ScmDiffSummaryActionId = Extract<ScmActionId, 'scm.diffSummary.generate' | 'scm.diffSummary.draftPullRequest'>;
 type LocalScmActionId = Exclude<ScmActionId, ScmDiffSummaryActionId>;
 
 type RunMutation = <T>(operation: () => Promise<T>) => Promise<T>;
@@ -1121,17 +1121,20 @@ export async function executeScmActionOperation(
         });
         throw parsed.error;
     }
-    const request = parsed.data;
-    if (params.actionId === 'scm.diffSummary.generate') {
-        const scopedRequest = request as ScmComparisonCaptureInput;
+    let request = parsed.data;
+    if (params.actionId === 'scm.diffSummary.generate' || params.actionId === 'scm.diffSummary.draftPullRequest') {
+        const scopedRequest = ScmDiffSummaryGenerateInputSchema.parse(request);
         const sourceSessionId = typeof scopedRequest.source.sessionId === 'string' ? scopedRequest.source.sessionId : undefined;
         if (!await admitReviewScope(params, { cwd: scopedRequest.cwd,
             ...(params.sessionId ?? scopedRequest.sessionId ? { sessionId: params.sessionId ?? scopedRequest.sessionId } : {}),
             ...(sourceSessionId ? { sourceSessionId } : {}) })) {
             return { success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'Comparison evidence is unavailable for this caller.' };
         }
+        if (params.actionId === 'scm.diffSummary.draftPullRequest') {
+            request = { ...scopedRequest, pullRequestDraft: scopedRequest.pullRequestDraft ?? {}, outputs: ['summary'] };
+        }
     }
-    const result = params.actionId === 'scm.diffSummary.generate'
+    const result = params.actionId === 'scm.diffSummary.generate' || params.actionId === 'scm.diffSummary.draftPullRequest'
         ? await params.executeDiffSummary?.({ request })
         : await runLocalScmAction({
             ...params,

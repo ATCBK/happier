@@ -34,6 +34,7 @@ const storedSchema = z.strictObject({
   undoOutput: z.optional(ScmDiffSummaryGenerateOutputSchema), inputs: z.array(pendingInputSchema),
   undoWalkthroughProvenance: z.optional(ScmWalkthroughProvenanceSchema),
   reviewFindingCitations: z.optional(reviewFindingCitationsSchema),
+  pullRequestDraftEvidence: z.optional(z.string()),
   generation: z.optional(z.strictObject({ key: z.string().check(z.minLength(1)), runId: z.optional(z.string().check(z.minLength(1))), inputId: z.optional(z.string().check(z.minLength(1))) })),
 });
 type Stored = z.infer<typeof storedSchema>;
@@ -55,10 +56,12 @@ export type ScmDiffSummaryResultStore = Readonly<{
   admitGeneration(input: Readonly<{ cwd: string; sessionId?: string; key: string; outputs: readonly ScmDiffSummaryOutputKind[]; bypass?: boolean; signal?: AbortSignal }>,
     generate: () => Promise<ScmDiffSummaryGenerateOutput>): Promise<ScmDiffSummaryGenerateOutput>;
   list(options?: Readonly<{ admitScope?: (scope: Readonly<{ cwd: string; sessionId?: string; sourceSessionId?: string }>) => Promise<boolean> }>): Promise<Readonly<{ results: readonly ScmDiffSummarySavedResultItem[]; count: number; bytes: number }>>;
-  create(input: Readonly<{ cwd: string; sessionId?: string; output: ScmDiffSummaryGenerateOutput; generator?: ScmDiffSummaryGeneratorSelection }>): Promise<ScmDiffSummaryResult>;
+  create(input: Readonly<{ cwd: string; sessionId?: string; output: ScmDiffSummaryGenerateOutput; generator?: ScmDiffSummaryGeneratorSelection;
+    pullRequestDraftEvidence?: string }>): Promise<ScmDiffSummaryResult>;
   read(scope: ScmDiffSummaryResultScope): Promise<ScmDiffSummaryResultResponse>;
   prepareInvestigation(scope: ScmDiffSummaryResultScope): Promise<Readonly<{ beforeDirectory: string; afterDirectory: string }>>;
-  readStoredScope(scope: ScmDiffSummaryResultScope): Promise<Readonly<{ cwd: string; sessionId?: string; sourceSessionId?: string; reviewFindingCitations?: ReviewFindingCitations }> | null>;
+  readStoredScope(scope: ScmDiffSummaryResultScope): Promise<Readonly<{ cwd: string; sessionId?: string; sourceSessionId?: string;
+    reviewFindingCitations?: ReviewFindingCitations; pullRequestDraftEvidence?: string }> | null>;
   edit(input: ScmDiffSummaryResultScope & Readonly<{ expectedRevision: number; edit: ScmDiffSummaryResultEdit }>): Promise<ScmDiffSummaryResultResponse>;
   undo(input: ScmDiffSummaryResultScope & Readonly<{ expectedRevision: number }>): Promise<ScmDiffSummaryResultResponse>;
   delete(input: ScmDiffSummaryResultScope & Readonly<{ expectedRevision: number }>): Promise<ScmDiffSummaryResultDeleteResponse>;
@@ -226,7 +229,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
           for (const entry of inventory.results) {
             if (entry.cwd !== resolve(input.cwd) || entry.sessionId !== input.sessionId) continue;
             const stored = await load({ ...input, resultId: entry.resultId });
-            if (stored?.generation?.key !== input.key) continue;
+            if (stored?.generation?.key !== input.key || stored.pullRequestDraftEvidence) continue;
             if (input.outputs.some(kind => !stored.result.output.outputs?.[kind])
               || (stored.generation.runId && stored.result.output.runId && stored.generation.runId !== stored.result.output.runId)) continue;
             // Start can return before the profile binds its run. This is the actual
@@ -239,7 +242,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         const output = await generate();
         if (output.resultId) {
           await locked({ ...input, resultId: output.resultId }, async (stored) => {
-            if (stored) await save({ ...stored, generation: { key: input.key, ...(output.runId ? { runId: output.runId } : {}),
+            if (stored && !stored.pullRequestDraftEvidence) await save({ ...stored, generation: { key: input.key, ...(output.runId ? { runId: output.runId } : {}),
               ...(output.success && output.inputId ? { inputId: output.inputId } : {}) } });
           });
         }
@@ -279,13 +282,14 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
           ...(stored.sessionId ? { sessionId: stored.sessionId } : {}), directory: `${path(scope.resultId)}.investigation` });
       });
     },
-    async create({ cwd, sessionId, output, generator }) {
+    async create({ cwd, sessionId, output, generator, pullRequestDraftEvidence }) {
       if (!output.comparison) throw new Error('Saved results require captured comparison evidence');
       const resultId = randomUUID();
       const result = ScmDiffSummaryResultSchema.parse({ resultId, revision: 0, output: withRevision(output, resultId, 0), canUndo: false,
         ...(generator ? { generator } : {}) });
       await ensureProtectedLocalStateDirectory(directory);
-      return (await save({ result, cwd: resolve(cwd), ...(sessionId ? { sessionId } : {}), inputs: [] })).result;
+      return (await save({ result, cwd: resolve(cwd), ...(sessionId ? { sessionId } : {}), inputs: [],
+        ...(pullRequestDraftEvidence !== undefined ? { pullRequestDraftEvidence } : {}) })).result;
     },
     async read(scope) {
       const stored = await load(scope);
@@ -301,6 +305,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
       const sourceSessionId = typeof source?.sessionId === 'string' ? source.sessionId : undefined;
       return stored ? { cwd: stored.cwd, ...(stored.sessionId ? { sessionId: stored.sessionId } : {}),
         ...(sourceSessionId ? { sourceSessionId } : {}),
+        ...(stored.pullRequestDraftEvidence !== undefined ? { pullRequestDraftEvidence: stored.pullRequestDraftEvidence } : {}),
         ...(stored.reviewFindingCitations ? { reviewFindingCitations: stored.reviewFindingCitations } : {}) } : null;
     },
     async edit(input) {
@@ -520,6 +525,9 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
           }
           let normalized = publishReviewFindingCitations(normalizeScmDiffSummaryModelOutput(input.modelOutput, { comparison: stored.result.output.comparison!,
             requestedOutputs: pending.outputs, requireCompleteCoverage: !pending.stopIds }), pending.reviewFindingCitations ?? []);
+          if (stored.pullRequestDraftEvidence && pending.outputs.includes('summary') && !normalized.suggestedPrBody) {
+            throw new Error('The requested pull request description is missing from the summary.');
+          }
           if (pending.stopIds) {
             const current = stored.result.output.outputs?.walkthrough?.value;
             const incoming = normalized.walkthrough;
@@ -548,6 +556,10 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
     },
     async publishProgress(input) {
       return change(input, input.expectedRevision, (stored) => {
+        if (stored.pullRequestDraftEvidence && input.output.outputs?.summary?.state === 'complete'
+          && !input.output.outputs.summary.value?.suggestedPrBody) {
+          return failure('invalid_output', 'The requested pull request description is missing from the summary.');
+        }
         if (input.output.runId && stored.result.output.runId && input.output.runId !== stored.result.output.runId) {
           return failure('invalid_output', 'This generator was replaced for the saved result.');
         }

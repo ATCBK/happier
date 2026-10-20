@@ -8,7 +8,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ExecutionRunIntentProfile, ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 
-import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask } from './buildDiffSummaryPrompt';
+import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask, SCM_DIFF_SUMMARY_PR_DRAFT_TASK } from './buildDiffSummaryPrompt';
 import { loadScmDiffSummaryContext } from './loadScmDiffSummaryContext';
 import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from './presentScmDiffSummaryModelContext';
@@ -86,6 +86,7 @@ function readRequestedOutputs(input: Readonly<Record<string, unknown>>) {
 
 function saveCompletedOutput(start: ExecutionRunProfileTurnCompleteParams['start'], completion: ExecutionRunProfileBoundedCompleteResult | null) {
   if (!completion || completion.nextInput || completion.toolResultMeta?.scmResultUpdate) return completion;
+  if (readRecord(start.intentInput).pullRequestDraft) return completion;
   if (readRecord(readRecord(start.intentInput).reviewNarration).phase === 'writing') return completion;
   const output = ScmDiffSummaryGenerateOutputSchema.safeParse(completion.toolResultOutput);
   if (!output.success || !output.data.success || output.data.producer?.kind === 'review'
@@ -250,9 +251,14 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const saved = existing?.success ? existing.result : await scmDiffSummaryResultStore.create({ ...scope,
       output: buildPendingScmDiffSummaryOutput(trustedInput), generator });
     const retainedScope = savedId ? await scmDiffSummaryResultStore.readStoredScope({ ...scope, resultId: saved.resultId }) : null;
+    if (input.pullRequestDraft && !retainedScope?.pullRequestDraftEvidence) {
+      throw Object.assign(new Error('Host-captured pull request draft evidence is unavailable'), { code: 'DIFF_UNAVAILABLE' });
+    }
+    const draftEvidence = retainedScope?.pullRequestDraftEvidence;
     const citations = retainedScope?.reviewFindingCitations ?? [];
     const savedInput = { ...input, resultId: saved.resultId, resultBaseRevision: saved.revision, resultGenerator: generator,
       reviewNarration: { reviewFindingCitations: citations } };
+    if (draftEvidence) savedInput.pullRequestDraft ??= {};
     const isSeededResult = Boolean(savedId && (saved.output.runId || typeof input.instructions === 'string'
       || Object.values(saved.output.outputs ?? {}).some((output) => output?.value !== undefined)));
     const inputRecord = { ...savedInput, comparison: context.comparison, cacheScopeKey: sessionId, ...(desiredSelection ?? {}) };
@@ -304,7 +310,9 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       ? `Saved outputs: ${JSON.stringify(presentScmDiffSummaryModelContext(selectedStops
         ? { comparisonId: promptComparison.id, title: saved.output.outputs?.walkthrough?.value?.title, stops: selectedStops }
         : saved.output, promptComparison, citations))}` : undefined;
-    const taskInstructions = [investigationInstructions, ...(savedContext ? [
+    const evidenceContext = [savedContext, ...(draftEvidence ? [`Pull request drafting evidence: ${draftEvidence}`] : [])].filter(Boolean).join('\n\n');
+    const taskInstructions = [investigationInstructions,
+      ...(draftEvidence && (input.outputs ?? ['summary']).includes('summary') ? [SCM_DIFF_SUMMARY_PR_DRAFT_TASK] : []), ...(savedContext ? [
       'Start a new conversation seeded from this saved result and its captured evidence.',
       'This conversation is a replacement generator, not a continuation of the previous native thread.',
       explanationInput?.reviewExplanation
@@ -324,7 +332,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
         instructions: userInstructions,
         outputLanguage: input.outputLanguage,
         ...(explanationInput?.reviewExplanation ? { reviewExplanation: true } : {}),
-        ...(savedContext ? { evidenceContext: savedContext } : {}),
+        ...(evidenceContext ? { evidenceContext } : {}),
         ...(taskInstructions ? { taskInstructions } : {}),
       });
     const analysisInstructions = userInstructions;
@@ -333,6 +341,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const planned = request.runClass === 'long_lived' && !isSeededResult ? planDiffSummaryAnalysis({ comparison: context.comparison,
       metadata: context.metadata, outputs: input.outputs ?? ['summary'], prompt: instructions, contextWindowTokens,
       instructions: analysisInstructions, outputLanguage: input.outputLanguage,
+      ...(evidenceContext ? { evidenceContext } : {}),
       ...(taskInstructions ? { taskInstructions } : {}) }) : null;
     return {
       ...executionPolicy,
