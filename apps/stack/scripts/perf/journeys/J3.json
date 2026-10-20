@@ -5,6 +5,7 @@
     { "op": "open" },
     { "op": "home" },
     { "op": "browser", "args": ["wait", "[data-testid^=\"session-list-item-\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-skeleton\"], [data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] },
     { "op": "browser", "args": ["eval", "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"] },
     { "op": "browser", "args": ["scroll", "up", "100000", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
     { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop === 0"] }
