@@ -5,6 +5,11 @@ import { KIRO_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js'
 import { KIRO_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 
 describe('Kiro plugin manifest', () => {
+  it('advertises only the readable v1 native chat-store search source', () => {
+    expect(PLUGIN_MANIFEST.contributes.agents[0]?.surfaces?.externalSession).toMatchObject({
+      sources: [{ sourceKind: 'kiroChatStore', contentSearch: true }],
+    });
+  });
   it('uses the strict target manifest and declares its host-owned ACP runtime', () => {
     expect(ingestPluginManifestV2(PLUGIN_MANIFEST)).toMatchObject({ ok: true });
     expect(PLUGIN_MANIFEST).not.toHaveProperty('uses');
@@ -14,11 +19,11 @@ describe('Kiro plugin manifest', () => {
     expect(PLUGIN_MANIFEST).not.toHaveProperty('activation');
     expect(PLUGIN_MANIFEST).toMatchObject({
       hostAccess: {
-        required: [{
+        required: expect.arrayContaining([expect.objectContaining({
           id: 'kiro-process',
           capability: 'process',
           scope: { executables: [{ kind: 'systemTool', id: 'kiro-cli' }] },
-        }],
+        })]),
         optional: [],
       },
       contributes: {
@@ -49,9 +54,10 @@ describe('Kiro plugin manifest', () => {
 
   it('registers Kiro auth through the canonical activation transaction without a runtime factory', async () => {
     const registerCliAuth = vi.fn();
+    const registerExternalSessions = vi.fn();
 
     await KIRO_PLUGIN.activate({
-      agents: { registerCliAuth },
+      agents: { registerCliAuth, registerExternalSessions },
     } as never);
 
     expect(registerCliAuth).toHaveBeenCalledTimes(1);
