@@ -10789,15 +10789,18 @@ function SessionViewLoadedContent({
     const mainColumn = React.useMemo(() => ({
         hideLabel: hideSessionLabel,
         showLabel: showSessionLabel,
-        identity: <>
-            {headerAgentId ? <SessionAgentCatalogIdentityIcon agentId={headerAgentId}
+        identity: {
+            mark: headerAgentId ? <SessionAgentCatalogIdentityIcon agentId={headerAgentId}
                 machineId={headerMachineId} serverId={sessionRouteServerId}
-                color={theme.colors.text.secondary} size={ICON_SIZE.sm} /> : null}
-            <Text numberOfLines={1}>{headerTitle}</Text>
-            <Text numberOfLines={1} style={{ color: sessionStatus.statusColor }}>{sessionStatus.statusText}</Text>
-        </>,
+                color={theme.colors.text.secondary} size={ICON_SIZE.sm} /> : undefined,
+            name: headerTitle,
+            // The header's own lifecycle projection: one interpretation of "working" and "needs you".
+            state: sessionStatus.state === 'thinking' || sessionStatus.state === 'archiving' ? 'working' as const
+                : sessionStatus.state === 'permission_required' || sessionStatus.state === 'action_required' ? 'attention' as const
+                    : undefined,
+        },
     }), [headerAgentId, headerMachineId, headerTitle, hideSessionLabel, showSessionLabel,
-        sessionRouteServerId, sessionStatus.statusColor, sessionStatus.statusText, theme.colors.text.secondary]);
+        sessionRouteServerId, sessionStatus.state, theme.colors.text.secondary]);
 
     if (embedded) {
         // Embedded in another surface's pane (the peek): the Session's own providers, without its
