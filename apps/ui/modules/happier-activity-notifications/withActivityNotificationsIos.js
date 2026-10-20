@@ -101,10 +101,13 @@ function targetBuildConfigurations(project, target) {
     .filter((configuration) => configuration && configuration.buildSettings);
 }
 
-function applyBuildSettings(project, target, settings) {
+function configureTargetBuild(project, target, settings) {
   for (const configuration of targetBuildConfigurations(project, target)) {
     Object.assign(configuration.buildSettings, settings);
   }
+  // The containing app resolves the embedded product from its own products
+  // directory, while this extension builds in a target-specific subdirectory.
+  project.pbxFileReferenceSection()[target.pbxNativeTarget.productReference].path = `"${TARGET_NAME}/${TARGET_NAME}.appex"`;
 }
 
 function addMissingCryptoSources(project, targetUuid) {
@@ -153,11 +156,15 @@ function configureNotificationServiceTarget(project, options) {
     CODE_SIGN_ENTITLEMENTS: `"${TARGET_NAME}/${TARGET_NAME}.entitlements"`,
     CLANG_ENABLE_MODULES: 'YES',
     SKIP_INSTALL: 'YES',
+    // Xcode unpacks static XCFramework headers under CONFIGURATION_BUILD_DIR.
+    // Keep this copy of Clibsodium out of the app's CocoaPods header search path.
+    CONFIGURATION_BUILD_DIR: '"$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/$(TARGET_NAME)"',
+    BUILT_PRODUCTS_DIR: '"$(CONFIGURATION_BUILD_DIR)"',
   };
 
   const existing = findTargetByName(project, TARGET_NAME);
   if (existing) {
-    applyBuildSettings(project, existing, settings);
+    configureTargetBuild(project, existing, settings);
     addMissingCryptoSources(project, existing.uuid);
     addSessionCryptoFramework(project, existing.uuid);
     return project;
@@ -178,7 +185,7 @@ function configureNotificationServiceTarget(project, options) {
     target.uuid,
   );
   addSessionCryptoFramework(project, target.uuid);
-  applyBuildSettings(project, target, settings);
+  configureTargetBuild(project, target, settings);
   return project;
 }
 

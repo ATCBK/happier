@@ -87,7 +87,16 @@ test('the alert consumer is built as an app extension the app embeds and depends
     assert.equal(settings.PRODUCT_BUNDLE_IDENTIFIER, '"dev.happier.app.ActivityNotificationService"');
     assert.equal(settings.INFOPLIST_FILE, `"${TARGET_NAME}/${TARGET_NAME}-Info.plist"`);
     assert.equal(settings.SKIP_INSTALL, 'YES');
+    // Xcode expands static XCFramework headers under CONFIGURATION_BUILD_DIR/include.
+    // Keep that module map out of the app's default header search directory,
+    // where CocoaPods already supplies the same Clibsodium module.
+    assert.equal(settings.CONFIGURATION_BUILD_DIR, '"$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/$(TARGET_NAME)"');
   }
+  assert.equal(
+    project.pbxFileReferenceSection()[extension.target.productReference].path,
+    `"${TARGET_NAME}/${TARGET_NAME}.appex"`,
+    'the app must embed the extension from its isolated output directory',
+  );
   assert.ok(project.writeSync().includes('com.apple.product-type.app-extension'));
 });
 
