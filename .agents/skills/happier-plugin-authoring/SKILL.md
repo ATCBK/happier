@@ -44,6 +44,15 @@ API declarations and the [maintained example](../../../packages/plugin-ui/README
 
 ## Cross-plugin integrations
 
+For a PRs & Issues source's selectable repositories/projects/teams/environments
+in 0.3 development source, use the optional `listScopeUnits` contribution role,
+descriptor `scopeUnit`, and `createTriageSourceSettingsSurface({ scopeSelection })`.
+The source owns authorization and its private token codec; the shared control owns
+All/Selected, search, paging and submission. `mode: 'configured'` must project only
+retained metadata without a provider read. See the canonical
+[source author contract](../../../docs/triage-sources.md#shared-source-unit-selection-03-development-source)
+for exact exported schemas, adapter shape and the separate snapshot unit join.
+
 In 0.3 development source, Run-on auto-picks by default after the Home's Machine
 list settles, preferring the rendered release, last use on this device, this
 device's own Machine when known, then recent activity. Declare optional
