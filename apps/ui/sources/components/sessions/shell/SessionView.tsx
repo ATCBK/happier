@@ -167,6 +167,7 @@ import { applyTranscriptJumpHighlightForJumpResult } from '@/components/sessions
 import type { PendingMessageEditRequest } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbarController } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbarController';
+import { SessionPhoneTrackWatchCapsule } from '@/components/sessions/files/track/SessionTrack';
 import { FindComposerSlotHost, FindComposerSlotProvider } from '@/components/ui/find/FindComposerSlot';
 import type { TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
@@ -10599,6 +10600,7 @@ function SessionViewLoadedContent({
     const inputWithTranscriptSelection = transcriptSelectionToolbar || input ? (
         <View style={{ gap: theme.space.s8 }}>
             {transcriptSelectionToolbar}
+            <SessionPhoneTrackWatchCapsule sessionId={sessionId} serverId={sessionRouteServerId.trim() || null} />
             <FindComposerSlotHost composer={input} />
         </View>
     ) : null;
