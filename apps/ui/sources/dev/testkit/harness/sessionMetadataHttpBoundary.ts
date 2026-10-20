@@ -60,7 +60,7 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
             if (listing) return Response.json({ sessions: [...records.values()], hasNext: false, nextCursor: null });
             const id = decodeURIComponent(detail![1]!);
             const current = records.get(id);
-            if (!current) return Response.json({}, { status: 404 });
+            if (!current) return Response.json({ error: 'Session not found' }, { status: 404 });
             if (init?.method !== 'PATCH') return Response.json({ session: current });
             writes.push(id);
             if (rejectPatchFor === id) {
