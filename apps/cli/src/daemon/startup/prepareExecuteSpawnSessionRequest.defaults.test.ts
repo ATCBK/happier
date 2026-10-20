@@ -19,6 +19,7 @@ import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperatio
 import { ApiClient } from '@/api/api';
 import { prepareExecuteSpawnSessionRequest } from './prepareExecuteSpawnSessionRequest';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
+import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 
 const credentials = { token: 'default-binding-owner', encryption: null } as const;
 const serverHttpBaseUrl = 'https://spawn-defaults.example';
@@ -146,7 +147,7 @@ describe('fresh daemon spawn Account purpose defaults', () => {
       credentials, api: await ApiClient.create(credentials),
       connectedServicesMaterializationBaseDir: configuration.happyHomeDir,
       connectedServiceRefreshCoordinator: null, connectedServiceQuotasCoordinator: null,
-      connectedServiceRuntimeRegistry: { registerTarget: () => {} },
+      connectedServiceRuntimeRegistry: new ConnectedServiceRuntimeRegistry(),
       pidToTrackedSession: new Map(), pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(),
       pidToSpawnWebhookTimeout: new Map(), spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
       resolveCanonicalTrackedSessionId: () => '', onChildExited: () => {},

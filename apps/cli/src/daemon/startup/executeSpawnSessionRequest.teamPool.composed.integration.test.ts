@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -37,24 +38,35 @@ import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBr
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
+import { logger } from '@/ui/logger';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
 
 // Only process creation is replaced. Production daemon preparation creates
 // the bootstrap/attach files; the admitted external Agent runs in this worker.
-const os = vi.hoisted(() => ({ runner: null as null | ((args: readonly string[], environment: NodeJS.ProcessEnv) => void), pid: 0 }));
-vi.mock('node:child_process', async importOriginal => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, spawn: (...args: Parameters<typeof actual.spawn>) => {
-    if (os.runner && Array.isArray(args[1]) && args[1].some(value => value === '--existing-session')) {
-      const child = new actual.ChildProcess();
-      Object.defineProperty(child, 'pid', { value: os.pid });
+const os = vi.hoisted(() => ({ runner: null as null | ((args: readonly string[], environment: NodeJS.ProcessEnv) => void), pid: 0,
+  child: null as ChildProcess | null }));
+vi.mock('@/utils/spawnHappyCLI', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/utils/spawnHappyCLI')>();
+  const { spawn } = await import('node:child_process');
+  // This is the OS process adapter, not a domain service. Source validation
+  // does not package a separate CLI runtime to replace process creation.
+  return { ...actual, spawnHappyCLI: (...args: Parameters<typeof actual.spawnHappyCLI>) => {
+    if (os.runner && args[0].some(value => value === '--existing-session')) {
+      // Startup markers validate live OS identity. Keep an owned process at
+      // this boundary while the actual Agent runtime executes in this worker.
+      const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+        detached: true, stdio: ['pipe', 'ignore', 'ignore'],
+      });
+      if (!child.pid) throw new Error('Controlled runner process did not start');
+      os.child = child;
+      os.pid = child.pid;
       const run = os.runner;
       os.runner = null;
-      const environment = args[2]?.env ?? {};
-      setImmediate(() => run(args[1] as string[], environment));
+      const environment = args[1]?.env ?? {};
+      setImmediate(() => run(args[0], environment));
       return child;
     }
-    return actual.spawn(...args);
+    return actual.spawnHappyCLI(...args);
   } };
 });
 
@@ -73,7 +85,19 @@ const { openTeamCredentialProviderBroker }: typeof import('../../../../server/so
 const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest,
   createQualifiedConnectedAccountIdentityDigest, createServiceAccountTokenIdentityFields }: typeof import('../../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/identity') = await import(server + 'app/api/routes/connect/qualifiedConnectedAccounts/identity');
 
-afterEach(() => { os.runner = null; resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks(); });
+async function closeControlledRunner(): Promise<void> {
+  const child = os.child; os.child = null;
+  if (child && child.exitCode === null && child.signalCode === null) {
+    child.stdin?.end();
+    await once(child, 'exit');
+  }
+}
+
+afterEach(async () => {
+  os.runner = null;
+  await closeControlledRunner();
+  resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks();
+});
 
 describe('Team Pool Session launch through Action/CLI and an external Agent', () => {
   let harness: Awaited<ReturnType<typeof createLightSqliteHarness>>;
@@ -313,6 +337,9 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '', onChildExited() {},
             processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true }) });
         try {
+          // Observe the logging boundary without replacing launch logic; a
+          // cleanup refusal must not hide the original preparation diagnostic.
+          const startupDiagnostics = vi.spyOn(logger, 'debug');
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
           const result = await createActionExecutor(deps).execute('session.spawn_new', {
@@ -323,13 +350,16 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             connectedServices: { v: 2, bindingsByServiceId: { [`${service.pluginId}/${service.localId}`]: {
               source: 'team_resource', resourceId: resource.id, deliveryMode: 'brokered' } } },
           }, { surface, authority: 'present_user', actionCaller: { kind: 'host' } });
+          expect(runner, JSON.stringify({ result, diagnostics: startupDiagnostics.mock.calls.filter(([message]) =>
+            /failed|refused|cleanup/iu.test(message)) })).toBeDefined();
           await runner;
-          expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'success' } });
+          expect(result, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
+            message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ ok: true, result: { type: 'success' } });
           expect(requests.slice(requestStart)).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
           expect(await db.sessionTeamCredentialBinding.findMany({ where: { sessionId } })).toEqual(expect.arrayContaining([
             expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id }),
           ]));
-        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); }
+        } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closeControlledRunner(); }
         }
       });
     } finally {

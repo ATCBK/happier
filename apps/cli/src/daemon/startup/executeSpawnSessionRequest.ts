@@ -545,7 +545,7 @@ export async function executeSpawnSessionRequest(
             let teamModelRow: NormalizedSessionTeamCredentialLaunch['teamModelRow'] = null;
             const hasTeamSelection = options.teamCredentialBindings?.some(binding => (
                 binding.slot.kind === 'provider_model' && binding.resourceId !== null
-            )) || Object.values(options.connectedServices?.bindingsByServiceId ?? {}).some(binding => binding.source === 'team_resource');
+            )) || Object.values(prepared.connectedServices?.bindingsByServiceId ?? {}).some(binding => binding.source === 'team_resource');
             if (hasTeamSelection) {
                 const homeDomainAction = createAccountServerActionDeps({
                     token: params.credentials.token, credentials: params.credentials,
