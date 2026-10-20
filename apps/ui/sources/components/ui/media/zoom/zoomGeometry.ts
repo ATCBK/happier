@@ -82,6 +82,8 @@ export function resizeZoom(state: ZoomState, image: ZoomSize, previous: ZoomSize
     'worklet';
     if (gestureActive && previous.width === viewport.width) return state;
     const bounds = resolveZoomBounds(image, viewport, dpr);
+    // Before the first layout there is no centre content point to preserve.
+    if (state.scale === 0) return { scale: bounds.min, x: 0, y: 0 };
     const scale = clampZoom(state.scale, bounds.min, bounds.max);
     // Translations are relative to the centre: retaining t/scale retains its content point.
     const point = clampPan({ x: state.x * scale / state.scale, y: state.y * scale / state.scale }, panBounds(image, viewport, scale));

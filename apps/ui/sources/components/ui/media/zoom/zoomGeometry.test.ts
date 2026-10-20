@@ -61,6 +61,8 @@ describe('media zoom geometry', () => {
             .toBe(state);
         expect(resizeZoom(state, { width: 1000, height: 1000 }, { width: 500, height: 500 }, { width: 1000, height: 1000 }, 1, false))
             .toEqual({ scale: 1, x: 0, y: 0 });
+        expect(resizeZoom({ scale: 0, x: 0, y: 0 }, { width: 1000, height: 1000 }, { width: 0, height: 0 }, { width: 500, height: 500 }, 1, false))
+            .toEqual({ scale: 0.5, x: 0, y: 0 });
     });
 
     it('uses the bounded exponential wheel factor for wheel and keyboard steps', () => {
