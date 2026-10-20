@@ -175,4 +175,4 @@ export function createDevinExternalSessionsContribution(options: Readonly<{ env?
     }),
   };
 }
-export const devinExternalSessionsContribution = createDevinExternalSessionsContribution();
+export const devinExternalSessionsContribution: AgentExternalSessionsContribution = createDevinExternalSessionsContribution();

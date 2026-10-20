@@ -225,11 +225,8 @@ it('keeps an expired Discord CDN response unavailable without materializing an e
 });
 
 it('requires the production channel-file registration to materialize provider attachments', async () => {
-  const fixture = await attachmentJourney('Telegram', { omitRegistration: true });
-  try {
-    await fixture.receive();
-    expect(fixture.admissions).toHaveLength(1);
-    await expect(fixture.resolve()).rejects.toThrow('Missing activated attachment runtime');
-    expect(fixture.downloads).toEqual([]);
-  } finally { await fixture.dispose(); }
+  // The manifest declares composerAttachments/channel-file, so activation
+  // refuses a plugin that omits its registration before any file is fetched.
+  await expect(attachmentJourney('Telegram', { omitRegistration: true }))
+    .rejects.toThrow("activation is missing registration 'composerAttachments/channel-file'");
 });
