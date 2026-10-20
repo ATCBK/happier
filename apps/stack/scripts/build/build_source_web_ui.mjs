@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 
 import { captureSourceWebBuildInputs, readWorkspacePackages, resolveWorkspaceSource,
   sourceBundleBuildLockPath, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
-import { resolveExpoBin, prepareExpoCommandEnv, applyExpoExportMaxWorkersArgs } from '../utils/expo/command.mjs';
+import { resolveExpoBin, prepareExpoCommandEnv } from '../utils/expo/command.mjs';
 import { applyExpoNodeHeapEnv } from '../utils/expo/expoNodeHeapEnv.mjs';
 import { run } from '../utils/proc/proc.mjs';
 import { runSourceBuildCommand } from '../utils/proc/runSourceBuildCommand.mjs';
@@ -22,6 +22,7 @@ import { runWorkspaceBuildAdmission } from '../utils/proc/workspace_build_admiss
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 import { readJsonIfExists } from '../utils/fs/json.mjs';
 import { readCachedFileDigest } from '../utils/fs/cached_file_digest.mjs';
+import { sourceWebExportArgs } from './sourceWebExportArgs.mjs';
 
 /** Stack starts reuse completed account-free exports through source publication.
  * Explicit outputDir callers keep their private finite producer boundary, used
@@ -102,7 +103,7 @@ async function sourceWebBuildOptions({ repoDir, env }) {
     .filter(([key]) => key !== 'HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY')
     .sort(([left], [right]) => left.localeCompare(right));
   return createHash('sha256').update(JSON.stringify([process.version, process.platform, process.arch, options,
-    applyExpoExportMaxWorkersArgs(['export', '--platform', 'web'], effective)]))
+    sourceWebExportArgs(effective)]))
     .digest('hex');
 }
 
@@ -259,9 +260,7 @@ async function consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, sign
     const uiDir = resolve(outputDir, 'web');
     const exportStartedAt = performance.now();
     const expoCommand = await resolveExpoBin(join(repoDir, 'apps/ui'));
-    const expoArgs = applyExpoExportMaxWorkersArgs([
-      'export', '--platform', 'web', '--output-dir', uiDir,
-    ], exportEnv);
+    const expoArgs = sourceWebExportArgs(exportEnv, uiDir);
     // The optional runner substitutes only the external Expo boundary in tests.
     // Real finite exports reuse their containing native envelope and dependency
     // custody; injected runners replace only the external Expo boundary.
