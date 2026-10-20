@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 import { buildConnectedServiceCredentialRecord, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { QualifiedConnectedAccountGroupResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from '@happier-dev/plugins-claude/agent';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
@@ -45,6 +46,7 @@ import { ConnectedServiceGenerationReconciliationNotAcknowledgeableError } from 
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import { bootstrapMachineSyncRuntime } from '@/daemon/machine/bootstrapMachineSyncRuntime';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
+import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { ApiMachineClient } from './apiMachine';
 import {
     publishPluginAccountCollectionWatchInvalidation as publishCollectionChange,
@@ -1293,23 +1295,15 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         if (!materializedRoot || !descriptor?.nativeHome) throw new Error('Expected the admitted Claude native home');
         const provenancePath = join(materializedRoot, '.happier-claude-connected-service-home.json');
         const getConnectedServiceAuthGroup = vi.fn(async () => {
-            // Home admits the exact target before native mutation. Lose its
-            // later proof only after that target has actually been written.
-            if (!authoritativeProofAvailable) {
-                try {
-                    const provenance: unknown = JSON.parse(await readFile(provenancePath, 'utf8'));
-                    if (provenance && typeof provenance === 'object'
-                        && 'generation' in provenance && provenance.generation === 9
-                        && 'credentialRevision' in provenance && provenance.credentialRevision === credentialRevision) return null;
-                } catch (error) {
-                    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-                }
-            }
+            // Currentness is admitted before native mutation. Native epoch proof,
+            // not a second Home read, establishes successful adoption afterward.
+            if (!authoritativeProofAvailable) return null;
             return { serviceId: 'claude-subscription', groupId: 'shared', activeProfileId: 'team',
                 generation: 9, memberProfileIds: ['team'] };
         });
         const trackedLaunch = { directory: tempRoot,
-            environmentVariables: { [descriptor.nativeHome.environmentKey]: materializedRoot } };
+            environmentVariables: { [descriptor.nativeHome.environmentKey]: materializedRoot,
+                [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: materializedRoot } };
         const restartRequestedPids = new Set<number>();
         const runtime = await startDaemonSessionControlRuntime({
             machineId: machine.id,
@@ -1325,17 +1319,13 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             },
             api: {
                 getAccountEncryptionMode: vi.fn(async () => 'plain'),
-                getConnectedServiceCredentialPlain: vi.fn(async () => ({
-                    content: { t: 'plain' as const, v: connectedCredential },
-                    credentialRevision,
-                })),
-                getConnectedServiceAuthGroup,
                 push: vi.fn(() => ({ sendPushNotification: vi.fn() })),
             } as never,
             connectedServicesMaterializationBaseDir: join(tempRoot, 'materializations'),
             getConnectedServiceRefreshCoordinator: () => null,
             getConnectedServiceQuotasCoordinator: () => null,
             connectedServiceRuntimeRegistry: runtimeRegistry,
+            resolveQualifiedConnectedAccountV4Support: () => 'advertised',
             pidToTrackedSession: new Map([
                 [7101, { pid: 7101, startedBy: 'daemon', happySessionId: 'sess-shared-a',
                     happySessionMetadataFromLocalWebhook: createTestMetadata({ flavor: 'claude' }), spawnOptions: trackedLaunch }],
@@ -1364,6 +1354,18 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient('token', machine);
         mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: projection };
+            if (url.includes('/v4/connect/qualified/group?')) {
+                const group = await getConnectedServiceAuthGroup();
+                if (!group) return { status: 404, data: {} };
+                return { status: 200, data: QualifiedConnectedAccountGroupResponseV4Schema.parse({ group: {
+                    v: 1, ref: { service: BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID['claude-subscription'].service,
+                        groupId: group.groupId }, incarnation: 'fixture-shared', displayName: 'Shared Claude', policy: {},
+                    activeConnectedAccountId: group.activeProfileId, generation: group.generation,
+                    runtimeStateRevision: 0, state: {}, createdAt: 1, updatedAt: 1,
+                    members: group.memberProfileIds.map(connectedAccountId => ({ v: 1, connectedAccountId,
+                        state: {}, createdAt: 1, updatedAt: 1 })),
+                } }) };
+            }
             if (url.includes('/v4/connect/qualified/credential?')) {
                 const compatibility = BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID['claude-subscription'];
                 return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
@@ -1390,6 +1392,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         });
         writeAccountChangesCursor.mockClear();
 
+        const projectionOutcomes: Array<Readonly<{ status: 'converged' }> | Readonly<{ status: 'deferred'; error: unknown }>> = [];
         const bootstrap = await bootstrapMachineSyncRuntime({
             cliVersion: '0.0.0-test',
             machineId: machine.id,
@@ -1423,31 +1426,68 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
             daemonServerWorkScheduler: {} as never,
-            reconcileConnectedServicesProjection: runtime.reconcileConnectedServicesProjection,
+            // Observe the real owner's result delivered to the API cursor owner;
+            // no reconciliation or native-file logic is replaced.
+            reconcileConnectedServicesProjection: async notification => {
+                try {
+                    await runtime.reconcileConnectedServicesProjection(notification);
+                    projectionOutcomes.push({ status: 'converged' });
+                } catch (error) {
+                    projectionOutcomes.push({ status: 'deferred', error });
+                    throw error;
+                }
+            },
             startVoiceInferenceWorkerForMachine: vi.fn(async () => null),
         });
 
         try {
             runtimeRegistry.unregisterPid(7101);
             runtimeRegistry.registerTarget(targetInput(7101, 'sess-shared-a'));
+            const retainedBindings = runtimeRegistry.getBySessionId('sess-shared-a')!.connectedServicesBindingsRaw;
 
             await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
             expect(writeAccountChangesCursor).toHaveBeenCalledOnce();
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 3);
 
             expect(materializedRoot).toEqual(expect.any(String));
-            expect(claudeProvenanceReplaceCount.current).toBe(2);
-            const effectAfterLostResponse = await stat(provenancePath, { bigint: true });
-            // One real Claude hot-apply replaces base provenance and then stamps the exact group epoch.
-            // Replays and additional recipients must verify those bytes without another replacement.
+            expect(claudeProvenanceReplaceCount.current).toBe(0);
+            await expect(stat(provenancePath)).rejects.toMatchObject({ code: 'ENOENT' });
+            expect(projectionOutcomes.length).toBeGreaterThan(0);
+            for (const outcome of projectionOutcomes) {
+                expect(outcome.status).toBe('deferred');
+                if (outcome.status === 'deferred') {
+                    expect(outcome.error).toBeInstanceOf(ConnectedServiceGenerationReconciliationNotAcknowledgeableError);
+                }
+            }
 
             authoritativeProofAvailable = true;
+            projectionOutcomes.length = 0;
+            writeAccountChangesCursor.mockClear();
+            await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
+
+            // One shared-generation write publishes the full epoch. Replays and
+            // additional recipients must verify it without another replacement.
+            const effectAfterRecovery = await stat(provenancePath, { bigint: true });
+            const recoveredProvenanceBytes = await readFile(provenancePath, 'utf8');
+            const recoveredProvenance = JSON.parse(recoveredProvenanceBytes);
+            expect(recoveredProvenance).toMatchObject({
+                serviceId: 'claude-subscription', credentialProfileId: 'team',
+                groupId: 'shared', generation: 9, credentialRevision,
+            });
+            expect(claudeProvenanceReplaceCount.current).toBe(1);
+            expect(projectionOutcomes).toEqual(expect.arrayContaining([{ status: 'converged' }]));
+            expect(writeAccountChangesCursor).toHaveBeenCalledOnce();
+            expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 3);
+
             runtimeRegistry.registerTarget(targetInput(7102, 'sess-shared-b'));
+            projectionOutcomes.length = 0;
             writeAccountChangesCursor.mockClear();
             await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
 
             const finalEffect = await stat(provenancePath, { bigint: true });
-            const finalProvenance = JSON.parse(await readFile(provenancePath, 'utf8'));
+            const finalProvenanceBytes = await readFile(provenancePath, 'utf8');
+            const finalProvenance = JSON.parse(finalProvenanceBytes);
+            expect(finalProvenanceBytes).toBe(recoveredProvenanceBytes);
             expect(finalProvenance).toMatchObject({
                 serviceId: 'claude-subscription',
                 credentialProfileId: 'team',
@@ -1455,15 +1495,17 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
                 generation: 9,
                 credentialRevision,
             });
-            expect(finalEffect.ino).toBe(effectAfterLostResponse.ino);
-            expect(finalEffect.mtimeNs).toBe(effectAfterLostResponse.mtimeNs);
-            expect(claudeProvenanceReplaceCount.current).toBe(2);
+            expect(finalEffect.ino).toBe(effectAfterRecovery.ino);
+            expect(finalEffect.mtimeNs).toBe(effectAfterRecovery.mtimeNs);
+            expect(claudeProvenanceReplaceCount.current).toBe(1);
+            expect(projectionOutcomes).toEqual(expect.arrayContaining([{ status: 'converged' }]));
             expect(writeAccountChangesCursor).toHaveBeenCalledTimes(1);
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 3);
             expect(restartRequestedPids).toEqual(new Set());
-            expect(runtimeRegistry.listTargets().map(({ pid, sessionId }) => ({ pid, sessionId }))).toEqual([
-                { pid: 7101, sessionId: 'sess-shared-a' },
-                { pid: 7102, sessionId: 'sess-shared-b' },
+            expect(runtimeRegistry.listTargets().map(({ pid, sessionId, connectedServicesBindingsRaw }) =>
+                ({ pid, sessionId, connectedServicesBindingsRaw }))).toEqual([
+                { pid: 7101, sessionId: 'sess-shared-a', connectedServicesBindingsRaw: retainedBindings },
+                { pid: 7102, sessionId: 'sess-shared-b', connectedServicesBindingsRaw: retainedBindings },
             ]);
         } finally {
             await bootstrap.stopPeerMediationLoopbackServer();

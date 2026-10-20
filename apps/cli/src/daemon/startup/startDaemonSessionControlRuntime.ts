@@ -243,6 +243,7 @@ import {
   resolveConnectedServiceSwitchContinuity,
 } from '@/daemon/connectedServices/catalogHooks';
 import { resolveConnectedServiceTargetMaterializedRoot } from '@/daemon/connectedServices/materialize/resolveConnectedServiceTargetMaterializedRoot';
+import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { createConnectedServiceRuntimeAuthNativeHome } from '@/daemon/connectedServices/runtimeAuth/createRuntimeAuthNativeHome';
 import type {
   CatalogAgentId,
@@ -13661,7 +13662,8 @@ export async function startDaemonSessionControlRuntime(
       entry,
     ));
     return materializedRoot
-      ? { [descriptor.nativeHome.environmentKey]: materializedRoot }
+      ? { [descriptor.nativeHome.environmentKey]: materializedRoot,
+          [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: materializedRoot }
       : null;
   };
   const createDurableGenerationConsumer = (
