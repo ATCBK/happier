@@ -194,7 +194,7 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
           />
           <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}`}
             total={block.rows.length} hidden={lead.hidden} complete={block.truncated === 0} expanded={expanded.includes(block.dimension)}
-            unlisted={block.truncated > 0 ? t('usage.board.page.moreRows', { count: block.truncated }) : null}
+            unlisted={block.truncated > 0 && lead.hidden === 0 ? t('usage.board.page.moreRows', { count: block.truncated }) : null}
             testID={`${props.testID}.${block.dimension}.more`}
             onToggle={() => setExpanded(current => current.includes(block.dimension)
               ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} />
