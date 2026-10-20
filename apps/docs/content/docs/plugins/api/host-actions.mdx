@@ -18717,7 +18717,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `surface` (json, required): Widget surface — Qualified target with serverId, accountId and owner. For a named area layout, include owner.layoutId; discover layouts with widgets.area.layout.list.
-- `instance` (json, required): Configured widget — Complete v1 instance with a unique id, definition reference and bindings.
+- `instance` (json, required): Configured widget — Complete v1 instance with a unique id, definition reference and bindings. A value binding must satisfy the widget’s inputSchema from widgets.catalog.list; use a picked Session, Machine or checkout exactly as action_options_resolve returns it (consumer widget, fieldPath = the input path).
 - `area` (select): Project area — For Project layouts, choose the main area or aside in the same document.
 - `size` (select): Widget size — Choose a size declared by this widget and supported by the target surface; inspect widgets.catalog.list for available sizes.
 - `toIndex` (integer): Insertion index — Zero-based widget position in the current view.
@@ -18781,7 +18781,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `ref` (json, required): Widget or group — Qualified surface and instanceId from widgets.item.list. A group uses its group id as instanceId.
-- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
+- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
 - `paths` (text_list): Input paths — Only change these declared field paths. Omit to replace or reset the complete binding set.
 
 ## `widgets.item.inputs.validate`
@@ -18797,7 +18797,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `ref` (json, required): Widget or group — Qualified surface and instanceId from widgets.item.list. A group uses its group id as instanceId.
-- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
+- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
 
 ## `widgets.item.list`
 

@@ -3905,7 +3905,7 @@ export function createCliActionDeps(params: Readonly<{
       const entries = candidates.map(candidate => cliWidgetCatalogEntryV1(candidate, countWidgetInstancesV1(instances, widgetCandidateDefinitionV1(candidate))));
       for (const summary of await actionDeps.widgetDefinitionArtifacts?.list(signal) ?? []) {
         const reference = { kind: 'artifact' as const, artifactId: summary.artifactId };
-        entries.push({ definition: reference, title: summary.name, fields: [...summary.inputs.fields],
+        entries.push({ definition: reference, title: summary.name, fields: [...summary.inputs.fields], inputSchema: summary.inputSchema,
           sizeDeclaration: summary.sizeDeclaration,
           availability: summary.bodyKind === 'declarative' || summary.bodyKind === 'html' || summary.bodyKind === 'builtin' || summary.sourceDefinition && candidates.some(candidate => candidate.availability === 'available'
             && isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), summary.sourceDefinition!)) ? 'available' : 'unavailable',

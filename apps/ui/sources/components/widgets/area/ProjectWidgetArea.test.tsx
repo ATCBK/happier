@@ -887,6 +887,16 @@ it.each(['stacked', 'phone'] as const)(
         buildHeader: buildWidgetSurfaceArtifactHeaderV1,
       });
       area.seed(saved);
+      // Adding a checkout-bound widget admits the checkout against the Account's Project rows.
+      const activeCheckout = {
+        id: 'checkout',
+        serverId: connection.home.id,
+        machineId: 'machine',
+        rootPath: '/repo',
+        projectKey: 'anchor',
+        createdAtMs: 1,
+      };
+      area.setWorkspaceRefs([activeCheckout]);
       const { useProjectWidgetAreaBinding } =
         await import('./ProjectWidgetArea');
       const { ProjectOverviewDocument } =
@@ -899,14 +909,7 @@ it.each(['stacked', 'phone'] as const)(
         useProjectWidgetAreaBinding({
           serverId: connection.home.id,
           projectName: 'Project',
-          activeCheckout: {
-            id: 'checkout',
-            serverId: connection.home.id,
-            machineId: 'machine',
-            rootPath: '/repo',
-            projectKey: 'anchor',
-            createdAtMs: 1,
-          },
+          activeCheckout,
         }),
       );
       if (composition === 'phone') windowSize.width = 390;

@@ -2622,6 +2622,7 @@ export type WidgetsActionResultById = {
             }[];
             availability: 'available' | 'unavailable' | 'denied';
             instanceCount: number;
+            inputSchema?: PluginJsonSchemaV2 | undefined;
         }[];
         presentation: {
             sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];

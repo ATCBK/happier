@@ -8,6 +8,8 @@ import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 /** HTTP persistence boundary: the real Account mode, Artifact codec, Action and Home owners run above it. */
 export function createHomeHubArtifactHttpBoundary(
@@ -22,9 +24,6 @@ export function createHomeHubArtifactHttpBoundary(
         // owner is a different principal and must never supply this Profile.
         const path = new URL(String(input)).pathname;
         if (path === '/v1/machines' && options?.machines) return Response.json(options.machines);
-        if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(ProjectAccountRowListResponseV1Schema.parse({
-            status: 'listed', rows: [], coverage: 'complete',
-        }));
         if (path === '/v1/account/profile') {
             const currentProfile = AccountProfileSchema.parse(typeof profile === 'function' ? profile() : profile);
             if (currentProfile.id !== accountId) throw new Error('Home HTTP profile must belong to the signed-in Account');
@@ -43,6 +42,8 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
     let callerAccess: ArtifactCallerAccessV1 | null = 'owner';
     let grants: readonly ArtifactAccessGrantRowV1[] = [];
     const writes: T[] = [];
+    /** The Account's Project rows census the Home serves; widget input admission checks checkouts against it. */
+    let workspaceRefs: readonly WorkspaceRefV1[] = [];
     const layout = () => {
         if (!artifact?.body) return definition.defaultLayout;
         const opened: unknown = decodePlainArtifactStoredContent(artifact.body);
@@ -70,6 +71,9 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(workspaceRefs.length === 0
+            ? ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' })
+            : createPlainProjectAccountRowListFixture({ workspaceRefs }));
         if (path === AUTHORING_MEMORY_ROUTE_V1 && (!init?.method || init.method === 'GET')) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
         if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [served(artifact)] : []);
         if (path === `/v1/artifacts/${artifactId}/access/grants`) return artifact && (callerAccess === 'owner' || callerAccess === 'admin')
@@ -98,6 +102,7 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
     };
     return { artifactId, request, seed, layout, writes,
+        setWorkspaceRefs: (next: readonly WorkspaceRefV1[]) => { workspaceRefs = next; },
         setCallerAccess: (access: ArtifactCallerAccessV1 | null) => { callerAccess = access; },
         setGrants: (next: readonly ArtifactAccessGrantRowV1[]) => { grants = next; },
     };

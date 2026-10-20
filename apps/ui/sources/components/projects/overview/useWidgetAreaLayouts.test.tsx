@@ -78,28 +78,30 @@ it.each(['network_error', 'thrown_network_error', 'denied', 'permission_denied',
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId, authority: 'present_user', actionCaller: { kind: 'host' },
         });
     };
+    // Host presets (c32df2131d) are served by the Action executor, not Account inventory: only the Account's own layouts are retained or withdrawn.
+    const accountNames = (dashboards: readonly Readonly<{ name: string; isPreset: boolean }>[]) => dashboards.filter(row => !row.isPreset).map(row => row.name);
     try {
         const cold = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        await vi.waitFor(() => expect(cold.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']));
+        await vi.waitFor(() => expect(accountNames(cold.getCurrent().state.dashboards)).toEqual(['My usage']));
         failure = true;
         await act(async () => { await expect(cold.getCurrent().reload()).resolves.toBeNull(); });
         const transient = errorCode === 'network_error' || errorCode === 'thrown_network_error';
         const expectedNames = transient ? ['My usage'] : [];
-        expect(cold.getCurrent().state).toEqual({ status: 'offline', dashboards: transient
-            ? expect.arrayContaining([expect.objectContaining({ name: 'My usage' })]) : [] });
+        expect(cold.getCurrent().state.status).toBe('offline');
+        expect(accountNames(cold.getCurrent().state.dashboards)).toEqual(expectedNames);
         await cold.unmount();
         failure = false;
         hold = true;
         const warm = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(expectedNames);
+        expect(accountNames(warm.getCurrent().state.dashboards)).toEqual(expectedNames);
         await warm.rerender();
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(expectedNames);
+        expect(accountNames(warm.getCurrent().state.dashboards)).toEqual(expectedNames);
         held.resolve();
         await warm.unmount();
         held = createDeferred<void>();
         retireActiveServerAccountScopeLifetime();
         const retired = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        expect(retired.getCurrent().state.dashboards).toEqual([]);
+        expect(accountNames(retired.getCurrent().state.dashboards)).toEqual([]);
         await retired.unmount();
     } finally { held.resolve(); retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
 });

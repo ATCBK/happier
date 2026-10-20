@@ -3017,6 +3017,14 @@ plugin areas and host-owned core-page areas; WorkBoards, Session Board and direc
 Companion retain individual widgets. Group inputs compose with surface context
 through the existing follow/pin resolver; every child retains its own admission.
 
+A configured instance's `value` bindings are admitted against the widget's
+`inputSchema`, which `widgets.catalog.list` returns per entry: it is the same
+object the admission owner compiles, so the advertised shape and the accepted
+shape cannot diverge. A picked Session, Machine or checkout is the value
+`action.options.resolve` returned for that widget input, unchanged. When
+`widgets.item.add` needs approval, the add's inputs are admitted by that same
+owner first, so a person is never asked to approve an add that cannot run.
+
 Saved groups use the `widgets.fragment.*` lifecycle and `widgets.group.add` to
 insert independent copies through one atomic layout intent. They preserve group
 options and child definitions, bindings and sizes, while allocating fresh group

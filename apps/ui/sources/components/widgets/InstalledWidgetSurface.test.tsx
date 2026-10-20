@@ -229,7 +229,8 @@ describe('InstalledWidgetSurface', () => {
         const screen = await renderScreen(<ConfiguredWidgetRefusal resolution={resolution} testID="read-failed" />);
         const card = screen.tree.findByType(SurfaceStateCard).props;
         const { t } = await import('@/text');
-        expect(card.title).toBe(t('widgetAdd.optionsFailed'));
+        // The card names the widget that could not load (SB11); only the setup step names the choices.
+        expect(card.title).toBe(t('widgetAdd.widgetLoadFailed'));
         expect(card.reason).toBeUndefined();
         expect(card.action?.label).toBe(t('common.retry'));
         await screen.pressByTestIdAsync('read-failed-retry');
