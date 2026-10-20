@@ -1,0 +1,264 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import {
+  SegmentedTabBar,
+  type SegmentedTab,
+} from '@/components/ui/navigation/SegmentedTabBar';
+import { Text } from '@/components/ui/text/Text';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import { t } from '@/text';
+
+export type ReviewStripScope<T extends string = string> = Readonly<{
+  tabs: ReadonlyArray<SegmentedTab<T>>;
+  active: T;
+  onSelect: (id: T) => void;
+}>;
+
+export type ReviewStripProps<T extends string = string> = Readonly<{
+  scope?: ReviewStripScope<T> | null;
+  /** Quiet context beside the scope, e.g. the turn's time. */
+  scopeDetail?: string | null;
+  /** Ordinal of the current change across the comparison (0 when none) and the comparison's total. */
+  current: number;
+  total: number;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  onKeepAll?: () => void;
+  keepAllDisabledReason?: string | null;
+  /** The file is done: the strip becomes its completion line. */
+  complete?: Readonly<{
+    left: number;
+    nextFileName?: string | null;
+    onNextFile?: () => void;
+  }> | null;
+  /** Phones keep the scope only; the review bar carries the counter and actions. */
+  compact?: boolean;
+  testID?: string;
+}>;
+
+/**
+ * The review strip under the File page header (lab ade-shell RV2): scope, "2 of 7 changes", ↑ ↓,
+ * Keep all; once every change in the file is kept it reads "All changes in this file reviewed ·
+ * N of M left · Next file name". One quiet line; the page supplies dividers.
+ */
+export function ReviewStrip<T extends string>(props: ReviewStripProps<T>) {
+  const { theme } = useUnistyles();
+  const previousLabel = useKeyboardShortcutLabel('review.change.previous');
+  const nextLabel = useKeyboardShortcutLabel('review.change.next');
+  const nextFileLabel = useKeyboardShortcutLabel('review.change.next');
+  const withKey = (label: string, key: string | undefined) =>
+    key ? `${label} (${key})` : label;
+  const scope =
+    props.scope && props.scope.tabs.length > 1 ? (
+      <SegmentedTabBar
+        tabs={props.scope.tabs}
+        activeTabId={props.scope.active}
+        onSelectTab={props.scope.onSelect}
+        compact
+        segmentSizing="content"
+        accessibilityLabel={t('hunkReview.scopeA11y')}
+        testIDPrefix="file-changes-scope"
+      />
+    ) : null;
+
+  if (props.compact) {
+    return scope ? (
+      <View testID={props.testID} style={styles.compact}>
+        {scope}
+      </View>
+    ) : null;
+  }
+
+  if (props.complete) {
+    return (
+      <View
+        testID={props.testID}
+        accessibilityRole="summary"
+        style={styles.strip}
+      >
+        <Icon
+          name="check-circle"
+          size={ICON_SIZE.sm}
+          color={theme.colors.state.success.foreground}
+        />
+        <Text
+          variant="meta"
+          emphasis="semiBold"
+          numberOfLines={1}
+          style={{ color: theme.colors.text.primary, flexShrink: 1 }}
+        >
+          {t('hunkReview.fileReviewed')}
+        </Text>
+        {props.total > 0 ? (
+          <Text
+            variant="meta"
+            numberOfLines={1}
+            style={[styles.tabular, { color: theme.colors.text.tertiary }]}
+          >
+            {`· ${t('hunkReview.left', { left: props.complete.left, total: props.total })}`}
+          </Text>
+        ) : null}
+        <View style={styles.grow} />
+        {props.complete.nextFileName && props.complete.onNextFile ? (
+          <View style={styles.next}>
+            <Text
+              variant="meta"
+              numberOfLines={1}
+              style={{ color: theme.colors.text.secondary }}
+            >
+              {t('hunkReview.nextFile')}
+            </Text>
+            <TextLinkButton
+              testID="review-strip-next-file"
+              label={props.complete.nextFileName}
+              onPress={props.complete.onNextFile}
+            />
+            <IconButton
+              testID="review-strip-next-file-arrow"
+              accessibilityLabel={withKey(
+                t('hunkReview.nextFile'),
+                nextFileLabel,
+              )}
+              tooltip={withKey(t('hunkReview.nextFile'), nextFileLabel)}
+              iconName="caret-down"
+              variant="plain"
+              size={26}
+              iconSize={ICON_SIZE.xs}
+              onPress={props.complete.onNextFile}
+            />
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
+  return (
+    <View
+      testID={props.testID}
+      accessibilityRole="toolbar"
+      style={styles.strip}
+    >
+      {scope}
+      {props.scopeDetail ? (
+        <Text
+          variant="meta"
+          numberOfLines={1}
+          style={{ color: theme.colors.text.tertiary, flexShrink: 1 }}
+        >
+          {props.scopeDetail}
+        </Text>
+      ) : null}
+      {scope && props.total > 0 ? (
+        <View
+          style={[
+            styles.divider,
+            { backgroundColor: theme.colors.border.subtle },
+          ]}
+        />
+      ) : null}
+      {props.total > 0 ? (
+        <View style={styles.counter}>
+          <Text
+            variant="meta"
+            numberOfLines={1}
+            accessibilityLiveRegion="polite"
+            style={{ color: theme.colors.text.secondary }}
+          >
+            <Text
+              variant="meta"
+              emphasis="semiBold"
+              style={[styles.tabular, { color: theme.colors.text.primary }]}
+            >
+              {t('hunkReview.counter', {
+                current: props.current,
+                total: props.total,
+              })}
+            </Text>
+            {` ${t('hunkReview.changes', { total: props.total })}`}
+          </Text>
+          <IconButton
+            testID="review-strip-previous"
+            accessibilityLabel={withKey(
+              t('hunkReview.previousChange'),
+              previousLabel,
+            )}
+            tooltip={withKey(t('hunkReview.previousChange'), previousLabel)}
+            iconName="caret-up"
+            variant="plain"
+            size={26}
+            iconSize={ICON_SIZE.xs}
+            disabled={!props.onPrevious}
+            onPress={() => props.onPrevious?.()}
+          />
+          <IconButton
+            testID="review-strip-next"
+            accessibilityLabel={withKey(t('hunkReview.nextChange'), nextLabel)}
+            tooltip={withKey(t('hunkReview.nextChange'), nextLabel)}
+            iconName="caret-down"
+            variant="plain"
+            size={26}
+            iconSize={ICON_SIZE.xs}
+            disabled={!props.onNext}
+            onPress={() => props.onNext?.()}
+          />
+        </View>
+      ) : null}
+      <View style={styles.grow} />
+      {props.onKeepAll && props.total > 0 ? (
+        <RoundButton
+          testID="review-strip-keep-all"
+          size="mini"
+          display="secondary"
+          title={t('hunkReview.keepAll')}
+          disabled={Boolean(props.keepAllDisabledReason)}
+          accessibilityHint={props.keepAllDisabledReason ?? undefined}
+          onPress={props.onKeepAll}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  strip: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+    paddingLeft: theme.space.s16,
+    paddingRight: theme.space.s12,
+    paddingVertical: theme.space.s4,
+  },
+  compact: {
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s8,
+    alignItems: 'flex-start',
+  },
+  counter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s2,
+  },
+  next: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s6,
+    flexShrink: 1,
+  },
+  divider: {
+    width: StyleSheet.hairlineWidth,
+    height: 16,
+  },
+  grow: {
+    flex: 1,
+  },
+  tabular: {
+    fontVariant: ['tabular-nums'],
+  },
+}));
