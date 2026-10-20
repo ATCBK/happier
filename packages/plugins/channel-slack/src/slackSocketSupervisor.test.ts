@@ -10,7 +10,7 @@ import { SLACK_SOCKET_BACKGROUND_SERVICE_ID, SLACK_SOCKET_WORKER_ATTEMPT_ACTION_
 const credentialRef = { service: { pluginId: 'happier.channel.slack', localId: 'slack-bot' }, accountId: 'slack:T1:U1' };
 const snapshot = ConversationProviderConnectionReconciliationSnapshotV1Schema.parse({ v: 1, connectionId: 'connection-1',
   providerConnectionKey: 'slack:team:T1:app:A1', providerConfigVersion: 1,
-  providerConfig: { teamId: 'T1', appId: 'A1', botUserId: 'U1', botId: 'B1' }, credentialRef,
+  providerConfig: { teamId: 'T1', appId: 'A1', botUserId: 'U1', botId: 'B1', label: 'Happier' }, credentialRef,
   authorityEpoch: 7, enabled: true, deletionState: 'none', requiresFullSharedMessageContent: false });
 
 function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; failFacts?: boolean }> = {}) {
@@ -61,8 +61,9 @@ function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; f
     }
     if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest) { admissions.push(ConversationProviderObservationIngestInputV1Schema.parse(value)); return; }
     if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport) {
-      if (input.failFacts) throw new Error('Account is unavailable');
-      facts.push(ConversationTransportFactReportInputV1Schema.parse(value));
+      const report = ConversationTransportFactReportInputV1Schema.parse(value);
+      if (input.failFacts && report.fact.kind === 'historyGap') throw new Error('Account is unavailable');
+      facts.push(report);
       if (facts.at(-1)?.fact.kind === 'historyGap') listed = false; // The core owns whether history loss remains eligible.
       return { kind: 'recorded' };
     }
@@ -100,7 +101,7 @@ describe('Slack socket supervisor through real target worker Action', () => {
       await vi.waitFor(() => expect(h.admissions).toHaveLength(1));
       expect(h.reads).toBeGreaterThan(0);
       await vi.waitFor(() => expect(h.facts).toContainEqual({ connectionId: 'connection-1', authorityEpoch: 7, fact: { kind: 'providerReadiness', status: 'ready' } }));
-      const stopInput = { connectionId: snapshot.connectionId, providerConnectionKey: snapshot.providerConnectionKey,
+      const stopInput = { v: 1, connectionId: snapshot.connectionId, providerConnectionKey: snapshot.providerConnectionKey,
         providerConfigVersion: 1, providerConfig: snapshot.providerConfig, credentialRef, authorityEpoch: 8, reason: 'disable' };
       await expect(h.supervisor.stop({ ...stopInput, authorityEpoch: 9 }, h.stopContext)).resolves.toMatchObject({ kind: 'notReady' });
       await expect(h.supervisor.stop(stopInput, h.stopContext)).resolves.toEqual({ kind: 'stopped' });
@@ -125,5 +126,22 @@ describe('Slack socket supervisor through real target worker Action', () => {
         fact: { kind: 'historyGap', reason: 'providerHistoryUnavailable' } }));
       expect(h.socketsOpened).toBe(1);
     } finally { h.controller.abort(); await h.supervisor.dispose(); await running; }
+  });
+
+  it('retains a failed history-gap report and does not reconnect around unavailable core custody', async () => {
+    vi.useFakeTimers();
+    const h = harness({ disconnect: true, failFacts: true });
+    const running = h.supervisor.run(h.background);
+    try {
+      await vi.waitFor(() => expect(h.admissions).toHaveLength(1));
+      await vi.waitFor(() => expect(h.reads).toBeGreaterThan(1));
+      const reads = h.reads;
+      // Cross the existing 30-second repair deadline: an initial worker retry
+      // delay alone must not masquerade as retained gap-custody protection.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.reads).toBeGreaterThan(reads);
+      expect(h.socketsOpened).toBe(1);
+      expect(h.facts.some(report => report.fact.kind === 'historyGap')).toBe(false);
+    } finally { h.controller.abort(); await h.supervisor.dispose(); await running; vi.useRealTimers(); }
   });
 });

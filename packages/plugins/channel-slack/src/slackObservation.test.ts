@@ -54,4 +54,10 @@ describe('Slack authenticated message normalization', () => {
       .toMatchObject({ kind: 'routableNonAdmission', reason: 'unsupportedContent' });
     expect(mapSlackEventToIngress({ payload: payload(), identity, channel: { ...channel, id: 'C2' } })).toBeNull();
   });
+
+  it('does not treat legacy attachment fallback text as an original human command', () => {
+    const result = mapSlackEventToIngress({ payload: payload({ text: '/stop', attachments: [{ fallback: '/stop', text: '/stop' }] }), identity, channel });
+    expect(result).toMatchObject({ kind: 'routableNonAdmission', reason: 'unsupportedContent' });
+    expect(JSON.stringify(result)).not.toContain('/stop');
+  });
 });

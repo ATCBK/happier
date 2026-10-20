@@ -1,14 +1,295 @@
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import type { ConversationProviderConnectionReconciliationSnapshotV1, ConversationProviderConnectionStopResultV1 } from '@happier-dev/channels-protocol/v1';
+import {
+  assertConversationChannelsCoreCallerV1,
+  CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
+  ConversationProviderConnectionReadResultV1Schema,
+  ConversationProviderConnectionStopInputV1Schema,
+  ConversationProviderConnectionsSnapshotV1Schema,
+  ConversationTransportFactReportResultV1Schema,
+  type ConversationProviderConnectionReconciliationSnapshotV1,
+  type ConversationProviderConnectionStopResultV1,
+  type ConversationTransportFactReportInputV1,
+} from '@happier-dev/channels-protocol/v1';
+import { materializeExactSlackCredentials, readSlackConnectionConfiguration } from './slackActions.js';
+import { createSlackApi } from './slackApi.js';
+import { SLACK_CREDENTIAL_PURPOSE, SLACK_PLUGIN_ID, SLACK_SOCKET_BACKGROUND_SERVICE_ID, SLACK_SOCKET_WORKER_ATTEMPT_ACTION_ID } from './slackPluginConstants.js';
+import { startSlackSocketWorker, type SlackSocketWorker, type SlackSocketWorkerResult } from './slackSocketWorker.js';
 
-/** Inert test-first scaffold; dependency admission blocked RED, so this is not registered. */
+// Same bounded authoritative repair cadence as the existing Discord supervisor
+// (CHAN-28). Provider Retry-After replaces this deadline for a failed attempt.
+const RECONCILIATION_INTERVAL_MS = 30_000;
+type Snapshot = ConversationProviderConnectionReconciliationSnapshotV1;
+type Fact = ConversationTransportFactReportInputV1['fact'];
+type WorkerEntry = {
+  snapshot: Snapshot;
+  controller: AbortController;
+  worker: SlackSocketWorker | null;
+  completion: Promise<void>;
+  stopIntent: 'explicit' | 'reconcile' | 'authorityUnavailable' | 'generationRetired' | null;
+  replacement: Snapshot | null;
+  stopEpoch: number | null;
+};
+
+function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((value, index) => sameJson(value, right[index]));
+  }
+  const first = Object.entries(left);
+  const second = Object.entries(right);
+  return first.length === second.length && first.every(([key, value]) => Object.hasOwn(right, key)
+    && sameJson(value, Reflect.get(right, key)));
+}
+
+function factKey(snapshot: Snapshot): string { return JSON.stringify([snapshot.connectionId, snapshot.authorityEpoch]); }
+function eligible(snapshot: Snapshot): boolean { return snapshot.enabled && snapshot.deletionState === 'none'; }
+
+/** Process-local socket custody only. Core Actions remain the Account authority. */
 export function createSlackSocketSupervisor() {
+  const workers = new Map<string, WorkerEntry>();
+  const pendingFacts = new Map<string, Fact[]>();
+  const retryAt = new Map<string, number>();
+  let wake = (): void => {};
+  let running: Promise<void> | null = null;
+  let abortRun: AbortController | null = null;
+  let disposed = false;
+
+  const addFact = (snapshot: Snapshot, fact: Fact): void => {
+    const key = factKey(snapshot);
+    const facts = pendingFacts.get(key) ?? [];
+    if (!facts.some(value => sameJson(value, fact))) pendingFacts.set(key, [...facts, fact]);
+    wake();
+  };
+  const stopEntry = (entry: WorkerEntry, intent: NonNullable<WorkerEntry['stopIntent']>): void => {
+    if (entry.stopIntent === null || intent === 'explicit') entry.stopIntent = intent;
+    entry.controller.abort();
+    entry.worker?.stop();
+  };
+  const stopAll = async (intent: NonNullable<WorkerEntry['stopIntent']>): Promise<void> => {
+    const entries = [...workers.values()];
+    for (const entry of entries) stopEntry(entry, intent);
+    await Promise.allSettled(entries.map(entry => entry.completion));
+  };
+  const recordResult = (entry: WorkerEntry, result: SlackSocketWorkerResult): void => {
+    if (result.kind === 'historyGap') addFact(entry.snapshot, result);
+    if (result.kind === 'notReady') {
+      if (result.transportFact) addFact(entry.snapshot, result.transportFact);
+      const failure = result.failure;
+      const code = failure.reason === 'credentialInvalid' ? 'providerCredentialInvalid'
+        : failure.reason === 'permissionMissing' ? 'providerPermissionMissing'
+          : failure.reason === 'invalidConfiguration' ? 'providerConfigurationInvalid' : null;
+      if (code !== null) addFact(entry.snapshot, { kind: 'providerReadiness', status: 'attention', code,
+        ...(failure.diagnostic === undefined ? {} : { diagnostic: failure.diagnostic }) });
+      retryAt.set(entry.snapshot.connectionId, Date.now() + (failure.retryAfterMs ?? RECONCILIATION_INTERVAL_MS));
+    }
+    if (result.kind === 'stopped' && result.unprovenContinuity) {
+      if (entry.stopIntent === 'reconcile' && entry.replacement) addFact(entry.replacement, { kind: 'historyGap', reason: 'providerHistoryUnavailable' });
+      if (entry.stopIntent === 'authorityUnavailable' || entry.stopIntent === 'generationRetired') {
+        addFact(entry.snapshot, { kind: 'historyGap', reason: 'applicationAdmissionLost' });
+      }
+    }
+    if (entry.stopIntent === 'explicit') addFact({ ...entry.snapshot, authorityEpoch: entry.stopEpoch ?? entry.snapshot.authorityEpoch },
+      { kind: 'stopConfirmed', reason: 'explicitStop' });
+  };
+
+  const runWorkerAttempt = async (snapshot: Snapshot, context: PluginInvocationContext): Promise<void> => {
+    const caller = context.caller;
+    if (caller?.kind !== 'plugin' || caller.pluginId !== SLACK_PLUGIN_ID || caller.originSurface !== 'background'
+      || caller.contribution.id !== SLACK_SOCKET_BACKGROUND_SERVICE_ID
+      || caller.contribution.qualifiedId !== `${SLACK_PLUGIN_ID}/backgroundServices/${SLACK_SOCKET_BACKGROUND_SERVICE_ID}`) {
+      throw new Error('Slack socket worker attempts require the current background supervisor.');
+    }
+    const entry = workers.get(snapshot.connectionId);
+    if (!entry || !sameJson(entry.snapshot, snapshot) || entry.controller.signal.aborted || context.signal.aborted) return;
+    let result: SlackSocketWorkerResult = { kind: 'stopped' };
+    try {
+      const configuration = readSlackConnectionConfiguration(snapshot);
+      if ('kind' in configuration) { result = { kind: 'notReady', failure: configuration }; return; }
+      if (!snapshot.credentialRef) { result = { kind: 'notReady', failure: { kind: 'notReady', reason: 'credentialInvalid' } }; return; }
+      const credentials = await materializeExactSlackCredentials(context, snapshot.credentialRef);
+      if ('kind' in credentials) { result = { kind: 'notReady', failure: credentials }; return; }
+      const api = createSlackApi({ credentials, http: context.services.http });
+      const identity = await api.getIdentity({ signal: context.signal });
+      if ('kind' in identity) { result = { kind: 'notReady', failure: identity }; return; }
+      if (identity.teamId !== configuration.teamId || identity.appId !== configuration.appId
+        || identity.botUserId !== configuration.botUserId || identity.botId !== configuration.botId) {
+        result = { kind: 'notReady', failure: { kind: 'notReady', reason: 'invalidConfiguration', diagnostic: 'The Slack credential no longer matches this connection.' } };
+        return;
+      }
+      if (context.signal.aborted || entry.controller.signal.aborted) return;
+      entry.worker = startSlackSocketWorker({
+        connection: { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, identity }, api,
+        webSockets: context.services.http, signal: context.signal,
+        async admitObservation(value, options) {
+          await context.services.actions.execute({ pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest }, value, options);
+        },
+        reportConnectionStatus() {
+          if (workers.get(snapshot.connectionId) === entry && !context.signal.aborted && !entry.controller.signal.aborted) {
+            retryAt.delete(snapshot.connectionId);
+            addFact(snapshot, { kind: 'providerReadiness', status: 'ready' });
+          }
+        },
+      });
+      result = await entry.worker.result;
+    } catch {
+      if (!context.signal.aborted && !entry.controller.signal.aborted) result = { kind: 'notReady', failure: {
+        kind: 'notReady', reason: 'network', diagnostic: 'Slack Socket Mode could not be initialized.' } };
+    } finally { recordResult(entry, result); }
+  };
+
+  const publishFacts = async (snapshot: Snapshot, context: BackgroundServiceContext): Promise<boolean> => {
+    const key = factKey(snapshot);
+    const facts = pendingFacts.get(key);
+    if (!facts?.length) return true;
+    let historyGap = false;
+    for (const fact of facts) {
+      try {
+        const result = ConversationTransportFactReportResultV1Schema.parse(await context.services.actions.execute({
+          pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport,
+        }, { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, fact }, { signal: context.signal }));
+        if (result.kind === 'staleAuthority') { pendingFacts.delete(key); return false; }
+        if (fact.kind === 'historyGap') historyGap = true;
+      } catch { return false; }
+    }
+    // Preserve any newer fact queued while publication was in flight.
+    const remaining = (pendingFacts.get(key) ?? []).filter(fact => !facts.includes(fact));
+    if (remaining.length) pendingFacts.set(key, remaining); else pendingFacts.delete(key);
+    return !historyGap;
+  };
+
+  const reconcile = async (context: BackgroundServiceContext): Promise<void> => {
+    let listed: ReturnType<typeof ConversationProviderConnectionsSnapshotV1Schema.parse>;
+    try {
+      listed = ConversationProviderConnectionsSnapshotV1Schema.parse(await context.services.actions.execute({
+        pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList,
+      }, {}, { signal: context.signal }));
+    } catch { await stopAll('authorityUnavailable'); return; }
+    const current = new Set<string>();
+    const retainedFactKeys = new Set<string>();
+    for (const discovery of Object.values(listed)) {
+      current.add(discovery.connectionId);
+      let snapshot: Snapshot;
+      try {
+        const read = ConversationProviderConnectionReadResultV1Schema.parse(await context.services.actions.execute({
+          pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead,
+        }, { connectionId: discovery.connectionId }, { signal: context.signal }));
+        const values = Object.values(read);
+        if (values.length !== 1 || values[0]?.connectionId !== discovery.connectionId) throw new Error('Slack connection authority is unavailable.');
+        snapshot = values[0];
+      } catch {
+        const entry = workers.get(discovery.connectionId);
+        if (entry) { retainedFactKeys.add(factKey(entry.snapshot)); stopEntry(entry, 'authorityUnavailable'); }
+        continue;
+      }
+      retainedFactKeys.add(factKey(snapshot));
+      const entry = workers.get(snapshot.connectionId);
+      if (entry && !sameJson(entry.snapshot, snapshot)) {
+        entry.replacement = snapshot;
+        stopEntry(entry, 'reconcile');
+        // Only this connection waits for its predecessor. Other connections
+        // keep reconciling while cancellation settles at the host boundary.
+        continue;
+      }
+      const factsReady = await publishFacts(snapshot, context);
+      if (snapshot.deletionState === 'pendingStopReconciliation') {
+        if (!workers.has(snapshot.connectionId)) {
+          addFact(snapshot, { kind: 'stopConfirmed', reason: 'notRunningOnReconcile' });
+          await publishFacts(snapshot, context);
+        }
+        continue;
+      }
+      if (!eligible(snapshot) || !factsReady) {
+        const active = workers.get(snapshot.connectionId);
+        if (active) stopEntry(active, 'reconcile');
+        continue;
+      }
+      if (workers.has(snapshot.connectionId) || (retryAt.get(snapshot.connectionId) ?? 0) > Date.now()) continue;
+      retryAt.delete(snapshot.connectionId);
+      const controller = new AbortController();
+      const next: WorkerEntry = { snapshot, controller, worker: null, completion: Promise.resolve(), stopIntent: null, replacement: null, stopEpoch: null };
+      workers.set(snapshot.connectionId, next);
+      next.completion = (async () => {
+        try {
+          await context.services.actions.execute({ pluginId: SLACK_PLUGIN_ID, localId: SLACK_SOCKET_WORKER_ATTEMPT_ACTION_ID }, snapshot, { signal: controller.signal });
+        } catch {
+          if (!controller.signal.aborted) recordResult(next, { kind: 'notReady', failure: { kind: 'notReady', reason: 'network' } });
+        } finally {
+          if (workers.get(snapshot.connectionId) === next) workers.delete(snapshot.connectionId);
+          if (!controller.signal.aborted && !retryAt.has(snapshot.connectionId)) retryAt.set(snapshot.connectionId, Date.now() + RECONCILIATION_INTERVAL_MS);
+          wake();
+        }
+      })();
+    }
+    for (const [id, entry] of workers) if (!current.has(id)) stopEntry(entry, 'reconcile');
+    for (const key of pendingFacts.keys()) if (!retainedFactKeys.has(key)) pendingFacts.delete(key);
+    for (const id of retryAt.keys()) if (!current.has(id)) retryAt.delete(id);
+  };
+
+  const run = async (context: BackgroundServiceContext): Promise<void> => {
+    if (disposed || running) throw new Error('Slack socket supervisor is unavailable.');
+    const controller = new AbortController();
+    abortRun = controller;
+    let invalidated = true;
+    let resume: (() => void) | undefined;
+    wake = () => { invalidated = true; resume?.(); };
+    const abort = () => { controller.abort(); wake(); };
+    context.signal.addEventListener('abort', abort, { once: true });
+    if (context.signal.aborted) abort();
+    const credentials = context.services.connectedAccounts.watch(SLACK_CREDENTIAL_PURPOSE, () => { retryAt.clear(); wake(); });
+    running = (async () => {
+      try {
+        while (!controller.signal.aborted) {
+          invalidated = false;
+          await reconcile({ ...context, signal: controller.signal });
+          if (controller.signal.aborted) break;
+          if (invalidated) continue;
+          const deadlines = [...retryAt.values()].filter(at => at > Date.now());
+          const delay = Math.min(RECONCILIATION_INTERVAL_MS, ...deadlines.map(at => at - Date.now()));
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await new Promise<void>(resolve => { resume = resolve; timer = setTimeout(resolve, delay); if (invalidated || controller.signal.aborted) resolve(); });
+          } finally { clearTimeout(timer); resume = undefined; }
+        }
+      } finally {
+        await credentials.dispose();
+        context.signal.removeEventListener('abort', abort);
+        await stopAll('generationRetired');
+        wake = () => {};
+        abortRun = null;
+      }
+    })();
+    try { await running; } finally { running = null; }
+  };
+
   return {
-    async run(_context: BackgroundServiceContext): Promise<void> {},
-    invalidateConnections(): void {},
-    async runWorkerAttempt(_snapshot: ConversationProviderConnectionReconciliationSnapshotV1, _context: PluginInvocationContext): Promise<void> {},
-    async stop(_input: unknown, _context: PluginInvocationContext): Promise<ConversationProviderConnectionStopResultV1> { return { kind: 'notRunning' }; },
-    async dispose(): Promise<void> {},
+    run,
+    invalidateConnections(): void { wake(); },
+    runWorkerAttempt,
+    async stop(input: unknown, context: PluginInvocationContext): Promise<ConversationProviderConnectionStopResultV1> {
+      assertConversationChannelsCoreCallerV1(context, { code: 'slack_channels_core_caller_required', message: 'Slack socket stop requires the Channels core.' });
+      const request = ConversationProviderConnectionStopInputV1Schema.parse(input);
+      const entry = workers.get(request.connectionId);
+      if (!entry) return { kind: 'notRunning' };
+      if (entry.snapshot.authorityEpoch !== request.authorityEpoch - 1
+        || entry.snapshot.providerConnectionKey !== request.providerConnectionKey
+        || entry.snapshot.providerConfigVersion !== request.providerConfigVersion
+        || !sameJson(entry.snapshot.providerConfig, request.providerConfig)
+        || !sameJson(entry.snapshot.credentialRef, request.credentialRef)) {
+        return { kind: 'notReady', reason: 'invalidConfiguration', diagnostic: 'The Slack worker does not match the frozen old connection.' };
+      }
+      entry.stopEpoch = request.authorityEpoch;
+      stopEntry(entry, 'explicit');
+      await entry.completion;
+      return { kind: 'stopped' };
+    },
+    async dispose(): Promise<void> {
+      disposed = true;
+      abortRun?.abort();
+      wake();
+      await stopAll('generationRetired');
+    },
   };
 }

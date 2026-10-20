@@ -8,6 +8,7 @@ import {
 import { definePlugin, type JsonValue, type PluginServices } from '@happier-dev/plugin-sdk';
 import type { SessionSendRequest } from '@happier-dev/plugin-sdk/sessions';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
 import { describe, expect, it } from 'vitest';
 
 import { deliverSlackMessage, setupSlackChannels, testSlackConnection, SLACK_SETUP_INPUT_PROTOCOL_SCHEMA } from '../../channel-slack/src/slackActions.js';
@@ -39,12 +40,31 @@ async function slackJourney(options: Readonly<{ rateLimited?: boolean; disableAf
   const eventTime = Math.floor(Date.now() / 1000);
   let answer: string | undefined;
   let core: Awaited<ReturnType<typeof createChannelsJourneyFixture>> | undefined;
+  const sockets = new Set<PluginWebSocketConnection>();
   const http: PluginServices['http'] = {
-    async openWebSocket() { throw new Error('The composed delivery journey does not open a Socket'); },
+    async openWebSocket() {
+      let greeted = false;
+      let close!: () => void;
+      const closed = new Promise<Readonly<{ kind: 'local'; wasClean: true }>>(resolve => {
+        close = () => resolve({ kind: 'local', wasClean: true });
+      });
+      const socket: PluginWebSocketConnection = {
+        url: 'wss://wss.slack.com/link?ticket=fixture', protocol: '', closed,
+        async send() { throw new Error('The readiness handshake cannot ACK a message'); },
+        async receive() {
+          if (greeted) throw new Error('Readiness must finish after the authenticated hello');
+          greeted = true;
+          return { kind: 'text', text: JSON.stringify({ type: 'hello', connection_info: { app_id: 'A1' } }) };
+        }, close, dispose: close,
+      };
+      sockets.add(socket);
+      return socket;
+    },
     async request(request) {
       const method = new URL(request.url).pathname.split('/').at(-1);
       if (method === 'auth.test') return jsonResponse({ ok: true, team_id: 'T1', user_id: 'UBOT', bot_id: 'B1', team: 'Fixture', user: 'happier' }, request.url);
       if (method === 'bots.info') return jsonResponse({ ok: true, bot: { id: 'B1', app_id: 'A1', user_id: 'UBOT', name: 'Happier' } }, request.url);
+      if (method === 'apps.connections.open') return jsonResponse({ ok: true, url: 'wss://wss.slack.com/link?ticket=fixture' }, request.url);
       if (method === 'conversations.info') return jsonResponse({ ok: true, channel: {
         id: 'C1', name: 'deploys', is_im: false, is_mpim: false, is_private: false, is_archived: false, is_member: true,
       } }, request.url);
@@ -85,7 +105,17 @@ async function slackJourney(options: Readonly<{ rateLimited?: boolean; disableAf
   const provider = await createPluginTestkit({ manifest: definition.manifest, module: definition, services: { http, connectedAccounts },
     resolveCurrentPluginMaterializationRef: () => materialization });
   try {
-    const prepared = ConversationProviderSetupResultV1Schema.parse(await provider.invokeAction('setup', { credentialRef }, { surface: 'plugin' }));
+    // The SDK test host stamps the real cross-plugin caller; Action input never supplies it.
+    const setupDriver = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+      prepare: { title: 'Prepare the Slack provider', surfaces: ['plugin'], dangerLevel: 'safe',
+        inputSchema: SLACK_SETUP_INPUT_PROTOCOL_SCHEMA.jsonSchema, resultSchema: roles.setup.declaration.resultSchema.jsonSchema,
+        run: (input, context) => context.services.actions.execute({ pluginId, localId: 'setup' }, input) },
+    } });
+    const setupCaller = await createPluginTestkit({ manifest: setupDriver.manifest, module: setupDriver, actionTargets: [provider] });
+    const prepared = await (async () => {
+      try { return ConversationProviderSetupResultV1Schema.parse(await setupCaller.invokeAction('prepare', { credentialRef }, { surface: 'plugin' })); }
+      finally { await setupCaller.dispose(); }
+    })();
     if (!prepared.outboundTextLimit) throw new Error('Slack setup must declare its native text bound');
     const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1', transport: { kind: 'socket' },
       overlapSafety: prepared.overlapSafety, replayContinuity: prepared.replayContinuity, outboundTextLimit: prepared.outboundTextLimit,
@@ -136,12 +166,12 @@ async function slackJourney(options: Readonly<{ rateLimited?: boolean; disableAf
       validateWrites() {
         for (const [collection, definition] of [[journey.state, CHANNEL_STATE_COLLECTION], [journey.deliveries, CHANNEL_DELIVERIES_COLLECTION]] as const) {
           const schema = compilePluginJsonSchema(definition.schema);
-          for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(schema, row.value), row.rowId).toBe(true);
+          for (const row of collection.rows.values()) if (!row.deleted) expect(isValidPluginJsonSchemaValue(schema, row.value), row.rowId).toBe(true);
         }
       },
-      async dispose() { await journey.dispose(); await provider.dispose(); } };
+      async dispose() { await journey.dispose(); for (const socket of sockets) socket.dispose(); await provider.dispose(); } };
   } catch (error) {
-    await core?.dispose(); await provider.dispose(); throw error;
+    await core?.dispose(); for (const socket of sockets) socket.dispose(); await provider.dispose(); throw error;
   }
 }
 
@@ -164,7 +194,8 @@ describe('Slack through registered Channels ingress and Session projection', () 
       expect(journey.nativeMessages.map(message => message.text).join('')).toBe(text);
       expect(journey.nativeMessages.every(message => message.channel === 'C1' && message.thread_ts === rootTs)).toBe(true);
       expect(journey.consumed.every(delivery => countConversationTextUnits(delivery.content.text, limit.unit) <= limit.maximum)).toBe(true);
-      expect(journey.consumed.every(delivery => delivery.replyContext?.threadId === rootTs)).toBe(true);
+      expect(journey.consumed.every(delivery => delivery.replyContext !== undefined && 'threadId' in delivery.replyContext
+        && delivery.replyContext.threadId === endpoint.id)).toBe(true);
       const count = journey.nativeMessages.length;
       await journey.outward();
       expect(journey.nativeMessages).toHaveLength(count);

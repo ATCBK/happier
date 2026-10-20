@@ -1,4 +1,8 @@
+import type { ConversationEndpointIdentityV1 } from '@happier-dev/channels-protocol/v1';
+import type { SlackChannel, SlackIdentity } from './slackApi.js';
+
 export const SLACK_PLUGIN_ID = 'happier.channel.slack';
+export const SLACK_CHANNEL_PROVIDER_CONTRIBUTION_ID = 'slack-provider';
 export const SLACK_CONNECTED_ACCOUNT_ID = 'slack-bot';
 export const SLACK_CREDENTIAL_PURPOSE = 'slack-credentials';
 export const SLACK_BOT_TOKEN_ENVIRONMENT_KEY = 'SLACK_BOT_TOKEN';
@@ -24,6 +28,18 @@ export function createSlackThreadEndpointId(teamId: string, channelId: string, t
 
 export function createSlackPrincipalId(teamId: string, userId: string): string {
   return `slack:${teamId}:user:${userId}`;
+}
+
+/** One provider-authenticated topology projection for resolution and ingress. */
+export function createSlackEndpointIdentity(
+  identity: Pick<SlackIdentity, 'teamId'>,
+  channel: Pick<SlackChannel, 'id' | 'isIm' | 'isMpim'>,
+  threadTs?: string,
+): ConversationEndpointIdentityV1 {
+  const id = createSlackChannelEndpointId(identity.teamId, channel.id);
+  const audience = channel.isIm && !channel.isMpim ? 'direct' : 'shared';
+  if (threadTs !== undefined) return { id: createSlackThreadEndpointId(identity.teamId, channel.id, threadTs), parentId: id, kind: 'thread', audience };
+  return audience === 'direct' ? { id, kind: 'direct', audience: 'direct' } : { id, kind: 'shared', audience: 'shared' };
 }
 
 export function readSlackEndpointId(value: string): Readonly<{ teamId: string; channelId: string; threadTs?: string }> | null {

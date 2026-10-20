@@ -1,0 +1,97 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
+import { ConversationProviderSetupResultV1Schema } from '@happier-dev/channels-protocol/v1';
+import { setupSlackChannels, testSlackConnection, resolveSlackEndpoint, resolveSlackPrincipal, deliverSlackMessage } from './slackActions.js';
+
+const credentialRef = { service: { pluginId: 'happier.channel.slack', localId: 'slack-bot' }, accountId: 'slack-test' };
+const identity = { teamId: 'T1', appId: 'A1', botUserId: 'U1', botId: 'B1', label: 'Happier' };
+const connection = { v: 1, connectionId: 'connection-1', providerConnectionKey: 'slack:team:T1:app:A1', providerConfigVersion: 1, providerConfig: identity, credentialRef };
+function boundary(options: { foreignApp?: boolean; foreignUser?: boolean; direct?: boolean; foreignChannel?: boolean } = {}) {
+  const effects: unknown[] = [];
+  let closed = false;
+  const materialize = vi.fn(async () => ({ kind: 'environment', env: { SLACK_BOT_TOKEN: 'xoxb-test', SLACK_APP_TOKEN: 'xapp-test' } }));
+  const request = vi.fn(async (input: { url: string; body?: Uint8Array }) => {
+    const method = new URL(input.url).pathname.split('/').at(-1);
+    const body = method === 'auth.test' ? { ok: true, team_id: 'T1', user_id: 'U1', bot_id: 'B1' }
+      : method === 'bots.info' ? { ok: true, bot: { id: 'B1', user_id: 'U1', app_id: 'A1', name: 'Happier' } }
+      : method === 'apps.connections.open' ? { ok: true, url: 'wss://wss.slack.com/link?ticket=fixture' }
+      : method === 'chat.getPermalink' ? { ok: true, channel: 'C1', permalink: 'https://fixture.slack.com/archives/C1/p1700000000000001' }
+      : method === 'conversations.info' ? { ok: true, channel: { id: options.foreignChannel ? 'C2' : options.direct ? 'D1' : 'C1', is_im: options.direct ?? false,
+        is_mpim: false, is_private: options.direct ?? false, is_archived: false, name: 'deploys' } }
+      : method === 'users.info' ? { ok: true, user: { id: 'U2', team_id: options.foreignUser ? 'T2' : 'T1', is_bot: false, deleted: false, profile: { display_name: 'Alice' } } }
+      : method === 'chat.postMessage' ? { ok: true, channel: 'C1', ts: '1700000000.000002' } : undefined;
+    if (!body) throw new Error(`Unexpected Slack request ${method}`);
+    if (method === 'chat.postMessage') effects.push(JSON.parse(new TextDecoder().decode(input.body)));
+    return { status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(body)) };
+  });
+  const socket: PluginWebSocketConnection = { url: 'wss://wss.slack.com/link', protocol: '', closed: new Promise(() => {}),
+    async receive() { return { kind: 'text', text: JSON.stringify({ type: 'hello', connection_info: { app_id: options.foreignApp ? 'A2' : 'A1' } }) }; },
+    async send() {}, close() { closed = true; }, dispose() { closed = true; } };
+  const context = {
+    plugin: { id: 'happier.channel.slack', version: '0.0.0' }, surface: 'plugin',
+    contribution: { id: 'fixture', qualifiedId: 'happier.channel.slack/actions/fixture' }, invokedAtMs: 1,
+    caller: { kind: 'plugin', pluginId: 'happier.channels', occurrenceId: 'core-1',
+      sourceCustody: { kind: 'managed', immutableGenerationId: 'core-1', installSource: 'npm' },
+      contribution: { id: 'fixture', qualifiedId: 'happier.channels/actions/fixture' },
+      materialization: { pluginId: 'happier.channels', machineId: 'm1', materializationId: 'core-1' } },
+    signal: new AbortController().signal,
+    // Only selected credentials and Slack network are replaced at their host boundaries.
+    services: { connectedAccounts: { materialize }, http: { request, openWebSocket: async () => socket } } as unknown as PluginInvocationContext['services'],
+  } satisfies PluginInvocationContext;
+  return { context, materialize, request, effects, isClosed: () => closed };
+}
+
+describe('Slack provider Actions', () => {
+  it('verifies both tokens through the shared hello proof and returns secret-free connection facts', async () => {
+    const b = boundary();
+    const result = ConversationProviderSetupResultV1Schema.parse(await setupSlackChannels({ credentialRef }, b.context));
+    expect(result).toMatchObject({ credentialRef, providerConnectionKey: connection.providerConnectionKey,
+      integrationPrincipal: { id: 'slack:T1:user:U1' }, supportedTransports: ['socket'], replayContinuity: 'sessionBound', providerConfig: identity });
+    expect(JSON.stringify(result)).not.toContain('xapp-');
+    expect(b.materialize).toHaveBeenCalledWith('slack-credentials', { kind: 'environment', keys: ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'] },
+      { signal: b.context.signal, expectedAccount: credentialRef });
+    expect(b.isClosed()).toBe(true);
+  });
+  it('rejects bot/app disagreement and foreign credential references before setup persists', async () => {
+    await expect(setupSlackChannels({ credentialRef }, boundary({ foreignApp: true }).context)).rejects.toMatchObject({ code: 'slack_socket_invalidConfiguration' });
+    const b = boundary();
+    await expect(setupSlackChannels({ credentialRef: { ...credentialRef, service: { pluginId: 'other.plugin', localId: 'slack-bot' } } }, b.context))
+      .rejects.toMatchObject({ code: 'slack_setup_credential_invalid' });
+    expect(b.materialize).not.toHaveBeenCalled();
+  });
+  it('fails changed connection identity and unsupported transport without claiming readiness', async () => {
+    expect(await testSlackConnection({ ...connection, selectedTransport: 'socket', providerConfig: { ...identity, appId: 'A2' } }, boundary().context))
+      .toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+    const b = boundary();
+    expect(await testSlackConnection({ ...connection, selectedTransport: 'checkpointedPull' }, b.context)).toMatchObject({ kind: 'notReady', reason: 'unsupported' });
+    expect(b.materialize).not.toHaveBeenCalled();
+  });
+  it('resolves workspace-qualified shared, direct and thread topology', async () => {
+    expect(await resolveSlackEndpoint({ ...connection, query: 'C1' }, boundary().context)).toMatchObject({ kind: 'resolved', candidates: [
+      { kind: 'shared', audience: 'shared', id: 'slack:T1:channel:C1' }] });
+    expect(await resolveSlackEndpoint({ ...connection, query: 'D1' }, boundary({ direct: true }).context)).toMatchObject({ kind: 'resolved', candidates: [
+      { kind: 'direct', audience: 'direct', id: 'slack:T1:channel:D1' }] });
+    expect(await resolveSlackEndpoint({ ...connection, query: 'slack:T1:channel:C1:thread:1700000000.000001' }, boundary().context)).toMatchObject({ kind: 'resolved', candidates: [
+      { kind: 'thread', audience: 'shared', id: 'slack:T1:channel:C1:thread:1700000000.000001', parentId: 'slack:T1:channel:C1' }] });
+  });
+  it('resolves only exact authenticated same-workspace users, never display names or foreign IDs', async () => {
+    const endpoint = { kind: 'shared', audience: 'shared', id: 'slack:T1:channel:C1' };
+    expect(await resolveSlackPrincipal({ ...connection, endpoint, query: 'U2' }, boundary().context)).toMatchObject({ kind: 'resolved', candidates: [{ id: 'slack:T1:user:U2', label: 'Alice' }] });
+    expect(await resolveSlackPrincipal({ ...connection, endpoint, query: 'U2' }, boundary({ foreignUser: true }).context)).toMatchObject({ kind: 'resolved', candidates: [] });
+    expect(await resolveSlackPrincipal({ ...connection, endpoint, query: 'Alice' }, boundary().context)).toMatchObject({ kind: 'resolved', candidates: [] });
+    expect(await resolveSlackPrincipal({ ...connection, endpoint: { ...endpoint, id: 'slack:T2:channel:C1' }, query: 'U2' }, boundary().context))
+      .toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+  });
+  it('revalidates destination topology and refuses contradictory thread routes before any post', async () => {
+    const input = { ...connection, endpoint: { kind: 'thread', audience: 'shared', id: 'slack:T1:channel:C1:thread:1700000000.000001', parentId: 'slack:T1:channel:C1' },
+      content: { text: 'hello' }, deliveryKey: 'delivery-1', mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress' };
+    const good = boundary();
+    expect(await deliverSlackMessage(input, good.context)).toEqual({ kind: 'delivered', providerMessageIds: ['1700000000.000002'] });
+    expect(good.effects).toMatchObject([{ channel: 'C1', thread_ts: '1700000000.000001', text: 'hello' }]);
+    for (const [request, b] of [[input, boundary({ foreignChannel: true })], [{ ...input, replyContext: { threadId: '1700000000.999999' } }, boundary()]] as const) {
+      expect(await deliverSlackMessage(request, b.context)).toMatchObject({ kind: 'notDelivered', retry: 'never' });
+      expect(b.effects).toEqual([]);
+    }
+  });
+});

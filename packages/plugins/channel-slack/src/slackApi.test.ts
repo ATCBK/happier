@@ -59,6 +59,31 @@ describe('Slack Web API boundary', () => {
     await expect(api.getUser('U2')).resolves.toEqual({ id: 'U2', teamId: 'T1', isBot: false, deleted: false, label: 'Alice' });
   });
 
+  it('resolves an existing selected message to its authenticated Slack thread root', async () => {
+    let permalink = 'https://workspace.slack.com/archives/C1/p123456';
+    const api = createSlackApi({ credentials, http: { async request(input) {
+      const url = new URL(input.url);
+      expect(url.pathname).toBe('/api/chat.getPermalink');
+      expect(url.searchParams.get('channel')).toBe('C1');
+      expect(url.searchParams.get('message_ts')).toBe('123.456');
+      return response({ ok: true, channel: 'C1', permalink });
+    } } });
+    await expect(api.getThreadRoot('C1', '123.456')).resolves.toEqual({ threadTs: '123.456' });
+    permalink += '?thread_ts=100.001&cid=C1';
+    await expect(api.getThreadRoot('C1', '123.456')).resolves.toEqual({ threadTs: '100.001' });
+  });
+
+  it.each([
+    { channel: 'OTHER', permalink: 'https://workspace.slack.com/archives/C1/p123456' },
+    { channel: 'C1', permalink: 'https://outside.example/archives/C1/p123456' },
+    { channel: 'C1', permalink: 'https://workspace.slack.com/archives/OTHER/p123456' },
+    { channel: 'C1', permalink: 'https://workspace.slack.com/archives/C1/p999999' },
+    { channel: 'C1', permalink: 'https://workspace.slack.com/archives/C1/p123456?thread_ts=invalid' },
+  ])('rejects uncorrelated thread evidence', async (body) => {
+    const api = createSlackApi({ credentials, http: { async request() { return response({ ok: true, ...body }); } } });
+    await expect(api.getThreadRoot('C1', '123.456')).resolves.toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+  });
+
   it.each([
     ['invalid_auth', 'credentialInvalid'], ['token_revoked', 'credentialInvalid'], ['missing_scope', 'permissionMissing'],
   ])('maps %s to typed %s on reads and writes', async (error, reason) => {
@@ -125,6 +150,15 @@ describe('Slack Web API boundary', () => {
     await expect(api.getUser('U2')).resolves.toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
   });
 
+  it('does not resolve a different authenticated channel or user than the requested immutable ID', async () => {
+    const api = createSlackApi({ credentials, http: { async request() {
+      return response({ ok: true, channel: { id: 'OTHER', is_im: true },
+        user: { id: 'OTHER', team_id: 'T1', is_bot: false, deleted: false } });
+    } } });
+    await expect(api.getChannel('D1')).resolves.toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+    await expect(api.getUser('U2')).resolves.toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+  });
+
   it('makes no provider effect for already-cancelled sends', async () => {
     const controller = new AbortController();
     controller.abort();
@@ -132,5 +166,15 @@ describe('Slack Web API boundary', () => {
     const api = createSlackApi({ credentials, http: { async request() { attempts += 1; return response({ ok: true }); } } });
     await expect(api.postMessage(payload(), { signal: controller.signal })).resolves.toEqual({ kind: 'notDelivered', retry: 'safe' });
     expect(attempts).toBe(0);
+  });
+
+  it('retains confirmed acceptance if cancellation arrives with the send response', async () => {
+    const controller = new AbortController();
+    const api = createSlackApi({ credentials, http: { async request() {
+      controller.abort();
+      return response({ ok: true, channel: 'C1', ts: '123.456' });
+    } } });
+    await expect(api.postMessage(payload(), { signal: controller.signal }))
+      .resolves.toEqual({ kind: 'delivered', providerMessageIds: ['123.456'] });
   });
 });

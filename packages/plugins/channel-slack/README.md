@@ -1,9 +1,10 @@
 # Slack Channels
 
-Unreleased 0.3 development scaffold for Channels c0.73 F1. The package currently
-has a loadable manifest and activation entrypoint; the Slack provider roles are
-not registered yet. Test-first implementation is blocked on the checkout's
-dependency-refresh admission. This is not an available Slack integration.
+Unreleased 0.3 development provider for Channels c0.73 F1. Slack Socket Mode
+uses an outbound WebSocket, so the selected Machine needs no public HTTP
+listener. Enable Channels and Slack Channels, connect the app credentials,
+then create a connection and bind a conversation to a Session or thread router.
+This source implementation is not a stable-release availability claim.
 
 ## Prepare a Slack app
 
@@ -50,7 +51,7 @@ settings:
 
 Install the app to that workspace and invite the bot to the conversations it
 should observe. Generate an app-level token with `connections:write`. The
-intended Connected Account holds both the non-rotating bot token (`xoxb-`) and
+Slack bot Connected Account holds both the non-rotating bot token (`xoxb-`) and
 app-level token (`xapp-`) as secrets; Channel setup receives only the account
 reference. Rotating-token refresh and organization-wide multi-workspace
 installation are outside this first vertical. See
@@ -69,7 +70,9 @@ custody. No Slack checkpoint, binding store or HTTP listener is introduced.
 Socket Mode obtains a rotating URL with `apps.connections.open`; the app token
 must correspond to the bot's app. `auth.test` supplies the workspace/bot IDs,
 `bots.info` supplies its `app_id`, and the socket's authenticated
-`hello.connection_info.app_id` supplies the comparison. Event acknowledgements
+`hello.connection_info.app_id` supplies the comparison during setup, connection
+tests and observer startup. Account health verifies that both tokens are
+accepted; the shared socket handshake owns app correspondence. Event acknowledgements
 follow successful core admission; reconnects cannot promise replay of missed
 events. Native `event_id` supplies occurrence identity to the core census.
 Sources: [auth.test](https://docs.slack.dev/reference/methods/auth.test/),
@@ -90,7 +93,16 @@ identities must use core pairing. Sources:
 [message events](https://docs.slack.dev/reference/events/message/), retrieved
 2026-10-20.
 
-The planned output representation is plain text with Slack automatic parsing
+Select an existing conversation with its Slack channel ID (`C…`, `G…` or `D…`).
+An exact thread can be selected with
+`slack:<workspace-id>:channel:<channel-id>:thread:<root-ts>`.
+The authenticated [`chat.getPermalink`](https://docs.slack.dev/reference/methods/chat.getPermalink/)
+response verifies that the selected message exists and normalizes replies to
+their root timestamp (retrieved 2026-10-20). Principals accept an exact `U…` or
+`W…` user ID, or the provider's workspace-qualified principal ID. Shared-space
+pairing uses Channels' existing exact-endpoint proof and owner review.
+
+The output representation is plain text with Slack automatic parsing
 disabled and explicit mention delimiters neutralized. Core splits using the
 declared 40,000-character native ceiling, rather than treating Slack's 4,000
 character recommendation as a hard limit. `chat.postMessage.thread_ts` preserves
@@ -103,12 +115,23 @@ blind resend. Sources:
 [message truncation](https://docs.slack.dev/changelog/2018-truncating-really-long-messages/),
 retrieved 2026-10-20.
 
-## Acceptance still required
+Socket reconnects report continuity loss through core history-gap/readiness
+Actions and preserve the existing explicit baseline-recovery journey. Socket
+receive progress is not a durable checkpoint. Edits become bodyless
+`unsupportedEdit`; deletes are ignored. Files and rich/shared attachments become
+bodyless `unsupportedContent`, so attachment text cannot become a command.
+No `attachmentFetch` role or HTTP Events API transport is declared in this unit.
+See [message events](https://docs.slack.dev/reference/events/message/),
+[message_changed](https://docs.slack.dev/reference/events/message/message_changed/)
+and [message attachments](https://docs.slack.dev/tools/node-slack-sdk/reference/types/interfaces/MessageAttachment/),
+retrieved 2026-10-20.
 
-Run the provider tests, composed core journeys, F7 conformance and package
-typecheck/build after dependency admission is restored. The orchestrator owns
-bundled projection publication and loaded development-stack QA (`RELOAD NEEDED`).
-A real Slack workspace must additionally verify app/bot correspondence,
+## Release acceptance
+
+The Channels orchestrator owns loaded development-stack QA (`RELOAD NEEDED`).
+A real Slack workspace must verify app/bot correspondence,
 message scopes, mention notification suppression, Unicode text boundaries,
 thread replies, reconnect gaps, rate limits and credential repair before
-release. No live workspace or real Slack send was used for this scaffold.
+release. Source tests use documented HTTP/WebSocket boundary fakes and the real
+Channels composition/conformance harness. No live workspace or real Slack send
+is part of those tests.
