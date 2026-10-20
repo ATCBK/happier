@@ -125,6 +125,18 @@ async function executeAction(
       ...(request.page?.kind === 'continuation' ? {} : { next: ORGANIZATIONS_NEXT }),
     };
   }
+  if (ref.localId === 'posthog/list-scope-units') {
+    const request = input as Readonly<{ mode?: string; draft: Readonly<{ configuration: Readonly<{ token: string }> }> }>;
+    const configuration = JSON.parse(request.draft.configuration.token) as Readonly<{
+      include?: JsonValue;
+      environments: readonly Readonly<{ teamUuid: string; displayName: string }>[];
+    }>;
+    return {
+      kind: 'page', status: 'complete',
+      selection: configuration.include ?? { kind: 'selected', unitIds: configuration.environments.map((entry) => entry.teamUuid) },
+      units: configuration.environments.map((entry) => ({ id: entry.teamUuid, label: entry.displayName })),
+    };
+  }
   if (ref.localId === 'sources/administer-v1') {
     return { kind: 'active', sourceInstanceId: '11111111-1111-4111-8111-111111111111' };
   }
@@ -159,6 +171,17 @@ afterEach(async () => {
 });
 
 describe('the mounted PostHog PRs & Issues settings page', () => {
+  it('uses the shared All choice while preserving source-owned window policies', async () => {
+    const page = await mountSettings();
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Add Example organization to PRs & Issues' })); });
+    await act(async () => { await page.press(await page.getByRole('radio', { name: 'All' })); });
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Save selection' })); });
+    const write = recorded.find((entry) => (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1');
+    const result = write?.input as Readonly<{ draft: Readonly<{ configuration: Readonly<{ token: string }> }> }>;
+    expect(JSON.parse(result.draft.configuration.token)).toMatchObject({
+      include: { kind: 'all' }, scanWindowPolicy: configuredScanWindow, detailWindowPolicy: configuredDetailWindow,
+    });
+  });
   it('refuses a native draft before reading or administering configuration and allows cancellation', async () => {
     discoveredBinding = {
       purpose: accountBinding.purpose,
