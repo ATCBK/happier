@@ -498,6 +498,8 @@ export function createTriageEntrySessionStartController(
     // the gate the way a state read would.
     const inFlight = ({ current: false } as { current: boolean });
     const retired = ({ current: false } as { current: boolean });
+    // The recipe is a host presentation borrowed by this controller, not independent pending work.
+    let recipeLifetime = new AbortController();
     // The one identity a retry repeats. Scoped to this mount, like every other
     // fact here: a Session the user navigates back to is reached through its
     // link, not through a remembered start.
@@ -941,7 +943,7 @@ export function createTriageEntrySessionStartController(
                         }]),
                     );
                     setPhase(CHOOSING);
-                    const draft = await requestTriageNewSessionDraft(host, seed);
+                    const draft = await requestTriageNewSessionDraft(host, seed, { signal: recipeLifetime.signal });
                     if (retired.current) return;
                     if (draft.status === 'cancelled') {
                         // The reader closed the surface. Nothing was chosen,
@@ -1095,9 +1097,12 @@ export function createTriageEntrySessionStartController(
                 ...(recovery.reviewInstructions === undefined ? {} : { reviewInstructions: recovery.reviewInstructions }),
             };
         },
-        activate: () => { retired.current = false; },
+        activate: () => {
+            retired.current = false;
+            if (recipeLifetime.signal.aborted) recipeLifetime = new AbortController();
+        },
         subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose: () => { retired.current = true;  listeners.clear(); },
+        dispose: () => { retired.current = true; recipeLifetime.abort(); listeners.clear(); },
         waitForSettled: () => inFlight.current ? new Promise<TriageEntrySessionStartControllerV1>((resolve) => {
             const listener = () => { if (!inFlight.current) { listeners.delete(listener); resolve(snapshot); } };
             listeners.add(listener);

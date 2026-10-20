@@ -152,7 +152,7 @@ function createSemanticPresentationHost(input: Readonly<{
  * across (its own context bridge) reaches the detail. The pane's own chrome is therefore host-drawn (plain React
  * Native), never a plugin component.
  */
-function createSemanticDetailsPane(available: boolean): Readonly<{ binding: PluginUiDetailsPaneHost; pane: ReactNode }> {
+function createSemanticDetailsPane(placement: Readonly<{ available: boolean }>): Readonly<{ binding: PluginUiDetailsPaneHost; pane: ReactNode }> {
   let published: PluginUiDetailsPanePresentation | null = null;
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
@@ -190,7 +190,7 @@ function createSemanticDetailsPane(available: boolean): Readonly<{ binding: Plug
   }
   return {
     binding: {
-      useAvailable: () => available,
+      useAvailable: () => placement.available,
       renderDetailsPane: (input) => <Publisher input={input} />,
     },
     pane: <Pane />,
@@ -501,7 +501,7 @@ export function createPluginUiRnwSemanticSurfaceAdapter(
       let currentContext = context;
       const detailsPane = options.detailsPane === undefined
         ? undefined
-        : createSemanticDetailsPane(options.detailsPane.available);
+        : createSemanticDetailsPane(options.detailsPane);
       const paneHeader = options.paneHeader === true ? createSemanticPaneHeader() : undefined;
       const presentationHost = options.targetedSurfaces === undefined
         && options.physicalFocus === undefined

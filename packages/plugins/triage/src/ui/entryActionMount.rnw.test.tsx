@@ -455,7 +455,7 @@ let draftSeeds: unknown[] = [];
 /** Seeds handed to the host-owned New Session authoring surface. */
 let newSessionSeeds: unknown[] = [];
 
-async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: () => Promise<PluginUiSessionServerStartDraftV1 | null>): Promise<PluginUiTestkit> {
+async function mountShell(harness: Harness, hostedDetail: boolean | Readonly<{ available: boolean }> = false, chooseDraft?: (signal: AbortSignal) => Promise<PluginUiSessionServerStartDraftV1 | null>): Promise<PluginUiTestkit> {
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
     let fixture!: PluginUiTestkit;
     await act(async () => {
@@ -491,7 +491,7 @@ async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: 
             }),
             adapter: createPluginUiRnwSemanticSurfaceAdapter({
                 ephemeralSharedScope, overlays: true,
-                ...(hostedDetail ? { detailsPane: { available: true } } : {}),
+                ...(hostedDetail ? { detailsPane: typeof hostedDetail === 'boolean' ? { available: true } : hostedDetail } : {}),
                 // The native/web focus adapter is a genuine host boundary, as in the review chooser harness.
                 physicalFocus(target) { target.focus(); return true; },
             }),
@@ -499,7 +499,7 @@ async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: 
                 publishCurrentUiContext: () => undefined,
                 executeAction: async ({ action, input }) =>
                     await harness.executeAction({ action, input }) as never,
-                selectActionInput: async ({ request }) => {
+                selectActionInput: async ({ request, signal }) => {
                     if ('operation' in request) {
                         const operation = request.operation;
                         return {
@@ -535,7 +535,7 @@ async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: 
                     draftsOpened += 1;
                     draftSeeds.push(request.draft);
                     if (chooseDraft) {
-                        const draft = await chooseDraft();
+                        const draft = await chooseDraft(signal);
                         return draft === null ? { kind: 'cancelled' } : { kind: 'serverStartDraft', draft };
                     }
                     return harness.draftSettles()
@@ -589,6 +589,68 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
+    it.each([true, false])('keeps the recipe owner when the host pane relocates (opened beside page=%s)', async (openedBeside) => {
+        let beside = openedBeside;
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        let chooserSignal!: AbortSignal;
+        const harness = createHarness({ comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }) });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, { get available() { return beside; } }, (signal) => {
+            chooserSignal = signal;
+            return new Promise((resolve) => { finishRecipe = resolve; });
+        });
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        for (const next of [!openedBeside, openedBeside]) {
+            beside = next;
+            await act(async () => { await shell.updateSurface(shell.context.surface); });
+            await settle();
+            expect(chooserSignal.aborted).toBe(false);
+        }
+        await act(async () => { finishRecipe(SETTLED_DRAFT); });
+        await settle();
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(draftsOpened).toBe(1);
+    }, 60_000);
+
+    it('withdraws the pending chooser when its entry owner retires', async () => {
+        let chooserSignal!: AbortSignal;
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        const harness = createHarness({ includeSecondEntry: true, comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }) });
+        const shell = await mountShell(harness, true, (signal) => {
+            chooserSignal = signal;
+            return new Promise((resolve) => { finishRecipe = resolve; });
+        });
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+        })); });
+        await settle();
+        expect(chooserSignal.aborted).toBe(true);
+        // Even a late submit cannot become a creation for the replacement entry.
+        await act(async () => { finishRecipe(SETTLED_DRAFT); });
+        await settle();
+        expect(harness.startRequests).toEqual([]);
+        expect(harness.comparisonOpens).toEqual([]);
+    }, 60_000);
+
     it.each([
         { hosted: false, openFails: false, confirmed: false },
         { hosted: true, openFails: false, confirmed: false },
