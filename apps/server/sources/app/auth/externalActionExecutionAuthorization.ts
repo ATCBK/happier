@@ -283,7 +283,7 @@ async function isIssuedIntentNativeFactReportInTx(reader: Tx, binding: ExternalA
         return row.custodianAccountId === binding.custodianAccountId && Boolean(pending)
             && pending!.expectedIntentRevision === report.expectedIntentRevision && pending!.requestId === report.requestId
             && sameManagedInput(pending!.controller, report.controller)
-            && (binding.actionId === 'machines.managed.delete' ? pending!.intent === 'delete' : pending!.intent === 'stop' || pending!.intent === 'start');
+            && (binding.actionId === 'machines.managed.delete' ? pending!.intent === 'delete' : pending!.intent === 'stop' || pending!.intent === 'suspend' || pending!.intent === 'start' || pending!.intent === 'resume');
     } catch (error) {
         if (!(error instanceof ManagedMachineError)) throw error;
         return false;
