@@ -23,6 +23,9 @@ describe('EmbedConfigV1', () => {
     const organization = { folderId: 'folder', tagIds: ['lead'] };
     const create: NonNullable<EmbedAccessV1['create']> = {
       machineId: 'machine', agentTargetKey: 'agent:happier.agent.claude/claude', directory: 'managed', placement: organization,
+      connectedServices: { v: 2, bindingsByServiceId: {
+        'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+      } },
     };
     const modeChoices: (SessionPermissionMode[] | null)[] = [null, ['default'], ['default', 'read-only']];
     for (const send of [false, true]) for (const approve of [false, true]) for (const changeModel of [false, true]) {

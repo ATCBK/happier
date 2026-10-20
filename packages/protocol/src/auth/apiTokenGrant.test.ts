@@ -16,6 +16,9 @@ const modelB = { ...modelA, modelId: 'b' };
 const session = { kind: 'session', sessionId: 's1' } as const;
 const machine = { kind: 'machine', machineId: 'm1' } as const;
 const create = { machineId: 'm1', agentTargetKey: modelA.agentTargetKey, directory: 'managed', placement: { folderId: 'leads', tagIds: ['inbound'] } } as const;
+const connectedServices = { v: 2, bindingsByServiceId: {
+  'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+} } as const;
 const spawn = {
   executionTarget: { serverId: 'home', machineId: 'm1' },
   agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
@@ -52,12 +55,12 @@ describe('API token grant admission', () => {
     }
   });
   it('projects only canonical creation admission facts without prompt or startup custody', () => {
-    const authored = { ...spawn, creationKey: 'start', initialInput: { text: 'private prompt' },
+    const authored = { ...spawn, connectedServices, creationKey: 'start', initialInput: { text: 'private prompt' },
       agentSessionStartupInstructionsV1: { v: 1, id: 'managed.start', revision: 1, instructions: 'Private startup instructions' } };
     // Canonical spawn parsing remains the owner of the authored input; no new
     // parser or policy engine is introduced by the public projection.
     expect(projectApiTokenSessionSpawnAdmissionV1(authored))
-      .toEqual(spawn);
+      .toEqual({ ...spawn, connectedServices });
     const facts = projectApiTokenSessionSpawnAdmissionV1(authored);
     expect(evaluate({ grant: grant({ create }), actionId: 'session.spawn_new', target: machine, spawnInput: facts }))
       .toEqual(evaluate({ grant: grant({ create }), actionId: 'session.spawn_new', target: machine, spawnInput: spawn }));
@@ -176,14 +179,19 @@ describe('API token grant admission', () => {
   });
 
   it('enforces all creation bindings through the same evaluator', () => {
-    const g = grant({ create: { ...create, placement: { ...create.placement, tagIds: [...create.placement.tagIds] } }, targets: { sessions: [], machines: ['m1'] } });
-    expect(evaluate({ grant: g, actionId: 'session.spawn_new', target: machine, spawnInput: spawn })).toEqual({ ok: true });
+    const g = grant({ create: { ...create, connectedServices, placement: { ...create.placement, tagIds: [...create.placement.tagIds] } }, targets: { sessions: [], machines: ['m1'] } });
+    const boundSpawn = { ...spawn, connectedServices };
+    expect(evaluate({ grant: g, actionId: 'session.spawn_new', target: machine, spawnInput: boundSpawn })).toEqual({ ok: true });
     for (const changed of [
-      { ...spawn, executionTarget: { ...spawn.executionTarget, machineId: 'm2' } },
-      { ...spawn, directory: { kind: 'path', path: '/home/x' } },
-      { ...spawn, organizationPlacement: { ...create.placement, folderId: 'other' } },
-      { ...spawn, organizationPlacement: { ...create.placement, tagIds: ['other'] } },
-      { ...spawn, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+      { ...boundSpawn, executionTarget: { ...spawn.executionTarget, machineId: 'm2' } },
+      { ...boundSpawn, directory: { kind: 'path', path: '/home/x' } },
+      { ...boundSpawn, organizationPlacement: { ...create.placement, folderId: 'other' } },
+      { ...boundSpawn, organizationPlacement: { ...create.placement, tagIds: ['other'] } },
+      { ...boundSpawn, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+      { ...boundSpawn, connectedServices: undefined },
+      { ...boundSpawn, connectedServices: { v: 2, bindingsByServiceId: {
+        'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'forged' },
+      } } },
     ]) {
       expect(evaluate({ grant: g, actionId: 'session.spawn_new', target: machine, spawnInput: changed })).toEqual({ ok: false, reason: 'create_not_granted' });
     }
@@ -299,10 +307,12 @@ describe('monotonic child attenuation', () => {
     expect(within(contributed, contributed)).toBe(true);
   });
   it('rejects widening nullable sets, approve, origins and create bindings', () => {
-    const bound = grant({ create: { ...create, placement: { folderId: 'leads', tagIds: ['inbound'] } }, targets: { sessions: [], machines: ['m1'] } });
+    const bound = grant({ create: { ...create, connectedServices, placement: { folderId: 'leads', tagIds: ['inbound'] } }, targets: { sessions: [], machines: ['m1'] } });
     expect(within({ ...bound, create: null }, bound)).toBe(false);
     expect(within({ ...bound, create: null, actions: { families: [], ids: ['session.message.send'] } }, bound)).toBe(true);
     expect(within({ ...bound, create: { ...bound.create!, agentTargetKey: 'other' } }, bound)).toBe(false);
+    expect(within({ ...bound, create: { ...bound.create!, connectedServices: undefined } }, bound)).toBe(false);
+    expect(within({ ...bound, create: { ...bound.create!, connectedServices: { v: 2, bindingsByServiceId: {} } } }, bound)).toBe(false);
     expect(within(grant({ approve: true }), full)).toBe(false);
     expect(within(grant({ origins: ['https://example.com'] }), full)).toBe(false);
     for (const field of ['actions', 'targets', 'models', 'permissionModes'] as const) {

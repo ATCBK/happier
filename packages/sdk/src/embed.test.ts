@@ -28,11 +28,14 @@ const TOKEN_ID = '123e4567-e89b-42d3-a456-426614174000';
 const TOKEN = `hap_v1_${TOKEN_ID}_${encodeBase64(new Uint8Array(32).fill(8), 'base64url')}`;
 const config = { v: 1, ui: { attachments: true }, newChat: { enabled: true },
   organization: { folderId: 'leads', tagIds: ['inbound', 'hot'] }, style: null };
+const connectedServices = { v: 2, bindingsByServiceId: {
+  'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+} } as const;
 const grant = { v: 1, actions: { families: ['session_transcripts', 'session_targeting', 'messaging'],
   ids: ['session.spawn_new', 'session.model.set'] }, targets: null, approve: true,
   origins: ['https://crm.example'], models: null, permissionModes: ['default'],
   create: { machineId: 'machine-1', agentTargetKey: 'agent:happier.agent.claude/claude', directory: 'managed',
-    placement: config.organization } };
+    placement: config.organization, connectedServices } };
 const self = { accountId: 'account-1', accountEncryptionMode: 'plain', credentialId: TOKEN_ID, parentTokenId: null,
   expiresAt: null, grant, embedConfig: config };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
@@ -167,7 +170,7 @@ describe('SDK embed helpers', () => {
       expect((await client.embed.createSession(input, { requestId: 'lead-creation' })).id).toBe('session-1');
       expect(spawns[0]).toEqual({ v: 1, requestId: 'lead-creation', target: { kind: 'machine', machineId: 'machine-1' },
         input: { directory: { kind: 'managed' },
-          organizationPlacement: config.organization, permissionMode: 'default',
+          organizationPlacement: config.organization, permissionMode: 'default', connectedServices,
           modelSelection: { v: 1, ref: model, updatedAt: 0 },
           title: 'Lead', initialInput: { text: 'Analyse this lead' },
           agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } });

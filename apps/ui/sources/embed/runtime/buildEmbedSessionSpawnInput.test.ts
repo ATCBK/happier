@@ -12,6 +12,9 @@ import { buildEmbedSessionSpawnInput } from './buildEmbedSessionSpawnInput';
 const agentTargetKey = 'agent:happier.agent.claude/claude';
 const allowedModel: ProviderBoundModelRef = { agentTargetKey, providerConnectionId: null, modelId: 'allowed-model' };
 const endpointUrl = 'https://home.example';
+const connectedServices = { v: 2, bindingsByServiceId: {
+    'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+} } as const;
 
 function createSelf(): AccountApiTokenSelfV1 {
     return AccountApiTokenSelfV1Schema.parse({
@@ -21,7 +24,7 @@ function createSelf(): AccountApiTokenSelfV1 {
             v: 1, actions: { families: [], ids: ['session.spawn_new'] },
             targets: { sessions: [], machines: ['bound-machine'] }, approve: false, origins: [],
             models: [allowedModel], permissionModes: ['acceptEdits'],
-            create: { machineId: 'bound-machine', agentTargetKey, directory: 'managed', placement: { folderId: 'folder', tagIds: ['tag'] } },
+            create: { machineId: 'bound-machine', agentTargetKey, directory: 'managed', placement: { folderId: 'folder', tagIds: ['tag'] }, connectedServices },
         },
         embedConfig: { v: 1, ui: { attachments: true }, newChat: { enabled: true }, organization: { folderId: 'folder', tagIds: ['tag'] }, style: null },
     });
@@ -50,7 +53,7 @@ describe('buildEmbedSessionSpawnInput', () => {
             creationKey: 'launch-attempt', executionTarget: { serverId: endpointUrl, machineId: 'bound-machine' },
             agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
             directory: { kind: 'managed' }, organizationPlacement: { folderId: 'folder', tagIds: ['tag'] },
-            modelSelection: { v: 1, ref: allowedModel, updatedAt: 17 }, permissionMode: 'safe-yolo',
+            modelSelection: { v: 1, ref: allowedModel, updatedAt: 17 }, permissionMode: 'safe-yolo', connectedServices,
         });
         expect(buildEmbedSessionSpawnInput(input)).toEqual(spawn);
     });
