@@ -6,6 +6,7 @@ import { detectKiroCliAuthStatus } from './agent/auth/status.js';
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { KIRO_ACP_COMMAND } from './agent/acp/preflight.js';
 import { KIRO_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
+import { kiroExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const {
   id: KIRO_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -24,6 +25,11 @@ export const KIRO_PLUGIN = definePlugin({
       capability: 'process',
       reason: 'Run the declared Kiro CLI executable.',
       scope: { executables: [{ kind: 'systemTool', id: KIRO_ACP_COMMAND.toolId }] },
+    }, {
+      id: 'kiro-native-history',
+      capability: 'filesystem',
+      reason: 'Read the admitted Kiro native v1 chat history.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
     }],
     optional: [],
   },
@@ -63,6 +69,7 @@ export const KIRO_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: { user: [['.kiro', 'skills']], project: [['.kiro', 'skills']] } },
           sessions: {
@@ -72,7 +79,23 @@ export const KIRO_PLUGIN = definePlugin({
             executionRunContext: { versions: [1] },
           },
         }),
+        surfaces: {
+          externalSession: {
+            externalLinkedTakeover: { writerSafety: 'unsupported' },
+            sources: [{
+              sourceKind: 'kiroChatStore',
+              contentSearch: true,
+              schema: { fields: [
+                { kind: 'literal', name: 'kind', value: 'kiroChatStore' },
+                { kind: 'string', name: 'kiroHome', min: 1, max: 10_000, nullish: true },
+              ] },
+              key: { segments: [{ kind: 'literal', value: 'kiroChatStore' }, { kind: 'field', field: 'kiroHome' }] },
+              instances: [{ kind: 'default', constants: {} }],
+            }],
+          },
+        },
       },
+      externalSessions: kiroExternalSessionsContribution,
       cliAuth: {
         detectAuthStatus: async ({ runDeclaredSystemToolCommand }) =>
           await detectKiroCliAuthStatus({
