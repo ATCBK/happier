@@ -365,9 +365,12 @@ export async function rehydrateWorkspaceSyncTargetBootstrap(input: Readonly<{
     deferRootIdentityBinding: true,
   });
   if ('kind' in ownership) {
-    // The relationship's own running sync already fences this root, so there is
-    // no bootstrap custody left to rebuild; only a foreign operation is a conflict.
-    if (ownership.existing.ownerId === input.relationshipId && ownership.existing.operation === 'sync') return null;
+    // The relationship's own running sync already fences this root, directly or as the shared hub
+    // workspace of this endpoint, so there is no bootstrap custody left to rebuild; only a foreign
+    // operation is a conflict.
+    if (ownership.existing.operation === 'sync'
+      && (ownership.existing.ownerId === input.relationshipId
+        || ownership.existing.ownerId === input.targetWorkspaceRefId)) return null;
     throw bootstrapError('workspace_root_in_use', 'Workspace sync target root overlaps an active operation');
   }
   const materializationCustody = await (dependencies.rehydrateMaterializationFromReceiptPath
