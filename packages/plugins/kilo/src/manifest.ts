@@ -90,7 +90,7 @@ export const KILO_PLUGIN = definePlugin({
             sources: [{ sourceKind: 'kiloStorage', contentSearch: true,
               schema: { fields: [
                 { kind: 'literal', name: 'kind', value: 'kiloStorage' },
-                { kind: 'string', name: 'storageRoot', min: 1, max: 10_000, nullish: true },
+                { kind: 'string', name: 'storageRoot', min: 1, nullish: true },
               ] },
               key: { segments: [{ kind: 'literal', value: 'kiloStorage' }, { kind: 'field', field: 'storageRoot' }] },
               instances: [{ kind: 'default', constants: {} }],
