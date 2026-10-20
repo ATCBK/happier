@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import {
   DISCORD_APPLICATION_GATEWAY_MESSAGE_CONTENT_FLAG,
@@ -17,6 +18,12 @@ function response(value: unknown, status = 200) {
 }
 
 describe('Discord Gateway Bot snapshot', () => {
+  it('does not convert retired HTTP host generations into retryable Discord network failures', async () => {
+    const error = new PluginError({ code: 'plugin_final_generation_retired', message: 'Retired HTTP host' });
+    const api = createDiscordBotApi({ token: 'bot-token', http: { request: async () => { throw error; } } });
+    await expect(api.getChannel({ channelId: 'channel-1' })).rejects.toBe(error);
+  });
+
   it.each([1_000, 0])('accepts reset_after zero with %i remaining starts', async (remaining) => {
     const api = createDiscordBotApi({
       token: 'bot-token',

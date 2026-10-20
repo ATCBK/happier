@@ -22,6 +22,32 @@ function message(overrides: Readonly<Record<string, unknown>> = {}) {
 }
 
 describe('Discord message parser', () => {
+  it.each(['caption', ''])('projects attachment metadata with content %j without retaining signed URLs', (content) => {
+    const parsed = parseDiscordMessageDispatch({
+      event: 'MESSAGE_CREATE',
+      payload: message({ content, attachments: [{
+        id: 'file-1', filename: 'lead.pdf', size: 25_000_000,
+        url: 'https://cdn.discordapp.com/attachments/channel-1/file-1/lead.pdf?ex=expired',
+      }] }),
+      channel: { kind: 'shared', channelId: 'channel-1' }, context,
+    });
+    expect(parsed).toMatchObject({ kind: 'message', message: { text: content, attachments: [{
+      attachmentId: 'discord:attachment:channel-1:message-1:file-1', name: 'lead.pdf',
+      mediaType: 'application/octet-stream', byteLength: 25_000_000,
+    }] } });
+    expect(JSON.stringify(parsed)).not.toContain('https:');
+  });
+
+  it('ignores embeds accompanying native files while retaining the existing embed-only refusal', () => {
+    const input = { event: 'MESSAGE_CREATE' as const, channel: { kind: 'shared' as const, channelId: 'channel-1' }, context };
+    expect(parseDiscordMessageDispatch({ ...input, payload: message({ embeds: [{ title: 'preview' }] }) }))
+      .toMatchObject({ kind: 'routableNonAdmission', reason: 'unsupportedContent' });
+    expect(parseDiscordMessageDispatch({ ...input, payload: message({ embeds: [{ title: 'preview' }], attachments: [{
+      id: 'file-1', filename: 'lead.pdf', size: 3,
+      url: 'https://cdn.discordapp.com/attachments/channel-1/file-1/lead.pdf',
+    }] }) })).toMatchObject({ kind: 'message', message: { text: 'hello', attachments: [{ name: 'lead.pdf' }] } });
+  });
+
   it('uses immutable message/webhook identity so overlap sessions produce one occurrence without trusting display names', () => {
     const payload = message({
       author: { id: 'displayed-user-1', username: 'Happier Bot', bot: false },

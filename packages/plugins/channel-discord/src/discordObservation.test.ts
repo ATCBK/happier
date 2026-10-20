@@ -24,6 +24,20 @@ function message(overrides: Readonly<Record<string, unknown>> = {}) {
 }
 
 describe('Discord Gateway observation mapping', () => {
+  it('passes attachment-only native messages through the real strict ingress schema', () => {
+    const parsed = parseDiscordMessageDispatch({
+      event: 'MESSAGE_CREATE', channel: { kind: 'shared', channelId: 'channel-1' }, context,
+      payload: message({ content: '', attachments: [{ id: 'file-1', filename: 'photo.png',
+        content_type: 'image/png', size: 3,
+        url: 'https://cdn.discordapp.com/attachments/channel-1/file-1/photo.png?ex=old' }] }),
+    });
+    const ingress = mapDiscordMessageToSocketIngress({ parsed });
+    expect(ingress).toMatchObject({ kind: 'fullText', observation: { message: { text: '', attachments: [{
+      attachmentId: 'discord:attachment:channel-1:message-1:file-1', name: 'photo.png', mediaType: 'image/png', byteLength: 3,
+    }] } } });
+    expect(ConversationNormalizedIngressV1Schema.parse(ingress)).toEqual(ingress);
+  });
+
   it('maps an admitted Discord message into strict full-text socket ingress without turning receive progress into a core checkpoint', () => {
     const parsed = parseDiscordMessageDispatch({
       event: 'MESSAGE_CREATE',

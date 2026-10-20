@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { ConversationAttachmentFetchResultV1Schema } from '@happier-dev/channels-protocol/v1';
 
 import {
   deliverDiscordMessage,
+  fetchDiscordAttachment,
   readDiscordConnectionConfiguration,
   resolveDiscordEndpoint,
   setupDiscordChannels,
@@ -90,6 +92,107 @@ function channelsCallerContext(input: Readonly<{
 }
 
 describe('Discord Channels provider Actions', () => {
+  const attachmentInput = {
+    v: 1, connectionId: 'connection-1', providerConnectionKey: 'discord:application:application-1',
+    providerConfigVersion: 1, providerConfig: { applicationId: 'application-1', botUserId: 'discord-bot-1' }, credentialRef,
+    messageId: 'message-1', attachmentIds: ['discord:attachment:channel-1:message-1:file-1'],
+  };
+  const freshAttachment = {
+    id: 'file-1', filename: 'lead.pdf', content_type: 'application/pdf', size: 3,
+    url: 'https://cdn.discordapp.com/attachments/channel-1/file-1/lead.pdf?ex=renewed',
+  };
+  function attachmentContext(options: Readonly<{
+    attachment?: Readonly<Record<string, unknown>>;
+    messageId?: string;
+    channelId?: string;
+    downloadStatus?: number;
+    downloadError?: Error;
+    onDownload?: () => void;
+    signal?: AbortSignal;
+  }> = {}) {
+    const request = vi.fn(async (request: Parameters<Parameters<typeof channelsCallerContext>[0]['request']>[0]) => {
+      if (request.url.endsWith('/oauth2/applications/@me')) return jsonResponse({ id: 'application-1' });
+      if (request.url.endsWith('/users/@me')) return jsonResponse({ id: 'discord-bot-1', username: 'Happier', bot: true });
+      if (request.url.endsWith('/channels/channel-1/messages/message-1')) return jsonResponse({
+        id: options.messageId ?? 'message-1', channel_id: options.channelId ?? 'channel-1',
+        attachments: [options.attachment ?? freshAttachment],
+      });
+      options.onDownload?.();
+      if (options.downloadError) throw options.downloadError;
+      return { status: options.downloadStatus ?? 200, finalUrl: request.url, headers: {}, body: Uint8Array.of(0, 128, 255) };
+    });
+    return { request, ...channelsCallerContext({ request, signal: options.signal }) };
+  }
+
+  it('renews the native message URL at consumption and returns schema-valid bytes without CDN credentials', async () => {
+    const { context, request } = attachmentContext();
+    const result = await fetchDiscordAttachment(attachmentInput, context);
+    expect(ConversationAttachmentFetchResultV1Schema.parse(result)).toEqual({ kind: 'fetched', attachments: [{
+      attachmentId: attachmentInput.attachmentIds[0], base64: 'AID/',
+    }] });
+    expect(request.mock.calls.map(([request]) => request.url)).toContain('https://discord.com/api/v10/channels/channel-1/messages/message-1');
+    const download = request.mock.calls.at(-1)?.[0];
+    expect(download).toMatchObject({ url: freshAttachment.url, method: 'GET', redirect: 'error' });
+    expect(download?.headers).not.toHaveProperty('authorization');
+    expect(download).not.toHaveProperty('timeoutMs');
+  });
+
+  it.each([
+    'https://evil.example/attachments/channel-1/file-1/lead.pdf',
+    'http://cdn.discordapp.com/attachments/channel-1/file-1/lead.pdf',
+    'https://cdn.discordapp.com@evil.example/attachments/channel-1/file-1/lead.pdf',
+    'https://token@cdn.discordapp.com/attachments/channel-1/file-1/lead.pdf',
+    'https://cdn.discordapp.com/attachments/another-channel/file-1/lead.pdf',
+    'https://cdn.discordapp.com/attachments/channel-1/another-file/lead.pdf',
+  ])('refuses untrusted or mismatched native CDN URL %s without fetching it', async (url) => {
+    const onDownload = vi.fn();
+    const { context } = attachmentContext({ attachment: { ...freshAttachment, url }, onDownload });
+    await expect(fetchDiscordAttachment(attachmentInput, context)).resolves.toMatchObject({ kind: 'notReady', reason: 'unsupported' });
+    expect(onDownload).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404])('returns typed unavailable when the renewed download expires or disappears (%i)', async (downloadStatus) => {
+    const { context } = attachmentContext({ downloadStatus });
+    await expect(fetchDiscordAttachment(attachmentInput, context)).resolves.toMatchObject({
+      kind: 'notReady', reason: downloadStatus === 403 ? 'permissionMissing' : 'unsupported',
+    });
+  });
+
+  it.each([{ messageId: 'other' }, { channelId: 'other' }, { attachment: { ...freshAttachment, id: 'other' } }])(
+    'refuses files belonging to a different native message, channel or attachment', async (options) => {
+      const onDownload = vi.fn();
+      const { context } = attachmentContext({ ...options, onDownload });
+      await expect(fetchDiscordAttachment(attachmentInput, context)).resolves.toMatchObject({ kind: 'notReady' });
+      expect(onDownload).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses non-core callers and foreign credentials before credential or HTTP I/O', async () => {
+    const { context, request, materialize } = attachmentContext();
+    await expect(fetchDiscordAttachment({}, { ...context, surface: 'cli' })).rejects.toMatchObject({ code: 'discord_channels_core_caller_required' });
+    await expect(fetchDiscordAttachment({ ...attachmentInput, credentialRef: {
+      ...credentialRef, service: { ...credentialRef.service, pluginId: 'other' },
+    } }, context)).resolves.toMatchObject({ kind: 'notReady', reason: 'credentialInvalid' });
+    expect(materialize).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each(['cancel', 'retired'] as const)('propagates %s during the CDN boundary', async (kind) => {
+    const controller = new AbortController();
+    const error = kind === 'retired'
+      ? new PluginError({ code: 'plugin_final_generation_retired', message: 'Retired' })
+      : new Error('Cancelled');
+    const { context } = attachmentContext({ signal: controller.signal, downloadError: error,
+      onDownload: () => { if (kind === 'cancel') controller.abort(error); } });
+    await expect(fetchDiscordAttachment(attachmentInput, context)).rejects.toBe(error);
+  });
+
+  it('propagates host generation retirement during the renewed message read', async () => {
+    const error = new PluginError({ code: 'plugin_final_generation_retired', message: 'Retired' });
+    const { context } = channelsCallerContext({ request: async () => { throw error; } });
+    await expect(fetchDiscordAttachment(attachmentInput, context)).rejects.toBe(error);
+  });
+
   it('refuses unsupported new threads before any Discord request', async () => {
     const request = vi.fn(async () => { throw new Error('Unsupported starts must not call Discord'); });
     const { context } = channelsCallerContext({ request });
