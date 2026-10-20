@@ -51,6 +51,15 @@ describe('Codex external-session transcript helpers', () => {
     }))).toBeNull();
   });
 
+  it('rejects semantic row references beyond the acknowledged stream watermark', () => {
+    const cursor = { v: 7, kind: 'codexForwardStreamVector', sourceGeneration: ['home-generation'], streams: [{
+      fileRelPath: 'sessions/rollout.jsonl', physicalGeneration: '1:2:3', nextOffsetBytes: 42, subIndex: 0,
+      fingerprintOffsetBytes: 42, contentFingerprint: 'a'.repeat(64), semanticState: { precedingTimestampMs: 0,
+        locations: { assistant: { startOffsetBytes: 30, endOffsetBytes: 43 }, pending: [], startedThreadIds: [], completedThreadIds: [] } },
+    }] };
+    expect(decodeCodexExternalForwardCursor(Buffer.from(JSON.stringify(cursor)).toString('base64url'))).toBeNull();
+  });
+
   it('rejects writer-impossible whole-line forward offsets', () => {
     const encodeRaw = (value: unknown) =>
       Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
