@@ -1,4 +1,5 @@
-import { isPluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import {
     TriageSourceLinkSessionResultV1Schema,
     TriageSourceReadSessionLinksResultV1Schema,
@@ -25,7 +26,9 @@ export type TriageSessionRelationWriteV1 = Readonly<{
 /** One source-role decision for starts, explicit Actions, and mounted unlink. The
  * external relationship owner remains the fallback only when the role is absent. */
 export function createTriageSourceSessionRelations(
-    context: PluginInvocationContext,
+    context: Pick<PluginAccountActionContext, 'signal'> & Readonly<{
+        services: Pick<PluginAccountActionContext['services'], 'actions' | 'targetedContributions'>;
+    }>,
     collections: Pick<CorpusCollectionsV1, 'sourceInstances' | 'sessionLinks'>,
 ) {
     const options = { signal: context.signal };

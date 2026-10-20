@@ -20,7 +20,7 @@ export function useTriageListWindowViewDemand(
   refresh: RefreshTriageListWindowV1,
   readClientReadiness?: PluginUiHostReadiness,
 ): void {
-  const ownReadiness = usePluginHostReadiness();
+  const ownReadiness = usePluginHostReadiness(false);
   const readiness = readClientReadiness ?? ownReadiness;
   const previous = useRef<Readonly<{
     active: boolean;
@@ -42,8 +42,8 @@ export function useTriageListWindowViewDemand(
     // A retained inactive surface must stay demand-silent. The host's active
     // fact gates both view demand and the shared owner's re-acquisition.
     // Readiness is supplied by the host, independently from public activity.
-    // Defer Machine demand while it loads, then hand the named readiness edge
-    // to the same window/coalescing owner. No error interpretation or retry loop.
+    // Hand the Account read's readiness edge to the same window/coalescing owner.
+    // Nested sources decide their own execution placement, not this page demand.
     if (!active || readiness.pending || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
 
     void refresh(reacquire ? 'manual' : 'view');

@@ -257,7 +257,7 @@ export type TriageListLensV1 = Readonly<{
     limit: number;
 }>;
 
-/** Shared by the list Action, mounted window and pin projection; missing dates prove no membership. */
+/** Shared by the list Action, mounted window and pins; unknown dates cannot establish membership. */
 export function triageTaskCompletionMatchesWindowV1(
     snapshot: TriageSourceEntrySnapshotV1,
     sinceMs: number | undefined,

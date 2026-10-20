@@ -145,7 +145,7 @@ function createActionTriageEntryDetailTransport(
 /**
  * Read the durable half of detail directly from the mounted Account authority.
  *
- * This is the same domain owner the daemon Action calls, over the same three
+ * This is the same domain owner the Account Action calls, over the same three
  * Collection handles and codecs. The UI does not execute a provider operation
  * and does not recreate Session storage: when the generic Session summary
  * service is unavailable in this realm, the link keeps its canonical
@@ -246,15 +246,15 @@ export function useTriageEntryDetail(
   sourceReadSelection.current = { identity, sourceOwned: admittedSourceRead
     || (sourceReadSelection.current.identity === identity && sourceReadSelection.current.sourceOwned) };
   const sourceOwned = sourceReadSelection.current.sourceOwned;
-  // Source-owned relations use the Action transport even with mounted Account
-  // Collections. They must wait for and recover with that same Machine owner.
-  const machineBound = durable.collections === null || sourceOwned;
-  const readiness = usePluginHostReadiness(machineBound);
+  // Source-owned relations use the Account Action even with mounted Collections;
+  // each nested source operation admits its own execution placement.
+  const useActionTransport = durable.collections === null || sourceOwned;
+  const readiness = usePluginHostReadiness(false);
   const transport = useMemo<TriageEntryDetailTransportV1>(
-    () => durable.collections !== null && !machineBound
+    () => durable.collections !== null && !useActionTransport
       ? createDirectTriageEntryDetailTransport(durable.collections)
       : createActionTriageEntryDetailTransport(hostApi),
-    [durable.collections, hostApi, machineBound],
+    [durable.collections, hostApi, useActionTransport],
   );
   const [state, setState] = useState<TriageEntryDetailStateV1 | null>(null);
   const stateRef = useRef<TriageEntryDetailStateV1 | null>(null);

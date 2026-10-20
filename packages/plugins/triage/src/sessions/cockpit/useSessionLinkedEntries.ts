@@ -196,7 +196,9 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     const host = usePluginHostApi();
     const owner = usePluginUiEphemeralSharedScope();
     const sourceReadAvailable = hasTriageSourceSessionRelationsV1(targetedContributions);
-    const readiness = usePluginHostReadiness(sourceReadAvailable);
+    // The relation aggregate is Account-owned; nested source roles admit their
+    // own placement and retain per-source unavailable coverage.
+    const readiness = usePluginHostReadiness(false);
     const [sourceRead, setSourceRead] = React.useState<Readonly<{
         owner: PluginUiEphemeralSharedScope | null; sessionId: string;
         status: 'absent' | 'loading' | 'ready' | 'partial' | 'failed'; links: readonly TriageSourceSessionLinkV1[];

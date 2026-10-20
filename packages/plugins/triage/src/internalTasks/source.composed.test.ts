@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { PluginServices } from '@happier-dev/plugin-sdk';
 import { TriageGetResultV1Schema, TriageScanResultV1Schema, TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
-import { activate } from '../activate.js';
-import { PLUGIN_MANIFEST } from '../manifest.js';
-import { executeInternalTaskAction, type AccountJsonKvCollectionPort } from '@happier-dev/protocol/todos/todoActionOperationsV1';
+import { PLUGIN_MANIFEST, TRIAGE_PLUGIN, TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
+import { TriageSourceDescriptorV1Schema } from '@happier-dev/triage-protocol/v1';
+import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
+import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
+import { CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
+import { TriageListEntriesResultV1Schema } from '../actions/listEntriesProtocol.js';
+import { executeInternalTaskAction, executeInternalTaskReorder, type AccountJsonKvCollectionPort } from '@happier-dev/protocol/todos/todoActionOperationsV1';
 import { applyTodoSessionLinkV1, TodoSessionLinkInputV1Schema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
 
 const scope = { serverId: 'home', accountId: 'account' };
@@ -30,7 +34,7 @@ async function withSource(run: (kit: Awaited<ReturnType<typeof createPluginTestk
     if (id === 'tasks.internal.session.link') return { status: 'linked' };
     throw new Error(`Unexpected host Action ${id}`);
   } } as unknown as PluginServices['actions'];
-  const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: { actions } });
+  const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: TRIAGE_PLUGIN, services: { actions } });
   try { await run(kit, calls); } finally { await kit.dispose(); }
 }
 
@@ -96,6 +100,7 @@ describe('registered internal Happier task source', () => {
       },
     };
     const actions = { execute: async (id: string, input: unknown) => {
+      if (id === 'tasks.internal.reorder') return executeInternalTaskReorder({ input, scope, port, requireCurrent: () => {} });
       if (id === 'tasks.internal.list' || id === 'tasks.internal.create' || id === 'tasks.internal.edit' || id === 'tasks.internal.transition') {
         return executeInternalTaskAction({ actionId: id, input, scope, port, requireCurrent: () => {}, createId: () => 'new-task' });
       }
@@ -109,20 +114,64 @@ describe('registered internal Happier task source', () => {
       } }, { requireCurrent: () => {} });
       return { status: intent.linked === false ? 'unlinked' : 'linked' };
     } } as unknown as PluginServices['actions'];
-    const open = () => createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: { actions } });
+    const corpus = createTestkitCorpusCollections();
+    corpus.control.sourceInstances.seed(toCorpusStoredValue({
+      instanceTag: 'a'.repeat(43), sourceQualifiedId: `${source.pluginId}/${source.localId}`,
+      lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active, configuredAtMs: 1, configured: instance,
+    }));
+    // Account persistence and host Actions are genuine boundaries; admission,
+    // opaque operation handles, aggregate dispatch and the todo CAS owner stay real.
+    const storage = { account: { collection: (definition: { id: string }) => {
+      if (definition.id === 'source-instances') return corpus.collections.sourceInstances;
+      if (definition.id === 'session-links') return corpus.collections.sessionLinks;
+      if (definition.id === 'user-marks') return corpus.collections.userMarks;
+      throw new Error(`Unexpected Collection ${definition.id}`);
+    } } } as unknown as PluginServices['storage'];
+    const open = () => createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: TRIAGE_PLUGIN,
+      services: { actions, storage }, resolveCurrentPluginMaterializationRef: () => null });
     let kit = await open();
+    const invocation = () => ({ surface: 'agent' as const, services: {
+      targetedContributions: { observeForSelf: () => ({ readCurrent: async () => {
+        const snapshot = kit.readTargetedContributionFixture(TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1);
+        return { ...snapshot, contributions: snapshot.contributions.map(entry => ({ ...entry,
+          descriptor: TriageSourceDescriptorV1Schema.parse(PLUGIN_MANIFEST.contributes.targetedPluginContributions
+            .find(candidate => candidate.id === entry.contributor.contributionId)?.descriptor), surfaces: {},
+        })) };
+      }, dispose: () => {} }) } as unknown as PluginServices['targetedContributions'],
+    } });
     try {
-      const created = TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('internal/tasks/create-v1', { v: 1, instance, kindId: 'task',
-        fields: { title: 'New work', body: 'Keep the whole\nmultiline note', parent: { source, ...localRef }, labelIds: ['personal'] } }));
+      const created = TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('tasks/create-v1', {
+        v: 1, source, sourceInstanceId: instance.instance.sourceInstanceId, kindId: 'task',
+        fields: { title: 'New work', body: 'Keep the whole\nmultiline note', parent: { source, ...localRef }, labelIds: ['personal'] },
+      }, invocation()));
       expect(created).toMatchObject({ kind: 'applied', observation: { localRef: { entryId: 'new-task' } } });
       const address = { v: 1, instance, localRef: { ...localRef, entryId: 'new-task' } };
-      expect(TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('internal/tasks/edit-v1', { ...address,
-        fields: { title: 'Edited once', blockedBy: [{ source, ...localRef }] } })).kind).toBe('applied');
-      expect(TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('internal/tasks/transition-v1', { ...address,
-        transitionId: 'completed' }))).toMatchObject({ kind: 'applied', observation: { snapshot: { state: { presentation: 'resolved' } } } });
+      const aggregateAddress = { v: 1, sourceInstanceId: instance.instance.sourceInstanceId, entryRef: { source, ...address.localRef } };
+      expect(TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('tasks/edit-v1', { ...aggregateAddress,
+        fields: { title: 'Edited once', blockedBy: [{ source, ...localRef }] } }, invocation())).kind).toBe('applied');
+      expect(await actions.execute('tasks.internal.reorder', { scope, sourceId: 'new-task',
+        position: { anchorId: 'old-task', placement: 'before' } })).toEqual({ status: 'applied' });
+      expect(rows.get('todo.index')?.value).toEqual({ undoneOrder: ['new-task', 'old-task'], completedOrder: [] });
+      await kit.dispose();
+      kit = await open();
+      expect(await actions.execute('tasks.internal.list', {})).toMatchObject({ undoneOrder: ['new-task', 'old-task'] });
+      const oldest = TriageListEntriesResultV1Schema.parse(await kit.invokeAction('tasks/list-v1', {
+        v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'oldest',
+      }, invocation()));
+      // Source order persists; the Triage lens still owns its explicit sort.
+      expect(oldest.window.rows.map(row => row.entryRef.entryId)).toEqual(['old-task', 'new-task']);
+      expect(TriageTaskWriteResultV1Schema.parse(await kit.invokeAction('tasks/transition-v1', { ...aggregateAddress,
+        transitionId: 'completed' }, invocation()))).toMatchObject({ kind: 'applied', observation: { snapshot: { state: { presentation: 'resolved' } } } });
       expect(await kit.invokeAction('internal/tasks/link-session-v1', { ...address, sessionId: 'work-session', linked: true })).toEqual({ status: 'linked' });
       await kit.dispose();
       kit = await open();
+      const listed = TriageListEntriesResultV1Schema.parse(await kit.invokeAction('tasks/list-v1', {
+        v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
+      }, invocation()));
+      expect(listed.window.rows.map(row => row.entryRef.entryId).sort()).toEqual(['new-task', 'old-task']);
+      expect(await kit.invokeAction('entries/read-detail-v1', aggregateAddress, invocation())).toMatchObject({
+        kind: 'read', instance, linkedSessions: [{ sessionId: 'work-session' }],
+      });
       expect(TriageGetResultV1Schema.parse(await kit.invokeAction('internal/tasks/get-v1', address))).toMatchObject({ kind: 'present',
         snapshot: { title: 'Edited once', relations: { parent: { entryId: 'old-task' }, blockedBy: [{ entryId: 'old-task' }] } } });
       expect(await kit.invokeAction('internal/tasks/read-session-links-v1', { v: 1, instance, sessionId: 'work-session' })).toMatchObject({ kind: 'complete', links: [{ localRef: address.localRef }] });

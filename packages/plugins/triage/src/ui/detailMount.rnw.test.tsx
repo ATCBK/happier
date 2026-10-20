@@ -88,6 +88,8 @@ import { renderSurface as renderTasksSurface } from './tasksSurface.js';
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
 import { TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS } from '../refresh/refreshEligibility.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
+import { useTriageListWindow } from './window/useTriageListWindow.js';
+import { useTriageListWindowViewDemand } from './window/useTriageListWindowViewDemand.js';
 
 /**
  * Opening a row all the way into the source's own detail body.
@@ -1042,7 +1044,24 @@ function openedFixtureEntry(): string {
 }
 
 describe('opening a row into the source detail', () => {
-    it.each([false, true])('uses the selected detail transport for readiness with mounted Account data (source-owned links: %s)', async (sourceOwned) => {
+    it('demands the Account aggregate while the Machine connection is pending', async () => {
+        const harness = createHarness();
+        const surface = defineUiSurface(() => {
+            const window = useTriageListWindow();
+            useTriageListWindowViewDemand(true, window.refresh, window.readiness);
+            return <Text value={window.snapshot.window?.rows[0]?.content?.outcome.snapshot.title ?? 'reading'} />;
+        });
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'account-list-read', mountNonce: 'account-list-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' }, surface,
+            surfaceContext: { ...surfaceContext(), machineConnectionPending: true, machineExecutionReady: false },
+            adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: harness.ephemeralSharedScope }),
+            handlers: { executeAction: request => harness.executeAction(request) },
+        });
+        mounted.push(shell);
+        await vi.waitFor(() => { expect(document.body.textContent).toBe('Replace the duplicated normalizer'); });
+    });
+
+    it.each([false, true])('reads Account detail without Machine readiness using its selected transport (source-owned links: %s)', async (sourceOwned) => {
         const harness = createHarness();
         const protocol = PROTOCOL;
         const initial = surfaceContext();
@@ -1079,7 +1098,6 @@ describe('opening a row into the source detail', () => {
             const read = useTriageEntryDetail(input);
             return <Text value={read?.kind ?? 'none'} />;
         });
-        let pending = true;
         const shell = await createPluginUiTestkit({ identity: { instanceId: 'source-detail-read', mountNonce: 'source-detail-read' },
             authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
             surface: renderContext => {
@@ -1091,15 +1109,10 @@ describe('opening a row into the source detail', () => {
                 return React.cloneElement(entry as unknown as React.ReactElement<{ dataClient?: PluginUiDataClient }>, { dataClient });
             },
             surfaceContext: context, adapter: createPluginUiRnwSemanticSurfaceAdapter(),
-            handlers: { executeAction: async request => {
-                if (pending) throw new PluginError({ code: 'unavailable', retryable: true,
-                    diagnostics: [{ code: 'plugin_surface_connection_pending', severity: 'error' }] });
-                return await harness.executeAction(request);
-            } },
+            handlers: { executeAction: request => harness.executeAction(request) },
         });
         mounted.push(shell);
-        await vi.waitFor(() => { expect(document.body.textContent).toBe(sourceOwned ? 'reading' : 'ready'); });
-        pending = false;
+        await vi.waitFor(() => { expect(document.body.textContent).toBe('ready'); });
         await act(async () => { await shell.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true }); });
         await vi.waitFor(() => { expect(document.body.textContent).toBe('ready'); });
     });
@@ -1137,12 +1150,12 @@ describe('opening a row into the source detail', () => {
         await vi.waitFor(async () => { await expect(shell.getByText('ready')).resolves.toBeDefined(); });
     });
 
-    it('keeps a withdrawn detail read pending and reacquires it on host re-admission without Retry', async () => {
+    it('reports an Account detail refusal independently of Machine loading and reacquires it on host re-admission', async () => {
         const refusedHostReads = new Set([TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1]);
         const shell = await mountShell({ refusedHostReads, activeSurface: true });
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: true, machineExecutionReady: false }); });
         await openTheRow(shell);
-        await expect(shell.queryByText('These details could not be read')).resolves.toBeUndefined();
+        await expect(shell.getByText('These details could not be read')).resolves.toBeDefined();
         refusedHostReads.clear();
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: false, machineExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined(); });
@@ -1210,7 +1223,7 @@ describe('opening a row into the source detail', () => {
         await openTheRow(shell);
         await vi.waitFor(() => expect(published?.commands?.some((command) => command.title === 'Select session Current investigation')).toBe(true));
     });
-    it('replaces a settled host outage with pending on the public readiness transition without another read', async () => {
+    it('retains an Account read failure while Machine readiness changes without another Account read', async () => {
         const hostTarget = { ready: false, pending: false };
         let reads = 0;
         const shell = await mountShell({ activeSurface: true, hostTarget, automaticDemandOnly: true,
@@ -1218,23 +1231,23 @@ describe('opening a row into the source detail', () => {
         await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
         const previousReads = reads;
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: true }); });
-        await expect(shell.queryByText('Your sources could not be reached')).resolves.toBeUndefined();
+        await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
         expect(reads).toBe(previousReads);
         hostTarget.ready = true;
         await act(async () => { await shell.updateSurface(surfaceContext()); });
         await expect(shell.getByRole('button', { name: 'Replace the duplicated normalizer' })).resolves.toBeDefined();
     });
 
-    it('waits for the host target before source acquisition while keeping Account controls available', async () => {
+    it('attempts Account acquisition while the Machine loads and keeps Account controls available', async () => {
         const hostTarget = { ready: false };
         let reads = 0;
         const shell = await mountShell({ activeSurface: true, hostTarget, automaticDemandOnly: true,
             onAggregateRead: () => { reads += 1; } });
         await act(async () => { await Promise.resolve(); });
-        expect(reads).toBe(0);
+        expect(reads).toBeGreaterThan(0);
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Views: No saved view' })); });
         await expect(shell.getByRole('menuitemradio', { name: 'No saved view' })).resolves.toBeDefined();
-        await expect(shell.queryByText('Your sources could not be reached')).resolves.toBeUndefined();
+        await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
 
         hostTarget.ready = true;
         await act(async () => { await shell.updateSurface(surfaceContext()); });

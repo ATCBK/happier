@@ -44,9 +44,9 @@ type ConfiguredSourceRead = Readonly<{
 /**
  * Triage's configured source rows over the mounted Account Collection.
  *
- * There is deliberately no daemon fallback: provider discovery and source
- * creation remain daemon work, while these already-durable Triage-owned rows
- * are readable and removable whenever the Account authority is reachable.
+ * There is deliberately no daemon fallback: these Triage-owned rows are
+ * readable and removable whenever the Account authority is reachable. Discovery
+ * and source creation use each declared source operation's execution placement.
  * Failed reads retain the last accepted rows and failed writes publish no
  * speculative change or replay intent.
  */

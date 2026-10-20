@@ -3,7 +3,8 @@ import {
   TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1,
 } from '@happier-dev/triage-protocol/v1';
 import { defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
+import { TRIAGE_ACCOUNT_ACTION_EXECUTION_V1 } from '../accountExecution.js';
 import {
   INTERNAL_TASK_DRAFT_V1, INTERNAL_TASK_SOURCE_V1, INTERNAL_TASK_STATES_V1, internalTaskStateV1,
   scanInternalTasks, getInternalTask, createInternalTask, editInternalTask, transitionInternalTask,
@@ -19,8 +20,8 @@ export const INTERNAL_TASK_DESCRIPTOR_V1 = TriageSourceDescriptorV1Schema.parse(
       transitions: INTERNAL_TASK_STATES_V1.map(id => ({ id, label: internalTaskStateV1(id).nativeLabel, state: internalTaskStateV1(id) })) } }],
 });
 const surfaces = ['plugin', 'ui', 'agent', 'mcp', 'cli'] as const;
-const write = { surfaces, placementBindings: [], dangerLevel: 'writesRemote' } as const;
-const read = { surfaces, placementBindings: [], dangerLevel: 'safe' } as const;
+const write = { surfaces, placementBindings: [], execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1, dangerLevel: 'writesRemote' } as const;
+const read = { surfaces, placementBindings: [], execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1, dangerLevel: 'safe' } as const;
 
 /** Explicit user intent configures the built-in source through the same writer as every plugin. */
 export const INTERNAL_TASK_ACTIONS_V1 = {
@@ -29,7 +30,7 @@ export const INTERNAL_TASK_ACTIONS_V1 = {
     confirmation: { title: 'Use Happier tasks?', body: 'Shows personal tasks from this Happier Account in Tasks.', confirmLabel: 'Use tasks' },
     inputSchema: defineProtocolObject({ v: defineProtocolLiteral(1) }, { policy: 'closed' }),
     resultSchema: TriageSourceAdministrationActionResultV1Schema,
-    run: async (_input: Readonly<{ v: 1 }>, context: PluginInvocationContext) => TriageSourceAdministrationActionResultV1Schema.parse(
+    run: async (_input: Readonly<{ v: 1 }>, context: PluginAccountActionContext) => TriageSourceAdministrationActionResultV1Schema.parse(
       await context.services.actions.execute(TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1, { v: 1, kind: 'create', source: INTERNAL_TASK_SOURCE_V1, draft: INTERNAL_TASK_DRAFT_V1 }, { signal: context.signal })),
   },
   'internal/tasks/list-instances-v1': {

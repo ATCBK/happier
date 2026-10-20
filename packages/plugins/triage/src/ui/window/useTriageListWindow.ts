@@ -56,7 +56,8 @@ export type TriageMountedListWindowV1 = Readonly<{
 export function useTriageListWindow(): TriageMountedListWindowV1 {
   const hostApi = usePluginHostApi();
   const sharedScope = usePluginUiEphemeralSharedScope();
-  const hostReadiness = usePluginHostReadiness();
+  // The aggregate is Account-owned; each nested source admits its own placement.
+  const hostReadiness = usePluginHostReadiness(false);
   const committedReadiness = useRef(hostReadiness);
   useLayoutEffect(() => {
     committedReadiness.current = hostReadiness;

@@ -240,9 +240,11 @@ async function mountCockpit(
     listEntries?: () => Promise<unknown>,
     sourceLinks?: () => Promise<unknown>,
     sourceScope?: () => PluginUiEphemeralSharedScope,
+    machinePending = false,
 ): Promise<PluginUiTestkit> {
     let fixture!: PluginUiTestkit;
     const surfaceContext = createSurfaceContextFixture({
+        ...(machinePending ? { machineConnectionPending: true, machineExecutionReady: false } : {}),
         mount: {
             kind: 'destination',
             destination: { pluginId: PLUGIN_ID, localId: 'session-linked-entries' },
@@ -496,6 +498,16 @@ describe('the Session tab, round 2', () => {
 });
 
 describe('the mounted Session cockpit', () => {
+    it('reads source-owned Account links while no Machine is ready', async () => {
+        const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID },
+            null, true, null, undefined, true, undefined, async () => ({ kind: 'complete', links: [{
+                entryRef: linkRow().entryRef, sessionId: SESSION_ID, linkedAtMs: 10, displayPath: 'My linked Account task',
+            }] }), undefined, true);
+        await expect(fixture.getByText('My linked Account task')).resolves.toBeDefined();
+        expect(harness.gets).toHaveLength(0);
+    });
+
     it('never carries source-only links into another Account scope with the same Session id', async () => {
         const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
         let scope = createTriageEphemeralSharedScopeFixture();
