@@ -98,6 +98,11 @@ export function validateInputFieldSchema(params: Readonly<{
   return { status: 'valid', value: admitted };
 }
 
+/** The values a field's choices must contain: a multiselect carries several, any other field one. */
+export function readInputFieldSelectedValues(field: Pick<InputFieldHint, 'widget'>, value: JsonValue): readonly JsonValue[] {
+  return field.widget === 'multiselect' && Array.isArray(value) ? value : [value];
+}
+
 /** Full admission fails closed until every declared choice constraint is available. */
 export function validateInputFieldValue(params: Readonly<{
   field: InputFieldHint; value: JsonValue; type?: ResolvedInputTypeV1 | null;
@@ -110,7 +115,7 @@ export function validateInputFieldValue(params: Readonly<{
   const options = constraint.kind === 'static' ? constraint.options : params.options;
   if (constraint.kind === 'dynamic' && options === undefined)
     return { status: 'unavailable', reasonCode: 'input_type_options_unavailable' };
-  const values = params.field.widget === 'multiselect' && Array.isArray(params.value) ? params.value : [params.value];
+  const values = readInputFieldSelectedValues(params.field, params.value);
   const fieldOptions = params.field.options;
   if (fieldOptions && values.some(selected => !isInputOptionAvailable(selected, fieldOptions)))
     return { status: 'invalid', reasonCode: 'input_type_option_invalid' };

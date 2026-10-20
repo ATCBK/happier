@@ -85,7 +85,7 @@ import { WaitActionInputV1Schema } from './specs/wait.js';
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from './specs/actionOperations.js';
 import { readActionFailureEnvelope, readFailureEnvelopeDetails } from './executor/actionFailureEnvelope.js';
 import { readAccountNoticeArtifactV1, readUsageNoticeArtifactV1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
-import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '../json/strictJsonValue.js';
 import { readLocalServiceControlActionRequest } from './specs/localServices.js';
 import { resolveActionOriginationPreferenceFailureV1 } from './executor/actionOriginationPreferences.js';
 import { UsageSourceActionIdSchema, USAGE_SOURCE_ACTION_INPUT_SCHEMAS } from '../usage/usageSources.js';
@@ -7256,6 +7256,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const directOptionsSourceId = normalizeId(data.optionsSourceId);
           let optionsSourceId = directOptionsSourceId;
           let admittedInputTypeSource = false;
+          // The picked values an admission needs answered; every path below narrows to them.
+          const optionValues = Array.isArray(data.values) ? data.values as readonly JsonValue[] : undefined;
           const resolveTypedFieldOptions = async (field: Parameters<typeof resolveTypedInputFieldOptions>[0]['field'], ownerId: string): Promise<ActionExecuteResult | null> => {
             if (!field.inputType || 'hostType' in field.inputType) return null;
             if (!deps.resolveInputType && deps.readAdmittedInputTypeOptions) {
@@ -7268,7 +7270,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             }
             const resolved = await resolveTypedInputFieldOptions({ field, deps, ctx,
               actionId: ownerId as ActionId, input: { ...readRecord(data.draftInput), ...data },
-              consumer: optionsConsumer,
+              consumer: optionsConsumer, ...(optionValues ? { values: optionValues } : {}),
               readFailure: readActionFailureEnvelope, resolveSessionId: resolveSessionIdFromInput, reviewScope: reviewScopeForInput });
             return resolved.ok ? { ok: true, result: { actionId: ownerId, fieldPath,
               optionsSourceId: resolved.optionsSourceId === null ? null : readInputFieldOptionsSourceId(field) ?? null,
@@ -7443,6 +7445,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             optionsSourceId,
             input: dependencyInput,
             consumer: optionsConsumer,
+            ...(optionValues ? { values: optionValues } : {}),
             includeSpawnModelCatalog: actionIdRaw === 'session.spawn_new' && fieldPath === 'modelSelection',
           });
           if (!dynamic.ok) return dynamic;

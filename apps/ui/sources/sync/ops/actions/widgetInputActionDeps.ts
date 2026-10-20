@@ -274,13 +274,13 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             });
             return read.status === 'ok' && read.value ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_session_access_denied' };
         },
-        resolveOptions: async (field, input, request) => {
+        resolveOptions: async (field, input, request, values) => {
             const descriptor = descriptors.get(request);
             const targetDeclaration = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = targetDeclaration?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(input, targetDeclaration.path)) : null;
             const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                 ...(selected?.success ? { selectedSession: selected.data } : {}) },
-                fieldPath: field.path, draftInput: input }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
+                fieldPath: field.path, draftInput: input, values }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
             account.assertCurrent();
             if (!result.ok) return { status: result.errorCode === 'credential_scope_denied' ? 'denied' : 'unavailable', reasonCode: result.errorCode ?? 'widget_input_options_unavailable' };
             return (getActionSpec('action.options.resolve').outputSchema!.parse(result.result) as PublicActionResultById['action.options.resolve']).options;

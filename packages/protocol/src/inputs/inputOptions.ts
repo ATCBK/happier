@@ -24,6 +24,8 @@ import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.
 import { SESSION_LIST_PAGE_MAX_LIMIT } from '../sessions/listing/query.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
+import { SessionAwarenessProjectionV1Schema, type SessionAwarenessProjectionV1 } from '../sessions/awareness/projectionV1.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
 import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
@@ -185,6 +187,52 @@ function readDynamicOptionDirectory(
   return readNonEmptyString(input.directory) ?? readNonEmptyString(input.path);
 }
 
+const SESSION_GROUP_LABELS = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
+
+function readSessionAwarenessOption(serverId: string, session: SessionAwarenessProjectionV1) {
+  const readable = isSessionAwarenessContentReadableV1(session.encryption);
+  const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
+  const option: InputOption = {
+    value: VoiceTrackedSessionAddressV1Schema.parse({ serverId, sessionId: session.sessionId }),
+    label: readable ? session.title ?? session.sessionId : session.sessionId,
+    description: SESSION_GROUP_LABELS[group],
+    ...(!readable ? { disabled: true } : {}),
+  };
+  return { group, option };
+}
+
+/**
+ * The `sessions` source's point check: each picked Session is answered by the one-Session status read
+ * instead of paging the whole Home. A pick the Home reports gone has no option; any answer the read
+ * cannot give (refused grant, unreachable Home, a prefix that resolved another Session) returns null so
+ * the inventory scan, which every source keeps as its default, decides instead.
+ */
+async function readSessionOptionsForValues(params: Readonly<{
+  executor: Readonly<{ execute: (actionId: ActionId, input: unknown, ctx?: ActionExecutorContext) => Promise<ActionExecuteResult> }>;
+  ctx: ActionExecutorContext;
+  serverId: string;
+  values: readonly JsonValue[];
+}>): Promise<readonly InputOption[] | null> {
+  const options: InputOption[] = [];
+  for (const value of params.values) {
+    const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
+    // The inventory only ever offers this Home's Sessions, so any other pick has no option there either.
+    if (!address.success || address.data.serverId !== params.serverId) continue;
+    params.ctx.signal?.throwIfAborted();
+    const result = await params.executor.execute('session.status.get', { sessionId: address.data.sessionId }, params.ctx);
+    if (!result.ok) return null;
+    const status = readRecord(result.result);
+    if (status.ok === false) {
+      if (status.code === 'session_not_found') continue;
+      return null;
+    }
+    const awareness = SessionAwarenessProjectionV1Schema.safeParse(status.awareness);
+    if (!awareness.success || awareness.data.sessionId !== address.data.sessionId) return null;
+    options.push(readSessionAwarenessOption(params.serverId, awareness.data).option);
+  }
+  return options;
+}
+
 /** Field choices restrict, never replace, the type's schema and declared Resource choices. */
 export async function resolveTypedInputFieldOptions(params: Omit<Parameters<typeof resolveInputOptions>[0], 'optionsSourceId'> &
   Readonly<{ field: InputFieldHint }>): ReturnType<typeof resolveInputOptions> {
@@ -222,6 +270,8 @@ export async function resolveInputOptions(params: Readonly<{
   optionsSourceId: string;
   input: Record<string, unknown>;
   consumer?: InputOptionsConsumerV1;
+  /** Picked values to check: a source that can answer them directly does not read its whole inventory. */
+  values?: readonly JsonValue[];
   includeSpawnModelCatalog?: boolean;
   readFailure: (result: unknown) => Extract<ActionExecuteResult, { ok: false }> | null;
   resolveSessionId: (input: unknown, ctx: ActionExecutorContext) => string | null;
@@ -355,7 +405,7 @@ export async function resolveInputOptions(params: Readonly<{
   if (optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'session' })) {
     // The Usage Session type stores a session id on the current Home: the same Home sessions, by name,
     // chosen in place like the Period (no picker dialog).
-    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions' });
+    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions', values: undefined });
     if (!sessions.ok) return sessions;
     return { ok: true, result: sessions.result.map(option => ({ ...option,
       value: VoiceTrackedSessionAddressV1Schema.parse(option.value).sessionId })) };
@@ -378,8 +428,11 @@ export async function resolveInputOptions(params: Readonly<{
     // admitted corpus and marked-query admission also govern option discovery.
     const { createActionExecutor } = await import('../actions/actionExecutor.js');
     const executor = createActionExecutor(deps);
+    if (params.values) {
+      const direct = await readSessionOptionsForValues({ executor, ctx, serverId: sessionServerId, values: params.values });
+      if (direct) return { ok: true, result: direct };
+    }
     const groups: Record<'needsYou' | 'working' | 'recent', InputOption[]> = { needsYou: [], working: [], recent: [] };
-    const groupLabels = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
     const consumer = params.consumer;
     const project = consumer?.kind === 'widget' && consumer.surface.owner.kind === 'project'
       ? { serverId: consumer.surface.serverId, projectKey: consumer.surface.owner.projectId }
@@ -408,14 +461,8 @@ export async function resolveInputOptions(params: Readonly<{
             projectSessionIds.add(session.sessionId);
             continue;
           }
-          const readable = isSessionAwarenessContentReadableV1(session.encryption);
-          const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
-          groups[group].push({
-            value: VoiceTrackedSessionAddressV1Schema.parse({ serverId: sessionServerId, sessionId: session.sessionId }),
-            label: readable ? session.title ?? session.sessionId : session.sessionId,
-            description: groupLabels[group],
-            ...(!readable ? { disabled: true } : {}),
-          });
+          const { group, option } = readSessionAwarenessOption(sessionServerId, session);
+          groups[group].push(option);
         }
         cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
       } while (cursor);

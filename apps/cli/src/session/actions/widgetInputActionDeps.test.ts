@@ -94,6 +94,39 @@ describe('Widget Action input transport authority', () => {
             session: { kind: 'value', value: { serverId: 'foreign-home', sessionId: 'B' } },
         } } })).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_scope_mismatch' }] });
     });
+    describe('admitting one picked Session through the real Action executor', () => {
+        const scope = { serverId: 'home', accountId: 'viewer' };
+        const picked = { serverId: 'home', sessionId: 'B' };
+        const summary = { id: 'B', createdAt: 1, updatedAt: 1, active: true, activeAt: 1, encryptionMode: 'plain' as const, encryption: null };
+        const awareness = (overrides: Record<string, unknown> = {}) => ({ v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle',
+            freshness: 'live', operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete', ...overrides });
+        // Only the Home transport is faked: the Session list pages and the single-Session read are counted.
+        const admit = (status: NonNullable<ActionExecutorDeps['sessionStatusGet']>) => {
+            const pages: unknown[] = [];
+            const deps = createCliWidgetInputActionDepsV1({ ...scope, getDeps: () => ({ ...createUnavailableActionTransportDeps(), widgetAccountScope: () => scope,
+                sessionList: async request => { pages.push(request); throw new Error('A picked Session must not page the Session list'); },
+                sessionStatusGet: status }),
+                readCandidates: async () => [], validateSession: async () => true });
+            const resolve = () => deps.widgetInputs!.resolve({ ref: { surface: { ...scope, owner: { kind: 'home' as const } }, instanceId: 'summary' },
+                instance: { v: 1 as const, id: 'summary', definition: { kind: 'builtin' as const, id: 'session_summary' },
+                    bindings: { session: { kind: 'value' as const, value: picked } } },
+                context: { surface: 'cli' as const, authority: 'present_user' as const } });
+            return { pages, resolve };
+        };
+
+        it('admits a readable Session without paging the Session list', async () => {
+            const { pages, resolve } = admit(async () => ({ ok: true, session: summary, awareness: awareness() }));
+            expect(await resolve()).toEqual({ status: 'ready', input: { session: picked } });
+            expect(pages).toHaveLength(0);
+        });
+
+        it('still refuses a locked Session and a deleted Session with the choice-unavailable reason', async () => {
+            const refusal = { status: 'invalid', fields: [{ path: 'session', reasonCode: 'widget_input_option_unavailable' }] };
+            expect(await admit(async () => ({ ok: true, session: summary,
+                awareness: awareness({ title: undefined, encryption: 'locked', availability: 'locked' }) })).resolve()).toMatchObject(refusal);
+            expect(await admit(async () => ({ ok: false, code: 'session_not_found' })).resolve()).toMatchObject(refusal);
+        });
+    });
     it.each(['inline', 'artifact'] as const)('preserves native Session admission for a saved %s builtin', async kind => {
         const native = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'changes' })!;
         const definition: WidgetDefinitionV1 = { v: 1, id: 'native-definition', name: 'Saved changes',

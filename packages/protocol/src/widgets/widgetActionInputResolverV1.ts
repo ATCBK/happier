@@ -5,7 +5,7 @@ import type { JsonValue } from '../json/strictJsonValue.js';
 import type { WidgetActionInputResolverV1 } from './actionsV1.js';
 import { isWidgetTargetHostableV1, resolveConfiguredWidgetInputs, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { WidgetInstanceV1Schema, type WidgetBindingResolutionInputV1, type WidgetInputIssueV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from './widgetInstanceV1.js';
-import { readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue, type ResolvedInputTypeV1 } from '../inputs/inputTypeRuntime.js';
+import { readInputFieldOptionsConstraint, readInputFieldSelectedValues, validateInputFieldSchema, validateInputFieldValue, type ResolvedInputTypeV1 } from '../inputs/inputTypeRuntime.js';
 import { hasValidPluginConnectedAccountPurposeBindingsV2 } from '../plugins/actions/v2.js';
 import type { PluginJsonSchemaV2 } from '../plugins/contributions/publicTypes.js';
 import { WidgetConnectedAccountPurposeBindingV1Schema } from './widgetConnectedAccountPurposeBindingV1.js';
@@ -95,7 +95,8 @@ export type WidgetActionInputResolverPortsV1 = Readonly<{
     readViewerValues(request: Request): Promise<Readonly<{ values: WidgetBindingResolutionInputV1['viewerValues']; fields?: readonly WidgetInputIssueV1[] }>>;
     validateValue(field: InputFieldHint, value: JsonValue, request: Request): Promise<Validation>;
     readInputType?(field: InputFieldHint, request: Request): Promise<ResolvedInputTypeV1 | null>;
-    resolveOptions(field: InputFieldHint, input: Readonly<Record<string, JsonValue>>, request: Request): Promise<
+    /** `values` are the picked values to check: a source that can answer them directly need not read its whole inventory. */
+    resolveOptions(field: InputFieldHint, input: Readonly<Record<string, JsonValue>>, request: Request, values: readonly JsonValue[]): Promise<
         readonly Readonly<{ value: InputOptionValue; disabled?: boolean }>[] | Exclude<Validation, { status: 'valid' }>>;
 }>;
 
@@ -185,7 +186,7 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
             const contextBound = request.instance.bindings[field.path]?.kind === 'context';
             const constraint = readInputFieldOptionsConstraint(field, type, request.instance.bindings[field.path]?.kind === 'viewer', { contextBound, value });
             const options = constraint.kind === 'static' ? constraint.options : constraint.kind === 'dynamic'
-                ? await ports.resolveOptions(field, resolved.input, request) : undefined;
+                ? await ports.resolveOptions(field, resolved.input, request, readInputFieldSelectedValues(field, value)) : undefined;
             request.signal?.throwIfAborted();
             if (options && 'status' in options) {
                 issues.push({ path: field.path, ...options });

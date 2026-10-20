@@ -254,7 +254,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             return await input.validateSession(session.data, request.signal)
                 ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_session_access_denied' };
         },
-        resolveOptions: async (field, value, request) => {
+        resolveOptions: async (field, value, request, values) => {
             const descriptor = descriptors.get(request);
             const target = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = target?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(value, target.path)) : null;
@@ -262,7 +262,7 @@ export function createCliWidgetInputActionDepsV1(input: Readonly<{
             const result = await executor.execute('action.options.resolve', {
                 consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                     ...(selected?.success ? { selectedSession: selected.data } : {}) },
-                fieldPath: field.path, draftInput: value,
+                fieldPath: field.path, draftInput: value, values,
             }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
             if (!result.ok) return { status: result.errorCode === 'credential_scope_denied' ? 'denied' : 'unavailable', reasonCode: result.errorCode ?? 'widget_input_options_unavailable' };
             return (getActionSpec('action.options.resolve').outputSchema!.parse(result.result) as PublicActionResultById['action.options.resolve']).options;

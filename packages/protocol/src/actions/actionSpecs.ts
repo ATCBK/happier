@@ -2505,6 +2505,7 @@ const ActionOptionsResolveInputSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.optional(z.string().check(z.minLength(1))),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(200))),
   query: z.optional(z.string().check(z.trim())),
+  values: z.optional(z.array(StrictJsonValueSchema)),
   draftInput: z.optional(z.record(z.string(), z.unknown())),
 }).check(z.superRefine((value, ctx) => {
   const actionId = typeof value.actionId === 'string' ? value.actionId.trim() : '';
@@ -6069,6 +6070,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
         { path: 'draftInput', title: 'Partial action input', description: 'Partial input for dependent options, for example {"backendTargetKeys":["agent:pi"]} when resolving a model, configuration, or connected service.', widget: 'json' },
         { path: 'query', title: 'Query filter', description: 'Optional search text to filter the returned options.', widget: 'text' },
         { path: 'limit', title: 'Limit', description: 'Maximum number of options to return.', widget: 'text' },
+        { path: 'values', title: 'Values', description: 'Return only the options for these values, to check a picked value without reading the whole inventory. A source that can answer directly does; any other is read in full and narrowed.', widget: 'json' },
       ],
     },
     outputSchema: ActionOptionsResolveResultSchema,

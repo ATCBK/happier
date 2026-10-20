@@ -444,6 +444,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `draftInput` (json): Partial action input — Partial input for dependent options, for example &#123;"backendTargetKeys":["agent:pi"]&#125; when resolving a model, configuration, or connected service.
 - `query` (text): Query filter — Optional search text to filter the returned options.
 - `limit` (text): Limit — Maximum number of options to return.
+- `values` (json): Values — Return only the options for these values, to check a picked value without reading the whole inventory. A source that can answer directly does; any other is read in full and narrowed.
 
 ## `action.spec.get`
 
