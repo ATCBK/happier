@@ -1,3 +1,5 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { HAPPIER_META_COLUMN_STYLE, HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
@@ -1322,10 +1324,11 @@ const SessionItemContent = React.memo(
         }));
         // Retention controls placement only. It cannot turn quiet, unread, or pending facts into
         // semantic work after the canonical awareness owner stopped reporting work.
-        const rowAttentionState = workflowPresentation?.attention ? 'action_required'
+        const rowAttentionState = sessionStatus.state === 'archiving' ? 'working' : workflowPresentation?.attention ? 'action_required'
             : workflowPresentation?.marker.kind === 'activity' ? 'working' : derivedRowAttentionState;
         const attentionIndicatorAnimationEnabled = rowAttentionAnimationEnabled
-            && (workflowPresentation ? workflowPresentation.marker.kind === 'activity' : sessionStatus.isPulsing === true);
+            && (sessionStatus.state === 'archiving' ? sessionStatus.isPulsing === true
+                : workflowPresentation ? workflowPresentation.marker.kind === 'activity' : sessionStatus.isPulsing === true);
         const rowContextSubtitle = externalSessionIdentity?.rowMetadataLabel || sessionSubtitle;
         const rowPresentation = resolveSessionRowPresentation({
             attentionState: rowAttentionState,
@@ -1350,7 +1353,7 @@ const SessionItemContent = React.memo(
             !isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption)
             || sessionStatus.state === 'stale'
             || sessionStatus.state === 'disconnected');
-        const effectiveSecondaryLineMode: SessionListSecondaryLineMode = statusAvailabilityNeedsExplanation || statusOfflineIsQuiet
+        const effectiveSecondaryLineMode: SessionListSecondaryLineMode = sessionStatus.state === 'archiving' || statusAvailabilityNeedsExplanation || statusOfflineIsQuiet
             ? 'status'
             : rowPresentation.secondaryLine === 'path' || (statusUnknownIsQuiet && Boolean(rowContextSubtitle))
                 ? 'path'
@@ -1358,14 +1361,15 @@ const SessionItemContent = React.memo(
         // The row's word and tone come from the shared work-status owner, fed by the Session facts owner
         // with the status this row already projected (INT §5.3): healthy work is quiet, needs-you and
         // trouble speak in their tone. The marker beside it stays the row presentation's own.
-        const workStatus = workflowPresentation && !statusAvailabilityNeedsExplanation
+        const workStatus = sessionStatus.state !== 'archiving' && workflowPresentation && !statusAvailabilityNeedsExplanation
             ? resolveWorkStatusTone({ kind: 'workflow_step', facts: { lifecycle: workflowPresentation.lifecycle,
                 word: workflowPresentation.label, runStopPending: workflowOccurrence?.runStopPending } })
             : resolveWorkStatusTone({
             kind: 'session',
             facts: sessionWorkStatusFactsFromStatus(resolvedSession, sessionStatus),
         });
-        const canonicalStatusSummaryText = workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
+        const canonicalStatusSummaryText = sessionStatus.state === 'archiving' ? workStatus.word
+            : workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
             ? workStatus.word
             : statusAvailabilityNeedsExplanation
             ? workStatus.word
@@ -2087,6 +2091,7 @@ function SessionItemFromRowViewModel(props: SessionItemProps) {
     const { rowViewModel, ...itemProps } = props;
     const rowSession = rowViewModel.session;
     const rowStatus = rowViewModel.sessionStatus;
+    const archivePending = useSessionArchivePending(normalizeSessionAddress(itemProps.serverId, rowSession?.id));
     if (!rowSession || !rowStatus) {
         return null;
     }
@@ -2094,10 +2099,12 @@ function SessionItemFromRowViewModel(props: SessionItemProps) {
         rowSession,
         providedSession: itemProps.session,
     });
-    const sessionStatus = session === rowSession ? rowStatus : getSessionStatus(session, Date.now(), {
-        workingTextMode: 'static',
-        statusColors: theme.colors.status,
-    });
+    const sessionStatus = archivePending || rowStatus.state === 'archiving' || session !== rowSession
+        ? getSessionStatus(session, Date.now(), {
+            archiving: archivePending,
+            workingTextMode: 'static',
+            statusColors: theme.colors.status,
+        }) : rowStatus;
     const contentUnavailable = !isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption);
     // Encryption pending is not a reason to forget a name this device already holds:
     // the owner keeps a safe cached title and falls back only when none exists, so the

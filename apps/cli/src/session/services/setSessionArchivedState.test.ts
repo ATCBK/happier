@@ -4,8 +4,9 @@ import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { setSessionArchivedState } from './setSessionArchivedState';
 
 const boundary = vi.hoisted(() => ({ createSocket: vi.fn(), callMachineRpc: vi.fn() }));
@@ -109,18 +110,28 @@ describe('setSessionArchivedState', () => {
     expect(active).toBe(true);
   });
 
-  it('reports the self-Stop refusal when an Agent archives its own active session', async () => {
+  it('reports the self-Stop refusal through Action admission when an Agent archives its own active session', async () => {
     active = true;
     const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
-    const agentStartContext = resolveCliAgentStartContextV1({ sessionId, machineId: 'machine-1', directory: '/repo',
-      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-      metadata: {}, starterDepth: 0, turnDepth: 1, callerPermissionMode: 'default', settings: accountSettingsParse({}), roles: {},
+    const { executor } = createCliActionExecutorHarness({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+      getCurrentSessionMetadata: () => ({ machineId: 'machine-1', path: '/repo' }),
+      getCurrentSessionBackendTarget: () => ({ kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }),
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: {
+        v: 1, actions: { 'session.archive': { enabled: true, disabledSurfaces: [] } },
+        approvalWaivedSurfaces: { 'session.archive': ['agent'] },
+      } }), allowEnvironmentOverride: false }),
+    }, {
+      // Preserve the real archive -> Stop service path. Only its outbound
+      // HTTP/Machine RPC boundaries above are substituted.
+      sessionArchiveSet: async ({ sessionId: target, archived, context }) => {
+        if (!context) throw new Error('Expected the executing Action context');
+        return setSessionArchivedState({ credentials, idOrPrefix: target, archived,
+          externalAction: { context, effectActionId: 'session.archive', installationId: 'installation', privateKey: new Uint8Array(64) } });
+      },
     });
-    if (!agentStartContext) throw new Error('Expected admitted Session caller');
-    const externalAction = { context: { surface: 'agent' as const,
-      actionCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 1 }, agentStartContext },
-      effectActionId: 'session.archive', installationId: 'installation', privateKey: new Uint8Array(64) };
-    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true, externalAction }))
+    await expect(executor.execute('session.archive', { sessionId }, { surface: 'agent', authority: 'account_automation',
+      defaultSessionId: sessionId, sessionListAccess: 'led_subtree', callerPermissionMode: 'default',
+      actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 1 } }))
       .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action', error: 'self_stop_forbidden' });
     expect(post).toHaveBeenCalledTimes(1);
     expect(boundary.callMachineRpc).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
 import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles';
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
 import React, { useCallback } from 'react';
@@ -627,6 +628,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     ]);
     const canStopSession = sessionActionTarget.isActive && sessionActionTarget.canStop;
     const canArchiveSession = sessionActionTarget.canArchive;
+    const archivePending = useSessionArchivePending(collaborationTarget);
     const visibleSessionActionIds = React.useMemo(
         () => {
             const actionIds = listVisibleSessionActionIds({ target: sessionActionTarget, surface: 'sessionInfo' });
@@ -670,10 +672,12 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }), []);
     const stopInfoItemProps = React.useMemo(() => createSessionActionInfoItemProps({
         actionId: SESSION_ACTION_STOP_ID,
-    }), []);
+        archivePending,
+    }), [archivePending]);
     const archiveInfoItemProps = React.useMemo(() => createSessionActionInfoItemProps({
         actionId: SESSION_ACTION_ARCHIVE_ID,
-    }), []);
+        archivePending,
+    }), [archivePending]);
     const deleteInfoItemProps = React.useMemo(() => createSessionActionInfoItemProps({
         actionId: SESSION_ACTION_DELETE_ID,
     }), []);
@@ -1522,6 +1526,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     accessibilityHint={stopInfoItemProps.subtitle}
                                     onPress={handleStopSession}
                                     loading={stoppingSession}
+                                    disabled={stopInfoItemProps.disabled}
                                 />
                             ) : null}
                             {showArchive && archiveInfoItemProps ? (
@@ -1533,7 +1538,8 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                     titleNumberOfLines="complete"
                                     accessibilityHint={archiveInfoItemProps.subtitle}
                                     onPress={handleArchiveSession}
-                                    loading={archivingSession}
+                                    loading={archivingSession || archivePending}
+                                    disabled={archiveInfoItemProps.disabled}
                                 />
                             ) : null}
                             <View style={infoStyles.leaveSpacer} />

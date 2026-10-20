@@ -78,6 +78,7 @@ vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
 
 const storageModule = await import('@/sync/domains/state/storage');
+const { SessionItem: ArchiveProgressSessionItem } = await import('./SessionItem');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
     return renderCanonicalScreen(<InjectedAuthProvider credentials={null}>{args[0]}</InjectedAuthProvider>, args[1]);
@@ -259,13 +260,15 @@ describe('SessionItem activity time', () => {
 
     it('shows shared archive progress on an already mounted row and clears it when the operation settles', async () => {
         const { act } = await import('react-test-renderer');
-        const SessionItem = await importSessionItem();
-        const screen = await renderScreen(<SessionItem session={createSession('archiving-row')}
+        const session = createSession('archiving-row');
+        const rowViewModel = createSessionItemRowViewModel({ session, serverId: 'server_a',
+            overrides: { sessionStatus: projectStatus(session, Date.now()) } });
+        const screen = await renderScreen(<ArchiveProgressSessionItem session={session} rowViewModel={rowViewModel}
             serverId="server_a" pinned={false} selected={false} isFirst isLast isSingle
             variant="default" compact={false} />);
         const textBefore = screen.getTextContent();
         let operation: ReturnType<typeof storageModule.storage.getState>['sessionArchiveOperations'][string][string] | null = null;
-        await act(async () => { operation = storageModule.storage.getState().beginSessionArchive('archiving-row', 'server_a'); });
+        await act(async () => { operation = storageModule.storage.getState().beginSessionArchive({ sessionId: 'archiving-row', serverId: 'server_a' }); });
         expect(screen.getTextContent()).toContain('status.archiving');
         expect(screen.findByTestId('session-list-item-archiving-row')?.props.accessibilityLabel).toContain('status.archiving');
         await act(async () => { storageModule.storage.getState().finishSessionArchive(operation!); });

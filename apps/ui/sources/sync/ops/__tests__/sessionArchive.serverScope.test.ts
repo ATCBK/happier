@@ -1,163 +1,167 @@
-import { afterAll, beforeAll, describe, it, expect, vi, beforeEach } from 'vitest';
-
-const { mockRequest, mockResolveContext, mockRuntimeFetchWithServerReachability, mockRelease, mockStorageState } = vi.hoisted(() => ({
-  mockRequest: vi.fn(),
-  mockResolveContext: vi.fn(),
-  mockRuntimeFetchWithServerReachability: vi.fn(),
-  mockRelease: vi.fn(async () => undefined),
-  mockStorageState: {
-    sessions: {},
-    concurrentSessionListCacheByServerId: {},
-    applySessions: vi.fn(),
-  } as {
-    sessions: Record<string, unknown>;
-    concurrentSessionListCacheByServerId: Record<string, unknown>;
-    applySessions: ReturnType<typeof vi.fn>;
-  },
-}));
-
-vi.mock('../../api/session/apiSocket', () => ({
-  apiSocket: {
-    request: mockRequest,
-  },
-}));
-
-vi.mock('../../runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext', () => ({
-  resolveServerAccountRequestContext: mockResolveContext,
-}));
-
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-  runtimeFetchWithServerReachability: mockRuntimeFetchWithServerReachability,
-}));
-
-vi.mock('@/utils/system/runtimeFetch', () => ({
-  runtimeFetch: vi.fn(async () => {
-    throw new Error('Unexpected runtimeFetch call');
-  }),
-}));
-
-vi.mock('../../domains/state/storage', () => ({
-  storage: {
-    getState: () => mockStorageState,
-  },
-}));
-
-import { sessionArchiveWithServerScope, sessionUnarchiveWithServerScope } from '../../ops';
-
-function makeResponse(opts: Readonly<{ ok: boolean; status?: number; json?: unknown; text?: string }>) {
-  return {
-    ok: opts.ok,
-    status: opts.status ?? (opts.ok ? 200 : 500),
-    json: async () => opts.json ?? {},
-    text: async () => opts.text ?? '',
-    headers: new Map(),
-  } as any;
-}
+import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
 
 describe('sessionArchiveWithServerScope', () => {
-  beforeEach(() => {
-    mockRequest.mockReset();
-    mockResolveContext.mockReset();
-    mockRuntimeFetchWithServerReachability.mockReset();
-    mockRelease.mockClear();
-    mockStorageState.sessions = {};
-    mockStorageState.concurrentSessionListCacheByServerId = {};
-    mockStorageState.applySessions.mockReset();
+
+  it('reads the archive response from its prepared API Home without retargeting to focus', async () => {
+    realArchiveBoundary.resetRequests();
+    const owner = await realArchiveBoundary.addHome('https://prepared-archive.example', 'prepared-archive');
+    const { apiSocket } = await import('@/sync/api/session/apiSocket');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    realArchiveBoundary.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/prepared/archive'
+      ? Response.json({ success: true, archivedAt: 10 }) : null);
+    apiSocket.initialize({ endpoint: owner.serverUrl, token: owner.token, serverId: owner.id,
+      generation: getActiveServerSnapshot().generation }, null);
+    try {
+      const response = await apiSocket.request('/v2/sessions/prepared/archive', { method: 'POST' }, { retry: 'none' });
+      expect(await response.json()).toEqual({ success: true, archivedAt: 10 });
+      expect(realArchiveBoundary.httpRequests.filter(({ url }) => new URL(url).pathname.endsWith('/archive'))).toEqual([
+        { url: `${owner.serverUrl}/v2/sessions/prepared/archive`, token: `Bearer ${owner.token}` },
+      ]);
+    } finally { apiSocket.disconnect(); }
   });
 
-  it('uses active apiSocket.request when scope is active', async () => {
-    mockResolveContext.mockResolvedValue({
-      scope: 'active',
-      targetServerUrl: 'https://active.example',
-      targetServerId: 'server-a',
-      token: 'tok',
-      timeoutMs: 1000,
-      encryption: null,
-    });
-    mockRequest.mockResolvedValue(makeResponse({ ok: true, json: { success: true, archivedAt: 10 } }));
-
-    const res = await sessionArchiveWithServerScope('sid-1', { serverId: 'server-a' });
-    expect(res).toEqual({ success: true, archivedAt: 10 });
-    expect(mockRequest).toHaveBeenCalledWith('/v2/sessions/sid-1/archive', { method: 'POST' });
-    expect(mockRuntimeFetchWithServerReachability).not.toHaveBeenCalled();
+  it('uses the saved Home credential for an explicit remote archive', async () => {
+    realArchiveBoundary.resetRequests();
+    const owner = await realArchiveBoundary.addHome('https://explicit-archive.example', 'explicit-archive');
+    const { sessionArchiveWithServerScope } = await import('../sessions');
+    realArchiveBoundary.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/explicit/archive'
+      ? Response.json({ success: true, archivedAt: 11 }) : null);
+    await expect(sessionArchiveWithServerScope('explicit', { serverId: owner.id })).resolves.toEqual({ success: true, archivedAt: 11 });
+    expect(realArchiveBoundary.httpRequests.filter(({ url }) => new URL(url).pathname.endsWith('/archive'))).toEqual([
+      { url: `${owner.serverUrl}/v2/sessions/explicit/archive`, token: `Bearer ${owner.token}` },
+    ]);
   });
 
-  it('uses runtimeFetchWithServerReachability with the scoped server URL and bearer token when scope is not active', async () => {
-    mockResolveContext.mockResolvedValue({
-      scope: 'scoped',
-      targetServerUrl: 'https://scoped.example',
-      runtimeOrigin: 'http://127.0.0.1:49152',
-      carrier: 'iroh',
-      targetServerId: 'server-b',
-      token: 'tok_scoped',
-      timeoutMs: 1000,
-      encryption: null,
-      release: mockRelease,
-    });
-    mockRuntimeFetchWithServerReachability.mockResolvedValue(makeResponse({ ok: true, json: { success: true, archivedAt: 11 } }));
-
-    const res = await sessionArchiveWithServerScope('sid-2', { serverId: 'server-b' });
-    expect(res).toEqual({ success: true, archivedAt: 11 });
-    expect(mockRuntimeFetchWithServerReachability).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serverUrl: 'https://scoped.example',
-        token: 'tok_scoped',
-        url: 'http://127.0.0.1:49152/v2/sessions/sid-2/archive',
-        runtimeOrigin: 'http://127.0.0.1:49152',
-        timeoutMs: 1000,
-        init: expect.objectContaining({
-          method: 'POST',
-        }),
-      }),
-    );
-    expect(new Headers(mockRuntimeFetchWithServerReachability.mock.calls[0]?.[0]?.init?.headers).get('Authorization'))
-      .toBe('Bearer tok_scoped');
-    expect(mockRequest).not.toHaveBeenCalled();
-    expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it('surfaces a stable session_active code for JSON archive conflicts', async () => {
-    mockResolveContext.mockResolvedValue({
-      scope: 'active',
-      targetServerUrl: 'https://active.example',
-      targetServerId: 'server-a',
-      token: 'tok',
-      timeoutMs: 1000,
-      encryption: null,
-    });
-    mockRequest.mockResolvedValue(makeResponse({
-      ok: false,
-      status: 409,
-      text: '{"error":"session-active"}',
-    }));
-
-    const res = await sessionArchiveWithServerScope('sid-conflict', { serverId: 'server-a' });
-
-    expect(res).toEqual({
-      success: false,
-      message: 'Cannot archive an active session',
-      code: 'session_active',
-    });
+  it('surfaces a session-active conflict immediately without repeating the archive', async () => {
+    realArchiveBoundary.resetRequests();
+    const owner = await realArchiveBoundary.addHome('https://conflict-archive.example', 'conflict-archive');
+    const { sessionArchiveWithServerScope } = await import('../sessions');
+    realArchiveBoundary.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/conflict/archive'
+      ? Response.json({ error: 'session-active' }, { status: 409 }) : null);
+    await expect(sessionArchiveWithServerScope('conflict', { serverId: owner.id })).resolves.toMatchObject({ success: false, code: 'session_active' });
+    expect(realArchiveBoundary.httpRequests.filter(({ url }) => new URL(url).pathname.endsWith('/archive'))).toHaveLength(1);
   });
 });
 
-describe('archive routing from canonical session-list rows', () => {
-  let boundary: Awaited<ReturnType<typeof import('@/dev/testkit/harness/sessionOpsNetworkBoundary').installSessionOpsNetworkBoundary>>;
+// Load the actual operation graph during collection, outside bounded test bodies.
+// Every case shares the canonical Home/Account and network boundary fixture.
+const realArchiveBoundary = await (async () => {
+  const boundary = await (await import('@/dev/testkit/harness/sessionOpsNetworkBoundary')).installSessionOpsNetworkBoundary();
+  await import('../sessions');
+  await import('@/components/sessions/sessionStopArchiveFlow');
+  return boundary;
+})();
 
-  beforeAll(async () => {
-    vi.doUnmock('@/sync/api/session/apiSocket');
-    vi.doUnmock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext');
-    vi.doUnmock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch');
-    vi.doUnmock('@/utils/system/runtimeFetch');
-    vi.doUnmock('@/sync/domains/state/storage');
-    vi.resetModules();
-    boundary = await (await import('@/dev/testkit/harness/sessionOpsNetworkBoundary')).installSessionOpsNetworkBoundary();
+afterAll(async () => {
+  const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+  await resetServerReachabilitySupervisors();
+  await realArchiveBoundary.dispose();
+});
+
+describe('archive routing from canonical session-list rows', () => {
+  const boundary = realArchiveBoundary;
+  beforeEach(() => { boundary.resetRequests(); });
+
+
+  it('keeps active API response consumption inside caller cancellation and Home authority', async () => {
+    const owner = await boundary.addHome('https://archive-api-body.example', 'archive-api-body');
+    const { apiSocket } = await import('@/sync/api/session/apiSocket');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const controller = new AbortController();
+    let transportSignal: AbortSignal | null | undefined;
+    let failBody: (error: Error) => void = () => {};
+    let issued!: () => void;
+    const entered = new Promise<void>(resolve => { issued = resolve; });
+    boundary.setHttpResponder(async (input, init) => {
+      if (new URL(String(input)).pathname !== '/v2/sessions/api-body/archive') return null;
+      transportSignal = init?.signal;
+      const response = new Response(new ReadableStream<Uint8Array>({ start(body) {
+        failBody = error => body.error(error);
+        transportSignal?.addEventListener('abort', () => failBody(new DOMException('Cancelled', 'AbortError')), { once: true });
+      } }));
+      issued();
+      return response;
+    });
+    apiSocket.initialize({ endpoint: owner.serverUrl, token: owner.token, serverId: owner.id,
+      generation: getActiveServerSnapshot().generation }, null);
+    let settled = false;
+    const pending = apiSocket.request('/v2/sessions/api-body/archive', { method: 'POST', signal: controller.signal },
+      { retry: 'none' }, response => response.json()).then(
+        value => { settled = true; return { success: true, value }; },
+        () => { settled = true; return { success: false }; },
+      );
+    try {
+      await entered;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      controller.abort();
+      expect(transportSignal?.aborted).toBe(true);
+      expect(await pending).toEqual({ success: false });
+    } finally {
+      failBody(new Error('Release test response'));
+      await pending;
+      apiSocket.disconnect();
+    }
   });
 
-  afterAll(async () => {
-    const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-    await resetServerReachabilitySupervisors();
-    await boundary?.dispose();
+  it.each(['headers', 'body'] as const)('recovers shared archive admission when remote response %s stalls', async phase => {
+    const owner = await boundary.addHome(`https://archive-deadline-${phase}.example`, `deadline-${phase}`);
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    const { sessionArchiveWithServerScope } = await import('../sessions');
+    const { stopSessionAndMaybeArchive } = await import('@/components/sessions/sessionStopArchiveFlow');
+    storage.setState(storage.getInitialState(), true);
+    const sessionId = `deadline-${phase}`;
+    const address = { serverId: owner.id, sessionId };
+    storage.getState().applyServerScopedSessionListRows(owner.id, [
+      createSessionListRenderableSessionFixture({ id: sessionId, archivedAt: null }),
+    ], { source: 'ordinary', mode: 'replace' });
+    let issued!: () => void;
+    const entered = new Promise<void>(resolve => { issued = resolve; });
+    let transportSignal: AbortSignal | null | undefined;
+    let failTransport: (error: Error) => void = () => {};
+    boundary.setHttpResponder(async (input, init) => {
+      if (new URL(String(input)).pathname !== `/v2/sessions/${sessionId}/archive`) return null;
+      transportSignal = init?.signal;
+      const failOnAbort = () => failTransport(new DOMException('Archive cancelled', 'AbortError'));
+      if (phase === 'headers') {
+        return await new Promise<Response>((_resolve, reject) => {
+          failTransport = reject;
+          transportSignal?.addEventListener('abort', failOnAbort, { once: true });
+          issued();
+        });
+      }
+      const response = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        failTransport = error => controller.error(error);
+        transportSignal?.addEventListener('abort', failOnAbort, { once: true });
+      } }), { headers: { 'content-type': 'application/json' } });
+      issued();
+      return response;
+    });
+    vi.useFakeTimers();
+    const run = () => stopSessionAndMaybeArchive({ address, hideInactiveSessions: true, isPinned: false,
+      archiveAfterStop: 'always', stopSession: async () => ({ success: true }),
+      archiveSession: () => sessionArchiveWithServerScope(sessionId, { serverId: owner.id }),
+      stopErrorMessage: 'Stop failed', archiveErrorMessage: 'Archive failed',
+    });
+    const pending = run().then(() => ({ failed: false }), () => ({ failed: true }));
+    try {
+      await entered;
+      expect(storage.getState().sessionArchiveOperations[owner.id]?.[sessionId]).toBeDefined();
+      await vi.advanceTimersByTimeAsync(75_000);
+      expect(transportSignal?.aborted).toBe(true);
+      expect(await pending).toEqual({ failed: true });
+      expect(storage.getState().sessionArchiveOperations).toEqual({});
+      expect(storage.getState().sessionListRowsByServerId[owner.id]?.[sessionId]?.archivedAt).toBeNull();
+      boundary.setHttpResponder(async input => new URL(String(input)).pathname === `/v2/sessions/${sessionId}/archive`
+        ? Response.json({ success: true, archivedAt: 42 }) : null);
+      await expect(run()).resolves.toBeUndefined();
+      expect(storage.getState().sessionListRowsByServerId[owner.id]?.[sessionId]?.archivedAt).toBe(42);
+    } finally {
+      failTransport(new Error('Release test transport'));
+      await pending;
+      vi.useRealTimers();
+    }
   });
 
   it.each(['archive', 'unarchive'] as const)('projects a remote %s only into the captured Home, including list-only rows', async action => {
@@ -251,26 +255,22 @@ describe('archive routing from canonical session-list rows', () => {
 });
 
 describe('sessionUnarchiveWithServerScope', () => {
-  beforeEach(() => {
-    mockRequest.mockReset();
-    mockResolveContext.mockReset();
-    mockRuntimeFetchWithServerReachability.mockReset();
-  });
 
-  it('uses active apiSocket.request when scope is active', async () => {
-    mockResolveContext.mockResolvedValue({
-      scope: 'active',
-      targetServerUrl: 'https://active.example',
-      targetServerId: 'server-a',
-      token: 'tok',
-      timeoutMs: 1000,
-      encryption: null,
-    });
-    mockRequest.mockResolvedValue(makeResponse({ ok: true, json: { success: true, archivedAt: null } }));
-
-    const res = await sessionUnarchiveWithServerScope('sid-1', { serverId: 'server-a' });
-    expect(res).toEqual({ success: true, archivedAt: null });
-    expect(mockRequest).toHaveBeenCalledWith('/v2/sessions/sid-1/unarchive', { method: 'POST' });
-    expect(mockRuntimeFetchWithServerReachability).not.toHaveBeenCalled();
+  it('reads the unarchive response from its prepared API Home without retargeting to focus', async () => {
+    realArchiveBoundary.resetRequests();
+    const owner = await realArchiveBoundary.addHome('https://prepared-unarchive.example', 'prepared-unarchive');
+    const { apiSocket } = await import('@/sync/api/session/apiSocket');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    realArchiveBoundary.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/prepared/unarchive'
+      ? Response.json({ success: true, archivedAt: null }) : null);
+    apiSocket.initialize({ endpoint: owner.serverUrl, token: owner.token, serverId: owner.id,
+      generation: getActiveServerSnapshot().generation }, null);
+    try {
+      const response = await apiSocket.request('/v2/sessions/prepared/unarchive', { method: 'POST' }, { retry: 'none' });
+      expect(await response.json()).toEqual({ success: true, archivedAt: null });
+      expect(realArchiveBoundary.httpRequests.filter(({ url }) => new URL(url).pathname.endsWith('/unarchive'))).toEqual([
+        { url: `${owner.serverUrl}/v2/sessions/prepared/unarchive`, token: `Bearer ${owner.token}` },
+      ]);
+    } finally { apiSocket.disconnect(); }
   });
 });
