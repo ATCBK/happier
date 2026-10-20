@@ -14,6 +14,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
@@ -214,7 +215,8 @@ export const MemorySearchPanel = React.memo(function MemorySearchPanel(props: Re
                 />
             </View>
             {target === null ? (
-                <SearchNotice testID={`${testID}.unavailable`} kind="warning" title={t('memoryContext.memory.searchUnavailable')} />
+                <SearchNotice testID={`${testID}.unavailable`} kind="warning" title={t('memoryContext.memory.searchUnavailable')}
+                    action={{ label: t('memoryContext.memory.turnOnSearch'), onPress: () => router.push(SETTINGS_ROUTES.search as never) }} />
             ) : null}
             {props.idle !== undefined && !searching ? props.idle : <>
             {target === null ? null : results?.status === 'failed' ? (

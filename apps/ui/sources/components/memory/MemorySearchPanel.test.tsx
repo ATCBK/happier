@@ -298,6 +298,8 @@ describe('MemorySearchPanel corpus coverage', () => {
                 false, { sourceServerId: serverId }));
             await flushHookEffects();
             expect(screen.findByTestId('project-search.unavailable')).not.toBeNull();
+            // A search that cannot run says what it needs and leads to the setting that provides it.
+            expect(screen.findByTestId('project-search.unavailable-action')).not.toBeNull();
             expect(screen.findByTestId('project-search.remembered.0')).not.toBeNull();
             await act(async () => administration.selectTarget(administration.targets[1]!));
             await flushHookEffects();
