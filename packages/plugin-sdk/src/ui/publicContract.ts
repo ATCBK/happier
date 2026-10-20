@@ -4,7 +4,7 @@ import type { ProjectKeyV1, SessionServerStartSpawnDraftV1 } from '../sessions/a
 import type { JsonValue } from '../identity.js';
 import type { ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { PluginActionInputById } from '../actions/actionTypeMap.generated.js';
-import type { WorkBoardPreviewLayoutV1 as ProtocolWorkBoardPreviewLayoutV1 } from '@happier-dev/protocol';
+import type { WorkBoardPreviewLayoutV1 as ProtocolWorkBoardPreviewLayoutV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import type {
     StoredImageRefV1 as ProtocolStoredImageRefV1,
     PluginUiReadStoredImageResultV1 as ProtocolPluginUiReadStoredImageResultV1,
