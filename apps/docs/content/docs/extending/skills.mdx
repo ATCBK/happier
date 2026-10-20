@@ -19,11 +19,13 @@ Skills are Account library items. Their storage follows your [Account encryption
 
 Open **Settings → Skills**, then use **+**. The add dialog offers **Browse**, **From a link**, **Upload** and **Write**.
 
-1. In **Browse**, choose a registry and open a skill's details. Happier picks appear first when that catalog supplies entries. **From a link** previews the skills in a repository; select the ones you want. **Upload** accepts a skill folder or ZIP on the web, or a ZIP through the native document picker. **Write** opens a draft in the skill editor.
+1. In **Browse**, choose a registry and open a skill's details. Happier picks appear first when that catalog supplies entries. **From a link** previews the skills in a repository, a skills.sh pack (`https://skills.sh/p/<pack-id>`) or an HTTPS `.well-known/skills/index.json` index; select the ones you want. You can paste `npx skills add <url>` as text into the same field. Happier reads the link without running that command. **Upload** accepts a skill folder or ZIP on the web, or a ZIP through the native document picker. **Write** opens a draft in the skill editor.
 2. Review the instructions, files, source revision and whether the skill has scripts. Browse and link additions keep the reviewed revision, including supporting files and executable modes, even if the source branch advances before you press Add. Updates can offer the newer revision later. When a skill refers to another skill folder from the same repository or upload, for example `../prisma-orm-setup/SKILL.md`, the preview says "Also adds" that skill and includes it; untick it to leave it out. A skill you already added is not added twice. Other files outside the skill's own folder are not imported, and the preview says so. A folder or ZIP holding several skills lists each one to tick.
 3. Choose **Where it's on**, or keep **Everywhere**. Add the skill to the library, or save your written draft.
 
 The skill detail lets you edit instructions and supporting files, move the item to a library folder, duplicate it, or export an Agent Skills ZIP. A conflicting save keeps your draft for review. Removing a skill asks for confirmation.
+
+Pack and well-known index links use the same checklist, including skills already in your library. Pack links need a reachable machine to fetch their files; other index links follow the [registry source fetch rules](/extending/registries). Each skill is pinned to the content reviewed in the preview. When an index publishes a digest, Happier verifies the downloaded artifact and shows **Verified by digest** with its source host. An index without one shows **No digest published**; Happier still records a content digest to pin the reviewed copy. These sources have no Git commit. Unreadable or unverifiable items are left out of the preview while valid items remain available. Happier fetches and verifies the selected content again when you add it: if a selected item changed since preview or fails verification, Add fails before saving any selected skills. Your preview stays open. Review a fresh preview or deselect the affected item before retrying.
 
 If Happier saved the item but could not save its defaults, it reports that partial result. Use **Try again** to repair where it's on; the saved skill stays in the library and stays Off until a rule or Session selection enables it.
 
@@ -53,7 +55,7 @@ For use outside Happier, expand **Details** on an ordinary library skill and cho
 
 ## Updates and local edits
 
-Registry and link additions track their source and reviewed revision. Third-party skills default to manual updates. Open **Updates** or use **Check now** on a skill's source section.
+Registry, link and well-known index additions track their source and reviewed revision. Pack and index checks compare the current content digest with the saved one and offer changed content through the same update review. Third-party skills default to manual updates. Open **Updates** or use **Check now** on a skill's source section.
 
 - **Update available** means the source has a newer revision. Review the changes, then apply them.
 - **Modified** means your library files differ from their imported content. Review **Yours** and **Theirs**, then choose **Keep mine** or **Take theirs** for each changed file. Keeping yours advances the checked upstream baseline while retaining your edits; the skill remains Modified.
@@ -91,7 +93,7 @@ happier skills found --machine <machine-id>
 happier skills machine-install code-review --machine <machine-id>
 ```
 
-`happier skills install` adds the same referenced skills; `--dry-run` lists them and `--path` limits what is added. For a link, pass the preview items' Git `provenance.ref` objects as an array through `--refs-json` to retain those reviewed commits in a later install. An Agent can pass the same array as `source.refs` to `skills.install`. In 0.3 development, skills imported from a repository or a multi-skill upload keep their source folder names in the private Session folder, even if the declared skill name differs or you rename it later. This lets relative references between selected siblings resolve. Written skills, single-skill uploads and existing library items without a recorded source folder use their declared names.
+`happier skills install` adds the same referenced skills; `--dry-run` lists them and `--path` limits what is added. For a Git link, pass the preview items' `provenance.ref` objects as an array through `--refs-json` to retain those reviewed commits in a later install. For pack or well-known index links, pass the items' `wellKnown` provenance objects instead to retain their reviewed content digests. An Agent can pass the same array as `source.refs` to `skills.install`. In 0.3 development, skills imported from a repository, a pack or well-known index, or a multi-skill upload keep their source folder names in the private Session folder, even if the declared skill name differs or you rename it later. Pack and index imports use the index item's name for that folder. This lets relative references between selected siblings resolve. Written skills, single-skill uploads and existing library items without a recorded source folder use their declared names.
 
 When selected skills share a declared name or delivery folder, Happier delivers the most recently updated item; equal update times are settled by skill id. Folder comparisons ignore case so the choice is consistent across platforms. Other colliding items report a name conflict; Happier does not rename their folders.
 
