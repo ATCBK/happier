@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -23,7 +23,7 @@ export function useArtifactBody(artifactId: string, artifact: DecryptedArtifact 
     const requiresPreview = artifact !== null && artifact.isDecrypted !== false
         && (isArtifactHtmlHeaderV1(artifact.rawHeader ?? artifact.header)
             || (artifact.body !== null && typeof artifact.body === 'object'
-                && (artifact.body.mime.startsWith('image/') || (Platform.OS === 'web' && artifact.body.mime === 'application/pdf'))));
+                && resolveFileViewerKind({ path: artifact.title ?? '', mimeType: artifact.body.mime }).previewable));
     const requiresRead = needsBody || needsAuthority || requiresPreview;
     const [read, setRead] = React.useState<Readonly<{ state: ArtifactBodyState; result: ArtifactViewRead | null }>>({
         state: requiresRead ? 'loading' : 'ready', result: null,
@@ -36,7 +36,7 @@ export function useArtifactBody(artifactId: string, artifact: DecryptedArtifact 
         if (!requiresRead) { setRead({ state: 'ready', result: null }); return; }
         const controller = new AbortController();
         setRead({ state: 'loading', result: null });
-        void sync.fetchArtifactForView(artifactId, { includePdfPreview: Platform.OS === 'web', signal: controller.signal }).then((full) => {
+        void sync.fetchArtifactForView(artifactId, { signal: controller.signal }).then((full) => {
             if (controller.signal.aborted) return;
             if (full) {
                 storage.getState().updateArtifact(full.artifact);

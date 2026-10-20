@@ -217,7 +217,7 @@ describe('createArtifactWithHeaderViaApi', () => {
     request.mockClear();
     const headerOpens = vi.spyOn(ArtifactEncryption.prototype, 'decryptHeaderRaw');
     const bodyOpens = vi.spyOn(ArtifactEncryption.prototype, 'decryptBody');
-    const view = await fetchArtifactForViewFromApi({ credentials: { token: 't' }, artifactId, encryption, artifactDataKeys, request, includePdfPreview: true });
+    const view = await fetchArtifactForViewFromApi({ credentials: { token: 't' }, artifactId, encryption, artifactDataKeys, request });
     const opened = view?.artifact;
     if (!opened?.isDecrypted) throw new Error('Missing opened Artifact');
     const composedRead = { credentials: { token: 't' }, artifactId, reference: body, encryption, artifactDataKeys, request, artifact: opened };

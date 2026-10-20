@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -1027,7 +1028,7 @@ function assertArtifactDocumentReadAllowed(artifact: DecryptedArtifact | null): 
 export async function fetchArtifactForViewFromApi(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; artifactId: string;
     encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache; signal?: AbortSignal;
-    includePdfPreview: boolean; forbiddenOrigins?: readonly string[];
+    forbiddenOrigins?: readonly string[];
 }>): Promise<ArtifactViewRead | null> {
     const artifact = await fetchArtifactWithBodyFromApi(params);
     if (!artifact) return null;
@@ -1039,7 +1040,7 @@ export async function fetchArtifactForViewFromApi(params: Readonly<{
     }
     const reference = artifact.body;
     if (reference !== null && reference !== undefined && typeof reference === 'object'
-        && (reference.mime.startsWith('image/') || (params.includePdfPreview && reference.mime === 'application/pdf'))) {
+        && resolveFileViewerKind({ path: artifact.title ?? '', mimeType: reference.mime }).previewable) {
         return { artifact, binaryBytes: await fetchArtifactBinaryFromApi({ ...params, artifact, reference }) };
     }
     // Other files retain their explicit, later authenticated Download operation.

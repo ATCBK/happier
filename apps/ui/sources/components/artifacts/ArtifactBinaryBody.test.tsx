@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
@@ -20,7 +20,12 @@ vi.mock('@/text', async () => {
 
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetModules(); });
+beforeEach(async () => {
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0, filesImagePreviewMaxBytes: 1_000_000 });
+});
+
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); });
 
 function binarySource(mime: string, bytes = new Uint8Array([0, 255, 128])) {
     const reference: ArtifactBlobReferenceV1 = { blobId: 'b6a4bb92-8b93-4b18-b8b4-230041388a62', mime,
@@ -50,6 +55,41 @@ function installDownloadDocument() {
 }
 
 describe('ArtifactBinaryBody', () => {
+    it.each(['image/svg+xml', 'application/pdf'])('materializes %s through the shared bytes owner', async mime => {
+        const previous = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        const source = binarySource(mime);
+        const blobs: Blob[] = [];
+        vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => {
+            if (!(blob instanceof Blob)) throw new Error('Expected preview Blob');
+            blobs.push(blob);
+            return 'blob:artifact-preview';
+        });
+        const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        try {
+            const screen = await renderScreen(<ArtifactBinaryBody artifactId={mime} name="preview" {...source} />);
+            await vi.waitFor(() => expect(blobs).toHaveLength(1));
+            expect(blobs[0]!.type).toBe(mime);
+            expect(new Uint8Array(await blobs[0]!.arrayBuffer())).toEqual(source.bytes);
+            await screen.unmount();
+            expect(revoke).toHaveBeenCalledWith('blob:artifact-preview');
+        } finally { Object.defineProperty(Platform, 'OS', { configurable: true, value: previous }); }
+    });
+    it('applies the shared web buffering budget before creating an Artifact preview URI', async () => {
+        const previous = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_FILES_PREVIEW_MAX_BYTES', '2');
+        const source = binarySource('image/svg+xml');
+        const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:oversized');
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        try {
+            const screen = await renderScreen(<ArtifactBinaryBody artifactId="svg-budget" name="icon.svg" {...source} />);
+            await flushHookEffects();
+            expect(createUrl).not.toHaveBeenCalled();
+            expect(screen.findByTestId('artifact:previewFailed')).not.toBeNull();
+            expect(JSON.stringify(screen.tree.toJSON())).toContain('files.imagePreviewTooLarge');
+        } finally { Object.defineProperty(Platform, 'OS', { configurable: true, value: previous }); }
+    });
     it.each([
         ['android', 'success'], ['android', 'failure'], ['ios', 'success'], ['ios', 'failure'],
     ] as const)('preserves PDF download custody through %s sharing %s', async (platform, outcome) => {
@@ -84,19 +124,21 @@ describe('ArtifactBinaryBody', () => {
         }));
         try {
             const screen = await renderScreen(<ArtifactBinaryBody artifactId="pdf" name="Quarterly report" {...source} />);
-            expect(source.request).not.toHaveBeenCalled();
+            await flushHookEffects();
+            expect(source.request).toHaveBeenCalledOnce();
             expect(screen.tree.root.findAllByType('iframe')).toHaveLength(0);
             await screen.pressByTestIdAsync('artifact:download');
             await act(async () => { await vi.waitFor(() => expect(androidShares.length + iosShares.length).toBe(1)); });
             const shared = platform === 'android' ? androidShares : iosShares;
-            if (platform === 'android' && outcome === 'success') expect([...files.values()]).toEqual([[...source.bytes]]);
+            if (platform === 'android' && outcome === 'success') expect([...files.entries()].filter(([uri]) => uri.includes('/happier-downloads/')).map(([, bytes]) => bytes)).toEqual([[...source.bytes]]);
             expect(shared).toHaveLength(1);
             if (platform === 'android') expect(shared[0]).toMatch(/^file:\/\/\/cache\/happier-downloads\/.*Quarterly report$/);
             if (platform === 'android') expect(iosShares).toEqual([]);
             else expect(androidShares).toEqual([]);
             if (platform === 'android' && outcome === 'success') expect(files.get(shared[0]!)).toEqual([...source.bytes]);
-            else expect(files.size).toBe(0);
+            else expect([...files.keys()].filter(uri => uri.includes('/happier-downloads/'))).toEqual([]);
             expect(screen.findByTestId('artifact:downloadFailed') !== null).toBe(outcome === 'failure');
+            await screen.unmount();
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });
             vi.doUnmock('expo-file-system'); vi.doUnmock('expo-sharing'); vi.doUnmock('expo-modules-core');

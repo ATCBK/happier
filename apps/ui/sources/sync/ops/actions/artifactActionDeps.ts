@@ -23,6 +23,7 @@ import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEdi
     DocEditDeclineTransportInputV1Schema, DocEditDecisionResultV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
+import { readArtifactWorkspaceSourceSessionId } from './artifactWorkspaceSource';
 
 /** Artifact-backed Actions use the captured Account transport and canonical sync codecs. */
 export function createUiArtifactAction(account: LazyActionAccountContext, options?: Readonly<{
@@ -36,10 +37,10 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
     };
     const readWorkspaceFile = async (context: ActionExecutorContext, path: string, signal?: AbortSignal) => {
         account.assertCurrent();
-        if (context.actionCaller?.kind !== 'session' || context.runtimeAccountId !== account.accountId
+        const sessionId = readArtifactWorkspaceSourceSessionId(context);
+        if (!sessionId || context.runtimeAccountId !== account.accountId
             || !areServerProfileIdentifiersEquivalent(context.serverId, account.serverId))
             throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
-        const sessionId = context.actionCaller.sessionId;
         const target = readMachineControlTargetForSession({ serverId: account.serverId, accountId: account.accountId, sessionId });
         if (!target) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
         const absolutePath = resolveMachineAbsolutePath({ rootPath: target.basePath, agentRootPath: target.agentBasePath, requestPath: path });

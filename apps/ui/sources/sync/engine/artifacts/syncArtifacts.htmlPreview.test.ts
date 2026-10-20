@@ -40,7 +40,7 @@ describe('Artifact HTML private preview', () => {
             // Project only the outcome, so even a failing confidentiality test cannot dump custody.
             const outcome = (result: Promise<unknown>) => result.then(() => ({ code: 'returned_content' }),
                 (error: unknown) => ({ code: error && typeof error === 'object' ? Reflect.get(error, 'code') : null }));
-            expect(await outcome(fetchArtifactForViewFromApi({ ...params, includePdfPreview: false })))
+            expect(await outcome(fetchArtifactForViewFromApi(params)))
                 .toEqual({ code: 'artifact_kind_internal' });
             expect(await outcome(fetchArtifactBodyRevisionsFromApi(params))).toEqual({ code: 'artifact_kind_internal' });
             const privateRead = await fetchArtifactWithBodyFromApi(params);
@@ -57,7 +57,7 @@ describe('Artifact HTML private preview', () => {
         const request = async (path: string) => path.endsWith('/html-preview')
             ? Response.json({ url: `https://${artifactId}.preview.test/a/${artifactId}` }) : Response.json(artifact);
         const view = await fetchArtifactForViewFromApi({ artifactId, credentials: { token: 'captured-token' }, request,
-            encryption: null, artifactDataKeys: new Map(), includePdfPreview: false });
+            encryption: null, artifactDataKeys: new Map() });
         expect(view?.htmlPreview?.bundle).toEqual(bundle);
     });
     it.each(['create', 'update'] as const)('rejects malformed HTML bundle bytes before a %s can commit', async (operation) => {
@@ -123,7 +123,7 @@ describe('Artifact HTML private preview', () => {
         const headerOpens = vi.spyOn(ArtifactEncryption.prototype, 'decryptHeaderRaw');
         const bodyOpens = vi.spyOn(ArtifactEncryption.prototype, 'decryptBody');
         const params = { artifactId, credentials: { token: 'captured-token' }, request, encryption, artifactDataKeys };
-        const view = await fetchArtifactForViewFromApi({ ...params, includePdfPreview: true });
+        const view = await fetchArtifactForViewFromApi(params);
         const result = view?.htmlPreview;
         if (!result) throw new Error('Missing opened HTML preview');
         console.info('HTML Artifact composed read measurement', { mode,
