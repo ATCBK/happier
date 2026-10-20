@@ -1,23 +1,23 @@
 import React from 'react';
 import 'fake-indexeddb/auto';
+import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsParse } from '@/sync/domains/settings/settings';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 import { installNavigationShellCommonModuleMocks } from './navigationShellTestHelpers';
-import { SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-const initialStorage = storage.getState();
 type SettingsHarnessModule = typeof import('@/components/settings/secrets/secretSettingsTestHarness');
-let createSecretSettingsTestHarness: SettingsHarnessModule['createSecretSettingsTestHarness'];
 let account: Awaited<ReturnType<SettingsHarnessModule['createSecretSettingsTestHarness']>>;
+let browserDom: JSDOM | undefined;
+let browserStorage: ReturnType<typeof installLocalStorageMock> | undefined;
 
 vi.mock('socket.io-client', async importOriginal =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -75,6 +75,13 @@ installNavigationShellCommonModuleMocks({
     },
     storage: importOriginal => importOriginal(),
 });
+
+// Install the OS/transport boundaries before any real owner can import React Native.
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { SIDEBAR_DOCK_MIN_WIDTH_PX } = await import('./sidebarSizing');
+const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
+const initialStorage = storage.getState();
 
 const mockLocalSettingsStore = (() => {
   return {
@@ -202,14 +209,28 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
     expect(getSidebar(screen.tree)).toBeDefined();
   });
-  afterEach(async () => { standardCleanup(); await account?.dispose(); storage.setState(initialStorage, true); });
+  afterEach(async () => {
+    try {
+      standardCleanup();
+      hoistedState.mockPlatformOS = 'web';
+      await account?.dispose();
+      storage.setState(initialStorage, true);
+    } finally {
+      browserStorage?.restore();
+      browserDom?.window.close();
+    }
+  });
   beforeEach(async () => {
     vi.unstubAllGlobals();
+    browserDom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
+    vi.stubGlobal('window', browserDom.window);
+    vi.stubGlobal('document', browserDom.window.document);
+    browserStorage = installLocalStorageMock();
+    hoistedState.mockPlatformOS = 'web';
     act(() => {
       mockLocalSettingsStore.setSidebarCollapsed(false);
       mockLocalSettingsStore.setSidebarWidthPx(320);
     });
-    ({ createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness'));
     account = await createSecretSettingsTestHarness({ settings: settingsParse({
       actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
     }) });
@@ -265,6 +286,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
 
   it('keeps the dedicated activity overlay transparent and free of sidebar chrome', async () => {
     vi.stubGlobal('isTauri', true);
+    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: createDesktopSecureStorageBoundary().invoke });
     vi.stubGlobal('window', { location: { href: 'http://localhost/desktop/activity-overlay' } });
     const addEventListener = vi.fn();
     vi.stubGlobal('document', { addEventListener, removeEventListener: vi.fn() });
