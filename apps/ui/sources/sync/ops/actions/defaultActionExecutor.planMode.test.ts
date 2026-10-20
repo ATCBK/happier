@@ -1173,7 +1173,9 @@ describe('default Action executor mode and catalog contracts', () => {
       { sessionId: 'cascade-refused', status: 'failed' },
       { sessionId: 'cascade-last', status: 'archived' },
     ] });
-    expect(getActionSpec('session.archive').outputSchema.parse(result)).toEqual(result);
+    const archiveOutputSchema = getActionSpec('session.archive')?.outputSchema;
+    if (!archiveOutputSchema) throw new Error('Session archive output schema is unavailable');
+    expect(archiveOutputSchema.parse(result)).toEqual(result);
     expect(archived).toEqual(['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last']);
   });
   beforeEach(async () => {
