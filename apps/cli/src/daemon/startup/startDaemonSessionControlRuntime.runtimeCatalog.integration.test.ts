@@ -13802,6 +13802,49 @@ describe('startDaemonSessionControlRuntime', () => {
             });
             const controlServerInput = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
             expect(controlServerInput?.handleProviderAccountUsageSnapshot).toEqual(expect.any(Function));
+            if (!controlServerInput) throw new Error('Expected usage intake startup wiring');
+            const { createDaemonControlApp } = await vi.importActual<typeof import('../controlServer')>('../controlServer');
+            const app = createDaemonControlApp({ ...controlServerInput, controlToken: 'usage-intake-test' });
+            try {
+                // Replace only Home listing HTTP; startup qualification, recorder, store,
+                // persistence scheduler and control-route admission remain real.
+                listQualifiedAccounts.mockRejectedValueOnce(new Error('Home listing unavailable'));
+                const failed = await app.inject({
+                    method: 'POST', url: '/provider-account-usage-snapshot',
+                    headers: { 'x-happier-daemon-token': 'usage-intake-test' },
+                    payload: { sessionId: 'sess_usage', snapshot },
+                });
+                expect(failed.statusCode).toBe(503);
+                expect(failed.json()).toEqual({ ok: false, errorCode: 'provider_account_usage_snapshot_intake_failed' });
+                expect(logger.warn).toHaveBeenCalledWith(
+                    '[CONTROL SERVER] Provider account usage snapshot canonical intake failed',
+                    expect.objectContaining({ observation: {
+                        status: 'source_qualification_failed', reason: 'qualified_account_listing_failed',
+                        recordId: snapshot.recordId, persisted: false,
+                    } }),
+                );
+                expect(runtime.providerAccountUsageStore.resolveRecordId(snapshot.recordId)).toBeNull();
+                expect(writeProviderAccountUsage).not.toHaveBeenCalled();
+
+                listQualifiedAccounts.mockResolvedValueOnce({ status: 200, data: { service: CODEX_QUALIFIED_SERVICE, accounts: [] } });
+                const absent = await app.inject({
+                    method: 'POST', url: '/provider-account-usage-snapshot',
+                    headers: { 'x-happier-daemon-token': 'usage-intake-test' },
+                    payload: { sessionId: 'sess_usage', snapshot: { ...snapshot, observedAtMs: 999, fetchedAtMs: 999 } },
+                });
+                expect(absent.statusCode).toBe(503);
+                expect(absent.json()).toEqual({ ok: false, errorCode: 'provider_account_usage_snapshot_intake_failed' });
+                expect(logger.warn).toHaveBeenCalledWith(
+                    '[CONTROL SERVER] Provider account usage snapshot canonical intake failed',
+                    expect.objectContaining({ observation: {
+                        status: 'snapshot_advanced', recordId: snapshot.recordId, persisted: false,
+                        persistence: { status: 'not_persisted', reason: 'no_current_qualified_source' },
+                    } }),
+                );
+                expect(writeProviderAccountUsage).not.toHaveBeenCalled();
+            } finally {
+                await app.close();
+            }
             await expect(controlServerInput?.handleProviderAccountUsageSnapshot?.({
                 sessionId: 'sess_usage',
                 snapshot,
