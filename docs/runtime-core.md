@@ -234,6 +234,27 @@ recovery role but cannot mark the foreground busy or clear a live turn. Busy
 restart results identify the activity source in their existing diagnostics.
 An unavailable child-activity observation refuses replacement with a partial
 failure, rather than claiming that a turn is in progress.
+Ordinary runner refresh also reads native Agent work through the existing
+requester-qualified Session input live-work RPC. The host Runtime Activity owner
+exposes its Agent slot separately from its Execution Run slot; an active child
+therefore keeps the existing drain behavior rather than becoming a native busy
+refusal. Active native work returns busy. A successful unknown or absent native
+report permits refresh, preserving compatibility with non-reporting runners;
+an actual read failure refuses replacement with the existing activity-observation
+failure. The same native decision governs previews and signaling, and is checked
+again after a child drain and process-tree capture. Session-wide Runtime Activity remains the aggregate presentation
+and settlement projection, not a second native-work authority.
+
+A manual app restart confirms possible interruption of background work. The
+confirmed operation uses the unchanged ordinary V1 or process-attested recovery
+V2 request through one dedicated authenticated machine/local-control route and
+sets only the existing restart owner's internal native-interruption permission.
+It never bypasses foreground-turn refusal, child draining, process identity or
+Provider binding validation. A request reason is descriptive and cannot provide
+this permission. On an older daemon that lacks the dedicated method, the app
+sends the matching unchanged V1/V2 operation only after consent. Authentication,
+cancellation and other failures do not trigger that fallback. Connected Service
+switches and private request-auth source cutover retain their existing policies.
 Refresh completion follows the canonical respawn operation through retirement,
 preparation and its existing spawn budget; a separate handoff timer cannot expire
 a healthy replacement. Equivalent refresh requests keep joining the reserved

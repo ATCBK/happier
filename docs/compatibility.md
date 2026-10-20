@@ -37,6 +37,34 @@ proof. This is not a second accounting ledger or an inferred attribution shim.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## Confirmed background runner refresh (0.3 development)
+
+Ordinary runner-refresh V1 and process-attested V2 request bodies are unchanged.
+The explicit `daemon.sessionRunner.restart.confirmedBackground` operation accepts
+those same strict bodies and delegates to the ordinary restart owner with only
+native-background interruption allowed. It preserves child draining, foreground
+refusal, process identity and Provider binding security confirmation. No request
+reason proves consent.
+
+The app confirms raw reported activity, independent of presentation freshness,
+and also confirms a current daemon's native-background busy result. Only after
+that consent may a missing dedicated method fall back to the original V1 or V2
+operation; authorization, cancellation and other failures never downgrade.
+An older client using the ordinary operation safely receives busy for active
+native work. A current daemon accepts an omitted native activity field from a
+non-reporting runner; a successful unknown report permits refresh, while an
+actual read failure refuses it. The optional native slot extends the existing
+unreleased 0.3 Session-input live-work response in place. An old 0.3 development
+reader of a new runner is not a released coexistence contract.
+
+The inspected immutable CLI `cli-v0.2.16` and UI `ui-web-v0.2.17` tags at
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d` retain the strict V1 request;
+artifact publication provenance was not independently checked for this port.
+The moving 0.2 source intent includes PR607 refinements through `5763a9844b`.
+The new operation adds no persisted data or downgrade reader. Remove the
+missing-method adapter when supported original-operation-only daemons are no
+longer a reachable app target.
+
 ## MCP Test ingress (0.3 development)
 
 Current MCP Test Actions and UI requests address a saved server with `t: 'byId'`.

@@ -192,6 +192,11 @@ There is no separate public background-service installer endpoint today. Install
 Restarting the daemon preserves sessions. Each session runner continues using the CLI runtime it started with.
 To refresh eligible stale runners yourself, run `happier daemon restart-session-runners`; add `--dry-run` to preview.
 
+In 0.3 development builds, runner refresh skips native background work, including Agent tasks and shells.
+A successful unknown native report permits refresh; a failed activity read refuses it. Run the command again after the work
+finishes. Active child runs finish before replacement. The app asks before a manual restart when background
+work is observed; restarting may stop that work, while child runs still finish before replacement.
+
 In development builds, you can opt in to automatic refresh at daemon startup:
 
 ```bash
@@ -199,7 +204,8 @@ hdev daemon restart-session-runners --on-update on
 ```
 
 This setting is off by default and is read each time the daemon starts, including after a CLI update or service restart.
-The pass skips runners already current and runners the daemon observes as busy, including persisted active turns.
+The pass skips runners already current and runners the daemon observes as busy, including persisted active turns
+and native background work. An unavailable native-activity observation also prevents replacement.
 Skipped runners are not retried automatically; run `hdev daemon restart-session-runners` later when ready.
 
 Activity notifications can be missed while the daemon is unavailable. The automatic pass can then interrupt active work
