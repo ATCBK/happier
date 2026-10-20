@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -97,11 +98,16 @@ describe('Code consumes the qualified browser and real entry-history batch', () 
                 entries: [{ name: 'LICENSE', path: `${rootPath}/LICENSE`, type: 'file' }] };
             return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
         } });
-        const renderPage = (location: WorkspaceCodeLocation) => <WorkspaceCodeBrowserView paneScopeId="code-aside-test"
-            scope={fixture!.scope} rootLabel="Code" location={location} onNavigate={() => {}} onOpenFile={() => {}} history={null} />;
+        // Go to file is quick open (P3 §3.6): the page hands Search its own workspace, Files scope.
+        const searchRuntime = { open: vi.fn(), buildCommands: () => [] };
+        const renderPage = (location: WorkspaceCodeLocation) => <UniversalSearchRuntimeProvider value={searchRuntime}>
+            <WorkspaceCodeBrowserView paneScopeId="code-aside-test"
+                scope={fixture!.scope} rootLabel="Code" location={location} onNavigate={() => {}} onOpenFile={() => {}} history={null} />
+        </UniversalSearchRuntimeProvider>;
         const screen = await fixture.render(renderPage({ path: '', kind: 'folder' }));
         await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-LICENSE')).toBeTruthy());
-        expect(screen.findByTestId('workspace-code-bar-goto')).toBeTruthy();
+        await screen.pressByTestIdAsync('workspace-code-bar-goto');
+        expect(searchRuntime.open).toHaveBeenCalledWith(undefined, expect.objectContaining({ ...fixture.scope, sessionId: null }), { source: 'files' });
         await screen.update(fixture.wrap(renderPage({ path: 'LICENSE', kind: 'file' })));
         const reader = screen.root.findByType(WorkspaceFileDetailsView);
         expect(reader.props).toMatchObject({ scope: fixture.scope, filePath: 'LICENSE', presentation: 'screen' });

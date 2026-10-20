@@ -1,16 +1,12 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierBreadcrumb } from '@happier-dev/plugin-ui/presentation';
+import { HappierBreadcrumb, HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { KeyboardCommandHint } from '@/components/ui/keyboard/KeyHint';
 
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
-import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
-import { Popover } from '@/components/ui/popover';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { SearchResultsList } from '@/components/workspaces/files/repositoryTree/SearchResultsList';
-import { useWorkspaceFileQuery } from '@/sync/domains/workspaces/files/useWorkspaceFileQuery';
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
 
 /** One step of a Code location: the root (the project's name) or a folder/file under it. */
@@ -32,14 +28,14 @@ export function buildCodeBreadcrumbSegments(rootLabel: string, path: string): Co
  */
 export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly<{
     testID?: string;
-    scope: WorkspaceScopeBase;
     rootLabel: string;
     path: string;
     onNavigateFolder: (path: string) => void;
-    onOpenFile: (path: string) => void;
-    fileHref?: (path: string) => string | null;
-    /** `false` in the Overview widget: Go to file belongs to the Code page. */
-    goToFile?: boolean;
+    /**
+     * Go to file: opens quick open (⌘P, Files in this workspace; plan P3 §3.6). Absent in the Overview
+     * widget, where Go to file belongs to the Code page.
+     */
+    onQuickOpen?: (() => void) | null;
     /** Phone layout keeps nested up navigation above a full-width Go to file field. */
     compact?: boolean;
     /** The folder's own controls (View, +), at the end of the line after Go to file. */
@@ -64,7 +60,7 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
             />}
             {props.compact ? null : <View style={[styles.grow, styles.growRow]}>{props.status ? <View style={styles.status}>{props.status}</View> : null}</View>}
             <View style={props.compact ? styles.toolsCompact : styles.tools}>
-                {props.goToFile === false ? null : <CodeGoToFile testID={`${testID}-goto`} scope={props.scope} onOpenFile={props.onOpenFile} onOpenFolder={props.onNavigateFolder} fileHref={props.fileHref} compact={props.compact} />}
+                {props.onQuickOpen ? <CodeQuickOpenField testID={`${testID}-goto`} onPress={props.onQuickOpen} compact={props.compact} /> : null}
                 {props.trailing}
             </View>
             {props.compact && props.status ? <View style={styles.statusCompact}>{props.status}</View> : null}
@@ -73,56 +69,28 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
 });
 
 /**
- * Go to file: the workspace file search (`workspace.files.search`'s owner) under a compact field; the
- * results drop beneath it. A folder result goes to its page, a file opens.
+ * Go to file: the field that opens quick open, the one file picker (lab FB2 "CodeGoToFile becomes a
+ * button that opens this scope"); its ⌘P keycaps say the shortcut that does the same.
  */
-function CodeGoToFile(props: Readonly<{
-    testID: string;
-    scope: WorkspaceScopeBase;
-    onOpenFile: (path: string) => void;
-    onOpenFolder: (path: string) => void;
-    fileHref?: (path: string) => string | null;
-    compact?: boolean;
-}>) {
-    const { theme } = useUnistyles();
-    const anchorRef = React.useRef<View>(null);
-    const [query, setQuery] = React.useState('');
-    const open = query.trim().length > 0;
-    const fileQuery = useWorkspaceFileQuery({ scope: props.scope, query, enabled: open, limit: 50 });
-    const close = React.useCallback(() => setQuery(''), []);
+function CodeQuickOpenField(props: Readonly<{ testID: string; onPress: () => void; compact?: boolean }>) {
     return (
-        <View ref={anchorRef} collapsable={false} style={props.compact ? styles.gotoCompact : styles.goto}>
-            <CompactSearchField
-                testID={props.testID}
-                value={query}
-                onChangeText={setQuery}
-                placeholder={t('projects.code.goToFile')}
-            />
-            <Popover open={open} anchorRef={anchorRef} placement="bottom" onRequestClose={close} maxHeightCap={360}>
-                {({ maxHeight }) => (
-                    <FloatingOverlay maxHeight={maxHeight}>
-                        <View style={{ height: Math.min(maxHeight, 320) }}>
-                            <SearchResultsList
-                                theme={theme}
-                                workspaceScope={props.scope}
-                                fileHref={props.fileHref}
-                                isSearching={fileQuery.isSearching}
-                                searchQuery={query}
-                                searchResults={fileQuery.items}
-                                searchResultsQuery={fileQuery.resultQuery}
-                                searchError={Boolean(fileQuery.error)}
-                                hasMore={fileQuery.hasMore}
-                                onRetry={fileQuery.retry}
-                                onFolderPress={(folder) => { close(); props.onOpenFolder(folder.fullPath.replace(/\/+$/, '')); }}
-                                onFilePress={(file) => { close(); props.onOpenFile(file.fullPath); }}
-                            />
-                        </View>
-                    </FloatingOverlay>
-                )}
-            </Popover>
-        </View>
+        <HappierPressable testID={props.testID} accessibilityRole="button" accessibilityLabel={t('projects.code.goToFile')}
+            onPress={props.onPress} style={props.compact ? styles.gotoCompact : styles.goto}>
+            <View style={styles.gotoField}>
+                <CompactSearchField
+                    testID={`${props.testID}-field`}
+                    value=""
+                    onChangeText={ignoreFieldText}
+                    placeholder={t('projects.code.goToFile')}
+                    editable={false}
+                    trailing={<KeyboardCommandHint commandId="search.files" />}
+                />
+            </View>
+        </HappierPressable>
     );
 }
+
+const ignoreFieldText = () => {};
 
 const styles = StyleSheet.create((theme) => ({
     bar: {
@@ -201,5 +169,9 @@ const styles = StyleSheet.create((theme) => ({
     gotoCompact: {
         flex: 1,
         minWidth: 0,
+    },
+    // The field is the button's face: presses land on the button, never in a text input.
+    gotoField: {
+        pointerEvents: 'none',
     },
 }));

@@ -22,8 +22,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-const scope = { serverId: 'server-a', machineId: 'm1', rootPath: '/repo' };
-
 describe('Code breadcrumb (plan 13 §2: Back/up updates the route)', () => {
     it('names every ancestor of a location from the project root', () => {
         expect(buildCodeBreadcrumbSegments('happier', 'apps/ui/sources').map((segment) => segment.path))
@@ -36,12 +34,9 @@ describe('Code breadcrumb (plan 13 §2: Back/up updates the route)', () => {
         const screen = await renderScreen(
             <CodeBrowserBar
                 testID="bar"
-                scope={scope}
                 rootLabel="happier"
                 path="apps/ui/SettingsModal.tsx"
                 onNavigateFolder={onNavigateFolder}
-                onOpenFile={() => {}}
-                goToFile={false}
             />,
         );
         await screen.pressByTestIdAsync('bar-crumb-1');
@@ -55,9 +50,8 @@ describe('Code breadcrumb (plan 13 §2: Back/up updates the route)', () => {
     it('omits only the duplicate project label on phones, preserving nested up navigation', async () => {
         const onNavigateFolder = vi.fn();
         function PhoneBar({ path }: { path: string }) {
-            return <CodeBrowserBar testID="phone-bar" scope={scope} rootLabel="happier" path={path}
-                compact={useDeviceType() === 'phone'} onNavigateFolder={onNavigateFolder}
-                onOpenFile={() => {}} goToFile={false} />;
+            return <CodeBrowserBar testID="phone-bar" rootLabel="happier" path={path}
+                compact={useDeviceType() === 'phone'} onNavigateFolder={onNavigateFolder} />;
         }
         const screen = await renderScreen(<PhoneBar path="" />);
         expect(screen.findByTestId('phone-bar-current')).toBeNull();
@@ -67,5 +61,14 @@ describe('Code breadcrumb (plan 13 §2: Back/up updates the route)', () => {
         expect(onNavigateFolder).toHaveBeenLastCalledWith('apps/ui');
         await screen.pressByTestIdAsync('phone-bar-crumb-0');
         expect(onNavigateFolder).toHaveBeenLastCalledWith('');
+    });
+
+    it('opens quick open from Go to file instead of a second file picker, and draws none without one', async () => {
+        const onQuickOpen = vi.fn();
+        const screen = await renderScreen(<CodeBrowserBar testID="bar" rootLabel="happier" path="apps" onNavigateFolder={() => {}} onQuickOpen={onQuickOpen} />);
+        await screen.pressByTestIdAsync('bar-goto');
+        expect(onQuickOpen).toHaveBeenCalledTimes(1);
+        await screen.update(<CodeBrowserBar testID="bar" rootLabel="happier" path="apps" onNavigateFolder={() => {}} />);
+        expect(screen.findByTestId('bar-goto')).toBeNull();
     });
 });

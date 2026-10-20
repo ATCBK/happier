@@ -33,6 +33,7 @@ import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 
 import { CodeBrowserBar } from './CodeBrowserBar';
+import { useQuickOpenFilesLauncher } from '@/components/workspaces/files/useQuickOpenEmptyState';
 import { CodeCommitStrip } from './CodeCommitStrip';
 import { CodeEntryHistoryCells } from './CodeEntryHistoryCells';
 import { CodeReadmeCard, findCodeReadmePath } from './CodeReadmeCard';
@@ -141,6 +142,10 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
 
     const openFolder = React.useCallback((path: string) => onNavigate({ path, kind: 'folder' }), [onNavigate]);
     const openFile = props.onOpenFile;
+    // Go to file is quick open scoped to this project (P3 §3.6): one picker, one ranking.
+    const quickOpenScope = React.useMemo(() => props.scope, [props.scope.serverId, props.scope.machineId, props.scope.rootPath]);
+    const launchQuickOpen = useQuickOpenFilesLauncher({ scope: quickOpenScope });
+    const openQuickOpen = React.useMemo(() => launchQuickOpen ? () => launchQuickOpen() : null, [launchQuickOpen]);
     const onVisibleEntriesChange = props.onVisibleEntriesChange;
     const onNodesChange = React.useCallback((nodes: readonly LazyDirectoryTreeNode[], directory: WorkspaceRepositoryDirectoryState) => {
         const entries = nodes.filter((node) => node.depth === 0 && (node.type === 'file' || node.type === 'directory'));
@@ -248,12 +253,10 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const composeFolderPage = (parts: Readonly<{ controls: React.ReactNode; body: React.ReactNode; status: React.ReactNode }>) => <>
         <CodeBrowserBar
             testID={`${testID}-bar`}
-            scope={props.scope}
             rootLabel={props.rootLabel}
             path={location.path}
             onNavigateFolder={openFolder}
-            onOpenFile={openFile}
-            fileHref={props.fileHref}
+            onQuickOpen={openQuickOpen}
             compact={phone}
             trailing={parts.controls}
             status={parts.status}
@@ -307,13 +310,9 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 {location.path ? (
                     <CodeBrowserBar
                         testID={`${testID}-bar`}
-                        scope={props.scope}
                         rootLabel={props.rootLabel}
                         path={location.path}
                         onNavigateFolder={openFolder}
-                        onOpenFile={openFile}
-                        fileHref={props.fileHref}
-                        goToFile={false}
                     />
                 ) : null}
                 {body}
@@ -331,12 +330,10 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
         <PageFrame column="wide" content="column" style={styles.fileColumn}>
             {fileMode ? <CodeBrowserBar
                 testID={`${testID}-bar`}
-                scope={props.scope}
                 rootLabel={props.rootLabel}
                 path={location.path}
                 onNavigateFolder={openFolder}
-                onOpenFile={openFile}
-                fileHref={props.fileHref}
+                onQuickOpen={openQuickOpen}
                 compact={phone}
             /> : null}
             {fileMode ? reachabilityLine : null}
