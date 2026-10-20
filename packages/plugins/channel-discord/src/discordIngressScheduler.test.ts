@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DiscordIngressBackpressureError,
   DiscordIngressCancelledError,
   createDiscordIngressScheduler,
 } from './discordIngressScheduler.js';
@@ -21,12 +20,64 @@ function deferred<T>(): Readonly<{
 }
 
 describe('Discord inbound scheduler', () => {
+  it('starts independent lanes beyond the former eight-task pool', async () => {
+    const scheduler = createDiscordIngressScheduler();
+    const release = deferred<void>();
+    const started: number[] = [];
+    const results = Array.from({ length: 10 }, (_, index) => scheduler.schedule({
+      connectionId: index === 9 ? 'connection-b' : 'connection-a',
+      endpointId: `discord:channel:${index === 9 ? 0 : index}`,
+      async run() {
+        started.push(index);
+        await release.promise;
+      },
+    }));
+    const startedBeforeRelease = [...started];
+    release.resolve();
+    await Promise.all(results);
+    expect(startedBeforeRelease).toEqual(Array.from({ length: 10 }, (_, index) => index));
+  });
+
+  it('retains a busy endpoint backlog beyond the former lane and aggregate caps in arrival order', async () => {
+    const scheduler = createDiscordIngressScheduler();
+    const release = deferred<void>();
+    const started: number[] = [];
+    const results = Array.from({ length: 514 }, (_, index) => scheduler.schedule({
+      connectionId: 'connection-a',
+      endpointId: 'discord:channel:one',
+      async run() {
+        started.push(index);
+        if (index === 0) await release.promise;
+        return index;
+      },
+    }));
+    const settled = Promise.allSettled(results);
+    expect(started).toEqual([0]);
+    release.resolve();
+    expect(await settled).toEqual(Array.from({ length: 514 }, (_, index) => ({ status: 'fulfilled', value: index })));
+    expect(started).toEqual(Array.from({ length: 514 }, (_, index) => index));
+  });
+
+  it('retains aggregate queued work across endpoints beyond the former global cap', async () => {
+    const scheduler = createDiscordIngressScheduler();
+    const release = deferred<void>();
+    const results = Array.from({ length: 9 }, (_, lane) => Array.from({ length: 65 }, (_, index) => scheduler.schedule({
+      connectionId: 'connection-a',
+      endpointId: `discord:channel:${lane}`,
+      async run() {
+        if (index === 0) await release.promise;
+        return `${lane}:${index}`;
+      },
+    }))).flat();
+    const settled = Promise.allSettled(results);
+    release.resolve();
+    expect(await settled).toEqual(Array.from({ length: 9 }, (_, lane) => Array.from({ length: 65 }, (_, index) => ({
+      status: 'fulfilled', value: `${lane}:${index}`,
+    }))).flat());
+  });
+
   it('serializes one connection and endpoint lane while preserving that lane’s order', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 2,
-      maxQueuedPerKey: 2,
-      maxQueuedTotal: 4,
-    });
+    const scheduler = createDiscordIngressScheduler();
     const first = deferred<void>();
     const started: string[] = [];
 
@@ -55,118 +106,34 @@ describe('Discord inbound scheduler', () => {
     expect(started).toEqual(['first', 'second']);
   });
 
-  it('runs independent endpoint lanes concurrently instead of serializing a whole connection', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 2,
-      maxQueuedPerKey: 1,
-      maxQueuedTotal: 2,
-    });
+  it('continues a lane after synchronous and asynchronous task failure', async () => {
+    const scheduler = createDiscordIngressScheduler();
     const first = deferred<void>();
-    const second = deferred<void>();
-    const started: string[] = [];
-
-    const firstResult = scheduler.schedule({
+    const route = {
       connectionId: 'connection-a',
       endpointId: 'discord:channel:one',
-      run: async () => {
-        started.push('one');
-        await first.promise;
-        return 'one-result';
-      },
-    });
-    const secondResult = scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:two',
-      run: async () => {
-        started.push('two');
-        await second.promise;
-        return 'two-result';
-      },
-    });
-
-    expect(started).toEqual(['one', 'two']);
+    };
+    const synchronousFailure = new Error('synchronous failure');
+    const asynchronousFailure = new Error('asynchronous failure');
+    const results = [
+      scheduler.schedule({ ...route, run: () => first.promise }),
+      scheduler.schedule({ ...route, run() { throw synchronousFailure; } }),
+      scheduler.schedule({ ...route, async run() { throw asynchronousFailure; } }),
+      scheduler.schedule({ ...route, run: () => 'recovered' }),
+    ];
+    const settled = Promise.allSettled(results);
     first.resolve();
-    second.resolve();
-    await expect(firstResult).resolves.toBe('one-result');
-    await expect(secondResult).resolves.toBe('two-result');
+    expect(await settled).toEqual([
+      { status: 'fulfilled', value: undefined },
+      { status: 'rejected', reason: synchronousFailure },
+      { status: 'rejected', reason: asynchronousFailure },
+      { status: 'fulfilled', value: 'recovered' },
+    ]);
+    await expect(scheduler.schedule({ ...route, run: () => 'next' })).resolves.toBe('next');
   });
 
-  it('rejects bounded queued work without dropping the existing lane', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 1,
-      maxQueuedPerKey: 1,
-      maxQueuedTotal: 1,
-    });
-    const first = deferred<void>();
-    const firstResult = scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:one',
-      run: async () => {
-        await first.promise;
-        return 'first-result';
-      },
-    });
-    const queuedResult = scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:one',
-      run: async () => 'queued-result',
-    });
-
-    await expect(scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:one',
-      run: async () => 'over-capacity',
-    })).rejects.toEqual(expect.objectContaining({
-      name: 'DiscordIngressBackpressureError',
-      scope: 'lane',
-    } satisfies Partial<DiscordIngressBackpressureError>));
-
-    first.resolve();
-    await expect(firstResult).resolves.toBe('first-result');
-    await expect(queuedResult).resolves.toBe('queued-result');
-  });
-
-  it('enforces the global queue bound across distinct endpoint lanes', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 1,
-      maxQueuedPerKey: 2,
-      maxQueuedTotal: 1,
-    });
-    const first = deferred<void>();
-    const firstResult = scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:one',
-      run: async () => {
-        await first.promise;
-        return 'first-result';
-      },
-    });
-    const queuedResult = scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:two',
-      run: async () => 'queued-result',
-    });
-
-    await expect(scheduler.schedule({
-      connectionId: 'connection-a',
-      endpointId: 'discord:channel:three',
-      run: async () => 'over-capacity',
-    })).rejects.toEqual(expect.objectContaining({
-      name: 'DiscordIngressBackpressureError',
-      scope: 'global',
-    } satisfies Partial<DiscordIngressBackpressureError>));
-
-    first.resolve();
-    await expect(firstResult).resolves.toBe('first-result');
-    await expect(queuedResult).resolves.toBe('queued-result');
-  });
-
-  it('rotates fairly across busy endpoint lanes instead of letting one lane starve another', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 1,
-      maxQueuedPerKey: 2,
-      maxQueuedTotal: 4,
-    });
+  it('lets another endpoint progress while a busy endpoint retains its own arrival order', async () => {
+    const scheduler = createDiscordIngressScheduler();
     const first = deferred<void>();
     const second = deferred<void>();
     const secondStarted = deferred<void>();
@@ -200,25 +167,19 @@ describe('Discord inbound scheduler', () => {
       },
     });
 
-    expect(started).toEqual(['one-first']);
-    first.resolve();
-    await expect(firstResult).resolves.toBe('one-first-result');
     await secondStarted.promise;
-    // The other endpoint's queued admission reaches the slot before the busy
-    // endpoint wins it a second time.
     expect(started).toEqual(['one-first', 'two-first']);
     second.resolve();
     await expect(twoQueued).resolves.toBe('two-first-result');
+    expect(started).toEqual(['one-first', 'two-first']);
+    first.resolve();
+    await expect(firstResult).resolves.toBe('one-first-result');
     await expect(oneQueued).resolves.toBe('one-second-result');
     expect(started).toEqual(['one-first', 'two-first', 'one-second']);
   });
 
   it('cancels queued work before it can enter a later current lane', async () => {
-    const scheduler = createDiscordIngressScheduler({
-      maxConcurrent: 1,
-      maxQueuedPerKey: 1,
-      maxQueuedTotal: 2,
-    });
+    const scheduler = createDiscordIngressScheduler();
     const first = deferred<void>();
     const controller = new AbortController();
     let cancelledTaskRan = false;
@@ -232,7 +193,7 @@ describe('Discord inbound scheduler', () => {
     });
     const cancelledResult = scheduler.schedule({
       connectionId: 'connection-a',
-      endpointId: 'discord:channel:two',
+      endpointId: 'discord:channel:one',
       signal: controller.signal,
       run: async () => {
         cancelledTaskRan = true;
@@ -242,6 +203,12 @@ describe('Discord inbound scheduler', () => {
 
     controller.abort();
     await expect(cancelledResult).rejects.toBeInstanceOf(DiscordIngressCancelledError);
+    await expect(scheduler.schedule({
+      connectionId: 'connection-a',
+      endpointId: 'discord:channel:one',
+      signal: controller.signal,
+      run() { cancelledTaskRan = true; },
+    })).rejects.toBeInstanceOf(DiscordIngressCancelledError);
     first.resolve();
     await expect(firstResult).resolves.toBe('first-result');
     expect(cancelledTaskRan).toBe(false);

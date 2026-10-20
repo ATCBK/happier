@@ -126,11 +126,6 @@ export type DiscordGatewayWorkerInput = Readonly<{
   reportConnectionStatus?(status: 'ready' | 'reconnecting'): void | Promise<void>;
   signal: AbortSignal;
   clock?: DiscordGatewayWorkerClock;
-  ingressLimits?: Readonly<{
-    maxConcurrent: number;
-    maxQueuedPerKey: number;
-    maxQueuedTotal: number;
-  }>;
   identifyConcurrency?: DiscordIdentifyConcurrency;
 }>;
 
@@ -138,12 +133,6 @@ export type DiscordGatewayWorker = Readonly<{
   result: Promise<DiscordGatewayWorkerResult>;
   stop(): void;
 }>;
-
-const DEFAULT_INGRESS_LIMITS = Object.freeze({
-  maxConcurrent: 8,
-  maxQueuedPerKey: 64,
-  maxQueuedTotal: 512,
-});
 
 function defaultSleep(delayMs: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -337,7 +326,7 @@ export function startDiscordGatewayWorker(input: DiscordGatewayWorkerInput): Dis
     const signal = controller.signal;
     if (signal.aborted) return { kind: 'stopped' };
     const clock = input.clock ?? DEFAULT_CLOCK;
-    const scheduler = createDiscordIngressScheduler(input.ingressLimits ?? DEFAULT_INGRESS_LIMITS);
+    const scheduler = createDiscordIngressScheduler();
     const pendingAdmissions = new Set<Promise<void>>();
     const admissionsAtCancellation = new Set<Promise<void>>();
     const captureAdmissionsAtCancellation = (): void => {

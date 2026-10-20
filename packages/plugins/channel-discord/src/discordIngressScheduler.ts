@@ -1,17 +1,9 @@
 /**
  * Provider-owned ingress ordering. Discord messages for one endpoint retain
- * arrival order, while unrelated endpoints each run their own bounded lane.
- * The connection's bounded concurrency slots are handed out round-robin
- * across the endpoint lanes that are waiting, so a busy endpoint cannot
- * consume the next slot ahead of another endpoint that is also waiting. This
- * does not replace Channels admission/currentness.
+ * arrival order, while unrelated endpoints progress independently. Each lane
+ * has one in-flight task; pending work has no invented count-based rejection.
+ * This does not replace Channels admission/currentness or provider rate limits.
  */
-
-export type DiscordIngressSchedulerOptions = Readonly<{
-  maxConcurrent: number;
-  maxQueuedPerKey: number;
-  maxQueuedTotal: number;
-}>;
 
 export type DiscordIngressTask<T> = Readonly<{
   connectionId: string;
@@ -22,16 +14,6 @@ export type DiscordIngressTask<T> = Readonly<{
 
 export interface DiscordIngressScheduler {
   schedule<T>(task: DiscordIngressTask<T>): Promise<T>;
-}
-
-export class DiscordIngressBackpressureError extends Error {
-  readonly scope: 'lane' | 'global';
-
-  constructor(scope: 'lane' | 'global') {
-    super(`Discord ingress ${scope} queue is full.`);
-    this.name = 'DiscordIngressBackpressureError';
-    this.scope = scope;
-  }
 }
 
 export class DiscordIngressCancelledError extends Error {
@@ -45,20 +27,13 @@ type QueuedTask = Readonly<{
   start(onFinished: () => void): void;
   cancel(): void;
   attachAbortListener(listener: () => void): void;
-  detachAbortListener(): void;
 }>;
 
 type Lane = {
   running: boolean;
+  draining: boolean;
   queued: QueuedTask[];
 };
-
-function requirePositiveSafeInteger(value: number, name: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive safe integer.`);
-  }
-  return value;
-}
 
 function requireIdentifier(value: string, name: string): string {
   if (!value.trim()) throw new Error(`${name} is required.`);
@@ -118,20 +93,12 @@ function makeQueuedTask<T>(input: DiscordIngressTask<T>): Readonly<{
       abortListener = listener;
       input.signal?.addEventListener('abort', listener, { once: true });
     },
-    detachAbortListener,
   };
   return { promise, task };
 }
 
-export function createDiscordIngressScheduler(options: DiscordIngressSchedulerOptions): DiscordIngressScheduler {
-  const maxConcurrent = requirePositiveSafeInteger(options.maxConcurrent, 'maxConcurrent');
-  const maxQueuedPerKey = requirePositiveSafeInteger(options.maxQueuedPerKey, 'maxQueuedPerKey');
-  const maxQueuedTotal = requirePositiveSafeInteger(options.maxQueuedTotal, 'maxQueuedTotal');
+export function createDiscordIngressScheduler(): DiscordIngressScheduler {
   const lanes = new Map<string, Lane>();
-  let activeCount = 0;
-  let queuedCount = 0;
-  let draining = false;
-  let lastServedLaneKey: string | null = null;
 
   const removeIdleLane = (key: string, lane: Lane): void => {
     if (!lane.running && lane.queued.length === 0) lanes.delete(key);
@@ -141,57 +108,25 @@ export function createDiscordIngressScheduler(options: DiscordIngressSchedulerOp
     const index = lane.queued.indexOf(task);
     if (index === -1) return;
     lane.queued.splice(index, 1);
-    queuedCount -= 1;
     task.cancel();
     removeIdleLane(key, lane);
-    drain();
   };
 
-  const launch = (key: string, lane: Lane): void => {
-    const task = lane.queued.shift();
-    if (!task) return;
-    queuedCount -= 1;
-    activeCount += 1;
-    lane.running = true;
-    lastServedLaneKey = key;
-    task.detachAbortListener();
-    task.start(() => {
-      activeCount -= 1;
-      lane.running = false;
-      removeIdleLane(key, lane);
-      drain();
-    });
-  };
-
-  /**
-   * Round-robin lane selection. The search starts after the lane served
-   * last, wrapping once, so every waiting endpoint reaches a slot before a
-   * busy endpoint wins a second one. A lane key that has since been removed
-   * falls back to the front of the order.
-   */
-  const nextReadyLane = (): [string, Lane] | null => {
-    const entries = [...lanes.entries()];
-    const startOffset = lastServedLaneKey === null
-      ? 0
-      : entries.findIndex(([key]) => key === lastServedLaneKey) + 1;
-    for (let offset = 0; offset < entries.length; offset += 1) {
-      const entry = entries[(startOffset + offset) % entries.length]!;
-      if (!entry[1].running && entry[1].queued.length > 0) return entry;
-    }
-    return null;
-  };
-
-  const drain = (): void => {
-    if (draining) return;
-    draining = true;
+  const drain = (key: string, lane: Lane): void => {
+    if (lane.draining) return;
+    lane.draining = true;
     try {
-      while (activeCount < maxConcurrent) {
-        const next = nextReadyLane();
-        if (!next) return;
-        launch(next[0], next[1]);
+      while (!lane.running && lane.queued.length > 0) {
+        const task = lane.queued.shift()!;
+        lane.running = true;
+        task.start(() => {
+          lane.running = false;
+          drain(key, lane);
+        });
       }
     } finally {
-      draining = false;
+      lane.draining = false;
+      removeIdleLane(key, lane);
     }
   };
 
@@ -202,22 +137,15 @@ export function createDiscordIngressScheduler(options: DiscordIngressSchedulerOp
       if (input.signal?.aborted) return Promise.reject(new DiscordIngressCancelledError());
 
       const key = keyFor(connectionId, endpointId);
-      const lane = lanes.get(key) ?? { running: false, queued: [] };
-      if (lane.queued.length >= maxQueuedPerKey) {
-        return Promise.reject(new DiscordIngressBackpressureError('lane'));
-      }
-      if (queuedCount >= maxQueuedTotal) {
-        return Promise.reject(new DiscordIngressBackpressureError('global'));
-      }
+      const lane = lanes.get(key) ?? { running: false, draining: false, queued: [] };
 
       const { promise, task } = makeQueuedTask(input);
       lane.queued.push(task);
-      queuedCount += 1;
       lanes.set(key, lane);
       if (input.signal) {
         task.attachAbortListener(() => cancelQueuedTask(key, lane, task));
       }
-      drain();
+      drain(key, lane);
       return promise;
     },
   };
