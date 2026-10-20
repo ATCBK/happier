@@ -22,6 +22,12 @@ type SpawnDetachedDaemonStartSync = (
 ) => Promise<Partial<DetachedDaemonStartProcess>>;
 type ReadDaemonState = () => Promise<DaemonLocallyPersistedState | null>;
 type ConfirmReplacementDaemonState = (state: DaemonLocallyPersistedState) => Promise<boolean>;
+/**
+ * Subscribes to whether this daemon's machine socket is online. The listener is called
+ * immediately with the current value; the returned function unsubscribes.
+ */
+export type ObserveMachineConnectionOnline = (listener: (online: boolean) => void) => () => void;
+type MachineConnectionHandover = 'handed_over' | 'not_connected' | 'successor_stopped' | 'budget_elapsed';
 
 async function delay(ms: number): Promise<void> {
   if (ms <= 0) return;
@@ -150,6 +156,50 @@ export async function waitForReplacementDaemon(params: Readonly<{
   return false;
 }
 
+/**
+ * After the successor is confirmed, the incumbent keeps serving its machine socket until the
+ * server moves the machine connection to the successor. The server's machine-socket ownership
+ * registry admits one socket per machine runtime and disconnects the older one when the
+ * successor's socket claims it, so the incumbent leaving `online` is the handover itself.
+ * If the successor stops first, the incumbent still exits, as it did before the handover existed
+ * (the successor owns the lock and state by now). The restart verification budget bounds the
+ * wait so a successor that never connects cannot keep two daemons serving indefinitely.
+ */
+async function waitForMachineConnectionHandover(params: Readonly<{
+  observeOnline: ObserveMachineConnectionOnline;
+  successorPid: number;
+  timeoutMs: number;
+  pollMs: number;
+  readDaemonStateImpl: ReadDaemonState;
+}>): Promise<MachineConnectionHandover> {
+  const deadline = Date.now() + params.timeoutMs;
+  let online = false;
+  let resolveOffline: () => void = () => {};
+  const wentOffline = new Promise<'offline'>((resolve) => {
+    resolveOffline = () => resolve('offline');
+  });
+  const unsubscribe = params.observeOnline((next) => {
+    online = next;
+    if (!next) resolveOffline();
+  });
+  try {
+    if (!online) return 'not_connected';
+    for (;;) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return 'budget_elapsed';
+      const tick = await Promise.race([
+        wentOffline,
+        delay(Math.min(params.pollMs, remainingMs)).then(() => 'poll' as const),
+      ]);
+      if (tick === 'offline') return 'handed_over';
+      const state = await params.readDaemonStateImpl().catch(() => null);
+      if (state?.pid !== params.successorPid || !isPidAlive(params.successorPid)) return 'successor_stopped';
+    }
+  } finally {
+    unsubscribe();
+  }
+}
+
 export async function requestDaemonSelfRestart(params: Readonly<{
   runtimeId?: string | null;
   expectedCliVersion: string;
@@ -159,6 +209,8 @@ export async function requestDaemonSelfRestart(params: Readonly<{
   pollMs: number;
   postConfirmationOverlapMs?: number;
   onReplacementConfirmed?: () => Promise<void>;
+  /** Present when the successor connects to this daemon's server, so the socket can be handed over. */
+  observeMachineConnectionOnline?: ObserveMachineConnectionOnline;
   takeover?: boolean;
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
   spawnDetachedDaemonStartSyncImpl?: SpawnDetachedDaemonStartSync;
@@ -199,6 +251,8 @@ export async function requestDaemonSelfRestart(params: Readonly<{
     return { status: 'spawn_failed', error };
   }
 
+  // Assigned by the confirmation callback; the cast keeps the closure write visible to narrowing.
+  let confirmedSuccessorPid = null as number | null;
   const replacementConfirmed = await waitForReplacementDaemon({
     ownPid: params.ownPid ?? process.pid,
     expectedCliVersion,
@@ -208,16 +262,31 @@ export async function requestDaemonSelfRestart(params: Readonly<{
     pollMs,
     startupProcess: spawned,
     readDaemonStateImpl,
-    confirmReplacementStateImpl,
+    confirmReplacementStateImpl: async (state) => {
+      const confirmed = await confirmReplacementStateImpl(state);
+      if (confirmed) confirmedSuccessorPid = state.pid;
+      return confirmed;
+    },
   });
-  if (!replacementConfirmed) {
+  if (!replacementConfirmed || confirmedSuccessorPid === null) {
     logger.debug('[DAEMON RUN] Replacement daemon was not confirmed. Keeping current daemon alive.');
     return { status: 'replacement_not_confirmed' };
   }
 
-  logger.debug('[DAEMON RUN] Replacement daemon confirmed. Exiting current daemon process.');
+  logger.debug('[DAEMON RUN] Replacement daemon confirmed.');
   await params.onReplacementConfirmed?.();
-  await delay(postConfirmationOverlapMs);
+  const handover: MachineConnectionHandover = params.observeMachineConnectionOnline
+    ? await waitForMachineConnectionHandover({
+      observeOnline: params.observeMachineConnectionOnline,
+      successorPid: confirmedSuccessorPid,
+      timeoutMs,
+      pollMs,
+      readDaemonStateImpl,
+    })
+    : 'not_connected';
+  // Once the server moved the socket, exit before this daemon's reconnect could claim it back.
+  if (handover !== 'handed_over') await delay(postConfirmationOverlapMs);
+  logger.debug('[DAEMON RUN] Exiting current daemon process after self-restart handover.', { handover });
   exitProcess(0);
   return { status: 'exited' };
 }

@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +17,200 @@ function makeState(overrides: Partial<DaemonLocallyPersistedState> = {}): Daemon
     ...overrides,
   };
 }
+
+function createMachineConnection(initialOnline: boolean) {
+  let online = initialOnline;
+  const listeners = new Set<(online: boolean) => void>();
+  return {
+    observe: (listener: (online: boolean) => void) => {
+      listeners.add(listener);
+      listener(online);
+      return () => { listeners.delete(listener); };
+    },
+    // The server's same-runtime ownership registry disconnects the older socket
+    // when the successor's machine socket claims the machine.
+    setOnline(next: boolean) {
+      online = next;
+      for (const listener of [...listeners]) listener(next);
+    },
+    get listenerCount() { return listeners.size; },
+  };
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('Condition not reached');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+describe('daemon self-restart machine connection handover (composed lock handoff + restart)', () => {
+  function startHandoff(params: Readonly<{
+    successorPid: number;
+    child: ChildProcess;
+    connection: ReturnType<typeof createMachineConnection>;
+    exitProcess: (code: number) => void;
+    events: string[];
+    lock: { current: string | null };
+    confirmReplacementStateImpl?: (state: DaemonLocallyPersistedState) => Promise<boolean>;
+    timeoutMs?: number;
+  }>) {
+    return requestDaemonSelfRestartWithLockHandoff({
+      getCurrentDaemonLockHandle: () => params.lock.current,
+      setCurrentDaemonLockHandle: (lock) => { params.lock.current = lock; },
+      quiesceBeforeLockRelease: async () => {
+        params.events.push('quiesce');
+        return { resume: () => { params.events.push('resume'); } };
+      },
+      releaseDaemonLock: async () => { params.events.push('release'); },
+      acquireDaemonLock: async () => {
+        params.events.push('reacquire');
+        return 'reacquired-lock';
+      },
+      requestShutdown: () => { throw new Error('Incumbent must not shut down through the shutdown path'); },
+      selfRestartParams: {
+        ownPid: process.pid, expectedCliVersion: '', runtimeId: 'runtime-1',
+        timeoutMs: params.timeoutMs ?? 2_000, pollMs: 5, postConfirmationOverlapMs: 0,
+        spawnDetachedDaemonStartSyncImpl: async () => Object.assign(params.child, { detachedDaemonPid: params.successorPid }),
+        readDaemonStateImpl: async () => makeState({ pid: params.successorPid, runtimeId: 'runtime-1' }),
+        // The real confirmation pings the successor's control server; only a live process answers.
+        confirmReplacementStateImpl: params.confirmReplacementStateImpl ?? (async (state) => isAlive(state.pid)),
+        observeMachineConnectionOnline: params.connection.observe,
+        exitProcess: (code: number) => {
+          params.events.push(`exit:${code}`);
+          params.exitProcess(code);
+        },
+        env: {},
+      },
+    });
+  }
+
+  it('keeps the incumbent connected after successor confirmation until the server moves the machine connection to the successor', async () => {
+    const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
+    await once(child, 'spawn');
+    if (!child.pid) throw new Error('Missing successor PID');
+    const connection = createMachineConnection(true);
+    const events: string[] = [];
+    const lock = { current: 'incumbent-lock' as string | null };
+    const exitProcess = vi.fn();
+    let confirmations = 0;
+    try {
+      const restarting = startHandoff({
+        successorPid: child.pid, child, connection, exitProcess, events, lock,
+        confirmReplacementStateImpl: async (state) => { confirmations += 1; return isAlive(state.pid); },
+      });
+      await waitUntil(() => confirmations > 0);
+      // The successor is ready but has not claimed the machine socket: the incumbent keeps serving.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(exitProcess).not.toHaveBeenCalled();
+      expect(events).toEqual(['quiesce', 'release']);
+
+      connection.setOnline(false);
+      await expect(restarting).resolves.toEqual({ status: 'exited' });
+      expect(exitProcess).toHaveBeenCalledWith(0);
+      // Handover does not reacquire the lock, resume the incumbent, or stop Sessions.
+      expect(events).toEqual(['quiesce', 'release', 'exit:0']);
+      expect(lock.current).toBeNull();
+      expect(connection.listenerCount).toBe(0);
+    } finally {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  });
+
+  it('exits without resuming when the confirmed successor stops before it takes the connection', async () => {
+    const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
+    await once(child, 'spawn');
+    if (!child.pid) throw new Error('Missing successor PID');
+    const connection = createMachineConnection(true);
+    const events: string[] = [];
+    const lock = { current: 'incumbent-lock' as string | null };
+    const exitProcess = vi.fn();
+    let confirmations = 0;
+    const restarting = startHandoff({
+      successorPid: child.pid, child, connection, exitProcess, events, lock,
+      confirmReplacementStateImpl: async (state) => { confirmations += 1; return isAlive(state.pid); },
+    });
+    await waitUntil(() => confirmations > 0);
+    expect(exitProcess).not.toHaveBeenCalled();
+    const exited = once(child, 'exit');
+    child.kill();
+    await exited;
+    await expect(restarting).resolves.toEqual({ status: 'exited' });
+    expect(events).toEqual(['quiesce', 'release', 'exit:0']);
+    expect(connection.listenerCount).toBe(0);
+  });
+
+  it('leaves the incumbent running and connected when the successor fails before confirmation', async () => {
+    const child = spawnInlineNodeTestProcess('process.exit(3)');
+    await once(child, 'exit');
+    const connection = createMachineConnection(true);
+    const events: string[] = [];
+    const lock = { current: 'incumbent-lock' as string | null };
+    const exitProcess = vi.fn();
+    const result = await startHandoff({
+      successorPid: child.pid ?? 999_999, child, connection, exitProcess, events, lock,
+    });
+    expect(result).toEqual({ status: 'replacement_not_confirmed' });
+    expect(exitProcess).not.toHaveBeenCalled();
+    expect(events).toEqual(['quiesce', 'release', 'reacquire', 'resume']);
+    expect(lock.current).toBe('reacquired-lock');
+    expect(connection.listenerCount).toBe(0);
+  });
+
+  it('exits once the restart verification budget elapses when a live successor never takes the connection', async () => {
+    const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
+    await once(child, 'spawn');
+    if (!child.pid) throw new Error('Missing successor PID');
+    const connection = createMachineConnection(true);
+    const events: string[] = [];
+    const lock = { current: 'incumbent-lock' as string | null };
+    const exitProcess = vi.fn();
+    try {
+      const startedAt = Date.now();
+      await expect(startHandoff({ successorPid: child.pid, child, connection, exitProcess, events, lock, timeoutMs: 150 }))
+        .resolves.toEqual({ status: 'exited' });
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
+      expect(events).toEqual(['quiesce', 'release', 'exit:0']);
+      expect(connection.listenerCount).toBe(0);
+    } finally {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  });
+
+  it('exits after confirmation when there is no live machine connection to hand over', async () => {
+    const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
+    await once(child, 'spawn');
+    if (!child.pid) throw new Error('Missing successor PID');
+    const connection = createMachineConnection(false);
+    const events: string[] = [];
+    const lock = { current: 'incumbent-lock' as string | null };
+    const exitProcess = vi.fn();
+    try {
+      await expect(startHandoff({ successorPid: child.pid, child, connection, exitProcess, events, lock }))
+        .resolves.toEqual({ status: 'exited' });
+      expect(events).toEqual(['quiesce', 'release', 'exit:0']);
+      expect(connection.listenerCount).toBe(0);
+    } finally {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  });
+});
 
 describe('requestDaemonSelfRestart', () => {
   it.each(['version', 'runtime'] as const)('resumes the incumbent after a live successor publishes an incompatible %s', async (mismatch) => {
