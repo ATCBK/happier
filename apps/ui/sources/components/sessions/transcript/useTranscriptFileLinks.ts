@@ -4,6 +4,8 @@ import { useWorkspaceFileOpener, type WorkspaceFileOpenOptions } from '@/compone
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { readPressFocusReturnTarget } from '@/keyboard/focusReturn';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
+import { isAbsoluteLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
 import { resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import { useOptionalSessionTranscriptSource } from './source/SessionTranscriptSourceContext';
 import type { StructuredMessageRendererParams } from './structured/structuredMessageRegistry';
@@ -24,26 +26,30 @@ export function useTranscriptFileLinks(params: Readonly<{
     const sessionAddress = React.useMemo(() => normalizeSessionAddress(serverId, params.sessionId), [serverId, params.sessionId]);
     const openPath = React.useCallback((path: string, options?: WorkspaceFileOpenOptions & Readonly<{ event?: unknown }>): boolean => {
         if (!enabled) return false;
-        const resolved = resolveWorkspaceFileReference({ url: path, workspacePath: params.workspacePath });
-        if (!resolved) return false;
+        const filePath = isAbsoluteLocalPath(path.replace(/\\/g, '/'))
+            ? params.workspacePath ? resolvePathRelativeToRoot({ path, root: params.workspacePath, preservePathSpelling: true }) : null
+            : path;
+        if (filePath === null || !isSafeWorkspaceRelativePath(filePath)) return false;
         const { event, ...openOptions } = options ?? {};
         fireAndForget(open({
             kind: 'session', sessionId: params.sessionId,
-            ...(serverId ? { serverId } : {}), path: resolved.filePath,
+            ...(serverId ? { serverId } : {}), path: filePath,
         }, {
             view: 'view',
-            ...(resolved.anchor ? { anchor: resolved.anchor, anchorSource: 'file' } : {}),
             ...openOptions,
             origin: {
                 focusReturnRef: { current: readPressFocusReturnTarget(event) },
                 ...(sessionAddress && (params.routeMessageId != null || params.seq != null) ? {
-                    transcript: { sessionAddress, routeMessageId: params.routeMessageId, seq: params.seq, filePath: resolved.filePath },
+                    transcript: { sessionAddress, routeMessageId: params.routeMessageId, seq: params.seq, filePath },
                 } : {}),
             },
         }), { tag: 'useTranscriptFileLinks.openPath' });
         return true;
     }, [enabled, open, params.routeMessageId, params.seq, serverId, params.sessionId, params.workspacePath, sessionAddress]);
-    const onMarkdownLinkPress = React.useCallback((url: string) => openPath(url), [openPath]);
+    const onMarkdownLinkPress = React.useCallback((url: string) => {
+        const resolved = resolveWorkspaceFileReference({ url, workspacePath: params.workspacePath });
+        return resolved ? openPath(resolved.filePath, resolved.anchor ? { anchor: resolved.anchor, anchorSource: 'file' } : undefined) : false;
+    }, [openPath, params.workspacePath]);
     const jumpToAnchor = React.useCallback<NonNullable<StructuredMessageRendererParams['onJumpToAnchor']>>((target) => {
         openPath(target.filePath, { anchor: target.anchor, anchorSource: target.source, view: target.source === 'diff' ? 'changes' : 'view' });
     }, [openPath]);
