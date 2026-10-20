@@ -26,6 +26,17 @@ export type TrackAgentEditsEffects = Readonly<{
     reducedMotion: () => boolean;
 }>;
 
+/** The file this Session's agent is writing now: its newest write. Also feeds the phone's Watch capsule. */
+export function selectTrackTarget(writes: ReadonlyMap<string, TrackWrite>, sessionId: string): TrackTarget | null {
+    let target: TrackTarget | null = null;
+    for (const [path, write] of writes) {
+        // P3 owns eligibility; a workspace union must still never move a different session.
+        if (write.sessionId !== sessionId) continue;
+        if (!target || write.startedAt >= target.write.startedAt) target = { path, write, region: write.region };
+    }
+    return target;
+}
+
 /** One session-local decision owner. Tool extraction and lifecycle admission belong to P3. */
 export function createTrackAgentEditsController(effects: TrackAgentEditsEffects) {
     let snapshot: TrackAgentEditsSnapshot = { enabled: false, paused: false, pauseReason: null, target: null };
@@ -82,15 +93,8 @@ export function createTrackAgentEditsController(effects: TrackAgentEditsEffects)
             const sessionChanged = sessionId !== input.sessionId;
             sessionId = input.sessionId;
             if (sessionChanged || !input.enabled || !input.sessionActive) openedPath = null;
-            let target: TrackTarget | null = null;
             // Watch/presence still needs the live path while the device-local follow preference is off.
-            if (input.sessionActive) {
-                for (const [path, write] of input.writes) {
-                    // P3 owns eligibility; a workspace union must still never move a different session.
-                    if (write.sessionId !== input.sessionId) continue;
-                    if (!target || write.startedAt >= target.write.startedAt) target = { path, write, region: write.region };
-                }
-            }
+            let target = input.sessionActive ? selectTrackTarget(input.writes, input.sessionId) : null;
             const previousTarget = sessionChanged ? null : snapshot.target;
             if (target && previousTarget?.path === target.path) {
                 const previousRegion = previousTarget.region;

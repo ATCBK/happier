@@ -73,6 +73,7 @@ import { useMountedSessionBoardController } from '@/components/sessions/board/Se
 import { isSessionBoardVisibleInDetails } from '@/components/sessions/board/sessionBoardDetailsVisibility';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
+import { TrackCapsule, TrackInputBoundary, useSessionTrack } from '@/components/sessions/files/track/SessionTrack';
 
 export type SessionDetailsPanelProps = Readonly<{
     sessionId: string;
@@ -179,6 +180,10 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         enabled: props.simulatorPreview === undefined,
     });
     const mountedSessionAddress = normalizeSessionAddress(pluginRuntime.serverId, props.sessionId);
+    const trackSessionAddress = React.useMemo(() => mountedSessionAddress ?? { serverId: pluginRuntime.serverId ?? '', sessionId: props.sessionId },
+        [mountedSessionAddress?.serverId, mountedSessionAddress?.sessionId, pluginRuntime.serverId, props.sessionId]);
+    const track = useSessionTrack({ scopeId: props.scopeId, sessionAddress: trackSessionAddress,
+        workspaceRoot: fileWriteScope?.rootPath ?? null, active: !controlledDestination });
     const mountedBoard = useMountedSessionBoardController(mountedSessionAddress);
     const callerHostedHtmlRuntime = mountedBoard?.callerHostedHtmlRuntime ?? null;
     const boardHasContent = mountedBoard?.binding.status === 'ready'
@@ -434,9 +439,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             sessionId={props.sessionId}
             serverId={pluginRuntime.serverId}
             openDetailsTab={openDetailsTab}
-            onBrowseFiles={() => pane.openRight({ tabId: 'files' })}
         />
-    ), [openDetailsTab, pane.openRight, pluginRuntime.serverId, props.sessionId]);
+    ), [openDetailsTab, pluginRuntime.serverId, props.sessionId]);
 
     const renderOverlay = React.useCallback((overlay: NonNullable<typeof pane.scopeState>['details']['overlay']) => {
         if (!overlay) return null;
@@ -542,6 +546,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
 
         return (
             <>
+                <TrackCapsule track={track} />
                 {showDedicatedBoardAction ? boardOpenButton : null}
                 {browserOpenButton}
                 {showHeaderActions && showRightPaneToggle ? (
@@ -572,6 +577,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         showRightPaneToggle,
         theme.colors.text.secondary,
         toggleRightPane,
+        track,
     ]);
 
     const renderHeaderActions = React.useCallback(() => {
@@ -614,9 +620,10 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         />
     );
     // The pushed phone route recomposes every tab's header and state for the phone (details lab 2).
+    const tracked = <TrackInputBoundary track={track}>{workspace}</TrackInputBoundary>;
     const presented = props.presentation === 'screen' && deviceType === 'phone'
-        ? <SurfaceStateSizeProvider size="phone">{workspace}</SurfaceStateSizeProvider>
-        : workspace;
+        ? <SurfaceStateSizeProvider size="phone">{tracked}</SurfaceStateSizeProvider>
+        : tracked;
     // A retained viewer source (a Computer or Browser tab) binds nothing without the Session's
     // admitted Home/Account authority. Inside the Session shell it is inherited; a Details route or
     // phone scene rendered outside it takes this panel's own runtime authority.
