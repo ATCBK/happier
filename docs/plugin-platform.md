@@ -3204,6 +3204,12 @@ response body retains the caller and handle lifetime. A native prompt that
 waits for inference is ordinary request work, not server startup; the host
 does not impose its former five-minute request deadline on that turn.
 
+The managed endpoint transport's open and next-read phases consume the same
+caller and exact-handle lifetime. Concurrent endpoint reads and durable endpoint
+projections remain under their admitted lifecycle owners rather than a global
+stream or projection census. Native process-assignment acknowledgement consumes
+the process-custody owner's handshake budget and caller cancellation.
+
 Managed Provider contributions may opt into `sharing: 'connectionMachine'` in
 unreleased 0.3 source. This selects the incumbent daemon managed-services and
 process-custody owner, not a plugin-owned supervisor or public lifecycle API.
