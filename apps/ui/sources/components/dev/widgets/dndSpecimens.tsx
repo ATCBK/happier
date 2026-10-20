@@ -261,7 +261,7 @@ export const DND_SPECIMEN_FRAMES: WidgetSpecimenFrames = {
           })}
         />
       ))}
-      {/* Over its own place, and while admission is still being read: only what is carried. */}
+      {/* Over its own place: only what is carried. While admission is still being read: a quiet "checking" line. */}
       <Preview
         testID="dnd.silent.same"
         title="Signups this week"
