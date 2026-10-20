@@ -1,4 +1,4 @@
-import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError, type Tx } from "@/storage/inTx";
 import * as privacyKit from 'privacy-kit';
 import { artifactConversionBlobKey, artifactConversionBlobCustody, type PreparedArtifactAccountEncryptionConversionBlob, type PreparedArtifactAccountEncryptionConversionBlobs } from './artifactEncryptionConversionBlobService';
 import { db } from '@/storage/db';
@@ -706,8 +706,14 @@ export async function createArtifact(params: {
                     const state = await readArtifactCreateStateInTx(tx, { ...params, actorUserId, artifactId, header, body, dataEncryptionKey });
                     return "ok" in state ? state : { ok: false as const, error: "internal" as const };
                 }, { transactionClass: "artifact-create-replay" });
-            } catch { return { ok: false, error: "internal" }; }
+            } catch (replayError) {
+                if (isTransactionConflictExhaustedError(replayError) || isTransactionAcquisitionUnavailableError(replayError)) throw replayError;
+                return { ok: false, error: "internal" };
+            }
         }
+        // inTx already owns conflict/acquisition recovery. Preserve its terminal
+        // typed refusal for HTTP callers rather than starting another budget.
+        if (isTransactionConflictExhaustedError(error) || isTransactionAcquisitionUnavailableError(error)) throw error;
         return { ok: false, error: "internal" };
     } finally {
         if (!admitted) await discardArtifactBlobCandidate(preparedBlob);
@@ -1059,7 +1065,8 @@ export async function updateArtifact(params: {
         admitted = result.ok;
         if (result.ok && (header || body)) await cleanupArtifactOrphanBlobsAfterCommit(artifactId);
         return result;
-    } catch {
+    } catch (error) {
+        if (isTransactionConflictExhaustedError(error) || isTransactionAcquisitionUnavailableError(error)) throw error;
         return { ok: false, error: "internal" };
     } finally {
         if (!admitted) await discardArtifactBlobCandidate(preparedBlob);

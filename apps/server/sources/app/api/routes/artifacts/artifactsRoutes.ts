@@ -417,7 +417,8 @@ export function artifactsRoutes(app: Fastify) {
                 }),
                 500: z.object({
                     error: z.literal('Failed to create artifact')
-                })
+                }),
+                503: z.object({ error: z.enum(['database_transaction_conflict_exhausted', 'database_connection_unavailable']), statusCode: z.literal(503) }),
             }
         }
     }, async (request, reply) => {
@@ -473,7 +474,8 @@ export function artifactsRoutes(app: Fastify) {
                 413: ArtifactQuotaExceededV1Schema,
                 500: z.object({
                     error: z.literal('Failed to update artifact')
-                })
+                }),
+                503: z.object({ error: z.enum(['database_transaction_conflict_exhausted', 'database_connection_unavailable']), statusCode: z.literal(503) }),
             }
         }
     }, async (request, reply) => {

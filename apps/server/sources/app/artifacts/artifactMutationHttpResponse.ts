@@ -1,5 +1,5 @@
 import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate } from '@/app/events/eventRouter';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { readArtifactForCallerInTx } from './artifactAccessService';
 import { createArtifact, updateArtifact } from './artifactWriteService';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
@@ -9,6 +9,7 @@ import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifa
 import type { ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 
 export type ArtifactHttpMutationResult = Awaited<ReturnType<typeof createArtifactHttpMutation | typeof updateArtifactHttpMutation>>;
 export type ArtifactCreateHttpInput = Readonly<{ id: string; kind?: ArtifactCoarseKindV1; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
@@ -23,6 +24,7 @@ function memoryDecisionHttpFailure(error: string) {
 
 export async function createArtifactHttpMutation(userId: string, input: ArtifactCreateHttpInput, authentication?: SessionAccessAuthentication) {
         const { id, header, body, dataEncryptionKey, blob } = input;
+        let createSucceeded = false;
 
         try {
             log({ module: 'api', artifactId: id, userId }, 'Creating artifact');
@@ -54,6 +56,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
 
                 return { statusCode: 500 as const, body: { error: 'Failed to create artifact' as const } };
             }
+            createSucceeded = true;
 
             if (result.didWrite) {
                 const newArtifactPayload = buildNewArtifactUpdate(result.artifact, result.cursor.resolveCursor(), randomKeyNaked(12));
@@ -66,7 +69,9 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
                 log({ module: 'api', artifactId: id, userId }, 'Found existing artifact');
             }
 
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId: id }), { /* Artifact access, Account mode and mutation response content must share one capture. */ isolationLevel: "Serializable" });
+            const read = await inReadSnapshot(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId: id }), {
+                transactionClass: 'artifact-create-response-read',
+            });
             if (!read.ok) return { statusCode: 500 as const, body: { error: 'Failed to create artifact' as const } };
             const artifact = read.artifact;
             return { statusCode: 200 as const, body: {
@@ -87,6 +92,10 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
                 updatedAt: artifact.updatedAt.getTime()
             } };
         } catch (error) {
+            const databaseError = readDatabaseErrorCode(error);
+            // A failed response read cannot certify rollback of the preceding
+            // committed create. Keep that acknowledgement failure uncertain.
+            if (databaseError && !createSucceeded) return { statusCode: 503 as const, body: { error: databaseError, statusCode: 503 as const } };
             log({ module: 'api', level: 'error' }, `Failed to create artifact: ${error}`);
             return { statusCode: 500 as const, body: { error: 'Failed to create artifact' as const } };
         }
@@ -180,6 +189,8 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
                 ...(bodyUpdate && { bodyVersion: bodyUpdate.version }),
             } };
         } catch (error) {
+            const databaseError = readDatabaseErrorCode(error);
+            if (databaseError) return { statusCode: 503 as const, body: { error: databaseError, statusCode: 503 as const } };
             log({ module: 'api', level: 'error' }, `Failed to update artifact: ${error}`);
             return { statusCode: 500 as const, body: { error: 'Failed to update artifact' as const } };
         }

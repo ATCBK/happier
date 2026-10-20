@@ -49,13 +49,17 @@ import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions
 import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
-import { HttpStatusError, readHttpStatus } from '@/api/client/httpStatusError';
+import { createHttpStatusError, HttpStatusError, readHttpStatus } from '@/api/client/httpStatusError';
 import { createBackoff } from '@/utils/time';
 import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEditAcceptTransportInputV1Schema,
   DocEditDeclineTransportInputV1Schema, DocEditDecisionResultV1Schema,
   type DocEditAcceptHostInputV1, type DocEditDeclineInputV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 
 export type AccountArtifactRevision = Readonly<{ headerVersion: number; bodyVersion: number }>;
+
+function readArtifactStorageFailureCode(value: unknown) {
+  return value === 'database_transaction_conflict_exhausted' || value === 'database_connection_unavailable' ? value : null;
+}
 
 // Retry only the revision-fenced HTTP write, never its Action/native effect.
 // The existing transport backoff owns the retry budget. Identical bytes and
@@ -949,7 +953,13 @@ export function createAccountArtifactStore(params: Readonly<{
         throw Object.assign(new Error(sourceError.data), { code: sourceError.data });
       if (response.status === 404 && input.memoryDecisionSource)
         throw Object.assign(new Error('memory_decision_source_unsupported'), { code: 'memory_decision_source_unsupported' });
-      if (response.status < 200 || response.status >= 300) throw Object.assign(new Error(response.status === 409 ? 'artifact_create_conflict' : 'artifact_create_failed'), { code: response.status === 409 ? 'conflict' : 'create_failed' });
+      if (response.status < 200 || response.status >= 300) {
+        // Only published storage codes may cross this boundary. Retain status
+        // without carrying Axios request headers or arbitrary server content.
+        const storageError = response.status === 503 ? readArtifactStorageFailureCode(response.data?.error) : null;
+        throw createHttpStatusError(response.status, storageError ?? (response.status === 409 ? 'artifact_create_conflict' : 'artifact_create_failed'),
+          storageError ?? (response.status === 409 ? 'conflict' : 'create_failed'));
+      }
       if (response.data?.id !== artifactId) {
         throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
       }
@@ -997,11 +1007,16 @@ export function createAccountArtifactStore(params: Readonly<{
               ...(input.memoryDecisionSource ? { memoryDecisionSource: input.memoryDecisionSource } : {}),
               ...(blob !== undefined ? { blob } : {}),
             }, { headers: headers(), ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true });
-          if (result.status >= 500) throw new HttpStatusError(result.status, 'artifact_update_unavailable');
+          if (result.status >= 500) {
+            const storageError = result.status === 503 ? readArtifactStorageFailureCode(result.data?.error) : null;
+            throw createHttpStatusError(result.status, storageError ?? 'artifact_update_unavailable', storageError ?? undefined);
+          }
           return result;
         });
       } catch (error) {
         if (error instanceof HttpStatusError && (readHttpStatus(error) ?? 0) >= 500) {
+          const storageError = readArtifactStorageFailureCode('code' in error ? error.code : undefined);
+          if (storageError) return { ok: false, errorCode: storageError, error: storageError } as const;
           return { ok: false, errorCode: 'update_failed', error: 'artifact_update_failed' } as const;
         }
         throw error;
@@ -1124,7 +1139,7 @@ export function createAccountArtifactStore(params: Readonly<{
       for (;;) {
         input.signal?.throwIfAborted();
         await input.beforeWrite?.();
-        const current = await store.read(artifactId, { signal: input.signal, includeSharedAudience: false })
+        const current: AccountArtifact | null = await store.read(artifactId, { signal: input.signal, includeSharedAudience: false })
           ?? await findRetainedNotice(accountId, occurrence, input.signal);
         if (current) artifactId = current.artifactId;
         const notice = current ? readAccountNoticeArtifactV1(current) : null;
