@@ -678,6 +678,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let terminalHandoffFailureRequiresManualAction = false;
   let runtimeTranscriptProjectionSerial = Promise.resolve();
   const projectRuntimeTranscript = createRuntimeTranscriptProjector();
+  // A native runtime ending can mean observer/protocol loss or a crash. It
+  // cannot establish a clean process end, even when host cleanup exits zero.
+  let runtimeEndedWithoutCleanExit = false;
   let requestRuntimeEndedTermination = (): void => undefined;
   const observeRuntimeLifecycleMessage = (message: unknown): void => {
     const parsedRuntimeEvent = AgentSessionRuntimeEventSchema.safeParse(message);
@@ -832,6 +835,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       terminalTurnStateMachine.observe(observation);
     }
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'runtime-ended') {
+      runtimeEndedWithoutCleanExit = true;
       requestRuntimeEndedTermination();
     }
   };
@@ -1028,6 +1032,22 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   publishKeepAlive();
 
   let closeFailedSession = false;
+  const endSessionAfterProcessExit = async (cleanExit: boolean): Promise<void> => {
+    try {
+      if (cleanExit && params.session.hasOwnerMetadataAuthority()) {
+        const stoppedAt = Date.now();
+        await params.session.updateMetadataAsCurrentPublisher(metadata => ({
+          ...metadata,
+          lifecycleState: 'stopped',
+          lifecycleStateSince: stoppedAt,
+        }));
+      }
+    } finally {
+      // Metadata failure or a superseded publisher must not skip the existing
+      // semantic-end/transport cleanup; its own authority checks still apply.
+      await params.session.endSessionAndClose();
+    }
+  };
   const cleanupOnce = (): Promise<void> => {
     cleanupPromise ??= (async () => {
       if (closeFailedSession) params.session.prepareForClose();
@@ -1075,6 +1095,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : {}),
     sessionExitReport: { sessionId: params.session.sessionId },
     onTerminate: (event, outcome) => {
+      const cleanProcessExit = outcome.exitCode === 0 && !runtimeEndedWithoutCleanExit;
       const work = (async () => {
         runtimeDisposeReason = resolveRunnerRuntimeDisposalReason(event);
         shouldExit = true;
@@ -1097,7 +1118,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           // Termination ends the runtime, never the Happy session's lifecycle intent:
           // the session becomes inactive and stays resumable. Archiving is a separate
           // user-intent action owned by the session archive service.
-          await params.session.endSessionAndClose();
+          await endSessionAfterProcessExit(cleanProcessExit);
         } finally {
           await cleanupOnce();
         }
@@ -1286,6 +1307,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   };
   let terminalRemoteModeLoopError: unknown = null;
   let terminalProcessExited = false;
+  let terminalProcessExitedCleanly = false;
   const terminalRemoteModeLoopPromise = !shouldExit && terminalRemoteModeLoop && resolvedStartingMode.kind === 'switching'
     ? runTerminalRemoteSessionModeLoopFn({
         ...terminalRemoteModeLoop,
@@ -1306,6 +1328,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           const result = await terminalRemoteModeLoop.runTerminal(loopParams);
           if (result.type === 'exit') {
             terminalProcessExited = true;
+            terminalProcessExitedCleanly = result.code === 0;
             terminalTurnStateMachine.observe({
               type: 'process_exited',
               agentId: params.policyAgentId,
@@ -1565,7 +1588,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               session: params.session,
               runtime: hookRuntimeForCallbacks,
             });
-            await params.session.endSessionAndClose();
+            await endSessionAfterProcessExit(terminalProcessExitedCleanly);
           }
         }
       } finally {
