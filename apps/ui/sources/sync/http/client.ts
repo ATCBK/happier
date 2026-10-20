@@ -84,6 +84,13 @@ export type ServerFetch = (
     options?: ServerFetchOptions,
 ) => Promise<Response>;
 
+/** Consume a response while the request still owns cancellation and its captured Home. */
+export type ServerResponseRequest<TOptions = ServerFetchOptions> = {
+    (path: string, init?: RequestInit, options?: TOptions): Promise<Response>;
+    <T>(path: string, init: RequestInit | undefined, options: TOptions | undefined,
+        consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+};
+
 type EndpointRequestContext = Readonly<{
     /** Stable logical URL used for identity, reachability, compatibility, and storage scope. */
     endpointUrl: string;
@@ -251,12 +258,16 @@ function maybeLogRuntimeFetchFailure(params: {
     }
 }
 
-async function requestAtEndpoint(
+function requestAtEndpoint(context: EndpointRequestContext, path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+function requestAtEndpoint<T>(context: EndpointRequestContext, path: string, init: RequestInit | undefined,
+    options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+async function requestAtEndpoint<T>(
     context: EndpointRequestContext,
     path: string,
     init?: RequestInit,
     options: ServerFetchOptions = {},
-): Promise<Response> {
+    consumeResponse?: (response: Response) => Promise<T>,
+): Promise<Response | T> {
     const localAbortSequence = context.active ? abortSequence : null;
     const usesReachabilitySupervision = context.active || context.superviseReachability === true;
     const recoversStoredCredentials = context.active || context.recoverStoredCredentials === true;
@@ -777,6 +788,14 @@ async function requestAtEndpoint(
 
             break;
         }
+        if (!response) throw new Error('serverFetch did not attempt the request');
+        if (!consumeResponse) return response;
+        // Domain parsing is outside the transport/auth retry catch. A body read
+        // failure must never dispatch a mutating request a second time.
+        const result = await consumeResponse(response);
+        requestController.signal.throwIfAborted();
+        assertRequestContextCurrent(context);
+        return result;
     } finally {
         if (writeTimeoutHandle) {
             clearTimeout(writeTimeoutHandle);
@@ -787,11 +806,6 @@ async function requestAtEndpoint(
         if (context.active) inFlightControllers.delete(requestController);
     }
 
-    if (!response) {
-        // Defensive: loop always runs at least once, but keep return type strict.
-        throw new Error('serverFetch did not attempt the request');
-    }
-    return response;
 }
 
 function normalizeEndpointBase(raw: string): string {
@@ -856,7 +870,7 @@ export function createServerFetchAtEndpoint(
         /** Observes this write's successful conditional removal of its rejected stored token. */
         onRejectedStoredCredentials?: (rejectedToken: string) => void;
     }>,
-): ServerFetch {
+): ServerResponseRequest {
     const endpointUrl = normalizeEndpointBase(params.endpointUrl);
     const runtimeOrigin = resolveEndpointRuntimeOrigin(endpointUrl, params.runtimeOrigin);
     const serverId = String(params.serverId ?? '').trim();
@@ -876,7 +890,13 @@ export function createServerFetchAtEndpoint(
         ...(params.signal ? { signal: params.signal } : {}),
     };
 
-    return async (path, init, options) => await requestAtEndpoint(context, path, init, options);
+    function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+    function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async function request<T>(path: string, init?: RequestInit, options?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
+        return consumeResponse ? await requestAtEndpoint(context, path, init, options, consumeResponse)
+            : await requestAtEndpoint(context, path, init, options);
+    }
+    return request;
 }
 
 /**
@@ -885,37 +905,40 @@ export function createServerFetchAtEndpoint(
  */
 export function createServerFetchForActiveServer(
     expectedActiveServer?: ExpectedActiveServerFetchBasis,
-): ServerFetch {
+): ServerResponseRequest {
     const basis = expectedActiveServer ?? getActiveServerSnapshot();
     const captured = { serverId: basis.serverId, generation: basis.generation };
-    return async (path, init, options) => await serverFetch(path, init, {
-        ...options,
-        expectedActiveServer: captured,
-    });
+    function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+    function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async function request<T>(path: string, init?: RequestInit, options?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
+        const scopedOptions = { ...options, expectedActiveServer: captured };
+        return consumeResponse ? await serverFetch(path, init, scopedOptions, consumeResponse) : await serverFetch(path, init, scopedOptions);
+    }
+    return request;
 }
 
 /** Focused-Home compatibility wrapper. All request policy remains in `requestAtEndpoint`. */
-export async function serverFetch(
+export function serverFetch(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+export function serverFetch<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+export async function serverFetch<T>(
     path: string,
     init?: RequestInit,
     options: ServerFetchOptions = {},
-): Promise<Response> {
+    consumeResponse?: (response: Response) => Promise<T>,
+): Promise<Response | T> {
     const snapshot = getActiveServerSnapshot();
     // Read from the same publication the snapshot was built from, so a carrier
     // and an origin can never describe different transport generations.
     const homeCarrier = getActiveServerHomeCarrier();
-    return await requestAtEndpoint(
-        {
-            endpointUrl: snapshot.serverUrl,
-            runtimeOrigin: resolveActiveServerRuntimeOrigin(snapshot),
-            ...(homeCarrier ? { homeCarrier } : {}),
-            serverId: snapshot.serverId,
-            generation: snapshot.generation,
-            active: true,
-            useStoredCredentials: true,
-        },
-        path,
-        init,
-        options,
-    );
+    const context: EndpointRequestContext = {
+        endpointUrl: snapshot.serverUrl,
+        runtimeOrigin: resolveActiveServerRuntimeOrigin(snapshot),
+        ...(homeCarrier ? { homeCarrier } : {}),
+        serverId: snapshot.serverId,
+        generation: snapshot.generation,
+        active: true,
+        useStoredCredentials: true,
+    };
+    return consumeResponse ? await requestAtEndpoint(context, path, init, options, consumeResponse)
+        : await requestAtEndpoint(context, path, init, options);
 }

@@ -36,6 +36,7 @@ import {
     createServerFetchAtEndpoint,
     serverFetch,
     type ServerFetch,
+    type ServerResponseRequest,
     StaleServerGenerationError,
     type ServerFetchOptions,
 } from '@/sync/http/client';
@@ -227,7 +228,7 @@ export interface SyncSocketConfig {
     token: string;
     socketRole?: HappierSocketRole;
     /** An admitted frame authority has no stored credential or endpoint supervisor. */
-    request?: ServerFetch;
+    request?: ServerResponseRequest;
     isCurrent?: () => boolean;
     onCredentialRejected?: () => void;
     serverId?: string;
@@ -859,13 +860,15 @@ class ApiSocket {
      * awaiting feature decisions, but cannot re-target it to a later socket
      * configuration.
      */
-    createRequestForPreparedTarget(target: PreparedSocketRequestTarget): ServerFetch {
-        return async (path, options, requestOptions) => {
-            if (!this.isPreparedRequestTargetCurrent(target)) {
-                throw new StaleServerGenerationError();
-            }
-            return await this.request(path, options, requestOptions);
-        };
+    createRequestForPreparedTarget(target: PreparedSocketRequestTarget): ServerResponseRequest {
+        const socket = this;
+        function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
+        function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+        async function request<T>(path: string, init?: RequestInit, options?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
+            if (!socket.isPreparedRequestTargetCurrent(target)) throw new StaleServerGenerationError();
+            return consumeResponse ? await socket.request(path, init, options, consumeResponse) : await socket.request(path, init, options);
+        }
+        return request;
     }
 
     private isPreparedRequestTargetCurrent(target: PreparedSocketRequestTarget): boolean {
@@ -881,16 +884,20 @@ class ApiSocket {
         );
     }
 
-    async request(path: string, options?: RequestInit, requestOptions: ServerFetchOptions = {}): Promise<Response> {
+    request(path: string, options?: RequestInit, requestOptions?: ServerFetchOptions): Promise<Response>;
+    request<T>(path: string, options: RequestInit | undefined, requestOptions: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async request<T>(path: string, options?: RequestInit, requestOptions: ServerFetchOptions = {}, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
         if (!this.config) {
             throw new Error('SyncSocket not initialized');
         }
         const config = this.config;
         if (config.request) {
             if (config.isCurrent?.() === false) throw new StaleServerGenerationError();
-            const response = await config.request(path, options, requestOptions);
+            const result = consumeResponse
+                ? await config.request(path, options, requestOptions, consumeResponse)
+                : await config.request(path, options, requestOptions);
             if (this.config !== config || config.isCurrent?.() === false) throw new StaleServerGenerationError();
-            return response;
+            return result;
         }
         const snapshot = getActiveServerSnapshot();
         const hasPreparedTarget = Boolean(
@@ -903,7 +910,11 @@ class ApiSocket {
         const url = `${endpoint}${path}`;
         const method = String(options?.method ?? 'GET').toUpperCase();
         let credentialsToken: string;
-        let issueRequest: () => Promise<InFlightHttpRequestResult>;
+        type RequestResult = InFlightHttpRequestResult & Readonly<{ consumption?: Readonly<{ value: T }> }>;
+        const dispatch = async (request: ServerResponseRequest): Promise<RequestResult> => consumeResponse
+            ? await request(path, options, requestOptions, async response => ({ response, consumption: { value: await consumeResponse(response) } }))
+            : { response: await request(path, options, requestOptions) };
+        let issueRequest: () => Promise<RequestResult>;
         let isCurrent: () => boolean;
         let acceptsRecoveredConfiguration: ((recovery: RecoveredHttpRequestConfiguration) => boolean) | null = null;
         let acceptsRejectedConfiguration: (() => boolean) | null = null;
@@ -1005,7 +1016,8 @@ class ApiSocket {
                 credentialsToken = capturedToken;
                 issueRequest = async () => {
                     try {
-                        const response = await requestAtPreparedTarget(path, options, requestOptions);
+                        const result = await dispatch(requestAtPreparedTarget);
+                        const { response } = result;
                         let recovery: RecoveredHttpRequestConfiguration | undefined;
                         if (recoveredToken && recoveredToken !== capturedToken) {
                             if (!isPreparedConfigCurrent()) throw new StaleServerGenerationError();
@@ -1021,7 +1033,7 @@ class ApiSocket {
                                 isCurrent: isRecoveredConfigurationCurrent,
                             };
                         }
-                        return { response, ...(recovery ? { recovery } : {}) };
+                        return { ...result, ...(recovery ? { recovery } : {}) };
                     } catch (error) {
                         if (!isCurrent()) throw new StaleServerGenerationError();
                         throw error;
@@ -1062,20 +1074,15 @@ class ApiSocket {
                     const current = getActiveServerSnapshot();
                     return current.generation === generation && current.serverId === serverId;
                 };
-                issueRequest = async () => ({
-                    response: await serverFetch(
-                        url,
-                        {
-                            ...options,
-                            headers: (() => {
-                                const headers = new Headers(options?.headers);
-                                headers.set('Authorization', `Bearer ${credentials.token}`);
-                                return headers;
-                            })(),
-                        },
-                        { includeAuth: false, ...requestOptions },
-                    ),
-                });
+                issueRequest = async () => {
+                    const headers = new Headers(options?.headers);
+                    headers.set('Authorization', `Bearer ${credentials.token}`);
+                    const init = { ...options, headers };
+                    const policy = { includeAuth: false, ...requestOptions };
+                    return consumeResponse
+                        ? await serverFetch(url, init, policy, async response => ({ response, consumption: { value: await consumeResponse(response) } }))
+                        : { response: await serverFetch(url, init, policy) };
+                };
             }
 
             const hasBody = options?.body != null;
@@ -1085,6 +1092,7 @@ class ApiSocket {
                 (method === 'GET' || method === 'HEAD')
                 && !hasBody
                 && !hasSignal
+                && !consumeResponse
                 && options?.cache !== 'no-store';
 
             const requestKey = canDedupe
@@ -1093,7 +1101,7 @@ class ApiSocket {
                 ? `${serverId ?? ''}:${method}:${url}:tk:${getOrCreateTokenCacheKey(credentialsToken)}`
                 : null;
 
-            let result: InFlightHttpRequestResult;
+            let result: RequestResult;
             if (requestKey) {
                 const existing = this.inFlightHttpRequestsByKey.get(requestKey);
                 if (existing) {
@@ -1118,6 +1126,7 @@ class ApiSocket {
                 // bearer was removed. Preserve that no-commit outcome, never its
                 // old body or authority; any replacement still takes the stale path.
                 if (result.response.status === 401 && acceptsRejectedConfiguration?.()) {
+                    if (consumeResponse && result.consumption) return result.consumption.value;
                     return new Response(null, { status: 401 });
                 }
                 throw new StaleServerGenerationError();
@@ -1139,6 +1148,10 @@ class ApiSocket {
                 // Best-effort only
             }
 
+            if (consumeResponse) {
+                if (!result.consumption) throw new Error('Response consumer did not run');
+                return result.consumption.value;
+            }
             return response;
         } finally {
             unsubscribeCredentialChanges?.();

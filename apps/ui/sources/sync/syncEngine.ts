@@ -614,7 +614,7 @@ import type { SessionMetadataInactiveModelIntentExpectationV1 } from '@happier-d
 import type { AutomationV3ClearRunHistoryResponse, AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
-import { createServerFetchAtEndpoint, StaleServerGenerationError, type ServerFetch } from './http/client';
+import { createServerFetchAtEndpoint, StaleServerGenerationError, type ServerFetch, type ServerFetchOptions, type ServerResponseRequest } from './http/client';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { clearEmbedMemoryStorage } from '@/sync/domains/state/persistenceStorage';
 import { clearEmbedBrowserRecords } from '@/sync/domains/state/browserRecordStorage';
@@ -1333,7 +1333,7 @@ class Sync {
         private credentials: AuthCredentials | null = null;
         private appliedServerTarget: SyncServerTarget | null = null;
         private embedSessionScope: (SyncEmbedSessionOptions & Readonly<{
-            request: ServerFetch;
+            request: ServerResponseRequest;
             controller: AbortController;
         }>) | null = null;
         private embedFeaturesSnapshot: ServerFeaturesSnapshot = { status: 'unsupported', reason: 'endpoint_missing' };
@@ -2558,7 +2558,10 @@ class Sync {
                 isCurrent: () => this.embedSessionScope?.controller === controller && options.isCurrent(),
             });
             const sessionPath = encodeURIComponent(options.scope.sessionId);
-            const request: ServerFetch = async (path, init, requestOptions) => {
+            const sync = this;
+            function request(path: string, init?: RequestInit, requestOptions?: ServerFetchOptions): Promise<Response>;
+            function request<T>(path: string, init: RequestInit | undefined, requestOptions: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+            async function request<T>(path: string, init?: RequestInit, requestOptions?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
                 const url = new URL(path, options.endpointUrl);
                 const method = (init?.method ?? 'GET').toUpperCase();
                 const read = method === 'GET';
@@ -2573,10 +2576,17 @@ class Sync {
                     || method === 'POST' && /^\/v1\/actions\/[^/]+$/.test(url.pathname)
                 );
                 if (!permitted) throw new Error('Request is outside the embed Session corridor');
+                const observe = (response: Response) => {
+                    if (response.status === 401 && sync.embedSessionScope?.controller === controller && options.isCurrent()) options.onCredentialRejected?.();
+                };
+                if (consumeResponse) return await endpointRequest(path, init, requestOptions, async response => {
+                    observe(response);
+                    return await consumeResponse(response);
+                });
                 const response = await endpointRequest(path, init, requestOptions);
-                if (response.status === 401 && this.embedSessionScope?.controller === controller && options.isCurrent()) options.onCredentialRejected?.();
+                observe(response);
                 return response;
-            };
+            }
             const scope = {
                 ...options,
                 controller,
@@ -4227,6 +4237,11 @@ class Sync {
             requiredHydrationSessionIds: unreadable,
             prioritizeSessionIds: unreadable,
         });
+    };
+
+    /** Join the existing Availability queue after an authenticated declaration claim. */
+    public refreshPluginAccountAvailability = async (): Promise<void> => {
+        await this.pluginAvailabilitySync.invalidateAndAwait({ settleOnFirstAttempt: true });
     };
 
     public invalidateSessionListSnapshot = (serverId?: string | null): void => {

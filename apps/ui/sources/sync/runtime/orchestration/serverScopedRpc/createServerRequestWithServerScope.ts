@@ -4,7 +4,7 @@ import {
     createServerAccountScope,
     type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
-import { createServerFetchAtEndpoint, type ServerFetchOptions } from '@/sync/http/client';
+import { createServerFetchAtEndpoint, type ServerFetchOptions, type ServerResponseRequest } from '@/sync/http/client';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 
@@ -20,6 +20,8 @@ type ScopedServerAccountRequestContext = Extract<
 >;
 
 export type ServerAccountRequestOptions = Readonly<Pick<ServerFetchOptions, 'onIssued' | 'retry'>>;
+export type ServerAccountResponseRequest = ServerResponseRequest<ServerAccountRequestOptions>;
+type RawServerAccountRequest = (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
 
 export function createServerRequestForExplicitServerScope(params: Readonly<{
     serverUrl: string;
@@ -34,25 +36,28 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
      * identity, audience and logging exactly as it does for every other carrier.
      */
     homeCarrier?: HomeCarrier;
-}>): (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response> {
-    return async (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => {
+}>): ServerAccountResponseRequest {
+    function request(path: string, init?: RequestInit, options?: ServerAccountRequestOptions): Promise<Response>;
+    function request<T>(path: string, init: RequestInit | undefined, options: ServerAccountRequestOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async function request<T>(path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
         const headers = new Headers(init?.headers);
         headers.set('Authorization', `Bearer ${params.token}`);
         if (params.homeCarrier || options?.retry === 'none') {
             // The canonical HTTP owner composes semantic carriers and explicit
             // no-retry requests. Supply its scoped credential and request policy
             // here instead of parking user Retry on passive reachability.
-            return await createServerFetchAtEndpoint({
+            const endpointRequest = createServerFetchAtEndpoint({
                 endpointUrl: params.serverUrl,
                 ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
                 ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
                 credentials: { token: params.token },
-            })(path, { ...init, method: init?.method ?? 'GET', headers }, {
-                retry: 'none',
-                ...(options?.onIssued ? { onIssued: options.onIssued } : {}),
             });
+            const requestInit = { ...init, method: init?.method ?? 'GET', headers };
+            const requestOptions = { retry: 'none' as const, ...(options?.onIssued ? { onIssued: options.onIssued } : {}) };
+            return consumeResponse ? await endpointRequest(path, requestInit, requestOptions, consumeResponse)
+                : await endpointRequest(path, requestInit, requestOptions);
         }
-        return await runtimeFetchWithServerReachability({
+        const requestParams = {
             serverUrl: params.serverUrl,
             ...(params.homeIdentityId ? { homeIdentityId: params.homeIdentityId } : {}),
             token: params.token,
@@ -65,8 +70,11 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
                 headers,
             },
             ...(options?.onIssued ? { onIssued: options.onIssued } : {}),
-        });
-    };
+        };
+        return consumeResponse ? await runtimeFetchWithServerReachability(requestParams, consumeResponse)
+            : await runtimeFetchWithServerReachability(requestParams);
+    }
+    return request;
 }
 
 export type ServerAccountRequestAuthority = Readonly<{
@@ -82,17 +90,22 @@ export type ServerAccountRequestAuthority = Readonly<{
     transferCarrierCustody?: () => () => Promise<void>;
 }>;
 
+export function createServerRequestForResolvedServerScope(params: Readonly<{ context: ResolvedServerAccountRequestContext; activeRequest: ServerAccountResponseRequest }>): ServerAccountResponseRequest;
+export function createServerRequestForResolvedServerScope(params: Readonly<{ context: ResolvedServerAccountRequestContext; activeRequest: RawServerAccountRequest }>): RawServerAccountRequest;
 export function createServerRequestForResolvedServerScope(params: Readonly<{
     context: ResolvedServerAccountRequestContext;
-    activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
-}>): (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response> {
-    return async (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => {
+    activeRequest: ServerAccountResponseRequest | RawServerAccountRequest;
+}>): ServerAccountResponseRequest | RawServerAccountRequest {
+    function request(path: string, init?: RequestInit, options?: ServerAccountRequestOptions): Promise<Response>;
+    function request<T>(path: string, init: RequestInit | undefined, options: ServerAccountRequestOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async function request<T>(path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
         if (params.context.scope === 'active') {
-            return await params.activeRequest(path, init, options);
+            return consumeResponse ? await params.activeRequest(path, init, options, consumeResponse)
+                : await params.activeRequest(path, init, options);
         }
 
         const homeIdentityId = resolvePortableServerIdentityForRoutingId(params.context.targetServerId);
-        return await createServerRequestForExplicitServerScope({
+        const scopedRequest = createServerRequestForExplicitServerScope({
             serverUrl: params.context.targetServerUrl,
             ...(homeIdentityId ? { homeIdentityId } : {}),
             ...(params.context.runtimeOrigin ? { runtimeOrigin: params.context.runtimeOrigin } : {}),
@@ -102,15 +115,17 @@ export function createServerRequestForResolvedServerScope(params: Readonly<{
             // dropping its carrier here would send every account-scoped request
             // to an origin an ingress-less Home does not have.
             ...(params.context.homeCarrier ? { homeCarrier: params.context.homeCarrier } : {}),
-        })(path, init, options);
-    };
+        });
+        return consumeResponse ? await scopedRequest(path, init, options, consumeResponse) : await scopedRequest(path, init, options);
+    }
+    return request;
 }
 
 export function createServerRequestWithServerScope(params: Readonly<{
     serverId?: string | null;
     timeoutMs?: number;
     preferScoped?: boolean;
-    activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
+    activeRequest: RawServerAccountRequest;
 }>): (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response> {
     return async (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => {
         const context = await resolveServerAccountRequestContext({
@@ -145,7 +160,7 @@ type ServerAccountRequestTarget =
     | Readonly<{ serverId: string; scope?: never }>;
 
 type CaptureServerAccountRequestParams = ServerAccountRequestTarget & Readonly<{
-    activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
+    activeRequest: RawServerAccountRequest;
 }>;
 
 export async function captureServerRequestAuthorityForServerAccountScope(params: CaptureServerAccountRequestParams): Promise<ServerAccountRequestAuthority> {
@@ -216,7 +231,7 @@ export async function runWithServerRequestAuthorityForServerAccountScope<TResult
 /** Response bytes stay under the same lease as the Account-authenticated request. */
 export function createServerRequestForServerAccountScope(params: Readonly<{
     scope: ServerAccountScope;
-    activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
+    activeRequest: RawServerAccountRequest;
 }>): (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response> {
     return (path, init, options) => runWithServerRequestAuthorityForServerAccountScope(params, async (authority) => {
         const response = await authority.request(path, init, options);
@@ -230,7 +245,7 @@ export function createServerRequestForServerAccountScope(params: Readonly<{
 /** Resolves an explicitly disposable authority; callers must release it. */
 export async function resolveServerRequestForServerAccountScope(params: Readonly<{
     scope: ServerAccountScope;
-    activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
+    activeRequest: RawServerAccountRequest;
 }>): Promise<ServerAccountRequestAuthority> {
     return await captureServerRequestAuthorityForServerAccountScope(params);
 }

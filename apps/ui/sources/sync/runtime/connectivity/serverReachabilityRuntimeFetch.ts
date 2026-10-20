@@ -1,3 +1,4 @@
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { normalizeRequestBodyHeaders } from '@/sync/http/requestBodyHeaders';
 import {
@@ -41,7 +42,7 @@ function redactUrlForError(raw: string): string {
     }
 }
 
-export async function runtimeFetchWithServerReachability(params: Readonly<{
+type ReachableFetchParams = Readonly<{
     serverUrl: string;
     homeIdentityId?: string;
     token: string | null;
@@ -53,7 +54,11 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
     runtimeOrigin?: string;
     /** Called after reachability/origin guards pass and immediately before dispatch. */
     onIssued?: () => void;
-}>): Promise<Response> {
+}>;
+
+export function runtimeFetchWithServerReachability(params: ReachableFetchParams): Promise<Response>;
+export function runtimeFetchWithServerReachability<T>(params: ReachableFetchParams, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+export async function runtimeFetchWithServerReachability<T>(params: ReachableFetchParams, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
     const targetUrl = tryParseUrl(params.url, params.serverUrl);
     const requestedCompatibilityDeclaration =
         readAccountStoredContentCompatibilityRequestDeclaration(params.init);
@@ -117,7 +122,8 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
         }
     }
 
-    const signal = params.signal ?? params.init.signal ?? undefined;
+    const cancellation = mergeAbortSignals([params.signal, params.init.signal ?? undefined]);
+    const signal = cancellation.signal;
     const acquisitionLifetime = new AbortController();
     const reachabilityPromise = acquireServerReachabilitySupervisor({
         serverUrl: params.serverUrl,
@@ -156,8 +162,12 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
                 reportServerAuthFailed(params.serverUrl, response.status, probeReportScope, effectiveToken);
             }
         }
-        return response;
+        if (!consumeResponse) return response;
+        const result = await consumeResponse(response);
+        signal.throwIfAborted();
+        return result;
     } finally {
+        cancellation.dispose();
         acquisitionLifetime.abort();
         if (reachability) {
             await reachability.release();
