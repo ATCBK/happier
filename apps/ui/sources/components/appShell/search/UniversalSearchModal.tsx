@@ -5,12 +5,13 @@ import { buildCommandSurfaceCardChrome, type CommandSurfaceLayout } from '@/moda
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import type { Command } from '@/components/appShell/commandPalette/types';
 import { t } from '@/text';
-import { UniversalSearchController } from './UniversalSearchController';
+import { UniversalSearchController, type UniversalSearchControllerProps } from './UniversalSearchController';
 import type { UniversalSearchScopeSeed, UniversalSearchSourceFocus } from './UniversalSearchRuntimeContext';
 import type { TerminalJumpTarget } from '@/components/sessions/terminal/jump/terminalJumpTarget';
 
 export type UniversalSearchModalProps = CustomModalInjectedProps & Readonly<{
     commands: readonly Command[];
+    openWorkspaceFile?: UniversalSearchControllerProps['openWorkspaceFile'];
     initialQuery?: string;
     initialSource?: UniversalSearchSourceFocus;
     activeSessionId?: string | null;
@@ -34,6 +35,7 @@ export function UniversalSearchModal(props: UniversalSearchModalProps): React.Re
     return (
         <UniversalSearchController
             commands={props.commands}
+            openWorkspaceFile={props.openWorkspaceFile}
             initialQuery={props.initialQuery}
             initialSource={props.initialSource}
             activeSessionId={props.activeSessionId}

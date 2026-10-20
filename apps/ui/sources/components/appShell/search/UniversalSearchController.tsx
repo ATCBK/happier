@@ -232,6 +232,8 @@ function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: st
 
 export type UniversalSearchControllerProps = Readonly<{
     commands: readonly Command[];
+    /** An imperative modal receives the opener captured by its retained Workspace owner. */
+    openWorkspaceFile?: ReturnType<typeof useWorkspaceFileOpener>['open'];
     initialQuery?: string;
     initialSource?: UniversalSearchSourceFocus;
     activeSessionId?: string | null;
@@ -258,7 +260,8 @@ function resolveInitialScope(props: Pick<UniversalSearchControllerProps, 'active
 
 export function UniversalSearchController(props: UniversalSearchControllerProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const { open: openFile } = useWorkspaceFileOpener();
+    const { open: inheritedOpenFile } = useWorkspaceFileOpener();
+    const openFile = props.openWorkspaceFile ?? inheritedOpenFile;
     const deviceType = useDeviceType();
     const textInFilesShortcut = useKeyboardShortcutLabel('search.textInFiles');
     const [scope, setScope] = React.useState<UniversalSearchScopeSeed>(() => resolveInitialScope(props));

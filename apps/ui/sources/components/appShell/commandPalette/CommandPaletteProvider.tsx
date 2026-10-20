@@ -76,6 +76,7 @@ import { usePaneArrangement } from '@/components/appShell/panes/arrangement/useP
 import { readShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 import { focusPaneRegion } from '@/components/appShell/panes/paneRegionFocus';
 import { useAskHappierStarter } from '@/components/sessions/bots/useAskHappierOffer';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 
 export function readActiveSessionIdFromRoute(
     segments: readonly string[],
@@ -216,6 +217,7 @@ export function CommandPaletteProvider({ children }: { children: React.ReactNode
 
 function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const { toggle: togglePaneArrangement } = usePaneArrangement();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
     const resolveNewSessionOrdinaryEntryRoute = useResolveNewSessionOrdinaryEntryRoute();
@@ -456,8 +458,9 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         if (!openModal) return;
         Modal.update<UniversalSearchModalProps>(openModal.id, {
             commands: buildCommands(openModal.activeSessionId, openModal.scope),
+            openWorkspaceFile,
         });
-    }, [buildCommands]);
+    }, [buildCommands, openWorkspaceFile]);
     React.useEffect(() => {
         refreshOpenPaletteCommands();
     }, [refreshOpenPaletteCommands]);
@@ -525,6 +528,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             onHostUnmount: clearOpenPalette,
             props: {
                 commands: buildCommands(invocationScope.sessionId, invocationScope),
+                openWorkspaceFile,
                 ...(initialQuery ? { initialQuery } : {}),
                 ...(options?.source ? { initialSource: options.source } : {}),
                 ...(invocationScope.sessionId ? { activeSessionId: invocationScope.sessionId } : {}),
@@ -538,7 +542,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             scope: invocationScope,
         };
         setPaletteOpen(true);
-    }, [activeSessionId, buildCommands, router, universalSearchRouteActive]);
+    }, [activeSessionId, buildCommands, openWorkspaceFile, router, universalSearchRouteActive]);
 
     const universalSearchRuntime = useMemo<UniversalSearchRuntime>(() => ({
         open: showCommandPalette,
