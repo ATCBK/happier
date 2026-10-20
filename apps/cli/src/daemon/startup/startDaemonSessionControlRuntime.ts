@@ -6555,7 +6555,15 @@ export async function startDaemonSessionControlRuntime(
           const transport = await resolveSessionTransportContext({ credentials, idOrPrefix: sessionId, signal });
           if (!transport.ok || transport.sessionId !== sessionId) return null;
           await assertSessionAccountCurrent(sessionId, accountContext);
-          return await prepareSessionRunnerRestartAdmission({ expectedPid, signal, callRpc: async (request, requestSignal) =>
+          const tracked = findTrackedSessionByHappySessionId(params.pidToTrackedSession.values(), sessionId);
+          if (!tracked || (tracked.sessionRunnerPid ?? tracked.pid) !== expectedPid) return null;
+          return await prepareSessionRunnerRestartAdmission({ expectedPid, signal,
+            onHold: attempt => {
+              tracked.plannedRestartAdmission = attempt;
+              attempt.signal.addEventListener('abort', () => {
+                if (tracked.plannedRestartAdmission === attempt) delete tracked.plannedRestartAdmission;
+              }, { once: true });
+            }, callRpc: async (request, requestSignal) =>
             await withSessionAccountHome(accountContext, async () => {
               const input = { token: credentials.token, sessionId,
                 method: `${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`, request, timeoutMs: null,

@@ -58,6 +58,8 @@ type OwnedHandlerRegistrationContext = {
     nextMethods: Set<string>;
 };
 
+type PausedRequestAdmission = Readonly<{ details?: unknown; revalidate?: (signal: AbortSignal) => Promise<void> }>;
+
 export type RpcHandlerRegistrationReadiness =
     | Readonly<{ status: 'ready' }>
     | Readonly<{
@@ -142,7 +144,7 @@ export class RpcHandlerManager {
     private acknowledgedRegistrationMethods = new Set<string>();
     private registrationReadinessWaiters = new Set<RegistrationReadinessWaiter>();
     private readonly inFlightRequestCounts = new Map<string, number>();
-    private readonly pausedRequestAdmission = new Map<string, Readonly<{ details?: unknown }>>();
+    private readonly pausedRequestAdmission = new Map<string, PausedRequestAdmission>();
     private activeTransportRequestControllers = new Set<AbortController>();
     /**
      * The authenticated relay stamps this short-lived id immediately before it
@@ -582,21 +584,6 @@ export class RpcHandlerManager {
                 errorCode: RPC_ERROR_CODES.FORBIDDEN,
             });
         }
-        const pausedAdmission = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method));
-        if (pausedAdmission) {
-            // Bind an encrypted refusal to the actual request before encoding it.
-            // An unbound transport error intentionally drops domain evidence at
-            // the client codec; it cannot carry definite no-effect Run evidence.
-            try {
-                const decoded = await socketRpcCodec.decodeRequestParams(rpcContent, request.params, request.method);
-                callId = decoded.callId;
-            } catch (error) {
-                return await respond(request, { error: 'Unable to open RPC content',
-                    errorCode: readRpcErrorCode(error) ?? RPC_ERROR_CODES.UPDATE_REQUIRED });
-            }
-            return await deny('handler_admission', { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
-                ...pausedAdmission });
-        }
         this.beginInFlightRequest(this.readUnprefixedMethod(request.method));
         const controller = new AbortController();
         this.activeTransportRequestControllers.add(controller);
@@ -631,6 +618,25 @@ export class RpcHandlerManager {
             phaseStartedAtMs = now;
         };
         try {
+            const pausedAtArrival = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method));
+            const admissionRevalidation = this.revalidatePausedRequestAdmission(this.readUnprefixedMethod(request.method), controller.signal);
+            if (admissionRevalidation) await admissionRevalidation;
+            const pausedAdmission = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method))
+                ?? (controller.signal.aborted ? pausedAtArrival : undefined);
+            if (pausedAdmission) {
+                // Bind an encrypted refusal to the actual request before encoding it.
+                // An unbound transport error cannot carry definite no-effect evidence.
+                try {
+                    const decoded = await socketRpcCodec.decodeRequestParams(rpcContent, request.params, request.method);
+                    callId = decoded.callId;
+                } catch (error) {
+                    return await respond(request, { error: 'Unable to open RPC content',
+                        errorCode: readRpcErrorCode(error) ?? RPC_ERROR_CODES.UPDATE_REQUIRED });
+                }
+                return await deny('handler_admission', { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                    ...(pausedAdmission.details === undefined ? {} : { details: pausedAdmission.details }) });
+            }
+            controller.signal.throwIfAborted();
             const sessionDecisionAuthorization = parseSocketRpcAuthorizationContext(request.authorization);
             const isRequesterDecisionMethod = request.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`);
             const isSessionDecisionRoute = isRequesterDecisionMethod
@@ -1021,13 +1027,21 @@ export class RpcHandlerManager {
             if (!handler) {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }
-            if (this.pausedRequestAdmission.has(method)) {
-                return { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
-                    ...this.pausedRequestAdmission.get(method) };
-            }
+            const signal = options?.signal ?? new AbortController().signal;
             this.beginInFlightRequest(method);
-            const handlerExecutionId = this.beginHandlerExecution(method);
+            let handlerExecutionId: number | null = null;
             try {
+                const pausedAtArrival = this.pausedRequestAdmission.get(method);
+                const admissionRevalidation = this.revalidatePausedRequestAdmission(method, signal);
+                if (admissionRevalidation) await admissionRevalidation;
+                const pausedAdmission = this.pausedRequestAdmission.get(method)
+                    ?? (signal.aborted ? pausedAtArrival : undefined);
+                if (pausedAdmission) {
+                    return { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                        ...(pausedAdmission.details === undefined ? {} : { details: pausedAdmission.details }) };
+                }
+                signal.throwIfAborted();
+                handlerExecutionId = this.beginHandlerExecution(method);
                 return await handler(params, Object.freeze({
                     ...(options?.rpcContext ? {
                         machineAdmission: options.rpcContext.machineAdmission,
@@ -1038,7 +1052,7 @@ export class RpcHandlerManager {
                         requesterSessionBootstrap: options.rpcContext.requesterSessionBootstrap,
                     } : {}),
                     ...(callerInputConstraints ? { callerInputConstraints } : {}),
-                    signal: options?.signal ?? new AbortController().signal,
+                    signal,
                     requestStartedAtMs,
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                     ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
@@ -1048,7 +1062,7 @@ export class RpcHandlerManager {
                         : {}),
                 }));
             } finally {
-                this.activeHandlerExecutions.delete(handlerExecutionId);
+                if (handlerExecutionId !== null) this.activeHandlerExecutions.delete(handlerExecutionId);
                 this.finishInFlightRequest(method);
             }
         }, true);
@@ -1230,15 +1244,23 @@ export class RpcHandlerManager {
     }
 
     /** The single planned-restart owner closes admission; existing requests retain their lifetimes. */
-    pauseRequestAdmission(methods: readonly string[], refusal: Readonly<{ details?: unknown }> = {}): () => void {
+    pauseRequestAdmission(methods: readonly string[], refusal: PausedRequestAdmission = {}): () => void {
         const selected = new Set(methods);
         for (const method of selected) this.pausedRequestAdmission.set(method, refusal);
         let released = false;
         return () => {
             if (released) return;
             released = true;
-            for (const method of selected) this.pausedRequestAdmission.delete(method);
+            for (const method of selected) {
+                if (this.pausedRequestAdmission.get(method) === refusal) this.pausedRequestAdmission.delete(method);
+            }
         };
+    }
+
+    private revalidatePausedRequestAdmission(method: string, signal: AbortSignal): Promise<void> | undefined {
+        // An unreadable owner cannot reopen admission. The callback releases only
+        // its own pause after observing definitive retirement at that owner.
+        return this.pausedRequestAdmission.get(method)?.revalidate?.(signal).catch(() => undefined);
     }
 
     /** Includes receiving authorization and cleanup, before/after handler execution. */

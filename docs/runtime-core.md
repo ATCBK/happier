@@ -55,7 +55,18 @@ the drain. A refused creation retains typed `noRunCreated` evidence through loca
 and transported dispatch. The admission hold remains an in-flight private RPC
 request after a separate readiness response. Existing request cancellation and
 transport retirement reopen admission, without a release-message dependency or
-an expiry timer. A signalled runner keeps the hold through retirement; normal
+an expiry timer. A clustered room broadcast can lose cancellation without
+disconnecting the receiver. When creation encounters a closed gate, or a new
+restart attempt encounters an older hold, the receiver checks that exact PID
+and attempt through the existing authenticated local daemon control channel.
+Only a definite retired result releases the hold; an unreadable daemon leaves
+admission closed. The waiting creation registers its cancellation and existing
+deadline before this read. Each read follows both that caller and the hold's
+lifetime; a cancelled or disconnected creation settles as `noRunCreated`
+without entering its handler or releasing an independently live hold. The daemon
+retains the attempt's existing request signal on its tracked runner, without
+persistence, polling or an expiry timer.
+A signalled runner keeps the hold through retirement; normal
 completion of the Connected Service deferral callback does not release it. The daemon
 refuses to signal if that live request is lost during its final checks. The exact
 runner PID and attempt pair readiness with its own hold; a delayed older request

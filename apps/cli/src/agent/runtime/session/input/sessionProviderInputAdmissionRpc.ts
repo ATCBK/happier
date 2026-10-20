@@ -9,6 +9,8 @@ import { z } from 'zod/mini';
 
 import type { SessionProviderInputConsumer } from './_types';
 import { registerSessionGuardNoticeRpc, type SessionGuardNoticeOwner } from './sessionGuardNoticeRpc';
+import { readSessionRunnerRestartAdmissionCurrent, SessionRunnerRestartAdmissionIdentitySchema,
+  type SessionRunnerRestartAdmissionAttempt, type SessionRunnerRestartAdmissionIdentity } from '@/daemon/plannedRunnerRestart/sessionRunnerRestartAdmission';
 
 const RUN_CREATION_METHODS = (['execution.run.start', 'execution.run.ensure', 'execution.run.ensure_or_start'] as const)
   .flatMap(id => {
@@ -17,8 +19,7 @@ const RUN_CREATION_METHODS = (['execution.run.start', 'execution.run.ensure', 'e
   });
 const restartAdmissionRequestSchema = z.strictObject({
   action: z.enum(['restart_hold', 'restart_prepare']),
-  requestId: z.string().check(z.minLength(1)),
-  expectedPid: z.number().check(z.int(), z.positive()),
+  ...SessionRunnerRestartAdmissionIdentitySchema.shape,
 });
 type RestartAdmissionRequest = z.infer<typeof restartAdmissionRequestSchema>;
 const restartAdmissionResponseSchema = z.strictObject({
@@ -36,25 +37,32 @@ async function untilAborted(signal: AbortSignal): Promise<void> {
   await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
 }
 
-async function waitForPreparation(ready: Promise<void>, signal: AbortSignal): Promise<void> {
+async function waitForPreparation<T>(ready: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
   let onAbort!: () => void;
   const cancelled = new Promise<never>((_, reject) => {
     onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
   });
-  try { await Promise.race([ready, cancelled]); }
+  try { return await Promise.race([ready, cancelled]); }
   finally { signal.removeEventListener('abort', onAbort); }
 }
 
 /** The receiving RPC owner closes admission before draining; the daemon owns physical replacement. */
-export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerManager):
+export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerManager, options: Readonly<{
+  readHoldCurrent?: (request: SessionRunnerRestartAdmissionIdentity, signal: AbortSignal) => Promise<boolean | null>;
+}> = {}):
   (raw: unknown, signal?: AbortSignal) => Promise<z.infer<typeof restartAdmissionResponseSchema>> {
-  let held: { requestId: string; attached: boolean; ready: Promise<void>; resolve: () => void; reject: (error: unknown) => void } | null = null;
+  let held: { requestId: string; attached: boolean; ready: Promise<void>; resolve: () => void; reject: (error: unknown) => void;
+    revalidate?: (signal: AbortSignal) => Promise<void> } | null = null;
   return async (raw: unknown, signal?: AbortSignal) => {
     const request = restartAdmissionRequestSchema.parse(raw);
     if (request.expectedPid !== process.pid || !signal || signal.aborted) return { status: 'unavailable' as const };
-    if (held && held.requestId !== request.requestId) return { status: 'unavailable' as const };
+    if (held && held.requestId !== request.requestId) {
+      await held.revalidate?.(signal);
+      if (signal.aborted) return { status: 'unavailable' as const };
+      if (held && held.requestId !== request.requestId) return { status: 'unavailable' as const };
+    }
     if (!held) {
       let resolve!: () => void;
       let reject!: (error: unknown) => void;
@@ -73,21 +81,41 @@ export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerMan
     }
     if (preparing.attached) return { status: 'unavailable' as const };
     preparing.attached = true;
+    const retirement = new AbortController();
+    const holdSignal = AbortSignal.any([signal, retirement.signal]);
     let release = () => {};
+    preparing.revalidate = async callerSignal => {
+      const signal = AbortSignal.any([callerSignal, holdSignal]);
+      try {
+        signal.throwIfAborted();
+        const identity = { requestId: request.requestId, expectedPid: request.expectedPid };
+        const current = await waitForPreparation(options.readHoldCurrent
+          ? options.readHoldCurrent(identity, signal)
+          : readSessionRunnerRestartAdmissionCurrent(identity, { signal }), signal);
+        if (!signal.aborted && current === false && held === preparing) {
+          release();
+          held = null;
+          retirement.abort();
+        }
+      } catch { /* An unanswered read cannot release a live hold. */ }
+    };
     try {
       const rpc = readRpc();
       release = rpc.pauseRequestAdmission(RUN_CREATION_METHODS, {
         details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+        revalidate: preparing.revalidate,
       });
-      await rpc.waitForIdle(signal, RUN_CREATION_METHODS);
-      signal.throwIfAborted();
+      await rpc.waitForIdle(holdSignal, RUN_CREATION_METHODS);
+      holdSignal.throwIfAborted();
       preparing.resolve();
       // This request remains in flight after readiness. Existing RPC cancellation
-      // and transport retirement release its admission hold, even if no reply arrives.
-      await untilAborted(signal);
+      // and transport retirement normally release it. Cluster room broadcasts can
+      // lose CANCEL without disconnecting either socket; closed-gate demand then
+      // checks the exact attempt through the existing local daemon channel.
+      await untilAborted(holdSignal);
       return { status: 'released' as const };
     } finally {
-      preparing.reject(signal.reason ?? new Error('Restart preparation retired'));
+      preparing.reject(holdSignal.reason ?? new Error('Restart preparation retired'));
       release();
       if (held === preparing) held = null;
     }
@@ -98,12 +126,14 @@ export function createSessionRunnerRestartAdmission(readRpc: () => RpcHandlerMan
 export async function prepareSessionRunnerRestartAdmission(params: Readonly<{
   expectedPid: number;
   signal: AbortSignal;
+  onHold?: (attempt: SessionRunnerRestartAdmissionAttempt) => void;
   callRpc: (request: RestartAdmissionRequest, signal?: AbortSignal) => Promise<unknown>;
 }>): Promise<SessionRunnerRestartAdmissionRelease | null> {
   const requestId = randomUUID();
   const lifetime = new AbortController();
   const signal = AbortSignal.any([params.signal, lifetime.signal]);
   const request = { requestId, expectedPid: params.expectedPid };
+  params.onHold?.({ ...request, signal });
   const parseResponse = (raw: unknown) => {
     const code = readRpcErrorCode(raw) ?? (raw && typeof raw === 'object' && 'errorCode' in raw ? raw.errorCode : undefined);
     if (code === RPC_ERROR_CODES.METHOD_NOT_FOUND || code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {

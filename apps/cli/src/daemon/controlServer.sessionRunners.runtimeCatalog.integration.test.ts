@@ -16,8 +16,61 @@ import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMa
 import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { createSessionRunnerRestartAdmission, prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { readSessionRunnerRestartAdmissionCurrent } from './plannedRunnerRestart/sessionRunnerRestartAdmission';
 
 describe('daemon control server: session runner restarts', () => {
+  it('reopens creation on demand after a lost cancellation forward using the exact daemon attempt', async () => {
+    // The daemon tracks the launcher; the RPC receiver can be its distinct runner.
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: process.pid + 1, sessionRunnerPid: process.pid, happySessionId: 'session' };
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine',
+      stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'session' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'test-token' });
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => ({ admitted: true }));
+    const owner = new AbortController();
+    let release: Awaited<ReturnType<typeof prepareSessionRunnerRestartAdmission>> = null;
+    let next: Awaited<ReturnType<typeof prepareSessionRunnerRestartAdmission>> = null;
+    try {
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing test HTTP listener');
+      const target = { pid: process.pid, httpPort: address.port, controlToken: 'test-token' };
+      const admission = createSessionRunnerRestartAdmission(() => rpc, {
+        readHoldCurrent: (request, signal) => readSessionRunnerRestartAdmissionCurrent(request, { target, signal }),
+      });
+      rpc.registerHandler(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, (request, context) => admission(request, context?.signal));
+      release = await prepareSessionRunnerRestartAdmission({ expectedPid: process.pid, signal: owner.signal,
+        onHold: attempt => { tracked.plannedRestartAdmission = attempt; },
+        callRpc: (request, signal) => {
+          // Only the relay cancellation packet is lost; the receiver stays connected.
+          const response = rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`,
+            params: request, requestId: request.action + request.requestId });
+          return new Promise((resolve, reject) => {
+            response.then(resolve, reject);
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+        } });
+      expect(release).not.toBeNull();
+      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toMatchObject({
+        errorCode: 'RPC_CLIENT_NOT_AVAILABLE', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      });
+      const path = '/session-runners/restart-admission/current';
+      const identity = { expectedPid: process.pid, requestId: tracked.plannedRestartAdmission!.requestId };
+      expect((await app.inject({ method: 'POST', url: path, payload: identity })).statusCode).toBe(401);
+      expect(await readSessionRunnerRestartAdmissionCurrent({ ...identity, requestId: 'older-attempt' }, { target })).toBe(false);
+      expect(await readSessionRunnerRestartAdmissionCurrent(identity, { target: { ...target, controlToken: 'wrong' } })).toBeNull();
+      owner.abort();
+      await release?.();
+      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
+      next = await prepareSessionRunnerRestartAdmission({ expectedPid: process.pid, signal: new AbortController().signal,
+        onHold: attempt => { tracked.plannedRestartAdmission = attempt; },
+        callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
+      expect(next).not.toBeNull();
+    } finally { owner.abort(); await release?.(); await next?.(); rpc.onSocketDisconnect(); await app.close(); }
+  });
   it('resumes an ACP fixture after a mid-turn capability edit with the new MCP set and delivers input queued during restart to the same vendor session', async () => {
     await withTempDir('happier-impl-p2c-u6-acp-', async directory => {
       const env = createAcpSubprocessEnvScope();

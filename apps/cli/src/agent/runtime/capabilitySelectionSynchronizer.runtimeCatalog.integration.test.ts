@@ -6,7 +6,6 @@ import { ExecutionRunListResponseSchema, ExecutionRunStartResponseSchema, readEx
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '@/daemon/connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
-import type { TrackedSession } from '@/daemon/types';
 import { createSessionRunnerRestartAdmission, prepareSessionRunnerRestartAdmission, registerSessionProviderInputAdmissionRpc } from './session/input/sessionProviderInputAdmissionRpc';
 import { createSessionProviderInputConsumer } from './session/input/sessionProviderInputConsumer';
 import { MessageQueue2 } from './modeMessageQueue';
@@ -24,7 +23,7 @@ describe('capability refresh during real Run admission', () => {
       const held = new Promise<void>(resolve => { release = resolve; });
       await withAdmittedSessionRun({
         beforeRunReportPreferencesRead: async () => { if (armed) { entered(); await held; } },
-        async run({ rpc, start, session, agentIdentity }) {
+        async run({ rpc, start, session, agentIdentity, trackedSessions }) {
           const lifetime = new AbortController();
           const startCreation = providerSafe ? async () => ExecutionRunStartResponseSchema.parse(await rpc.invokeLocal(
             SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1, { runId: null, resume: false, start: {
@@ -35,8 +34,8 @@ describe('capability refresh during real Run admission', () => {
           registerSessionProviderInputAdmissionRpc({ rpcHandlerRegistrar: rpc,
             runnerRestartAdmission: createSessionRunnerRestartAdmission(() => rpc),
             consumer: createSessionProviderInputConsumer({ session, messageQueue: new MessageQueue2(() => 'fixture') }) });
-          const tracked: TrackedSession = { pid: process.pid, happySessionId: session.sessionId, startedBy: 'daemon',
-            processStartTimeMs: 1, processCommandHash: 'fixture', spawnOptions: { directory: '/repo' } };
+          const tracked = trackedSessions.find(child => child.happySessionId === session.sessionId && child.pid === process.pid);
+          if (!tracked) throw new Error('Missing daemon-tracked fixture Session');
           let creating: ReturnType<typeof start> | undefined;
           let restarting: ReturnType<typeof requestPlannedRunnerRestart> | undefined;
           let inFlightAtSignal: number | undefined;
@@ -64,6 +63,7 @@ describe('capability refresh during real Run admission', () => {
                 return true;
               },
               prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal: AbortSignal.any([signal, lifetime.signal]),
+                onHold: attempt => { tracked.plannedRestartAdmission = attempt; },
                 callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request,
                   { ...(signal ? { signal } : {}), verifiedPeerAuthority: 'present_user' }) }),
               canSignal: async () => {
@@ -121,7 +121,7 @@ describe('capability refresh during real Run admission', () => {
     const response = new Promise<void>(resolve => { release = resolve; });
     await withAdmittedSessionRun({
       beforeRunReportPreferencesRead: async () => { if (armed) { entered(); await response; } },
-      async run({ rpc, start, session }) {
+      async run({ rpc, start, session, trackedSessions }) {
         // Retained terminal peers belong to this Session and must not make
         // custody assertions depend on which other cases ran first.
         const peer = await start();
@@ -146,14 +146,15 @@ describe('capability refresh during real Run admission', () => {
         const atGate = new Promise<void>(resolve => { gateEntered = resolve; });
         const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
         const restart = vi.fn(async (_request, options: Readonly<{ signal: AbortSignal }>) => {
-          const tracked: TrackedSession = { pid: process.pid, happySessionId: session.sessionId, startedBy: 'daemon',
-            processStartTimeMs: 1, processCommandHash: 'fixture', spawnOptions: { directory: '/repo' } };
+          const tracked = trackedSessions.find(child => child.happySessionId === session.sessionId && child.pid === process.pid);
+          if (!tracked) throw new Error('Missing daemon-tracked fixture Session');
           const result = await requestPlannedRunnerRestart({ sessionId: session.sessionId, tracked,
             reason: 'capability_selection_change', deferral: { kind: 'none' }, restartRequestedPids: new Set(),
             pidToTrackedSession: new Map([[tracked.pid, tracked]]), isProcessSafeToSignal: async () => true,
             prepareSignal: async () => {
               gateEntered();
               return await prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal: options.signal,
+                onHold: attempt => { tracked.plannedRestartAdmission = attempt; },
                 callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
             },
             canSignal: async () => {

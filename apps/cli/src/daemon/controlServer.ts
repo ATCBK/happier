@@ -37,6 +37,8 @@ import {
 import { getDaemonAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelRequestSchema, DaemonAgentInstallCancelResponseSchema, DaemonAgentInstallListRequestSchema, DaemonAgentInstallListResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { isUnattestedPublicV1RunnerRolloutMutation } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, SessionRunnerRestartAdmissionIdentitySchema,
+  SessionRunnerRestartAdmissionCurrentSchema } from './plannedRunnerRestart/sessionRunnerRestartAdmission';
 import { Metadata, type SessionCreationOutcome } from '@/api/types';
 import { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import {
@@ -1854,6 +1856,16 @@ export function createDaemonControlApp({
       };
     }
     return await handleSessionRunnerStatusV2Get({ sessionId: request.body.sessionId });
+  });
+
+  typed.post(SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, {
+    schema: { body: SessionRunnerRestartAdmissionIdentitySchema,
+      response: { 200: SessionRunnerRestartAdmissionCurrentSchema, 401: authSchema401 } },
+    preHandler: requireAuth,
+  }, async request => {
+    const { expectedPid, requestId } = request.body;
+    const attempt = getChildren().find(tracked => (tracked.sessionRunnerPid ?? tracked.pid) === expectedPid)?.plannedRestartAdmission;
+    return { current: Boolean(attempt && attempt.requestId === requestId && !attempt.signal.aborted) };
   });
 
   // Session reports itself after creation

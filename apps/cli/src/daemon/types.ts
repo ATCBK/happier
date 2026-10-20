@@ -80,6 +80,8 @@ export interface TrackedSession {
   activeTurnId?: string;
   /** Requester reason for this occurrence's planned signal; diagnostics only, never persisted. */
   plannedRestartReason?: string;
+  /** Request-owned planned-restart hold; read by the runner only to retire a lost cancellation. Never persisted. */
+  plannedRestartAdmission?: import('./plannedRunnerRestart/sessionRunnerRestartAdmission').SessionRunnerRestartAdmissionAttempt;
   /**
    * A turn that was active when a prior daemon incarnation stopped observing
    * this runner. It is exit-settlement evidence only and must never be used as

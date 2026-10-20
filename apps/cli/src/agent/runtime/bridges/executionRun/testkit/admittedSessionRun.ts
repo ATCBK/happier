@@ -106,6 +106,7 @@ type AdmittedSessionRunOptions = Readonly<{
 export type AdmittedSessionRunFixture = Readonly<{
   rpc: RpcHandlerManager;
   session: ApiSessionClient;
+  trackedSessions: readonly TrackedSession[];
   directory: string;
   agentIdentity: Readonly<{ pluginId: string; localId: string }>;
   nativeOpen: typeof nativeOpen;
@@ -749,7 +750,7 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
   try {
     if (options) {
       if (!session) throw new Error('The composed Session Run fixture requires a real Session');
-      await options.run({ rpc, session, directory, agentIdentity, nativeOpen, bridge, lifecycleEvents, activationDisposals,
+      await options.run({ rpc, session, trackedSessions: tracked, directory, agentIdentity, nativeOpen, bridge, lifecycleEvents, activationDisposals,
         get admittedRuntime() { return admittedRuntimeFixture!; },
         async replaceAgent(selection) {
           const previous = admittedRuntimeFixture;

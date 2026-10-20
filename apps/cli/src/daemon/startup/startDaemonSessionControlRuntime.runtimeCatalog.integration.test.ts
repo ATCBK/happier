@@ -18334,8 +18334,12 @@ describe('startDaemonSessionControlRuntime', () => {
         }
         let shuttingDown = false;
         let signalSent = false;
+        let signalledAttempt: TrackedSession['plannedRestartAdmission'];
+        let attemptLiveAtSignal = false;
         const processKill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
             if (Math.abs(pid) === tracked.pid && signal === 'SIGTERM') {
+                signalledAttempt = tracked.plannedRestartAdmission;
+                attemptLiveAtSignal = Boolean(signalledAttempt && !signalledAttempt.signal.aborted);
                 signalSent = true;
                 credentialProcessLive = false;
                 return true;
@@ -18487,6 +18491,12 @@ describe('startDaemonSessionControlRuntime', () => {
             // this observation. Successful completion is checked below; only the
             // explicit retirement/budget cases require it to remain pending here.
             await vi.waitFor(() => expect(signalSent).toBe(true));
+            if (childActivity === 'idle') {
+                // Observe publication at the physical signal boundary; the exit
+                // observer can already have retired it by the next awaited read.
+                expect(signalledAttempt).toMatchObject({ expectedPid: tracked.sessionRunnerPid, requestId: expect.any(String) });
+                expect(attemptLiveAtSignal).toBe(true);
+            }
             if (childActivity === 'Stop before exit' || childActivity === 'shutdown before exit' || childActivity === 'adopted runner survives') {
                 expect(refreshResult).toBeUndefined();
                 if (childActivity === 'Stop before exit') await runtime.stopSession('sess-refresh-drain');
@@ -18516,6 +18526,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 { exit: { type: 'spawn_error', errorName: 'PlannedRunnerRestart', errorMessage: 'capability_selection_change' } });
             await expect(refresh).resolves.toMatchObject({ ok: true, status: 'restarted' });
             expect(runtime.hasPendingRunnerRestarts()).toBe(false);
+            expect(tracked.plannedRestartAdmission).toBeUndefined();
         } finally {
             releaseSlowSpawn();
             processKill.mockRestore(); pidSafety.mockRestore(); await runtime.stopControlServer();
