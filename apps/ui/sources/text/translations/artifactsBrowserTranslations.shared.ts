@@ -150,6 +150,9 @@ export type ArtifactsBrowserTranslations = Readonly<{
         openRevision: (params: Readonly<{ n: number }>) => string;
         count: (params: Readonly<{ count: number }>) => string;
         countUnavailable: string;
+        refineHint: string;
+        threadsTitle: string;
+        refineFailed: string;
         threadDetail: (params: Readonly<{ who: string; n: number }>) => string;
         acceptedToast: (params: Readonly<{ n: number }>) => string;
         youAccepted: (params: Readonly<{ name: string }>) => string;
@@ -336,6 +339,9 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             openRevision: ({ n }) => `Open version ${n}`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversation' : 'conversations'}`,
             countUnavailable: 'Comment count unavailable',
+            refineHint: 'Select the words to comment on',
+            threadsTitle: 'Conversations',
+            refineFailed: 'Couldn’t place that selection. Select the words again.',
             threadDetail: ({ who, n }) => n === 0 ? who : `${who} · ${n} ${n === 1 ? 'reply' : 'replies'}`,
             acceptedToast: ({ n }) => `Accepted · version ${n}`,
             youAccepted: ({ name }) => `You accepted ${name}’s edit`,
