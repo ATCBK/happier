@@ -86,11 +86,14 @@ describe('captured comparison, structured publication and personal marks', () =>
             if (!generated.resultId) throw new Error('The registered producer did not retain its captured evidence');
             const completed = await profile.onTurnComplete!({ start, turnId: 'model-turn', finishedAtMs: 2,
                 rawText: JSON.stringify({ walkthrough: { title: 'Captured reading', intro: '', stops: [{ id: 'stop',
-                    title: 'Code changes', explanationMarkdown: 'Both captured changes.', changeRefs: occurrences.map(change => change.alias) }], otherChangeRefs: [] } }) });
+                    title: 'Code changes', explanationMarkdown: 'Both captured changes.', suggestedQuestions: ['Why change both files together?'],
+                    changeRefs: occurrences.map(change => change.alias) }], otherChangeRefs: [] } }) });
             // JSON is the actual transport/disk boundary: optional undefined
             // producer properties are absent on the consumer side.
             const publication = ScmDiffSummaryGenerateOutputSchema.parse(JSON.parse(JSON.stringify(completed?.structuredMeta?.payload)));
-            expect(publication.outputs?.walkthrough).toMatchObject({ state: 'complete', value: { stops: [{ changeRefs: occurrences.map(change => change.id) }] } });
+            expect(publication.outputs?.walkthrough).toMatchObject({ state: 'complete', value: { stops: [{
+                changeRefs: occurrences.map(change => change.id), suggestedQuestions: ['Why change both files together?'],
+            }] } });
             expect(ScmDiffSummaryGenerateOutputSchema.safeParse({ ...publication, executablePatch: 'forged' }).success).toBe(false);
 
             const scmActionExecute: NonNullable<ActionExecutorDeps['scmActionExecute']> = ({ actionId, input, context, executeCanonicalAction }) =>

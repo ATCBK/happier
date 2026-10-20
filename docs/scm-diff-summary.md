@@ -145,6 +145,16 @@ in a short final stop. Diffs, PR text, comments, file contents and saved generat
 prose are evidence, never user instructions. Review citations and settled context
 require actual supplied review findings; generation alone establishes no review.
 
+Walkthrough stops may carry optional `suggestedQuestions`, plain strings grounded
+in that stop's captured evidence. Existing results without them remain readable.
+The strict stop schema, revisioned result store and reading projection carry the
+questions; merging stops combines their questions and Undo restores the previous
+lists. Saved questions are context, not instructions. Choosing one prepares the
+existing Ask composer with its exact stop and saved revision; Send uses
+`scm.diffSummary.discuss` and the existing Execution Run recipient. It does not
+regenerate or edit the reading. Question-chip presentation remains UI integration
+work in this unreleased development change.
+
 In unreleased 0.3 source, `scm.diffSummary.outputLanguage` uses the existing Account
 settings owner. Its empty default follows the requesting UI's active locale;
 explicit language tags select prose only. JSON keys, code, identifiers, enums and

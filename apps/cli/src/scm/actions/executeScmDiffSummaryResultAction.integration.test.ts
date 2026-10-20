@@ -48,6 +48,31 @@ function createScmResultActionExecutor(scmActionExecute: NonNullable<ActionExecu
 }
 
 describe('saved SCM result Action boundary', () => {
+  it('sends a suggested stop question to the retained Ask recipient without rewriting the reading', async () => {
+    const question = 'Why keep the selection across refresh?';
+    const reading = { title: 'Selection', intro: '', stops: [{ id: 'selection', title: 'Keep selection',
+      explanationMarkdown: 'The selected change survives refresh.', changeRefs: [], suggestedQuestions: [question] }], otherChangeRefs: [] };
+    const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output: ScmDiffSummaryGenerateOutputSchema.parse({
+      ...output, outputs: { ...output.outputs, walkthrough: { state: 'complete', value: reading } },
+    }) });
+    const messages: Array<{ recipient: unknown; message: string }> = [];
+    const executor = createScmResultActionExecutor(({ actionId, input, context, executeCanonicalAction }) =>
+      executeScmActionOperation({ actionId, input, actionContext: context, executeCanonicalAction,
+        workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] } }), {
+      executionRunGet: async () => ({ run }),
+      sessionSendMessage: async request => {
+        messages.push({ recipient: request.recipient, message: request.message });
+        return { status: 'accepted', localId: request.localId };
+      },
+    });
+    expect(await executor.execute('scm.diffSummary.discuss', { cwd, resultId: saved.resultId, expectedRevision: saved.revision,
+      stopIds: ['selection'], message: question }, { surface: 'cli', bypassApprovals: true }))
+      .toMatchObject({ ok: true, result: { success: true, runId: run.runId } });
+    expect(messages).toEqual([{ recipient: { kind: 'execution_run', runId: run.runId }, message: expect.stringContaining(question) }]);
+    expect(messages[0]!.message).toContain('The selected change survives refresh.');
+    expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
+      result: { revision: saved.revision, output: { outputs: { walkthrough: { value: reading } } } } });
+  });
   it.each(['scm.diffSummary.refine', 'scm.diffSummary.addOutputs', 'scm.diffSummary.discuss'] as const)(
     'admits %s to the recoverable original through Pending without awaiting native provisioning', async actionId => {
       const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });
