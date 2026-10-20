@@ -1,10 +1,11 @@
-import { readStoredSessionMessages } from '@/sync/domains/messages/readStoredSessionMessages';
-import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { createTtsChunker, resolveStreamingTtsChunkChars } from '@/voice/output/TtsChunker';
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
 import { resolveVoiceNetworkTimeoutMs } from '@/voice/runtime/fetchWithTimeout';
-import { waitForNextAssistantTextMessage } from '@/voice/runtime/waitForNextAssistantTextMessage';
+import {
+  captureSessionTurnBaseline,
+  waitForTurnFinalAssistantText,
+} from '@/voice/runtime/waitForNextAssistantTextMessage';
 import { voiceActivityController } from '@/voice/activity/voiceActivityController';
 import {
   appendVoiceConversationAssistantText,
@@ -21,7 +22,7 @@ import {
   type VoiceTextTurnPendingPort,
 } from '@/voice/sessionBinding/sendVoiceSessionComposerText';
 
-import { patchLocalVoiceState, setIdleStateUnlessRecording } from './localVoiceState';
+import { patchLocalVoiceState, resolveLocalVoiceError, setIdleStateUnlessRecording } from './localVoiceState';
 import { resolveLocalVoiceAdapterSettings } from './localVoiceSettings';
 import { runVoiceAgentTurnWithTools, type LocalVoiceAgentToolResultEntry } from './runVoiceAgentTurnWithTools';
 
@@ -267,25 +268,17 @@ export async function sendVoiceTextTurn(params: {
       });
       return;
     } catch (error) {
-      if (isTurnAbortedError(error) || params.signal?.aborted) {
-        patchLocalVoiceState({ status: 'idle', sessionId, error: null });
-        return;
-      }
+      // An aborted turn hands state back to whoever aborted it (cancel or hang-up).
+      if (isTurnAbortedError(error) || params.signal?.aborted) return;
       voiceActivityController.appendError(sessionId, adapterId, 'voice_agent_send_failed', error instanceof Error ? error.message : 'send_failed');
-      patchLocalVoiceState({ status: 'idle', sessionId, error: 'send_failed' });
+      patchLocalVoiceState({ status: 'idle', sessionId, ...resolveLocalVoiceError(error, 'send_failed') });
       throw error instanceof Error ? error : new Error('send_failed');
     } finally {
-      setIdleStateUnlessRecording(sessionId);
+      if (!params.signal?.aborted) setIdleStateUnlessRecording(sessionId);
     }
   }
 
-  const baselineMessages = readStoredSessionMessages(storage.getState(), sessionId) as any[];
-  const baselineCount = baselineMessages.length;
-  const baselineIds = new Set<string>(
-    baselineMessages
-      .map((message: any) => message?.id)
-      .filter((messageId: any): messageId is string => typeof messageId === 'string'),
-  );
+  const baseline = captureSessionTurnBaseline(sessionId);
 
   patchLocalVoiceState({ status: 'sending' });
   try {
@@ -296,7 +289,7 @@ export async function sendVoiceTextTurn(params: {
     voiceActivityController.appendActionExecuted(sessionId, adapterId, 'unknown', `Sent to session: ${userText.slice(0, 200)}`);
   } catch (error) {
     voiceActivityController.appendError(sessionId, adapterId, 'send_failed', error instanceof Error ? error.message : 'send_failed');
-    patchLocalVoiceState({ status: 'idle', sessionId, error: 'send_failed' });
+    patchLocalVoiceState({ status: 'idle', sessionId, ...resolveLocalVoiceError(error, 'send_failed') });
     throw error;
   }
 
@@ -306,20 +299,15 @@ export async function sendVoiceTextTurn(params: {
     return;
   }
 
-  const assistantText = await waitForNextAssistantTextMessage(sessionId, baselineIds, baselineCount, 60_000, params.signal);
-  if (params.signal?.aborted) {
-    patchLocalVoiceState({ status: 'idle', sessionId, error: null });
-    return;
-  }
+  // Speak the final reply of the turn this message started; the wait is bounded by the session's
+  // turn lifecycle and by the voice turn's abort signal (cancel / hang-up), not by a fixed timeout.
+  const assistantText = await waitForTurnFinalAssistantText({ sessionId, baseline, signal: params.signal });
+  if (params.signal?.aborted) return;
   if (!assistantText) {
     patchLocalVoiceState({ status: 'idle', sessionId, error: null });
     return;
   }
 
-  if (params.signal?.aborted) {
-    patchLocalVoiceState({ status: 'idle', sessionId, error: null });
-    return;
-  }
   await speakAssistantText({
     text: assistantText,
     settings,
@@ -327,5 +315,6 @@ export async function sendVoiceTextTurn(params: {
     registerPlaybackStopper: params.playbackController.registerStopper,
     onSpeaking: () => patchLocalVoiceState({ status: 'speaking' }),
   });
+  if (params.signal?.aborted) return;
   setIdleStateUnlessRecording(sessionId);
 }

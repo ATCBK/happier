@@ -13,6 +13,15 @@ It lets you mix and match:
 
 Open **Settings → Voice → Local voice** to configure it.
 
+## Before you start
+
+Local voice is an experimental feature. Turn it on in **Settings → Features**:
+
+- **Voice** — required for every Local voice mode
+- **Subagents** and **Voice agent** — also required for **Agent** mode with the daemon voice agent
+
+See [Feature flags](/extras/feature-flags) for how these toggles combine with what your server and build allow. If a prerequisite is off, the voice surface tells you which toggle to turn on.
+
 ## What Local voice supports
 
 ### STT providers
@@ -54,7 +63,7 @@ Use this when you want:
 - simple speech input into a session
 - fewer moving parts
 
-TTS can still stay enabled here, so Happier can read replies back to you.
+TTS can still stay enabled here, so Happier can read replies back to you. With **Auto-speak replies** on, Happier waits until the session finishes its turn and then speaks the turn's final reply. It does not read out thinking or interim progress messages. Waiting has no fixed time limit: it ends when the turn ends, or when you cancel the reply or hang up.
 
 ### Agent
 
@@ -209,11 +218,11 @@ This is the main output test for:
 
 ### Auto-speak replies
 
-If enabled, Happier speaks replies automatically after a turn completes.
+If enabled, Happier speaks replies automatically after a turn completes. In **Direct to session** mode, that is the final reply of the session's turn.
 
 ### Barge-in
 
-If enabled, starting a new turn can interrupt current speech playback so you do not need to wait for the previous spoken reply to finish.
+If enabled (the default), starting a new turn can interrupt current speech playback so you do not need to wait for the previous spoken reply to finish.
 
 ### Network timeout
 
@@ -422,6 +431,8 @@ For web builds, your STT or TTS server may need CORS configured correctly.
 If you expose a speech server beyond your local network, add proper authentication and HTTPS.
 
 ## Troubleshooting
+
+When a Local voice step fails (microphone, speech-to-text, sending, speech playback, or a missing feature toggle), the voice surface shows what went wrong and what to change. The message clears when you start the next turn.
 
 ### Local voice hears me, but nothing is spoken back
 

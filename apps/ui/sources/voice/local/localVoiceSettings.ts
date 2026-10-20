@@ -39,7 +39,8 @@ export function isHandsFreeLocalNeuralSttEnabled(settings: any): boolean {
   return resolveLocalSttProvider(settings) === 'local_neural' && config?.handsFree?.enabled === true;
 }
 
+/** Barge-in defaults to on, matching the `bargeInEnabled` settings schema default. */
 export function isVoiceBargeInEnabled(settings: any): boolean {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
-  return config?.tts?.bargeInEnabled === true;
+  return config?.tts?.bargeInEnabled !== false;
 }

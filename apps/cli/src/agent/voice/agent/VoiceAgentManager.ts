@@ -28,6 +28,7 @@ import type {
   VoiceAgentTurnStreamStartResult,
 } from './voiceAgentTypes';
 import { VoiceAgentError } from './voiceAgentTypes';
+
 import { resolveVoiceActionBlockMemoryRecallGuidanceEnabled } from './resolveVoiceActionBlockMemoryRecallGuidanceEnabled';
 
 export type {
@@ -39,6 +40,32 @@ export type {
   VoiceAgentTurnStreamStartResult,
 } from './voiceAgentTypes';
 export { VoiceAgentError } from './voiceAgentTypes';
+
+/** Models often decorate the READY handshake ("Ready.", "READY!"); only the word itself matters. */
+function isVoiceAgentReadyHandshakeReply(text: string): boolean {
+  return text.trim().replace(/[\s.!"'`*]+$/u, '').replace(/^[\s"'`*]+/u, '').toUpperCase() === 'READY';
+}
+
+async function awaitWithinVoiceAgentBootstrapBudget<T>(promise: Promise<T>, budgetMs: number): Promise<T> {
+  if (budgetMs <= 0) {
+    throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent bootstrap budget exhausted');
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new VoiceAgentError('VOICE_AGENT_START_FAILED', `Voice agent session start timed out after ${budgetMs}ms`)),
+          budgetMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export class VoiceAgentManager {
   private static readonly MAX_HISTORY_TURNS = 48;
@@ -259,7 +286,11 @@ export class VoiceAgentManager {
         }
       });
 
-      const chatSessionId = await (async () => {
+      // Session start/load and the READY handshake are one bootstrap: they share a single deadline
+      // derived from the bootstrap budget instead of each waiting the full budget (or unbounded).
+      const bootstrapDeadlineMs = this.getNowMs() + this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs);
+      const remainingBootstrapBudgetMs = () => Math.max(0, bootstrapDeadlineMs - this.getNowMs());
+      const chatSessionId = await awaitWithinVoiceAgentBootstrapBudget((async () => {
         if (resume.chatSessionId) {
           if (!chatBackend.loadSession) {
             throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Backend does not support resume');
@@ -269,7 +300,7 @@ export class VoiceAgentManager {
         }
         const started = await chatBackend.startSession();
         return started.sessionId;
-      })();
+      })(), remainingBootstrapBudgetMs());
 
       const instance: VoiceAgentInstance = {
         id: voiceAgentId,
@@ -331,10 +362,13 @@ export class VoiceAgentManager {
           });
           await instance.chatBackend.sendPrompt(instance.chatSessionId, prompt);
           if (instance.chatBackend.waitForResponseComplete) {
-            await instance.chatBackend.waitForResponseComplete(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
+            const remainingMs = remainingBootstrapBudgetMs();
+            if (remainingMs <= 0) {
+              throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent bootstrap budget exhausted');
+            }
+            await instance.chatBackend.waitForResponseComplete(remainingMs);
           }
-          const response = instance.chatBuffer.trim();
-          if (response.toUpperCase() !== 'READY') {
+          if (!isVoiceAgentReadyHandshakeReply(instance.chatBuffer)) {
             throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Bootstrap failed');
           }
           instance.clearChatBuffer();

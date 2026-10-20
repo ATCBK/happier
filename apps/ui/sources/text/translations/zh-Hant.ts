@@ -982,6 +982,28 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
     },
 
     voiceSurface: {
+        errors: {
+            sendFailed: "無法將你的訊息傳送到工作階段。",
+            sttFailed: "無法轉寫你說的內容。請再試一次。",
+            sttTimeout: "語音辨識逾時。請檢查網路連線後再試一次。",
+            sttAuthFailed: "語音辨識拒絕了 API 金鑰。請在 設定 → 語音 中檢查金鑰及其限制。",
+            sttRateLimited: "語音辨識已達到速率限制。請稍候再試。",
+            missingSttBaseUrl: "請在 設定 → 語音 中設定語音辨識伺服器 URL。",
+            missingSttApiKey: "請在 設定 → 語音 中新增語音辨識 API 金鑰。",
+            recordingStartFailed: "無法啟動麥克風。請確認沒有其他 App 正在使用。",
+            recordingStopFailed: "無法完成錄音。請再試一次。",
+            deviceSttUnavailable: "此裝置不支援語音辨識。請在 設定 → 語音 中選擇其他語音辨識提供者。",
+            speechPermissionDenied: "麥克風或語音辨識權限遭拒。請在裝置設定中允許。",
+            deviceSttStartFailed: "無法啟動語音辨識。請再試一次。",
+            localNeuralSttUnavailable: "此版本不支援裝置端語音辨識。請在 設定 → 語音 中選擇其他語音辨識提供者。",
+            localNeuralPackNotInstalled: "請在 設定 → 語音 中下載語音模型。",
+            localNeuralSttStartFailed: "無法啟動裝置端語音辨識。請再試一次。",
+            localNeuralAudioCaptureFailed: "麥克風意外停止。請再試一次。",
+            ttsFailed: "無法播放語音回覆。請在 設定 → 語音 中檢查語音合成。",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `代理模式需要在 設定 → 功能 中開啟「${feature}」。`,
+            voiceAgentUnavailable: "此伺服器不支援語音代理。",
+            generic: "語音發生問題。",
+        },
 	        a11y: {
 	            teleport: '傳送語音代理',
 	            toggleActivity: '切換語音活動',

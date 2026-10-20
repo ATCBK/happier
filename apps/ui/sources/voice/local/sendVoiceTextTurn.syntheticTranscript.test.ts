@@ -87,7 +87,8 @@ vi.mock('@/voice/output/speakAssistantText', () => ({
 }));
 
 vi.mock('@/voice/runtime/waitForNextAssistantTextMessage', () => ({
-  waitForNextAssistantTextMessage: vi.fn(),
+  captureSessionTurnBaseline: vi.fn(() => ({ baselineIds: new Set<string>(), baselineCount: 0, turnMarker: null })),
+  waitForTurnFinalAssistantText: vi.fn(async () => null),
 }));
 
 vi.mock('@/voice/tools/handlers', () => ({
@@ -103,7 +104,8 @@ vi.mock('@/voice/tools/resolveToolSessionId', () => ({
   resolveToolSessionId: (params: any) => resolveToolSessionId(params),
 }));
 
-vi.mock('./localVoiceState', () => ({
+vi.mock('./localVoiceState', async (importOriginal) => ({
+  resolveLocalVoiceError: (await importOriginal<typeof import('./localVoiceState')>()).resolveLocalVoiceError,
   patchLocalVoiceState: vi.fn(),
   setIdleStateUnlessRecording: vi.fn(),
 }));

@@ -12,6 +12,7 @@ import {
     expoSpeechSpeak,
     getStorage,
     registerLocalVoiceEngineHarnessHooks,
+    resolveRuntimeFeatureDecision,
     routerNavigate,
     sessionRpcWithServerScope,
     setActiveServerAndSwitch,
@@ -148,6 +149,65 @@ describe('local voice engine agent behavior', () => {
         expect(events.some((e) => e.kind === 'assistant.text' && String(e.text).includes('Voice agent reply'))).toBe(true);
         expect(globalThis.fetch).toHaveBeenCalledTimes(3);
         expect((globalThis.fetch as any).mock.calls[1]?.[0]).toContain('/v1/chat/completions');
+    }, 60_000);
+
+    it('agent mode leaves the voice session ended when the user hangs up while the reply is speaking', async () => {
+        const storage = await getStorage();
+        storage.__setState({
+            settings: {
+                ...storage.getState().settings,
+                voice: {
+                    ...storage.getState().settings.voice,
+                    providerId: 'local_conversation',
+                    adapters: {
+                        ...storage.getState().settings.voice.adapters,
+                        local_conversation: {
+                            ...storage.getState().settings.voice.adapters.local_conversation,
+                            conversationMode: 'agent',
+                            tts: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.tts,
+                                autoSpeakReplies: true,
+                                provider: 'device',
+                            },
+                            agent: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.agent,
+                                backend: 'openai_compat',
+                                openaiCompat: {
+                                    ...storage.getState().settings.voice.adapters.local_conversation.agent.openaiCompat,
+                                    chatBaseUrl: 'http://localhost:8002',
+                                    chatModel: 'fast-model',
+                                    commitModel: 'commit-model',
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            sessions: {
+                ...storage.getState().sessions,
+                s1: { id: 's1', active: true, presence: 'online', metadata: { path: '/tmp', host: 'test' } },
+            },
+        });
+        (globalThis.fetch as any)
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ text: 'hello world' }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: 'Voice agent reply' } }] }) });
+        const onDoneRef: { current: (() => void) | undefined } = { current: undefined };
+        expoSpeechSpeak.mockImplementation((_text: string, opts: any) => {
+            onDoneRef.current = opts?.onDone;
+        });
+
+        const { toggleLocalVoiceTurn, getLocalVoiceState, stopLocalVoiceSession } = localVoiceEngine;
+        await toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
+        const turnPromise = toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
+        await waitForCondition(() => getLocalVoiceState().status === 'speaking', 'agent reply speaking');
+
+        await stopLocalVoiceSession();
+        expect(getLocalVoiceState()).toMatchObject({ status: 'idle', sessionId: null });
+        // Playback completion is reported only after the hang-up finished.
+        onDoneRef.current?.();
+        await turnPromise;
+
+        expect(getLocalVoiceState()).toMatchObject({ status: 'idle', sessionId: null });
     }, 60_000);
 
     it('agent mode (openai_compat) sends a session message when the voice agent emits sendSessionMessage', async () => {
@@ -724,6 +784,67 @@ describe('local voice engine agent behavior', () => {
         expect(nextState.error).toBe('send_failed');
     });
 
+    it('surfaces the missing Subagents prerequisite instead of a generic send failure for the daemon agent', async () => {
+        const storage = await getStorage();
+        storage.__setState({
+            settings: {
+                ...storage.getState().settings,
+                voice: {
+                    ...storage.getState().settings.voice,
+                    providerId: 'local_conversation',
+                    adapters: {
+                        ...storage.getState().settings.voice.adapters,
+                        local_conversation: {
+                            ...storage.getState().settings.voice.adapters.local_conversation,
+                            conversationMode: 'agent',
+                            tts: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.tts,
+                                autoSpeakReplies: false,
+                            },
+                            agent: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.agent,
+                                backend: 'daemon',
+                            },
+                        },
+                    },
+                },
+            },
+            sessions: {
+                ...storage.getState().sessions,
+                s1: { id: 's1', active: true, presence: 'online', metadata: { path: '/tmp', host: 'test' } },
+            },
+        });
+        resolveRuntimeFeatureDecision.mockImplementation(async (args: any) => ({
+            featureId: args?.featureId,
+            state: args?.featureId === 'voice.agent' ? 'disabled' : 'enabled',
+            blockedBy: args?.featureId === 'voice.agent' ? 'dependency' : null,
+            blockerCode: args?.featureId === 'voice.agent' ? 'dependency_disabled' : 'none',
+            diagnostics: args?.featureId === 'voice.agent' ? ['dependency:execution.runs:disabled'] : [],
+            evaluatedAt: Date.now(),
+            scope: { scopeKind: 'runtime' },
+        }) as any);
+        (globalThis.fetch as any).mockResolvedValueOnce({ ok: true, json: async () => ({ text: 'hello world' }) });
+
+        try {
+            const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
+            await toggleLocalVoiceTurn('s1');
+            await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
+
+            expect(getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'voice_agent_requires_subagents' });
+        } finally {
+            resolveRuntimeFeatureDecision.mockReset();
+            resolveRuntimeFeatureDecision.mockImplementation(async (args: any) => ({
+                featureId: args?.featureId,
+                state: 'enabled',
+                blockedBy: null,
+                blockerCode: 'none',
+                diagnostics: [],
+                evaluatedAt: Date.now(),
+                scope: { scopeKind: 'runtime' },
+            }) as any);
+        }
+    });
+
     it('falls back to openai_compat agent when daemon agent is unsupported and openai_compat is configured', async () => {
         const storage = await getStorage();
         storage.__setState({
@@ -1064,6 +1185,66 @@ describe('local voice engine agent behavior', () => {
         expect(daemonVoiceAgentWelcome).toHaveBeenCalledTimes(1);
         await waitForMockCalls(expoSpeechSpeak, 1);
         expect(expoSpeechSpeak).toHaveBeenCalled();
+    });
+
+    it('keeps the mic status truthful while the immediate welcome plays during recording', async () => {
+        const storage = await getStorage();
+        storage.__setState({
+            settings: {
+                ...storage.getState().settings,
+                voice: {
+                    ...storage.getState().settings.voice,
+                    providerId: 'local_conversation',
+                    adapters: {
+                        ...storage.getState().settings.voice.adapters,
+                        local_conversation: {
+                            ...storage.getState().settings.voice.adapters.local_conversation,
+                            conversationMode: 'agent',
+                            stt: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.stt,
+                                baseUrl: 'http://localhost:8000',
+                            },
+                            tts: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.tts,
+                                provider: 'device',
+                                autoSpeakReplies: true,
+                            },
+                            agent: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.agent,
+                                backend: 'daemon',
+                                prewarmOnConnect: true,
+                                welcome: { enabled: true, mode: 'immediate', templateId: null },
+                            },
+                        },
+                    },
+                },
+            },
+            sessions: {
+                ...storage.getState().sessions,
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+            },
+        });
+
+        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        daemonVoiceAgentWelcome.mockResolvedValueOnce({ assistantText: 'Welcome!' });
+
+        const onDoneRef: { current: (() => void) | undefined } = { current: undefined };
+        expoSpeechSpeak.mockImplementationOnce((_text: string, opts: any) => {
+            opts?.onStart?.();
+            onDoneRef.current = opts?.onDone;
+        });
+
+        const { toggleLocalVoiceTurn, getLocalVoiceState } = localVoiceEngine;
+        await toggleLocalVoiceTurn('s1');
+        expect(getLocalVoiceState().status).toBe('recording');
+
+        await waitForMockCalls(expoSpeechSpeak, 1);
+        await flushMicrotasks(20);
+        expect(getLocalVoiceState().status).toBe('recording');
+
+        onDoneRef.current?.();
+        await flushMicrotasks(20);
+        expect(getLocalVoiceState().status).toBe('recording');
     });
 
     it('resetLocalVoiceAgentPersistence clears persisted run metadata and global voice activity', async () => {
