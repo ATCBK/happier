@@ -1,5 +1,20 @@
 import type { SupportedLanguage } from '../_all';
 
+export const paneArrangementTranslations = {
+  en: { paneArrangement: 'Pane arrangement', paneArrangementDescription: 'Choose whether the session or editor sits in the middle.' },
+  fr: { paneArrangement: 'Disposition des volets', paneArrangementDescription: 'Choisissez si la session ou l’éditeur occupe le centre.' },
+  de: { paneArrangement: 'Bereichsanordnung', paneArrangementDescription: 'Wähle, ob die Sitzung oder der Editor in der Mitte steht.' },
+  es: { paneArrangement: 'Disposición de paneles', paneArrangementDescription: 'Elige si la sesión o el editor ocupa el centro.' },
+  it: { paneArrangement: 'Disposizione dei pannelli', paneArrangementDescription: 'Scegli se posizionare al centro la sessione o l’editor.' },
+  pt: { paneArrangement: 'Disposição dos painéis', paneArrangementDescription: 'Escolha se a sessão ou o editor fica no centro.' },
+  ca: { paneArrangement: 'Disposició dels taulers', paneArrangementDescription: 'Tria si la sessió o l’editor ocupa el centre.' },
+  pl: { paneArrangement: 'Układ paneli', paneArrangementDescription: 'Wybierz, czy na środku ma być sesja, czy edytor.' },
+  ru: { paneArrangement: 'Расположение панелей', paneArrangementDescription: 'Выберите, что будет в центре: сессия или редактор.' },
+  ja: { paneArrangement: 'ペインの配置', paneArrangementDescription: 'セッションとエディターのどちらを中央に配置するか選択します。' },
+  'zh-Hans': { paneArrangement: '面板布局', paneArrangementDescription: '选择将会话还是编辑器放在中间。' },
+  'zh-Hant': { paneArrangement: '面板配置', paneArrangementDescription: '選擇將工作階段或編輯器放在中央。' },
+} as const satisfies Record<SupportedLanguage, Readonly<{ paneArrangement: string; paneArrangementDescription: string }>>;
+
 export const paneRegionLabels = {
   en: { rail: 'App navigation', navigation: 'Navigation column', right: 'Side panel', details: 'Editor and details', main: 'Main column', bottom: 'Bottom panel' },
   fr: { rail: 'Navigation de l’application', navigation: 'Colonne de navigation', right: 'Panneau latéral', details: 'Éditeur et détails', main: 'Colonne principale', bottom: 'Panneau inférieur' },

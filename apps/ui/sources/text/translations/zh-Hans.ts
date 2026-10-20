@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6341,6 +6341,7 @@ const zhHansValues = {
   },
 
   settingsAppearance: {
+    ...paneArrangementTranslations['zh-Hans'],
     visualEffects: {
       title: '动效与特效',
       footer: '调整应用中的动效和仪表显示。较低级别会减少动画并节省电量。设备的“减少动态效果”设置始终会强制使用最低级别。',

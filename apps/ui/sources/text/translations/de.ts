@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6593,6 +6593,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
     },
 
     settingsAppearance: {
+        ...paneArrangementTranslations['de'],
       pageDescription: 'Design, Text, Layout und Bewegung.',
       themesSummary: ({ light, dark }: { light: string; dark: string }) => `Hell: ${light} · Dunkel: ${dark}`,
       materialsAndMotion: 'Materialien und Bewegung',

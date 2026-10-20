@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6357,6 +6357,7 @@ const ruValues = {
   },
 
   settingsAppearance: {
+    ...paneArrangementTranslations['ru'],
     visualEffects: {
       title: 'Анимация и эффекты',
       footer: 'Настройте анимацию и индикаторы приложения. Снижение уровня уменьшает анимацию и расход батареи. Системная настройка уменьшения движения всегда включает минимальный уровень.',

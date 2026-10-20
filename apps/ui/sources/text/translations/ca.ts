@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6089,6 +6089,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
     },
 
     settingsAppearance: {
+        ...paneArrangementTranslations['ca'],
         settingsNavSidebar: 'Barra lateral de configuració', settingsNavSidebarDescription: 'Mostra les categories al costat de les pàgines de configuració.',
         visualEffects: {
             title: 'Moviment i efectes', footer: 'Ajusta el moviment i els indicadors de l’app. Els nivells més baixos redueixen l’animació i estalvien bateria. L’opció Reduir el moviment del dispositiu sempre força el nivell mínim.', level: 'Efectes', levelDescription: 'Quant de moviment i profunditat fan servir els indicadors',

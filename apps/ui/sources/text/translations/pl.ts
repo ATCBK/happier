@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6438,6 +6438,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
   },
 
   settingsAppearance: {
+    ...paneArrangementTranslations['pl'],
     visualEffects: {
       title: 'Ruch i efekty',
       footer: 'Dostosuj ruch i wskaźniki w całej aplikacji. Niższe poziomy ograniczają animacje i oszczędzają baterię. Ustawienie ograniczenia ruchu na urządzeniu zawsze wymusza poziom minimalny.',

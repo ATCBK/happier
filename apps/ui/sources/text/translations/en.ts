@@ -4,7 +4,7 @@ import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared'
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -7824,6 +7824,7 @@ const enInstrument = {
 };
 
 const enSettingsAppearance = {
+  ...paneArrangementTranslations['en'],
   pageDescription: 'Theme, text, layout and motion.',
   themesSummary: ({ light, dark }: { light: string; dark: string }) =>
     `Light uses ${light} · Dark uses ${dark}`,

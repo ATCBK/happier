@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6912,6 +6912,7 @@ localTailscale: {
   },
 
   settingsAppearance: {
+    ...paneArrangementTranslations['ja'],
     visualEffects: {
       title: 'モーションとエフェクト',
       footer: 'アプリ全体のモーションと計器表示を調整します。レベルを下げるとアニメーションが減り、バッテリーを節約できます。デバイスの「視差効果を減らす」が有効な場合は、常に最小レベルになります。',

@@ -6,7 +6,7 @@ import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -6424,6 +6424,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
   },
 
   settingsAppearance: {
+    ...paneArrangementTranslations['fr'],
     visualEffects: {
       title: 'Mouvement et effets',
       footer: 'Ajuste les animations et les indicateurs de l’app. Les niveaux réduits économisent la batterie. L’option Réduire les animations de ton appareil impose toujours le niveau minimal.',

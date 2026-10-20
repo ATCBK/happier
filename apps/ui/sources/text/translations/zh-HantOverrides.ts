@@ -5,7 +5,7 @@ import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared'
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
-import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
@@ -5639,6 +5639,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
     },
 
     settingsAppearance: {
+        ...paneArrangementTranslations['zh-Hant'],
       pageDescription: '主題、文字、版面與動態效果。',
       themesSummary: ({ light, dark }: { light: string; dark: string }) => `淺色：${light} · 深色：${dark}`,
       materialsAndMotion: '材質與動態效果',
