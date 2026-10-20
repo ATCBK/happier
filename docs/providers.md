@@ -733,9 +733,10 @@ host consumes the snapshot before capturing native runtime inputs. Only an
 accepted brokered inference binding satisfies native-auth preflight; native
 Sessions retain their sign-in check. Broker open and each request still enforce
 current resource, source and consumer authority, including Execution Run custody.
-The runtime's entitled-catalog read still needs the worker's application
-qualifier. That integration and the composed recipient Pool → Action/CLI
-spawn → native-turn journey remain incomplete in development source.
+The runtime's entitled-catalog read derives its applications from the worker's
+leased Agent requirements and uses the same paginated Session catalog transport
+as launch normalization. The composed recipient Pool → Action/CLI spawn →
+native-turn journey and loaded-runtime replay still require integrated validation.
 
 Resource access has two intentionally different privacy contracts:
 
