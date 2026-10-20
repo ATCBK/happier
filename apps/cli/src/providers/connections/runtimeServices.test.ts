@@ -94,6 +94,47 @@ afterEach(async () => {
 });
 
 describe('runtime Provider connection composition', () => {
+  it('reobserves deletion without withdrawing admitted authority from overlapping descriptions', async () => {
+    const { setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const { readProviderSettingsForCli } = await import('@/providers/settings/read');
+    const credentials: StoredCredentials = { token: 'provider-describe-overlap', encryption: null };
+    const { defaultsByAgentTargetKey: _defaults, ...catalog } = DEFAULT_PROVIDER_SETTINGS_V1;
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_deleted', role: 'named',
+      displayName: 'Deleted', displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1,
+      source: { kind: 'contribution', contributionKey: 'acme.gateway/gateway' }, deployment: { kind: 'managedLocal' } });
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+      providerConnectionsCatalog: { status: 'ready', revision: 0, catalog: { ...catalog, connections: [connection] } } });
+    persistenceBoundary.readStoredCredentials.mockResolvedValue(credentials);
+    mockProviderCatalogReadHttp(catalog);
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    let releaseRow!: () => void;
+    let enterRow!: () => void;
+    const rowReleased = new Promise<void>(resolve => { releaseRow = resolve; });
+    const rowEntered = new Promise<void>(resolve => { enterRow = resolve; });
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      if (new URL(String(url)).pathname === '/v1/account/entity-rows/provider-connections') {
+        enterRow(); await rowReleased;
+      }
+      return get(url, options);
+    });
+    const { createRuntimeProviderConnectionServices } = await import('./runtimeServices');
+    const services = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials,
+      happyHomeDir: configuration.happyHomeDir, featureGate: { isEnabled: () => true },
+      runtimeSummary: async () => ({ status: 'error' }), resolveRegistry: async () => ({ providersByContributionKey: new Map() }) });
+    const first = services.describeConnections({ machineId: 'machine-a', connectionId: connection.id });
+    await rowEntered;
+    const second = services.describeConnections({ machineId: 'machine-a', connectionId: connection.id });
+    try {
+      // A read is not a change notification. Native consumer currentness must
+      // still see the admitted row while this explicit reobservation waits.
+      expect(readProviderSettingsForCli(getActiveAccountSettingsSnapshot()!).settings.connections).toHaveLength(1);
+    } finally { releaseRow(); await Promise.all([first, second]); }
+    expect(await first).toMatchObject({ status: 'success', connections: [] });
+    expect(await second).toMatchObject({ status: 'success', connections: [] });
+    expect(readProviderSettingsForCli(getActiveAccountSettingsSnapshot()!).settings.connections).toEqual([]);
+  });
+
   it('reads admitted gateway custody without activation and leaves unavailable authority unchecked', async () => {
     const { setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
     const activeRegistry = runtimeRegistry(async () => { throw new Error('Description cannot activate plugins'); });
@@ -242,7 +283,7 @@ describe('runtime Provider connection composition', () => {
     });
     if (outage === 'row') {
       await expect(services.describeConnections({ machineId: 'machine-a' })).resolves.toMatchObject({
-        status: 'error', error: { code: 'provider_settings_invalid' },
+        status: 'error', error: { code: 'provider_catalog_unavailable' },
       });
       rowAvailable = true;
     }
@@ -261,9 +302,9 @@ describe('runtime Provider connection composition', () => {
         status: 'success', connections: [{ connectionId: 'pc_row', revision: 1, displayName: 'Current Row Provider' }],
       });
     }
-    if (outage === 'history') expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({
+    if (outage === 'history') await vi.waitFor(() => expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({
       status: 'ready', cleanup: { status: 'cleanup-pending' },
-    });
+    }));
   });
 
   it('describes token-only account connections without starting Agent activation and releases the active registry lease', async () => {

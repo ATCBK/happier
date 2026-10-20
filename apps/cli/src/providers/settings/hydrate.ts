@@ -19,7 +19,7 @@ type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSig
   isCredentialCurrent?(): boolean | Promise<boolean> }>;
 
 type CliCatalogInput = Readonly<{
-  expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal;
+  expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal; credentials?: StoredCredentials;
 }>;
 
 /** Retained runtime admission demand-loads its captured catalog once. */
@@ -40,7 +40,7 @@ async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reob
   if (operationContext && !await observeProviderCatalogPhase({ catalogReadId: randomUUID(), phase: 'admission_currentness' },
     () => operationContext.isCurrent())) return { status: 'unavailable', reason: 'scope-retired' };
   if (!reobserve && snapshot.providerConnectionsCatalog?.status === 'ready') return snapshot.providerConnectionsCatalog;
-  const credentials = input.operationContext?.credentials ?? await readStoredCredentials();
+  const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
   if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
   if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
   const refreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };

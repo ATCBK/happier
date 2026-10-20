@@ -6,10 +6,14 @@ import type { CallerInputConstraintsV1, ModelSelectionApplyPolicy, ProviderBound
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 import { configuration } from '@/configuration';
+import { readStoredCredentials } from '@/persistence';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createAccountScopedProviderModelProjectionReader } from '../modelManagement/remoteProjection';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import {
   getActiveAccountSettingsSnapshot,
+  getActiveAccountSettingsSnapshotLifetimeToken,
   subscribeActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
@@ -151,6 +155,7 @@ export async function authorizeSessionModelTransitionProviderTargetWithLease(
     happyHomeDir: configuration.happyHomeDir,
     machineId: params.machineId,
   });
+  const accountLifetime = getActiveAccountSettingsSnapshotLifetimeToken();
   const result = await createRuntimeProviderSpawnAuthorizationAttempt({
     signal: params.signal,
     selection: modelSelection(params.input.selection),
@@ -162,6 +167,12 @@ export async function authorizeSessionModelTransitionProviderTargetWithLease(
     subscribeAccountSettingsSnapshot: (listener) =>
       subscribeActiveAccountSettingsSnapshot(() => listener()),
     runtimeStateStore,
+    readModelProjection: createAccountScopedProviderModelProjectionReader({
+      serverUrl: resolveServerHttpBaseUrl(),
+      readCredentials: readStoredCredentials,
+      readAccountSettingsSnapshot: async () => getActiveAccountSettingsSnapshot(),
+      isCurrent: () => getActiveAccountSettingsSnapshotLifetimeToken() === accountLifetime,
+    }),
     materializationBaseDir: join(
       configuration.happyHomeDir,
       'providers',

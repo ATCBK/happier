@@ -15,6 +15,7 @@ import { createRuntimeProviderConnectionServices } from '@/providers/connections
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
 import { createRuntimeProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
+import { authorizeSessionModelTransitionProviderTargetWithLease } from '@/providers/sessions/authorizeSessionModelTransitionTarget';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -242,6 +243,23 @@ it('honours a committed peer grant on the next probe and model read through its 
         expect(transport.call).toHaveBeenCalledTimes(1);
         if (admitted.ok) {
           expect(admitted.attempt.isAuthorizationCurrent()).toBe(true);
+          const authorization = admitted.attempt.authorization;
+          // Runner preparation reauthorizes the admitted selection through the
+          // same owner as a live same-binding model change. It must reach the
+          // selected hub even though the worker has no local catalog observation.
+          const prepared = await authorizeSessionModelTransitionProviderTargetWithLease({
+            sessionId: 'peer-session', machineId: peerId, agentId: fixture.agentId,
+            agentTargetKey: fixture.agentTargetKey, lease: fixture.lease,
+            input: { selection: { agentTargetKey: fixture.agentTargetKey,
+              providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'gateway-model' },
+              activeSelection: { agentTargetKey: fixture.agentTargetKey,
+                providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'gateway-model' },
+              activeSessionBindingMetadata: authorization.sessionBindingMetadata,
+              managedPurposeBindingSnapshot: authorization.sessionBindingMetadata.managedPurposeBindings },
+          });
+          expect(prepared.runtimeBindingBasis.deployment).toMatchObject({ kind: 'managedLocal',
+            gatewayPlacement: { kind: 'machine', machineId: fixture.machineId } });
+          expect(prepared.model.id).toBe('gateway-model');
           admitted.attempt.cleanupOnFailure();
         }
       } finally {
