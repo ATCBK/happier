@@ -110,6 +110,20 @@ function NativeSessionOptionsProbe(props: Readonly<{ serverId: string }>) {
     </View>;
 }
 
+function SavedSessionOptionsProbe(props: Readonly<{ serverId: string; sessionId: string; asksOnlyForSaved: boolean }>) {
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const definition = { kind: 'builtin' as const, id: 'session_summary' };
+    const field = readBuiltinWidgetDescriptorV1(definition)!.inputs!.fields[0]!;
+    const saved = { serverId: props.serverId, sessionId: props.sessionId };
+    const consumer = { kind: 'widget' as const, surface: { serverId: props.serverId, accountId: 'viewer', owner: { kind: 'home' as const } }, definition };
+    const options = useInputFieldOptions({ serverId: props.serverId, enabled: !!binding, accountLifetime: binding,
+        requests: [{ field, consumer, draftInput: { session: saved }, ...(props.asksOnlyForSaved ? { values: [saved] } : {}) }] });
+    const state = options.state(field, props.asksOnlyForSaved ? { consumer, draftInput: { session: saved }, values: [saved] } : undefined);
+    return <View testID="saved-session.options" accessibilityLabel={state.status} accessibilityHint={state.errorCode}>
+        {state.options.map(option => <Text key={option.label}>{option.label}</Text>)}
+    </View>;
+}
+
 function NativePeriodOptionsProbe(props: Readonly<{ serverId: string; observe(state: InputFieldOptionsState): void }>) {
     const definition = { kind: 'builtin' as const, id: 'usage_flow' };
     const options = useInputFieldOptions({ serverId: props.serverId, enabled: true,
@@ -251,6 +265,36 @@ describe('qualified input field options scope', () => {
         expect(rpc.read).not.toHaveBeenCalled();
         await screen.unmount();
         await connection.dispose();
+    });
+    it('checks a saved Session through its own read instead of paging the Session list', async () => {
+        const serverId = await harness.addHome({ name: 'Saved Home', serverUrl: 'https://saved-session-options.example',
+            accountId: 'viewer', currentAccount: true });
+        const viewer = { readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+            attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
+            follow: { follows: false, notificationLevel: null }, notification: { level: 'none', source: 'none' } };
+        const record = (id: string, title: string) => V2SessionRecordSchema.parse({ id, seq: 1, createdAt: 1, updatedAt: 1,
+            active: true, activeAt: 1, encryptionMode: 'plain', metadataLayoutVersion: 0,
+            metadata: JSON.stringify({ path: '/repo', host: 'machine', summary: { text: title, updatedAt: 1 }, machineId: 'machine' }),
+            metadataVersion: 1, agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null,
+            effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
+            responsibleAccountId: null, responsibleAccount: null, viewer });
+        harness.answer(serverId, 'POST /v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({
+            sessions: [record('listed', 'Listed session')], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        }) });
+        harness.answer(serverId, 'GET /v2/sessions/saved', { body: { session: record('saved', 'Saved session') } });
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://saved-session-options.example', accountId: 'viewer',
+            request: (url, init) => harness.request(url, init) });
+        installHomeGovernanceBoundaries(harness);
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        setRuntimeFetch(harness.request);
+        const listPages = () => harness.requests.filter(request => request.path.endsWith('/v2/sessions/query')).length;
+        const screen = await renderScreen(<SavedSessionOptionsProbe serverId={serverId} sessionId="saved" asksOnlyForSaved />);
+        try {
+            await waitForHomeGovernance(() => expect(screen.findByTestId('saved-session.options')?.props.accessibilityLabel).not.toBe('loading'));
+            expect(screen.findByTestId('saved-session.options')?.props.accessibilityLabel).toBe('ready');
+            expect(screen.getTextContent()).toContain('Saved session');
+            expect(listPages()).toBe(0);
+        } finally { await screen.unmount(); await connection.dispose(); }
     });
     it('does not bypass serving type choices with authored static choices', async () => {
         const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://restricted-options.example',

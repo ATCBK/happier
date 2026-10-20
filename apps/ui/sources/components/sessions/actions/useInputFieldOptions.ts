@@ -31,7 +31,7 @@ function hasLocalStaticOptions(field: InputFieldOptionsRequest['field']): boolea
 
 function fieldKey(field: Pick<ActionInputFieldHint, 'optionsSourceId' | 'inputType'> & { path?: string }, context?: InputFieldOptionsContext): string {
     return JSON.stringify([field.path, field.optionsSourceId, field.inputType, context?.actionId, context?.consumer,
-        projectInputOptionsDependencies(context?.draftInput ?? {}, context?.consumer)]);
+        projectInputOptionsDependencies(context?.draftInput ?? {}, context?.consumer), context?.values]);
 }
 
 /** Account choices do not release their demand when a sibling's serving relay changes. */
@@ -135,6 +135,7 @@ export function useInputFieldOptions(params: Readonly<{
             const input = { ...(request.field.optionsSourceId ? { optionsSourceId: request.field.optionsSourceId } : {}),
                 ...(request.actionId ? { actionId: request.actionId, fieldPath: request.field.path } : {}),
                 ...(request.consumer ? { consumer: request.consumer, fieldPath: request.field.path } : {}),
+                ...(request.values ? { values: request.values } : {}),
                 draftInput: { ...projectInputOptionsDependencies(request.draftInput ?? {}, request.consumer),
                     ...(requestMachineId ? { machineId: requestMachineId } : {}),
                     ...(requestSessionId ? { sessionId: requestSessionId } : {}) },
