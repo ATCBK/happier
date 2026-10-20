@@ -11,7 +11,9 @@ import { observeRuntimePortOwnedByStackDevProxy, resolveLocalServerPortForStack 
 import { createListenerOwnershipCommandScope } from './listener_ownership.mjs';
 import { observeDevServerStartupTopology, decideDevStartupTopology, reclaimDevServerStartupOrphan } from '../dev/devStartupTopology.mjs';
 import { observeTcpPortAvailability } from '../net/ports.mjs';
-import { resolveStackOwnedServerListenPid } from '../dev/server.mjs';
+import { resolveStackOwnedServerListenPid, startDevServer } from '../dev/server.mjs';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
 
 test('pinned stack port retries typed bind availability without requiring listener discovery', async () => {
   let waitOptions = null;
@@ -166,7 +168,7 @@ async function spawnStackOwnedIdleProcess({ stackName, envPath }) {
   return child;
 }
 
-async function spawnStackOwnedMaintenanceServer({ stackName, envPath }) {
+async function spawnStackOwnedMaintenanceServer({ stackName, envPath, processKind = 'server' }) {
   const child = spawn(process.execPath, ['-e', `
     const { createServer } = require('node:http');
     const server = createServer((req, res) => {
@@ -190,7 +192,7 @@ async function spawnStackOwnedMaintenanceServer({ stackName, envPath }) {
       ...process.env,
       HAPPIER_STACK_STACK: stackName,
       HAPPIER_STACK_ENV_FILE: envPath,
-      HAPPIER_STACK_PROCESS_KIND: 'server',
+      HAPPIER_STACK_PROCESS_KIND: processKind,
     },
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -288,6 +290,100 @@ async function stopChild(child) {
     child.kill('SIGTERM');
   });
 }
+
+test('a retained dev server launched from a session remains reclaimable after runtime state is removed', {
+  skip: process.platform === 'win32' && 'Stack environment ownership is unsupported on Windows',
+}, async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-retained-server-orphan-' });
+  const stackName = 'repo-test-retained-orphan';
+  const envPath = fixture.path('env');
+  const runtimeStatePath = fixture.path('stack.runtime.json');
+  const port = await reserveUnusedPort();
+  const children = [];
+  t.after(async () => { for (const child of children) await stopChild(child); });
+  const serverUrl = `http://127.0.0.1:${port}`;
+  const env = {
+    ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root, repoDir: fixture.root }),
+    HAPPIER_STACK_STACK: stackName,
+    HAPPIER_STACK_ENV_FILE: envPath,
+    HAPPIER_STACK_PROCESS_KIND: 'session',
+    HAPPIER_DB_PROVIDER: 'sqlite',
+  };
+  const { serverProc } = await startDevServer({
+    serverComponentName: 'happier-server-light',
+    serverDir: fixture.root,
+    autostart: { stackName, baseDir: fixture.root },
+    baseEnv: env,
+    serverPort: port,
+    internalServerUrl: serverUrl,
+    publicServerUrl: serverUrl,
+    envPath,
+    stackMode: true,
+    runtimeStatePath,
+    serverAlreadyRunning: false,
+    restart: false,
+    children,
+    quiet: true,
+    priorRuntimeServerLaunchSpec: {
+      source: 'runtime',
+      command: process.execPath,
+      args: ['--eval', `
+        const { createServer } = require('node:http');
+        createServer((_req, res) => {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ service: 'happier-server', status: 'ok' }));
+        }).listen(Number(process.env.PORT), '127.0.0.1');
+      `],
+      serverDir: fixture.root,
+      migration: { mode: 'disabled' },
+    },
+  });
+  await rm(runtimeStatePath);
+  const scope = createListenerOwnershipCommandScope();
+  const observation = await observeDevServerStartupTopology({
+    serverRequested: true, stackMode: true, serverPort: port,
+    ownershipArgs: { env, port, stackName, runtimeStatePath, listenerObservationScope: scope },
+  }, {
+    observeTcpPortAvailabilityImpl: observeTcpPortAvailability,
+    observeRuntimePortOwnedByStackDevProxyImpl: observeRuntimePortOwnedByStackDevProxy,
+    resolveStackOwnedServerListenPidImpl: () => resolveStackOwnedServerListenPid(
+      { serverPort: port, stackName, envPath }, { observationScope: scope },
+    ),
+  });
+  assert.equal(observation.topology, 'exact-owned-orphan');
+  assert.equal(observation.listenerPid, serverProc.pid);
+  await reclaimDevServerStartupOrphan({ topologyObservation: observation, serverPort: port, stackName, envPath, env });
+  assert.equal((await observeTcpPortAvailability(port)).status, 'free');
+});
+
+test('startup still refuses a session listener with matching Stack bindings', {
+  skip: process.platform === 'win32' && 'Stack environment ownership is unsupported on Windows',
+}, async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-session-listener-refusal-' });
+  const stackName = 'repo-test-session-listener';
+  const envPath = fixture.path('env');
+  const { child, port } = await spawnStackOwnedMaintenanceServer({ stackName, envPath, processKind: 'session' });
+  t.after(() => stopChild(child));
+  const scope = createListenerOwnershipCommandScope();
+  const observation = await observeDevServerStartupTopology({
+    serverRequested: true, stackMode: true, serverPort: port,
+    ownershipArgs: {
+      env: { HAPPIER_STACK_ENV_FILE: envPath }, port, stackName,
+      runtimeStatePath: fixture.path('stack.runtime.json'), listenerObservationScope: scope,
+    },
+  }, {
+    observeTcpPortAvailabilityImpl: observeTcpPortAvailability,
+    observeRuntimePortOwnedByStackDevProxyImpl: observeRuntimePortOwnedByStackDevProxy,
+    resolveStackOwnedServerListenPidImpl: () => resolveStackOwnedServerListenPid(
+      { serverPort: port, stackName, envPath }, { observationScope: scope },
+    ),
+  });
+  assert.equal(observation.topology, 'foreign');
+  assert.throws(() => decideDevStartupTopology({ serverRequested: true, serverTopology: observation.topology }),
+    error => error?.code === 'ESERVERTOPOLOGYFOREIGN');
+  await reclaimDevServerStartupOrphan({ topologyObservation: observation, serverPort: port, stackName, envPath });
+  assert.equal((await observeTcpPortAvailability(port)).status, 'occupied');
+});
 
 test('non-main stack does not adopt a healthy runtime port without stack listener ownership', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-port-'));
