@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useRouter } from 'expo-router';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -50,9 +51,10 @@ describe('AppPaneScopeHost main column', () => {
     it('lets only the focused app destination reconcile the shared hide preference', async () => {
         const mainColumn = { hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' };
         function RetainedPage(props: Readonly<{ focused: boolean; detailsOpen: boolean }>) {
+            const navigation = useRouter();
             return <DestinationInstanceContext.Provider value={{ tabId: props.focused ? 'active' : 'retained',
                 ref: { kind: 'plugins', params: {} }, pathname: '/plugins',
-                focused: props.focused, visible: true }}>
+                focused: props.focused, visible: true, navigation }}>
                 <AppPaneScopeHost scopeId="app" mainColumn={mainColumn} main={<Main />}
                     destinationDetails={props.detailsOpen ? { pane: <div />, onClose: () => {} } : null} />
             </DestinationInstanceContext.Provider>;

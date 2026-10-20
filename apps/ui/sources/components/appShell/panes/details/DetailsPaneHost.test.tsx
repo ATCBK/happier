@@ -23,6 +23,8 @@ vi.mock('react-native', async () => {
     });
 });
 const runtime = installSessionPaneRuntimeTestHarness({ scopeId: 'app' });
+// Collection-time consumers bind the same real store as the runtime harness.
+vi.doUnmock('@/sync/domains/state/storage');
 // Load the real graph once after platform/transport registration, outside the
 // per-journey budget. A cold import must not outlive a timed-out render act().
 const { MultiPaneHostWithBottom } = await import('@/components/ui/panels/MultiPaneHostWithBottom');
