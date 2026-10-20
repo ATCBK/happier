@@ -351,13 +351,17 @@ export async function resolveInputOptions(params: Readonly<{
     if (failure) return failure;
     ctx.signal?.throwIfAborted();
     // Machine names only tell apart the same checkout on two machines; an unreadable list leaves the path to do that.
+    // A host marks a row `named: false` when its label is not a real name (hidden or still loading), and supplies the word
+    // for a machine it does not list (`unlistedLabel`), so every checkout is named the way the host's own screens name it.
     const machineList = await deps.machinesList({ serverId: selectedServerId, purpose: 'input' });
     const machineLabels = new Map<string, string>();
+    let unlistedLabel: string | undefined;
     if (!params.readFailure(machineList)) {
+      unlistedLabel = readNonEmptyString(readRecord(machineList).unlistedLabel);
       for (const machine of readRecordListProperty(machineList, 'items')) {
         const id = readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id);
         const label = readNonEmptyString(machine.label);
-        if (id && label) machineLabels.set(id, label);
+        if (id && label && machine.named !== false) machineLabels.set(id, label);
       }
     }
     const options: InputOption[] = [];
@@ -366,7 +370,7 @@ export async function resolveInputOptions(params: Readonly<{
       if (!ref.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
       // Recency changes whenever the checkout is opened; a saved pin must keep matching its option.
       const { lastOpenedAtMs: _recency, ...stable } = ref.data;
-      const machineLabel = machineLabels.get(ref.data.machineId);
+      const machineLabel = machineLabels.get(ref.data.machineId) ?? unlistedLabel;
       options.push({ value: stable, label: ref.data.label ?? ref.data.rootPath.split(/[\\/]+/).filter(Boolean).at(-1) ?? ref.data.rootPath,
         description: machineLabel ? `${machineLabel} · ${ref.data.rootPath}` : ref.data.rootPath });
     }

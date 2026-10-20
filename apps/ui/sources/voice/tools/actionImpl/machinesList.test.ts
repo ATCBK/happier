@@ -41,3 +41,20 @@ it('presents input machines as unavailable after request failure while retaining
         items: [{ machineId: machine.id, presence: 'offline' }],
     });
 });
+
+it('says which input machines carry a real name, so a checkout on any other machine reads as unlisted like the Projects list', async () => {
+    const named = createMachineFixture({ id: 'named', metadata: { ...createMachineFixture().metadata!, displayName: 'Build box' } });
+    const sameName = createMachineFixture({ id: 'same-name', metadata: { ...createMachineFixture().metadata!, displayName: 'Build box', host: 'other.local' } });
+    const runner = createMachineFixture({ id: 'runner', kind: 'ephemeral_session_runner', metadata: { ...createMachineFixture().metadata!, displayName: 'Temp runner' } });
+    const removed = createMachineFixture({ id: 'removed', revokedAt: 5, metadata: { ...createMachineFixture().metadata!, displayName: 'Old laptop' } });
+    const hydrating = createMachineFixture({ id: 'hydrating', metadata: null, availability: undefined });
+    const { serverId } = account.scope;
+    storage.setState({ machineListByServerId: { [serverId]: [named, sameName, runner, removed, hydrating] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const result = await listMachinesForVoiceTool({ purpose: 'input', serverId }) as { items: readonly Record<string, unknown>[]; unlistedLabel?: string };
+    const byId = new Map(result.items.map(item => [item.machineId, item]));
+    // Named and told apart among the machines the Projects list shows; hidden or still-loading rows never pass for a name.
+    expect(byId.get('named')).toMatchObject({ named: true, label: 'Build box · tester.local' });
+    expect(byId.get('same-name')).toMatchObject({ named: true, label: 'Build box · other.local' });
+    for (const id of ['runner', 'removed', 'hydrating']) expect(byId.get(id), id).toMatchObject({ named: false });
+    expect(result.unlistedLabel).toBe('Unlisted machine');
+});

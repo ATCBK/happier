@@ -382,6 +382,23 @@ describe('createActionExecutor (inventory/discovery)', () => {
       { value: { id: 'ws-2', serverId: 'home', machineId: 'm2', rootPath: '/srv/happier', label: 'Happier (server)', createdAtMs: 1 }, label: 'Happier (server)', description: 'Dev box · /srv/happier' },
     ]);
   });
+  it('names a checkout whose machine is not a named listed machine with the host\'s unlisted word, never a placeholder label', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const ref = (id: string, machineId: string, rootPath: string) => ({ id, serverId: 'home', machineId, rootPath, label: null, createdAtMs: 1, lastOpenedAtMs: 99 });
+    const refs = [ref('ws-1', 'm1', '/work/a'), ref('ws-2', 'm2', '/work/b'), ref('ws-3', 'gone', '/work/c')];
+    const resolve = async (machinesResult: unknown) => {
+      const executor = createActionExecutor({ ...createDeps(), projectWorkspaceRefs: async () => ({ workspaceRefs: refs }),
+        machinesList: async () => machinesResult, widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+      const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+        definition: { kind: 'builtin', id: 'project_checkouts' } }, fieldPath: 'checkout' }, { serverId: 'home' });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      return PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options.map(option => option.description);
+    };
+    const items = [{ serverId: 'home', machineId: 'm1', label: 'Laptop', named: true }, { serverId: 'home', machineId: 'm2', label: 'Loading…', named: false }];
+    expect(await resolve({ items, unlistedLabel: 'Unlisted machine' })).toEqual(['Laptop · /work/a', 'Unlisted machine · /work/b', 'Unlisted machine · /work/c']);
+    // A host with no word for it (the CLI) leaves the path to tell checkouts apart.
+    expect(await resolve({ items })).toEqual(['Laptop · /work/a', '/work/b', '/work/c']);
+  });
   it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
     const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
