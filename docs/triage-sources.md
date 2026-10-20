@@ -89,6 +89,12 @@ a non-empty set of source-native unit ids. Unit labels and secondary text are
 presentation; an optional `collisionScope` is the source-authored join to its
 entry identity. Consumers never derive that join from names or ids.
 
+Snapshots can independently carry `scopeUnitId`, the source's native unit id
+under the existing identifier boundary. Filters join it to the selected unit's
+id within the configured source. This is essential when issue identity is
+site-, workspace- or organization-wide: Jira projects, Linear teams and Sentry
+projects must not change entry collision identity to become filterable.
+
 The source keeps its token codec, authorization, provider paging and scan
 behavior. The shared configuration envelope remains opaque. Available-mode
 listing searches and pages the source's selectable units under its exact

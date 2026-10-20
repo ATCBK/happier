@@ -213,6 +213,12 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
     /** Source-authored short scope name for compact rows; the full path stays in scopeLabel. */
     scopeDisplayName: TriageTextV1ProtocolSchema.optional(),
     /**
+     * Source-native unit id for selection/filter joins (team, project, repository,
+     * environment). Independent of immutable entry collision identity; sources
+     * with deployment-wide entry ids must not rekey them to supply this fact.
+     */
+    scopeUnitId: TriageIdentifierV1ProtocolSchema.optional(),
+    /**
      * Who opened the entry, as the provider names them ("Mara Oduya", a login).
      * Presentation only: never an identity, a viewer match or a filter key. A
      * source with no author for an entry kind (an error group) omits it.
