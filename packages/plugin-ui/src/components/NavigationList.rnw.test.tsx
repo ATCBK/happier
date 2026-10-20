@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { HappierUiPalette } from '../environment/types.js';
 import type { PluginUiPresentationHost } from '../presentationHost/context.js';
-import { HAPPIER_COLLECTION_LIST_METRICS, resolveHappierCollectionListRowPadding } from '../presentation/collection/CollectionList.js';
+import { COLLECTION_RAIL_MIN_WIDTH_PX, HAPPIER_COLLECTION_LIST_METRICS, HAPPIER_COLLECTION_LIST_TEXT, resolveHappierCollectionListRowPadding } from '../presentation/collection/CollectionList.js';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '../presentation/layout/pageMetrics.js';
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { NavigationList } from './NavigationList.js';
@@ -69,6 +70,18 @@ function textWeight(row: HTMLElement, text: string): string {
 }
 
 describe('NavigationList (public plugin column anatomy)', () => {
+  it('fits a mark, readable title and trailing glyph below the standard rail default', () => {
+    const titleWidth = 16 * HAPPIER_COLLECTION_LIST_TEXT.rowTitle.fontSize * 0.5;
+    const rowDemand = 2 * HAPPIER_COLLECTION_LIST_METRICS.contentInset
+      + Math.max(HAPPIER_COLLECTION_LIST_METRICS.markSize, HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox)
+      + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap + titleWidth + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox;
+    expect(COLLECTION_RAIL_MIN_WIDTH_PX).toBeGreaterThanOrEqual(rowDemand);
+    const headerDemand = 2 * HAPPIER_COLLECTION_LIST_METRICS.contentInset
+      + HAPPIER_COLLECTION_LIST_METRICS.titleRowHeight + HAPPIER_COLLECTION_LIST_METRICS.headerGap
+      + 16 * HAPPIER_COLLECTION_LIST_TEXT.title.fontSize * 0.5;
+    expect(COLLECTION_RAIL_MIN_WIDTH_PX).toBeGreaterThanOrEqual(headerDemand);
+    expect(COLLECTION_RAIL_MIN_WIDTH_PX).toBeLessThan(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard);
+  });
   it('presents an explicit qualified row destination through the host without replacing ordinary activation', () => {
     const context = createSurfaceContext();
     const onOpen = vi.fn();

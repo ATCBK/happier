@@ -174,11 +174,14 @@ export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionList
 
 /** Readable rail floor: both insets, an identity mark, a sixteen-character title and a trailing glyph. */
 export const COLLECTION_RAIL_MIN_WIDTH_PX = Math.ceil(
-  2 * HAPPIER_COLLECTION_LIST_METRICS.contentInset
-  + Math.max(HAPPIER_COLLECTION_LIST_METRICS.markSize, HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox)
-  + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap
-  + 16 * HAPPIER_COLLECTION_LIST_TEXT.rowTitle.fontSize * 0.5
-  + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox,
+  2 * HAPPIER_COLLECTION_LIST_METRICS.contentInset + Math.max(
+    HAPPIER_COLLECTION_LIST_METRICS.titleRowHeight + HAPPIER_COLLECTION_LIST_METRICS.headerGap
+      + 16 * HAPPIER_COLLECTION_LIST_TEXT.title.fontSize * 0.5,
+    Math.max(HAPPIER_COLLECTION_LIST_METRICS.markSize, HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox)
+      + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap
+      + 16 * HAPPIER_COLLECTION_LIST_TEXT.rowTitle.fontSize * 0.5
+      + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox,
+  ),
 );
 
 /** A row's content inset (its own horizontal padding inside the gutter), plus a disclosure indent. */
