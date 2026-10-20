@@ -2,6 +2,7 @@ import { TeamCredentialProviderModelCatalogEntryV1Schema } from '@happier-dev/pr
 import { TeamCredentialResourceTestApplicationRequestV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import type { TeamCredentialResourceTestApplicationRequestV1, TeamCredentialSourceBindingV1, TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams';
 import type { DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
+import { admitTeamCredentialSourceModelRowsV1 } from '@happier-dev/protocol/rpc/providers';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol';
 import {
@@ -57,24 +58,15 @@ function sourceCatalogsFromProjection(input: Readonly<{
   resourceId: string;
   resourceRevision: number;
 }>): readonly TeamCredentialModelCatalogResolver[] {
-  if (input.projection.status !== 'success') return [];
+  const admitted = admitTeamCredentialSourceModelRowsV1(input.projection);
+  if (admitted.status !== 'success') return [];
   const catalogs = new Map<string, {
     application: ProviderBrokerApplicationBindingV1;
     rows: TeamCredentialProviderModelCatalogEntryV1[];
   }>();
-  for (const group of input.projection.groups) {
-    if (!group.authorization.authorized || !group.sourceRevision) continue;
-    for (const row of group.rows) {
-      if (
-        row.visibility !== 'visible'
-        || row.catalog.stale
-        || !row.application
-        || !SUPPORTED_RESOURCE_TEST_PROTOCOLS.has(row.application.protocol)
-        || row.ref.modelId !== row.descriptor.id
-        || row.compatibility.result.status === 'incompatible'
-        || (row.compatibility.result.status === 'experimental' && !row.compatibility.confirmed)
-      ) continue;
-      const key = `${candidateKey({ application: row.application, modelId: '' })}\0${group.sourceRevision}`;
+  for (const { row, sourceRevision } of admitted.rows) {
+      if (!SUPPORTED_RESOURCE_TEST_PROTOCOLS.has(row.application.protocol)) continue;
+      const key = `${candidateKey({ application: row.application, modelId: '' })}\0${sourceRevision}`;
       const catalog = catalogs.get(key) ?? { application: row.application, rows: [] };
       catalog.rows.push(TeamCredentialProviderModelCatalogEntryV1Schema.parse({
         selection: {
@@ -88,11 +80,10 @@ function sourceCatalogsFromProjection(input: Readonly<{
         },
         descriptor: row.descriptor,
         application: row.application,
-        sourceRevision: group.sourceRevision,
+        sourceRevision,
         availability: 'available',
       }));
       catalogs.set(key, catalog);
-    }
   }
   return [...catalogs.values()].flatMap((catalog) => {
     const resolver = createTeamCredentialModelCatalogResolver({
@@ -217,6 +208,7 @@ async function projectCandidates(input: Readonly<{
     ...projectTeamCredentialSourceModelFilter(input.source),
     mode: 'picker',
   });
+  if (projection.status === 'error') throw projection.error;
   return candidatesFromProjection({
     projection,
     teamId: input.teamId,

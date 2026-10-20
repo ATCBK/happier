@@ -21,6 +21,16 @@ function bodyOf(result: ReturnType<typeof evaluateTeamCredentialRequestPolicyV1>
 }
 
 describe('evaluateTeamCredentialRequestPolicyV1', () => {
+  it('admits inference bodies beyond the unrelated catalog response ceiling', () => {
+    const input = 'x'.repeat(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxDecodedBodyBytes + 1);
+    const result = evaluateTeamCredentialRequestPolicyV1({
+      policy,
+      request: request('/v1/responses', { model: 'gpt-5', input }),
+    });
+    expect(result).toMatchObject({ ok: true, modelId: 'gpt-5' });
+    expect(bodyOf(result).input).toBe(input);
+  });
+
   it('enforces and rewrites Responses, Chat Completions, and Messages through one owner', () => {
     const responses = evaluateTeamCredentialRequestPolicyV1({ policy, request: request('/v1/responses', { model: 'gpt-5', max_output_tokens: 2048 }) });
     expect(bodyOf(responses)).toMatchObject({ model: 'gpt-5', max_output_tokens: 2048, reasoning: { effort: 'low' } });

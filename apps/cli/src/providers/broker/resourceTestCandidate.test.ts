@@ -258,6 +258,14 @@ describe('resolveTeamCredentialBrokerEligibility', () => {
       sourceRevision: 'source-revision',
       projectModels,
     })).resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
+    await expect(resolveTeamCredentialBrokerEligibility({
+      machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1', expectedResourceRevision: 3,
+      source, application, modelId: 'model-a', sourceRevision: 'source-revision',
+      projectModels: async () => ({
+        status: 'error',
+        error: { v: 1, code: 'provider_endpoint_unavailable', retryable: true, action: 'retry' },
+      }),
+    })).resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
   });
 
   it('answers source-only Pool eligibility without returning application or request material', async () => {

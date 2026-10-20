@@ -20,6 +20,7 @@ import {
   writeProviderBrokerApplicationFailure,
 } from './providerBrokerApplicationServer';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
+import { evaluateTeamCredentialRequestPolicyV1 } from './requestPolicyV1';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from './providerBrokerPrivateProtocol';
 
 const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
@@ -254,16 +255,23 @@ describe('Provider broker target application integration', () => {
     }
   });
 
-  // The Agent's raw request reaches this parser before the Provider request
-  // policy, so the ingress must not be narrower than the canonical Provider
-  // decoded-body budget that policy enforces.
-  it('accepts an Agent request body above the inherited default parser limit', async () => {
-    const handler = vi.fn(async () => ({
+  it('admits a large inference body through the real transport and request policy', async () => {
+    const input = 'x'.repeat(5 * 1024 * 1024 + 1);
+    let admittedInput: unknown;
+    const handler = vi.fn(async (request: Parameters<ReturnType<typeof createProviderBrokerRequestHandler>>[0]) => {
+      const result = evaluateTeamCredentialRequestPolicyV1({
+        policy: { allowedModelIds: null, allowedProtocolKinds: null, reasoningEffort: null },
+        request: request.request,
+      });
+      if (!result.ok) return result;
+      admittedInput = JSON.parse(new TextDecoder().decode(result.request.body)).context;
+      return {
       ok: true as const,
       response: {
         ok: true as const, status: 200, statusText: 'OK', headers: Object.freeze({}), body: null,
       },
-    }));
+      };
+    });
     const server = await startProviderBrokerApplicationServer({ handler });
     try {
       const target = await server.createStreamTarget({
@@ -275,10 +283,10 @@ describe('Provider broker target application integration', () => {
       const response = await requestThroughApplicationTarget({
         ...target,
         authority: signedAuthority(),
-        body: JSON.stringify({ model: 'gpt-5', context: 'x'.repeat(1_200_000) }),
+        body: JSON.stringify({ model: 'gpt-5', context: input }),
       });
       expect(response).toContain('HTTP/1.1 200 OK');
-      expect(handler).toHaveBeenCalledOnce();
+      expect(admittedInput).toBe(input);
     } finally {
       await server.close();
     }
