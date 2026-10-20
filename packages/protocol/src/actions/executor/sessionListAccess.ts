@@ -69,7 +69,7 @@ export function resolveActionSessionListAccessFailure(
  * remain a convenience for unconstrained human/API callers. The Agent surface
  * is intrinsically bound to its current Session; other autonomous surfaces use
  * the host-only `sessionListAccess` fact to declare the same restricted corpus.
- * Reads, registered Session field setters, headless Resume and stop/archive/unarchive use the
+ * Reads, registered Session field setters and stop/archive/unarchive use the
  * same host Session caller and server-proved led subtree as start admission.
  * Other mutations remain current-Session-only. A Workflow caller additionally
  * admits its accepted typed reviewSession after a fresh exact access check.
@@ -97,9 +97,7 @@ export async function resolveActionCurrentSessionScopeFailure(
 
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const inputRecord = input as Readonly<Record<string, unknown>>;
-  const ledLifecycleAction = isLedSubtreeSessionLifecycleActionId(actionId)
-    || actionId === 'session.open' && inputRecord.intent === 'resume'
-      && !Object.hasOwn(inputRecord, 'destination') && !Object.hasOwn(inputRecord, 'tabId');
+  const ledLifecycleAction = isLedSubtreeSessionLifecycleActionId(actionId);
   if (!Object.prototype.hasOwnProperty.call(inputRecord, 'sessionId')) return null;
   if (typeof inputRecord.sessionId !== 'string') return null;
 
