@@ -399,7 +399,7 @@ export async function emitSessionMetadataUpdateWithServerScope(
     };
     const request = params.authority?.request ?? createServerRequestForResolvedServerScope({
         context,
-        activeRequest: (path, init) => apiSocket.request(path, init),
+        activeRequest: (path: string, init?: RequestInit) => apiSocket.request(path, init),
     });
     try {
     assertCurrent();

@@ -2558,26 +2558,27 @@ class Sync {
                 isCurrent: () => this.embedSessionScope?.controller === controller && options.isCurrent(),
             });
             const sessionPath = encodeURIComponent(options.scope.sessionId);
+            const embedOptions = options;
             const sync = this;
             function request(path: string, init?: RequestInit, requestOptions?: ServerFetchOptions): Promise<Response>;
             function request<T>(path: string, init: RequestInit | undefined, requestOptions: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
             async function request<T>(path: string, init?: RequestInit, requestOptions?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
-                const url = new URL(path, options.endpointUrl);
+                const url = new URL(path, embedOptions.endpointUrl);
                 const method = (init?.method ?? 'GET').toUpperCase();
                 const read = method === 'GET';
-                const permitted = url.origin === new URL(options.endpointUrl).origin && (
+                const permitted = url.origin === new URL(embedOptions.endpointUrl).origin && (
                     read && (url.pathname === '/v1/features/authenticated' || url.pathname === '/v2/cursor'
                         || url.pathname === `/v2/sessions/${sessionPath}`
                         || url.pathname === `/v1/sessions/${sessionPath}/messages`
                         || url.pathname.startsWith(`/v2/sessions/${sessionPath}/messages/by-local-id/`)
                         || url.pathname === `/v1/sessions/${sessionPath}/turns`
-                        || url.pathname === '/v2/changes' && url.searchParams.get('sessionId') === options.scope.sessionId)
+                        || url.pathname === '/v2/changes' && url.searchParams.get('sessionId') === embedOptions.scope.sessionId)
                     || (url.pathname === `/v2/sessions/${sessionPath}/pending` || url.pathname.startsWith(`/v2/sessions/${sessionPath}/pending/`))
                     || method === 'POST' && /^\/v1\/actions\/[^/]+$/.test(url.pathname)
                 );
                 if (!permitted) throw new Error('Request is outside the embed Session corridor');
                 const observe = (response: Response) => {
-                    if (response.status === 401 && sync.embedSessionScope?.controller === controller && options.isCurrent()) options.onCredentialRejected?.();
+                    if (response.status === 401 && sync.embedSessionScope?.controller === controller && embedOptions.isCurrent()) embedOptions.onCredentialRejected?.();
                 };
                 if (consumeResponse) return await endpointRequest(path, init, requestOptions, async response => {
                     observe(response);

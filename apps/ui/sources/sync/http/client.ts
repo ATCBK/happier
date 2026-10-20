@@ -1,3 +1,4 @@
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
@@ -793,7 +794,7 @@ async function requestAtEndpoint<T>(
         // Domain parsing is outside the transport/auth retry catch. A body read
         // failure must never dispatch a mutating request a second time.
         const result = await consumeResponse(response);
-        requestController.signal.throwIfAborted();
+        throwIfAborted(requestController.signal);
         assertRequestContextCurrent(context);
         return result;
     } finally {

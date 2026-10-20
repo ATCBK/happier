@@ -1297,7 +1297,7 @@ function computeVisibleSessionListIndexUnmeasured(
         if (!row) {
             return layoutChoice === 'recent_activity' && item.groupKind === 'loading';
         }
-        return corpusStorage === 'archived' ? row.archivedAt != null : row.archivedAt == null;
+        return corpusStorage === 'archived' ? row.archivedAt != null : row.archivedAt == null || row.archiving === true;
     });
 
     const {

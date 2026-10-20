@@ -18,6 +18,59 @@ afterEach(async () => {
 });
 
 describe('runtimeFetchWithServerReachability', () => {
+    it('consumes a successful response without a caller signal', async () => {
+        const runtimeFetchMock = vi.fn(async () => new Response(JSON.stringify({ accountId: 'account-a' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        }));
+        vi.doMock('@/utils/system/runtimeFetch', () => ({
+            runtimeFetch: runtimeFetchMock,
+            resetRuntimeFetch: () => {},
+            setRuntimeFetch: () => {},
+        }));
+
+        const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
+        await expect(runtimeFetchWithServerReachability({
+            serverUrl: 'https://api.example.test', token: 'token-a',
+            url: 'https://api.example.test/v1/account/profile', init: { method: 'GET' },
+        }, response => response.json())).resolves.toEqual({ accountId: 'account-a' });
+    });
+
+    it.each(['request', 'init'] as const)('rejects cancellation during response consumption from the %s signal', async source => {
+        const runtimeFetchMock = vi.fn(async () => new Response('body', { status: 200 }));
+        vi.doMock('@/utils/system/runtimeFetch', () => ({
+            runtimeFetch: runtimeFetchMock,
+            resetRuntimeFetch: () => {},
+            setRuntimeFetch: () => {},
+        }));
+        const controller = new AbortController();
+        const reason = new DOMException('Response consumption cancelled', 'AbortError');
+        let consumptionStarted!: () => void;
+        let finishConsumption!: () => void;
+        const started = new Promise<void>(resolve => { consumptionStarted = resolve; });
+        const finish = new Promise<void>(resolve => { finishConsumption = resolve; });
+        const { runtimeFetchWithServerReachability } = await import('./serverReachabilityRuntimeFetch');
+        const pending = runtimeFetchWithServerReachability({
+            serverUrl: 'https://api.example.test', token: 'token-a',
+            url: 'https://api.example.test/v1/account/profile',
+            ...(source === 'request' ? { signal: controller.signal } : {}),
+            init: { method: 'GET', ...(source === 'init' ? { signal: controller.signal } : {}) },
+        }, async response => {
+            const body = await response.text();
+            consumptionStarted();
+            await finish;
+            return body;
+        });
+        const rejected = expect(pending).rejects.toBe(reason);
+        try {
+            await started;
+            controller.abort(reason);
+        } finally {
+            finishConsumption();
+        }
+        await rejected;
+    });
+
     it('refuses authenticated cross-origin requests (prevents token leakage)', async () => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
 

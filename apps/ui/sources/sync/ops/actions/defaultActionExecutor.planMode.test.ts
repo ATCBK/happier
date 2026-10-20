@@ -1163,6 +1163,37 @@ describe('default Action executor mode and catalog contracts', () => {
       expect(read().metadataVersion).toBe(1);
     },
   );
+  it('keeps the owned archive timeout code and uses the translated UI failure through the real Action front door', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const session = createSessionFixture({ id: 'archive-timeout-localized', serverId, owner: 'alice', active: false });
+    storage.getState().applySessions([session]);
+    const row = createPlainSessionCurrentProjectionRecordFixture({ id: session.id, active: false });
+    homes.answer(serverId, `/v2/sessions/${session.id}`, { body: { session: row } });
+    const entered = createDeferred<void>();
+    const response = createDeferred<void>();
+    homes.answer(serverId, `/v2/sessions/${session.id}/archive`, { select: () => {
+      entered.resolve(); return { body: { success: true, archivedAt: 42 }, respondAfter: response.promise };
+    } });
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { t } = await import('@/text');
+    vi.useFakeTimers();
+    const pending = executeSessionAction({ actionId: 'ui.session.archive', target: createSessionActionTarget({
+      session, serverId, currentUserId: 'alice', isConnected: true, isPinned: false,
+    }) }).then(() => null, (error: unknown) => error);
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(75_000);
+      expect(await pending).toMatchObject({ code: 'session_archive_timeout', message: t('sessionInfo.failedToArchiveSession') });
+      expect(storage.getState().sessionArchiveOperations).toEqual({});
+      expect(storage.getState().sessions[session.id]?.archivedAt).toBeNull();
+    } finally {
+      response.resolve();
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
   it('composes the archive choice through the real HTTP list/archive owners and strict UI consumer', async () => {
     installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
     const rows = ['cascade-lead', 'cascade-child', 'cascade-refused', 'cascade-last', 'cascade-grandchild'].map(id =>

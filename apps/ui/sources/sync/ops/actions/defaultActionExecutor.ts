@@ -2012,9 +2012,9 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       };
     }),
 
-    sessionArchiveSet: async ({ sessionId, archived, serverId }) => {
+    sessionArchiveSet: async ({ sessionId, archived, serverId, context }) => {
       const result = archived
-        ? await sessionArchiveWithServerScope(sessionId, { serverId })
+        ? await withAccountLifetime(context?.signal, signal => sessionArchiveWithServerScope(sessionId, { serverId, signal }))
         : await sessionUnarchiveWithServerScope(sessionId, { serverId });
       return result.success ? result : { ok: false, errorCode: result.code ?? 'unknown_error',
         error: result.message ?? 'unknown_error', details: result };

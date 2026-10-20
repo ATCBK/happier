@@ -1,3 +1,4 @@
+import { SessionArchiveTimeoutError, withSessionArchiveDeadline } from './sessionArchiveLifecycle';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { resolveSessionArchiveAddress } from '@/sync/domains/session/listing/sessionArchiveState';
 /**
@@ -89,7 +90,7 @@ import { captureLazyActionAccountContext } from './actions/actionAccountContext'
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { randomUUID } from '@/platform/randomUUID';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 export {
     sessionScmBranchCheckout,
     sessionScmBranchCreate,
@@ -1424,11 +1425,16 @@ export interface SessionArchiveResponse {
 
 const SESSION_ACTIVE_ARCHIVE_MESSAGE = 'Cannot archive an active session';
 
-async function archiveRequestWithContext(params: Readonly<{
+type ArchiveRequestParams = Readonly<{
     sessionId: string;
     serverId?: string | null;
     action: 'archive' | 'unarchive';
-}>): Promise<Readonly<{ response: Response; address: SessionAddress; release: () => Promise<void> }>> {
+    signal?: AbortSignal;
+}>;
+type ArchiveRequestResult<T> = Readonly<{ response: T; address: SessionAddress; release: () => Promise<void> }>;
+function archiveRequestWithContext(params: ArchiveRequestParams): Promise<ArchiveRequestResult<Response>>;
+function archiveRequestWithContext<T>(params: ArchiveRequestParams, consumeResponse: (response: Response) => Promise<T>): Promise<ArchiveRequestResult<T>>;
+async function archiveRequestWithContext<T>(params: ArchiveRequestParams, consumeResponse?: (response: Response) => Promise<T>): Promise<ArchiveRequestResult<Response | T>> {
     const address = resolveSessionArchiveAddress({
         serverId: params.serverId ?? resolvePreferredServerIdForSessionId(params.sessionId) ?? getActiveServerSnapshot().serverId,
         sessionId: params.sessionId,
@@ -1438,10 +1444,14 @@ async function archiveRequestWithContext(params: Readonly<{
     const path = `/v2/sessions/${params.sessionId}/${params.action}`;
 
     try {
-        const response = await createServerRequestForResolvedServerScope({
+        throwIfAborted(params.signal);
+        const request = createServerRequestForResolvedServerScope({
             context,
-            activeRequest: (requestPath, init) => apiSocket.request(requestPath, init),
-        })(path, { method: 'POST' });
+            activeRequest: apiSocket.request.bind(apiSocket),
+        });
+        const init = { method: 'POST', ...(params.signal ? { signal: params.signal } : {}) };
+        const response = consumeResponse ? await request(path, init, undefined, consumeResponse)
+            : await request(path, init);
         return {
             response,
             address,
@@ -1469,27 +1479,31 @@ async function applyArchivedAtToLocalSession(capturedAddress: SessionAddress, ar
 
 export async function sessionArchiveWithServerScope(
     sessionId: string,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
 ): Promise<SessionArchiveResponse> {
     try {
-        const request = await archiveRequestWithContext({ sessionId, serverId: opts?.serverId ?? null, action: 'archive' });
-        try {
-        const { response } = request;
-        if (!response.ok) {
-            const message = await response.text().catch(() => '');
-            if (response.status === 409) {
-                return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
-            }
-            return { success: false, message: message || 'Failed to archive session' };
-        }
-        const json = await response.json().catch(() => ({}));
-        const archivedAt = typeof (json as any)?.archivedAt === 'number' ? (json as any).archivedAt : null;
-        await applyArchivedAtToLocalSession(request.address, archivedAt);
-        return { success: true, archivedAt };
-        } finally {
-            await request.release();
-        }
+        return await withSessionArchiveDeadline(opts?.signal, async signal => {
+            const request = await archiveRequestWithContext({ sessionId, serverId: opts?.serverId ?? null, action: 'archive', signal }, async (response): Promise<SessionArchiveResponse> => {
+                if (!response.ok) {
+                    const message = await response.text().catch(() => '');
+                    throwIfAborted(signal);
+                    if (response.status === 409) return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
+                    return { success: false, message: message || 'Failed to archive session' };
+                }
+                const json: unknown = await response.json().catch(() => null);
+                throwIfAborted(signal);
+                const archivedAt = json && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
+                    ? json.archivedAt : null;
+                return { success: true, archivedAt };
+            });
+            try {
+                throwIfAborted(signal);
+                if (request.response.success) await applyArchivedAtToLocalSession(request.address, request.response.archivedAt ?? null);
+                return request.response;
+            } finally { await request.release(); }
+        });
     } catch (error) {
+        if (error instanceof SessionArchiveTimeoutError) return { success: false, code: 'session_archive_timeout' };
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }
 }

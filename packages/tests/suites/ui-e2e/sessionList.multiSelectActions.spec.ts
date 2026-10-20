@@ -394,9 +394,8 @@ test.describe('ui e2e: session list multi-select actions', () => {
       await expect(progress).toHaveAttribute('data-action-id', 'ui.session.archive', { timeout: 60_000 });
       expect(delayedFirstArchive).toBe(true);
       expect(pendingSessionId).not.toBeNull();
-      const pendingStatus = page.getByTestId(`session-list-status-subtitle-text-${pendingSessionId}-working`);
-      await expect(pendingStatus).toBeVisible({ timeout: 60_000 });
-      await expect(pendingStatus).toContainText(/archiving/i);
+      const pendingRow = page.getByTestId(`session-list-item-${pendingSessionId}`);
+      await expect(pendingRow.getByRole('img', { name: /archiving/i })).toBeVisible({ timeout: 60_000 });
 
       archiveGate.resolve();
 

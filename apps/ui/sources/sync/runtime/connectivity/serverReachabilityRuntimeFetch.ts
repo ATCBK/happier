@@ -1,4 +1,4 @@
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { normalizeRequestBodyHeaders } from '@/sync/http/requestBodyHeaders';
 import {
@@ -164,7 +164,7 @@ export async function runtimeFetchWithServerReachability<T>(params: ReachableFet
         }
         if (!consumeResponse) return response;
         const result = await consumeResponse(response);
-        signal.throwIfAborted();
+        throwIfAborted(signal);
         return result;
     } finally {
         cancellation.dispose();

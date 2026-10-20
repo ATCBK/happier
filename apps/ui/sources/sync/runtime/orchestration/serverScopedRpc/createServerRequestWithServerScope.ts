@@ -100,8 +100,10 @@ export function createServerRequestForResolvedServerScope(params: Readonly<{
     function request<T>(path: string, init: RequestInit | undefined, options: ServerAccountRequestOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
     async function request<T>(path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
         if (params.context.scope === 'active') {
-            return consumeResponse ? await params.activeRequest(path, init, options, consumeResponse)
-                : await params.activeRequest(path, init, options);
+            // The public overload pairs consumer callers with a consumer-capable
+            // request; legacy raw callers continue to use its three-argument path.
+            const activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>) => Promise<Response | T> = params.activeRequest;
+            return await activeRequest(path, init, options, consumeResponse);
         }
 
         const homeIdentityId = resolvePortableServerIdentityForRoutingId(params.context.targetServerId);

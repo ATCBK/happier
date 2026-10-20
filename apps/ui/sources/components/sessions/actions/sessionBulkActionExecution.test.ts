@@ -43,6 +43,24 @@ function target(input: Partial<SessionBulkActionTarget> & Pick<SessionBulkAction
 }
 
 describe('executeSessionBulkAction', () => {
+    it('uses the caller archive failure message for an inactive target with an owned timeout code', async () => {
+        const result = await executeSessionBulkAction({
+            action: { id: SESSION_BULK_ACTION_IDS.archive },
+            targets: [target({ key: 'server-a:timeout', sessionId: 'timeout' })],
+            context: {
+                archiveErrorMessage: 'Archivierung fehlgeschlagen',
+                archiveSession: async () => ({ success: false, code: 'session_archive_timeout' }),
+            },
+        });
+
+        expect(result.failed).toMatchObject([{
+            target: { sessionId: 'timeout' },
+            reasonCode: 'session_archive_timeout',
+            reason: 'Archivierung fehlgeschlagen',
+        }]);
+        expect(result.remainingSelectedKeys).toEqual(['server-a:timeout']);
+    });
+
     it('treats empty target selections as a no-op for every bulk action', async () => {
         const actions: SessionBulkActionRequest[] = [
             { id: SESSION_BULK_ACTION_IDS.stop },
