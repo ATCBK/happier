@@ -141,7 +141,7 @@ export type RunnerAgentSessionRuntimeSource = Readonly<{
     prepareRuntimeFactory?(): Promise<void>;
     retire?(): Promise<void>;
     attestSessionOpen?(params: Readonly<{
-        phase: 'prepare' | 'commit';
+        phase: 'prepare' | 'commit' | 'refused';
         request: AgentSessionOpenRequest;
         providerSessionId: string | null;
         signal: AbortSignal;

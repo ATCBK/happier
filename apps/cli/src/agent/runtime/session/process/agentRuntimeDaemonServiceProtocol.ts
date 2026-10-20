@@ -140,6 +140,7 @@ export const AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema =
   z.strictObject({
     request: AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema,
     providerSessionId: z.nullable(OpaqueIdSchema),
+    refusal: z.optional(z.strictObject({ code: z.literal('native_agent_session_mode_unavailable') })),
   });
 
 export type AgentRuntimeDaemonServiceSessionOpenAttestationV1 =
@@ -182,7 +183,7 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.strictObject({
     z.strictObject({
       kind: z.literal('session.open.attest'),
       requestId: OpaqueIdSchema,
-      phase: z._default(z.enum(['prepare', 'commit']), 'commit'),
+      phase: z._default(z.enum(['prepare', 'commit', 'refused']), 'commit'),
       request: AgentRuntimeDaemonSessionOpenRequestV1Schema,
       providerSessionId: z.nullable(OpaqueIdSchema),
     }),

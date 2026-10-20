@@ -4533,7 +4533,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
     ) => Promise<Readonly<{ status: 'admitted' }>>;
     retireRuntimeSource?: () => Promise<void>;
     attestSessionOpen?: (params: Readonly<{
-        phase: 'prepare' | 'commit';
+        phase: 'prepare' | 'commit' | 'refused';
         request: AgentSessionOpenRequest;
         providerSessionId: string | null;
         signal: AbortSignal;
@@ -5748,9 +5748,23 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     });
             let sessions: NonNullable<AgentRuntime['sessions']> | undefined;
             let continuationRefusalMustRemainPrimary = false;
-            let openRequest: AgentSessionOpenRequest;
+            let openRequest: AgentSessionOpenRequest | undefined;
             let startupModeAdmission: Readonly<{ dispose(): void | Promise<void> }> | null = null;
             let startupModeRefusal: SessionStartupInputRefusalError | null = null;
+            const attestOpenOutcome = async (phase: 'prepare' | 'commit' | 'refused') => {
+                if (!openRequest) throw new Error('Native Session open request unavailable');
+                await params.attestSessionOpen?.({ phase, request: openRequest,
+                    providerSessionId: openRequest.kind === 'resume' ? openRequest.providerSessionId : null, signal });
+            };
+            const sanitizeOpenFailure = async (error: unknown) => {
+                try {
+                    if (error instanceof SessionStartupInputRefusalError) await attestOpenOutcome('refused');
+                } catch (attestationError) {
+                    // A refused marker write cannot bypass construction cleanup or claim native open.
+                    return sanitizeBoundaryError(attestationError);
+                }
+                return sanitizeBoundaryError(error);
+            };
             try {
                 if (resolvedLateEnvironmentValues) {
                     const lateEnvironment =
@@ -5914,24 +5928,17 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     );
                 }
                 assertGenerationCurrent();
-                const providerSessionId =
-                    openRequest.kind === 'resume'
-                        ? openRequest.providerSessionId
-                        : null;
-                await params.attestSessionOpen?.({
-                    phase: 'prepare',
-                    request: openRequest,
-                    providerSessionId,
-                    signal,
-                });
+                await attestOpenOutcome('prepare');
                 assertGenerationCurrent();
                 const openNativeSession = async (): Promise<AgentSessionRuntime> => {
+                    const request = openRequest;
+                    if (!request) throw new Error('Native Session open request unavailable');
                     // The startup-instructions fallback is a distinct open attempt.
                     startupModeRefusal = null;
                     try {
                         return await openNativeAgentSessionUntilAbort(() => {
                             if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
-                            return sessionFactory.open(openRequest, context);
+                            return sessionFactory.open(request, context);
                         }, signal);
                     } catch (error) {
                         if (startupModeRefusal && isPluginError(error)
@@ -5952,20 +5959,13 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     nativeStartupInstructionsSupported = false;
                     openRequest = buildOpenRequest();
                     assertGenerationCurrent();
-                    await params.attestSessionOpen?.({ phase: 'prepare', request: openRequest, providerSessionId, signal });
+                    await attestOpenOutcome('prepare');
                     recordOpenPhase('startup_fallback_preparation');
                     session = await openNativeSession();
                     recordOpenPhase('factory_open_fallback');
                 }
-                await params.attestSessionOpen?.({
-                    phase: 'commit',
-                    request: openRequest,
-                    providerSessionId,
-                    signal,
-                });
-                recordOpenPhase('open_attestation');
             } catch (error) {
-                let boundaryError = sanitizeBoundaryError(error);
+                const boundaryError = await sanitizeOpenFailure(error);
                 ownedAbortController.abort(boundaryError);
                 try {
                     await cleanupRuntimeScope();
@@ -5992,6 +5992,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             try {
                 assertGenerationCurrent();
                 assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
+                await attestOpenOutcome('commit');
+                recordOpenPhase('open_attestation');
                 cancellation = resolveNativeAgentSessionCancellation(
                     identity.agentId,
                     sessionCapabilities,
@@ -6008,7 +6010,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     session,
                 );
             } catch (error) {
-                let boundaryError = sanitizeBoundaryError(error);
+                let boundaryError = await sanitizeOpenFailure(error);
                 try {
                     await session.dispose('runtime_recovery');
                 } catch (disposeError) {

@@ -6163,7 +6163,9 @@ describe('native Agent session host adapter', () => {
         { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, genericFailure: true },
         { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, openCode: true },
         { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, retriesStartupInstructions: true, missingInventory: true },
-    ])('admits external native mode $mode against its observed inventory ($accepted, early=$refusesDuringOpen, missing=$missingInventory, settled=$settledCurrentModeId, unbind=$unbindBeforeRefusal, generic=$genericFailure, opencode=$openCode, null=$publishNullInventory, retry=$retriesStartupInstructions)', async ({ mode, modes, currentModeId, accepted, refusesDuringOpen, missingInventory, settledCurrentModeId, unbindBeforeRefusal, genericFailure, openCode, publishNullInventory, retriesStartupInstructions }) => {
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, attestationUnavailable: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, attestationUnavailable: true },
+    ])('admits external native mode $mode against its observed inventory ($accepted, early=$refusesDuringOpen, missing=$missingInventory, settled=$settledCurrentModeId, unbind=$unbindBeforeRefusal, generic=$genericFailure, opencode=$openCode, null=$publishNullInventory, retry=$retriesStartupInstructions, authority=$attestationUnavailable)', async ({ mode, modes, currentModeId, accepted, refusesDuringOpen, missingInventory, settledCurrentModeId, unbindBeforeRefusal, genericFailure, openCode, publishNullInventory, retriesStartupInstructions, attestationUnavailable }) => {
         const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
         const dispose = vi.fn();
         const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(async () => ({
@@ -6194,7 +6196,7 @@ describe('native Agent session host adapter', () => {
                     const body = path === '/session' ? { id: 'native-mode-cleanup' }
                         : path === '/agent' ? [{ name: 'build', mode: 'primary' }]
                         : path === '/mcp' ? { [posted.name]: { status: 'connected' } } : {};
-                    return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
+                    return { ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
                 } });
                 return (await createOpenCodeServerRuntimeAssembly({ ctx, directory: _request.cwd,
                     happierSessionId: _request.sessionId, request: _request,
@@ -6219,10 +6221,15 @@ describe('native Agent session host adapter', () => {
             if (refusesDuringOpen) throw new PluginError({ code: genericFailure ? 'agent_session_error' : 'native_agent_session_mode_unavailable', retryable: false });
             return { send, updateConfiguration, watch: () => ({ dispose() {} }), dispose };
         };
+        const attestations: string[] = [];
         const agentId = 'acme-native-mode-admission';
         const contributions = createExternalContributionFixtures(agentId);
         const plan = await createNativeAgentRuntimeSessionPlan({
             runtime: { sessions: { open } }, lease: createLease(agentId),
+            attestSessionOpen: async ({ phase }) => {
+                attestations.push(phase);
+                if (attestationUnavailable && phase === 'refused') throw new PluginError({ code: 'agent_session_authority_unavailable', retryable: false });
+            },
             backend: contributions.backend, agent: contributions.agent,
             sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true,
                 ...(retriesStartupInstructions ? { startupInstructions: { versions: [1], revisionChanges: 'resume' } } : {}) },
@@ -6240,9 +6247,13 @@ describe('native Agent session host adapter', () => {
             getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
         } as never);
         if (!accepted) {
-            await expect(admission).rejects.toMatchObject({ code: genericFailure ? 'agent_session_error' : 'native_agent_session_mode_unavailable' });
-            if (missingInventory || genericFailure) await expect(admission).rejects.not.toBeInstanceOf(SessionStartupInputRefusalError);
+            await expect(admission).rejects.toMatchObject({ code: attestationUnavailable ? 'agent_session_authority_unavailable'
+                : genericFailure ? 'agent_session_error' : 'native_agent_session_mode_unavailable' });
+            if (missingInventory || genericFailure || attestationUnavailable) await expect(admission).rejects.not.toBeInstanceOf(SessionStartupInputRefusalError);
             else await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
+            expect(attestations).toContain('prepare');
+            expect(attestations).not.toContain('commit');
+            expect(attestations.includes('refused')).toBe(!missingInventory && !genericFailure);
             expect(send).not.toHaveBeenCalled();
             if (refusesDuringOpen) expect(dispose).not.toHaveBeenCalled();
             else expect(dispose).toHaveBeenCalledOnce();
@@ -6254,6 +6265,7 @@ describe('native Agent session host adapter', () => {
             return;
         }
         const created = await admission;
+        expect(attestations).toEqual(['prepare', 'commit']);
         try {
             await created.operations.sendTurnPrompt('continue', { localId: 'native-mode-input' });
             expect(send).toHaveBeenCalledOnce();

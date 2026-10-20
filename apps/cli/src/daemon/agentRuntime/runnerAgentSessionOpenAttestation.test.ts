@@ -302,6 +302,23 @@ describe('runner-owned Agent session-open attestation', () => {
     });
   });
 
+  it.each(['current', 'foreign-runner', 'foreign-source', 'marker-refused'] as const)(
+    'observes a refused native open only after exact runner custody is recorded (%s)', async mode => {
+    const { runner, binding, tracked } = createFixture();
+    const updateMarker = vi.fn(async () => mode !== 'marker-refused');
+    const request = { kind: 'create' as const, sessionId: 'session-child', cwd: '/child' };
+    if (mode === 'foreign-source') tracked.runnerAgentSourceCustodyV1 = {
+      kind: 'managed', immutableGenerationId: `sha256:${'2'.repeat(64)}`, installSource: 'localPath' };
+    const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, retainedAgent: binding,
+      runner: mode === 'foreign-runner' ? { ...runner, pid: runner.pid + 1 } : runner,
+      phase: 'refused', request, providerSessionId: null, updateMarker });
+    expect(recorded).toEqual(mode === 'current' ? { request, providerSessionId: null,
+      refusal: { code: 'native_agent_session_mode_unavailable' } } : null);
+    expect(await awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked],
+      sessionId: 'session-child', timeoutMs: 0 })).toEqual(mode === 'current'
+      ? { status: 'refused', code: 'native_agent_session_mode_unavailable' } : { status: 'timeout' });
+  });
+
   it('fails closed before marker mutation on session or resume-provider mismatch', async () => {
     const { runner, binding, tracked } = createFixture();
     const updateMarker = vi.fn(async () => true);

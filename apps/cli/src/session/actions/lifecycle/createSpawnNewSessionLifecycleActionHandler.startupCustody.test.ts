@@ -1,14 +1,92 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { projectCurrentAgentSessionView } from '@happier-dev/agents';
 
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
 import type { TrackedSession } from '@/daemon/types';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
 import { createSpawnNewSessionLifecycleActionHandler } from './createSpawnNewSessionLifecycleActionHandler';
 import { runRequesterSessionLifecycle } from './requesterSessionLifecycle';
+import { attemptNativeForkOpen } from './fork/attemptNativeForkOpen';
 
 describe('Session startup operation custody', () => {
+  it.each(['refused', 'runner_exited'] as const)('keeps native-fork %s cleanup inside its own open owner after requester startup', async outcome => {
+    const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
+      generateOperationId: () => 'native-fork-startup', supportsCoreCancellation: () => true });
+    const tracked: TrackedSession = { pid: 102, startedBy: 'daemon', happySessionId: 'native-fork-child',
+      agentRuntimeDaemonServiceAuthorityFilePath: '/private/native-fork-authority.json' };
+    const runtimeDescriptorV1 = { v: 1 as const, agentId: 'acme-agent', agent: { providerSessionId: 'provider-parent' } };
+    const parentMetadata = projectCurrentAgentSessionView({ runtimeDescriptorV1 }, { agentId: 'acme-agent',
+      runtimeDescriptor: runtimeDescriptorV1, nativeResumeIdentity: { v: 1, vendorResumeId: 'provider-parent' } });
+    let stopped = false;
+    let archived = false;
+    const child = createSessionRecordFixture({ id: 'native-fork-child', active: true, machineId: null });
+    // Home HTTP and physical runner launch/Stop are system boundaries; startup,
+    // native-fork admission, marker interpretation and cleanup remain real.
+    const home = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.method === 'GET' && request.url === '/v2/sessions/native-fork-child') {
+        response.end(JSON.stringify({ session: { ...child, active: !stopped } }));
+      } else if (request.method === 'POST' && request.url === '/v2/sessions/native-fork-child/archive' && stopped) {
+        archived = true;
+        response.end(JSON.stringify({ success: true, archivedAt: 1 }));
+      } else {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: 'Session not found' }));
+      }
+    });
+    await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+    const address = home.address();
+    if (!address || typeof address === 'string') throw new Error('Expected Home HTTP listener');
+    try {
+      await runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, async () => {
+        const response = await operations.observeExecution({ actionId: 'session.fork', input: { requestId: 'native-fork-original' },
+          execute: async operation => {
+            const result = await runRequesterSessionLifecycle({ sessionId: 'parent',
+              context: { signal: operation.signal, localActionContext: operation },
+              spawnSession: async options => {
+                expect(options.nativeForkSource).toMatchObject({ sessionId: 'parent', providerSessionId: 'provider-parent' });
+                if (outcome === 'refused') tracked.agentRuntimeDaemonServiceSessionOpenAttestation =
+                  AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema.parse({ request: { kind: 'fork',
+                    sessionId: 'native-fork-child', cwd: '/project', source: options.nativeForkSource },
+                    providerSessionId: null, refusal: { code: 'native_agent_session_mode_unavailable' } });
+                else tracked.childProcess = Object.assign(new (await import('node:child_process')).ChildProcess(), { exitCode: 1 });
+                return { type: 'success', sessionId: 'native-fork-child' };
+              },
+              awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),
+              refused: () => ({ ok: false as const, errorCode: 'requester_unavailable', errorMessage: 'unavailable' }),
+              run: ({ spawnSession }) => attemptNativeForkOpen({ credentials: { token: 'test-token', encryption: null },
+                parentSessionId: 'parent', parentMetadata, directory: '/project', forkPoint: { type: 'latest' },
+                targetSeqInclusive: 0, effectiveCutoffSeqInclusive: 0, spawnNonce: 'native-fork-nonce',
+                forkBackendResolution: { ok: true, catalogAgentId: null, agentHintAgentId: 'acme-agent',
+                  backendTargetV2: { kind: 'backend', backendId: 'acme-agent' },
+                  backendTarget: { kind: 'configuredAcpBackend', backendId: 'acme-agent' }, replayFlavor: 'acme-agent', metadataOverlay: {} },
+                inheritedForkOverrides: { spawn: {}, metadata: {} }, spawnSession,
+                stopSession: async sessionId => { expect(sessionId).toBe('native-fork-child'); stopped = true; return true; },
+                awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }),
+              }),
+            });
+            if (!result) throw new Error('Native fork did not select an open strategy');
+            return result.ok ? { ok: true, result } : { ok: false, errorCode: result.errorCode, error: result.errorMessage };
+          } });
+        expect(response.ok).toBe(false);
+        expect(stopped).toBe(true);
+        expect(archived).toBe(true);
+        expect(operations.store.get({ accountId: 'account', machineId: 'machine' }, 'native-fork-startup'))
+          .toMatchObject({ state: 'failed' });
+      });
+    } finally {
+      operations.runner.cancel({ accountId: 'account', machineId: 'machine' }, 'native-fork-startup');
+      home.closeAllConnections();
+      await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
   it('keeps the same original operation for a cold fork child spawned by the requester lifecycle', async () => {
     const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'fork-startup', supportsCoreCancellation: () => true });
@@ -32,7 +110,7 @@ describe('Session startup operation custody', () => {
       expect(await response).toMatchObject({ ok: true, result: { type: 'success', sessionId: 'fork-child' } });
     } finally { operations.runner.cancel({ accountId: 'account', machineId: 'machine' }, 'fork-startup'); await response.catch(() => undefined); }
   });
-  it.each(['open', 'cancel'] as const)('retains the original operation after webhook acknowledgement until native startup can %s', async outcome => {
+  it.each(['open', 'cancel', 'exit'] as const)('retains the original operation after webhook acknowledgement until native startup can %s', async outcome => {
     vi.useFakeTimers();
     const scope = { accountId: 'account', machineId: 'machine' };
     const operations = createHostActionOperationRuntime({ machineId: scope.machineId,
@@ -40,6 +118,7 @@ describe('Session startup operation custody', () => {
       supportsCoreCancellation: () => true });
     const tracked: TrackedSession = { pid: 100, startedBy: 'daemon', happySessionId: 'session-child',
       agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json' };
+    const trackedSessions = [tracked];
     let captured: SpawnSessionOptions | undefined;
     // Physical runner launch/webhook is the OS boundary. Its later open is
     // observed by the actual tracked-runner startup owner, not a test promise.
@@ -47,7 +126,7 @@ describe('Session startup operation custody', () => {
       captured = options;
       return { type: 'success', sessionId: 'session-child' };
     }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({
-      getTrackedSessions: () => [tracked], ...input,
+      getTrackedSessions: () => trackedSessions, ...input,
     }) });
     try {
       const response = await operations.observeExecution({ actionId: 'session.spawn_new',
@@ -69,6 +148,9 @@ describe('Session startup operation custody', () => {
       if (outcome === 'cancel') {
         expect(operations.runner.cancel(scope, 'original-startup')).toEqual({ kind: 'requested' });
         expect(captured?.projectSetupOperation?.signal.aborted).toBe(true);
+      } else if (outcome === 'exit') {
+        trackedSessions.length = 0;
+        await vi.advanceTimersByTimeAsync(25);
       } else {
         tracked.agentRuntimeDaemonServiceSessionOpenAttestation = {
           request: { kind: 'create', sessionId: 'session-child', cwd: '/project' }, providerSessionId: 'native-child',
@@ -76,7 +158,7 @@ describe('Session startup operation custody', () => {
         await vi.advanceTimersByTimeAsync(25);
       }
       await vi.waitFor(() => expect(operations.store.get(scope, 'original-startup')).toMatchObject({
-        state: outcome === 'cancel' ? 'cancelled' : 'succeeded',
+        state: outcome === 'cancel' ? 'cancelled' : outcome === 'exit' ? 'failed' : 'succeeded',
       }));
     } finally { vi.useRealTimers(); }
   });

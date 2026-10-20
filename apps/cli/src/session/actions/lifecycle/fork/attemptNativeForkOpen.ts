@@ -214,6 +214,9 @@ export async function attemptNativeForkOpen(params: Readonly<{
         if (openAttestation.status === 'runner_exited') {
             throw new Error('Child runner exited before native fork open attestation');
         }
+        if (openAttestation.status === 'refused') {
+            throw new Error(openAttestation.code);
+        }
         const openMismatch = describeNativeForkOpenMismatch(
             openAttestation,
             childSessionId,

@@ -30,6 +30,7 @@ export type SessionLifecycleMachineDeps = Readonly<{
         signal?: AbortSignal;
     }>) => Promise<
         | Readonly<{ status: 'opened'; request: AgentSessionOpenRequest }>
+        | Readonly<{ status: 'refused'; code: 'native_agent_session_mode_unavailable' }>
         | Readonly<{ status: 'runner_exited' }>
         | Readonly<{ status: 'timeout' }>
     >;

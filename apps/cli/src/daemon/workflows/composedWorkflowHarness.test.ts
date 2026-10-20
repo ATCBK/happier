@@ -1094,6 +1094,135 @@ it('retains the original cold Session setup operation in durable Workflow progre
   } finally { controller.abort(new WorkflowRuntimeInterruption()); operations.runner.cancel(scope, 'original-start'); await settled; }
 });
 
+it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
+  'settles cold Workflow startup from native mode admission (%s)', async mode => {
+  const [{ createNativeAgentRuntimeSessionPlanFixture, createExternalContributionFixtures, createLease,
+    createSessionHostServiceOwners, createNativeSessionClientTestPort }, { buildPluginSessionBindingInput },
+    { PluginError }, { createAgentSessionRunnerFactoryBinding }, { AgentRuntimeDaemonServiceRequestV1Schema },
+    { recordTrackedRunnerAgentSessionOpenAttestation }] = await Promise.all([
+    import('@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit'),
+    import('@/plugins/runtime/runtimeCore/plugin/sessionLaunch'), import('@happier-dev/plugin-sdk'),
+    import('@/plugins/runtime/runner/agentSessionRunnerFactoryBinding'),
+    import('@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol'),
+    import('@/daemon/agentRuntime/runnerAgentSessionOpenAttestation'),
+  ]);
+  const directory = await projectDirectory();
+  const runId = '41414141-4141-4141-8141-414141414143';
+  const credentials = { token: 'token', encryption: null };
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
+    blocks: mode === 'valid' ? [step('launch')] : [step('launch'), step('must-not-admit')] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const scope = { accountId, machineId };
+  const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
+    generateOperationId: () => 'native-mode-start', supportsCoreCancellation: () => true });
+  const runner = { pid: 101, processStartTimeMs: 1000, processCommandHash: 'a'.repeat(64) };
+  const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.agent-plugin', pluginVersion: '1.0.0',
+    agentId: 'acme-mode', localAgentId: 'acme-mode', sourceCustody: {
+      kind: 'managed', immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+    locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+    normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js' });
+  const tracked: TrackedSession = { ...runner, startedBy: 'daemon', happySessionId: 'native-mode-child',
+    runnerAgentSourceCustodyV1: binding.sourceCustody,
+    agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json' };
+  const attestationPhases: string[] = [];
+  const send = vi.fn(async () => ({ status: 'admitted' as const }));
+  let finishOpen!: () => void;
+  const nativeFinished = new Promise<void>(resolve => { finishOpen = resolve; });
+  let openError: unknown;
+  let openedRuntime: Awaited<ReturnType<NonNullable<Awaited<ReturnType<typeof createNativeAgentRuntimeSessionPlanFixture>>['config']['createSessionRuntime']>>> | undefined;
+  const native = await createNativeAgentRuntimeSessionPlanFixture({ ...createExternalContributionFixtures('acme-mode'),
+    lease: { ...createLease('acme-mode'), sourceCustody: binding.sourceCustody }, createSessionHostServiceOwners,
+    sessionInput: buildPluginSessionBindingInput({ credentials, directory,
+      backendTarget: { kind: 'backend', backendId: 'acme-mode' }, sessionModeId: mode === 'valid' ? 'build' : 'default' }),
+    attestSessionOpen: async input => {
+      // Exact private transport parser and daemon recorder; only the marker-file write is an OS boundary.
+      const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+        context: { token: 'a'.repeat(43), sessionId: tracked.happySessionId },
+        operation: { kind: 'session.open.attest', requestId: 'native-mode-open', phase: input.phase,
+          request: input.request, providerSessionId: input.providerSessionId } });
+      if (request.operation.kind !== 'session.open.attest') throw new Error('wrong_attestation_operation');
+      attestationPhases.push(request.operation.phase);
+      const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, retainedAgent: binding, runner,
+        ...request.operation, updateMarker: async () => true });
+      if (!recorded) throw new Error('native_mode_attestation_refused');
+    },
+    runtime: { sessions: { open: async (_request, context) => {
+      if (mode !== 'missing-inventory') context.session.services.modes.bind({
+        read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+        subscribe: () => ({ dispose() {} }) });
+      if (mode !== 'valid') throw new PluginError({ code: 'native_agent_session_mode_unavailable', retryable: false });
+      return { send, watch: () => ({ dispose() {} }), dispose() {} };
+    } } },
+  });
+  let launches = 0;
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+    launches++;
+    if (options.sessionCreationTag) freshSessionCreationTags.set(options.sessionCreationTag, 'native-mode-child');
+    freshSessionRecords.set('native-mode-child', createSessionRecordFixture({ id: 'native-mode-child', encryptionMode: 'plain',
+      metadata: JSON.stringify(buildCommittedLaunchMetadata({ options, directory, accountSettings: {} })) }));
+    authorizedConversations.set('native-mode-child', directory);
+    // Physical launch/webhook is substituted. The actual native-open producer remains live and does not exit on refusal.
+    // This port substitutes the runner's process/Session transport, as in the native owner fixture.
+    void native.config.createSessionRuntime({ directory, metadata: {}, machineId,
+      session: createNativeSessionClientTestPort('native-mode-child'), transcriptSession: {}, messageBuffer: {}, mcpServers: {},
+      permissionHandler: {}, getPermissionMode: () => 'default', setThinking() {}, memoryRecallGuidanceEnabled: false,
+    } as never).then(value => { openedRuntime = value; finishOpen(); }, error => { openError = error; finishOpen(); });
+    return { type: 'success', sessionId: 'native-mode-child', sessionCreationOutcome: {
+      disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+  } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+  const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup(input, {
+    serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
+    transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
+      resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_refused_startup'); } }),
+    observeOperation: (target, options) => operations.handlers.getV2({ operationId: target.operationId,
+      ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
+      ...(options.includeSetupReview ? { includeSetupReview: true } : {}) }, options.signal ? { signal: options.signal } : undefined),
+    cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
+  });
+  const sessionInput = sessionInputBoundary({}, { sessionId: 'native-mode-child' });
+  const controller = new AbortController();
+  const coordinate = workflowDaemonProcess({ storage: kit, sessionInput, directory, sessionStartup });
+  const coordinating = coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+    acceptedEnvelope, signal: controller.signal });
+  const settled = coordinating.catch(error => error);
+  try {
+    await Promise.race([nativeFinished, coordinating.then(value => {
+      throw new Error(`Workflow settled before native open finished: ${JSON.stringify(value)}`);
+    })]);
+    if (mode === 'missing-inventory') {
+      expect(openError).toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+      expect(attestationPhases).toEqual(['prepare']);
+      expect(operations.store.get(scope, 'native-mode-start')).toMatchObject({ state: 'running' });
+      expect(sessionInput.enqueue).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(operations.store.get(scope, 'native-mode-start')?.state)
+        .toBe(mode === 'valid' ? 'succeeded' : 'failed'));
+      if (mode === 'valid') await expect(coordinating).resolves.toMatchObject({ state: 'succeeded' });
+      else {
+        await expect(coordinating).resolves.toMatchObject({ state: 'failed', reason: 'native_agent_session_mode_unavailable' });
+        expect(kit.run()).toMatchObject({ state: 'failed', workflowCustodyState: 'settled' });
+        expect(rowFor(kit, 'launch')).toMatchObject({ lifecycle: 'failed' });
+        expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+        expect(sessionInput.enqueue).not.toHaveBeenCalled();
+        expect(attestationPhases).toEqual(['prepare', 'refused']);
+        expect(openRowProgress(kit, rowFor(kit, 'launch')!)).toMatchObject({ execution: {
+          kind: 'action', actionId: 'session.spawn_new', output: { operation: { state: 'failed' } } } });
+        await expect(coordinate({ runId, attempt: 0, expectedRevision: kit.run().revision,
+          accountCurrentness: currentness, acceptedEnvelope })).resolves.toMatchObject({ state: 'failed' });
+      }
+    }
+    expect(launches).toBe(1);
+    expect(tracked.childProcess?.exitCode).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  } finally {
+    controller.abort(new WorkflowRuntimeInterruption());
+    operations.runner.cancel(scope, 'native-mode-start');
+    await settled;
+    await openedRuntime?.operations.resetOrDisposeRuntime();
+  }
+});
+
 it('reclaims a pending Agent leaf after its input persisted but the root projection write rolled back', async () => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414141';

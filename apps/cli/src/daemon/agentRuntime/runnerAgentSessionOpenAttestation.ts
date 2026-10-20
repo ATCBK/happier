@@ -109,6 +109,7 @@ export async function recordTrackedRunnerAgentSessionOpenAttestation(
       .parse({
         request,
         providerSessionId,
+        ...(input.phase === 'refused' ? { refusal: { code: 'native_agent_session_mode_unavailable' } } : {}),
       });
   if (input.phase === 'prepare') return attestation;
   const markerUpdated = await (
@@ -143,6 +144,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
     }>
   /** A runner that had registered this child exited before committing its open. */
   | Readonly<{ status: 'runner_exited' }>
+  | Readonly<{ status: 'refused'; code: 'native_agent_session_mode_unavailable' }>
   | Readonly<{ status: 'timeout' }>
 > {
   const sessionId = input.sessionId.trim();
@@ -174,6 +176,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
           tracked.agentRuntimeDaemonServiceAuthorityFilePath,
         )
       ) {
+        if (attestation.refusal) return Object.freeze({ status: 'refused' as const, code: attestation.refusal.code });
         return Object.freeze({
           status: 'opened' as const,
           request: attestation.request,

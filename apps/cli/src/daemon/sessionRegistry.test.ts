@@ -163,6 +163,58 @@ describe('sessionRegistry', () => {
     expect((await listSessionMarkers())[0].createdAt).toBe(raw.createdAt);
   });
 
+  it.each(['commit', 'refused'] as const)('rehydrates a recorded native-open %s through tolerant stored reads while keeping writes strict', async phase => {
+    const { listSessionMarkers, readSessionMarkerForPid, writeSessionMarker,
+      updateSessionMarkerAgentRuntimeSessionOpenAttestation } = await import('./sessionRegistry');
+    const { recordTrackedRunnerAgentSessionOpenAttestation, awaitTrackedRunnerAgentSessionOpen } =
+      await import('./agentRuntime/runnerAgentSessionOpenAttestation');
+    const { createAgentSessionRunnerFactoryBinding } = await import('@/plugins/runtime/runner/agentSessionRunnerFactoryBinding');
+    const { AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } =
+      await import('@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol');
+    const { buildTrackedSessionFromMarker } = await import('./sessions/trackedSessionFromMarker');
+    const runner = { pid: 12346, processStartTimeMs: 1234, processCommandHash: 'a'.repeat(64) };
+    const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.plugin', pluginVersion: '1.0.0',
+      agentId: 'acme-agent', localAgentId: 'acme-agent', sourceCustody: {
+        kind: 'managed', immutableGenerationId: 'registry:agent', installSource: 'localPath' },
+      locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+      normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js' });
+    const canonicalAuthority = join(happyHomeDir, 'authority.json');
+    const tracked: import('./types').TrackedSession = { ...runner, startedBy: 'daemon', happySessionId: 'native-open-child',
+      runnerAgentSourceCustodyV1: binding.sourceCustody,
+      agentRuntimeDaemonServiceAuthorityFilePath: canonicalAuthority };
+    await writeSessionMarker({ ...runner, startedBy: 'daemon', happySessionId: 'native-open-child',
+      runnerAgentSourceCustodyV1: binding.sourceCustody, agentRuntimeDaemonServiceAuthorityFilePath: canonicalAuthority });
+    const request = { kind: 'create' as const, sessionId: 'native-open-child', cwd: '/workspace' };
+    // A mis-bound marker cannot publish readiness or refusal even for the right process.
+    tracked.agentRuntimeDaemonServiceAuthorityFilePath = join(happyHomeDir, 'foreign-authority.json');
+    await expect(recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner, retainedAgent: binding,
+      phase, request, providerSessionId: null })).resolves.toBeNull();
+    await expect(awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked],
+      sessionId: request.sessionId, timeoutMs: 0 })).resolves.toEqual({ status: 'timeout' });
+    tracked.agentRuntimeDaemonServiceAuthorityFilePath = canonicalAuthority;
+    const recorded = await recordTrackedRunnerAgentSessionOpenAttestation({ tracked, runner, retainedAgent: binding,
+      phase, request, providerSessionId: null });
+    if (!recorded) throw new Error('Native-open attestation was not recorded');
+    const extraAttestation = { ...recorded, future: true, request: { ...request, future: true },
+      ...(phase === 'refused' ? { refusal: { code: 'native_agent_session_mode_unavailable' as const, future: true } } : {}) };
+    expect(AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema.safeParse(extraAttestation).success).toBe(false);
+    await expect(updateSessionMarkerAgentRuntimeSessionOpenAttestation({ pid: runner.pid,
+      sessionId: request.sessionId, authorityFilePath: canonicalAuthority,
+      attestation: extraAttestation })).rejects.toThrow();
+    const markerPath = join(happyHomeDir, 'tmp', 'daemon-sessions', `pid-${runner.pid}.json`);
+    const previousMarker = await readSessionMarkerForPid(runner.pid);
+    writeFileSync(markerPath, JSON.stringify({ ...previousMarker, future: true,
+      agentRuntimeDaemonServiceSessionOpenAttestation: extraAttestation }));
+    const restored = await readSessionMarkerForPid(runner.pid);
+    expect(restored?.agentRuntimeDaemonServiceSessionOpenAttestation).toEqual(recorded);
+    expect((await listSessionMarkers())[0]?.agentRuntimeDaemonServiceSessionOpenAttestation).toEqual(recorded);
+    if (!restored) throw new Error('Recorded native-open marker was lost');
+    const reattached = buildTrackedSessionFromMarker({ marker: restored, startedByFallback: 'daemon', reattachedFromDiskMarker: true });
+    await expect(awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [reattached],
+      sessionId: request.sessionId, timeoutMs: 0 })).resolves.toEqual(phase === 'refused'
+      ? { status: 'refused', code: 'native_agent_session_mode_unavailable' } : { status: 'opened', request });
+  });
+
   it('persists only the stable runner daemon-service authority path', async () => {
     const {
       listSessionMarkers,

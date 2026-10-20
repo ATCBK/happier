@@ -1,9 +1,10 @@
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import type { ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 
 import type { SessionLifecycleActionHandler, SessionLifecycleMachineDeps, SessionLifecycleMachineHandlers } from './sessionLifecycleTypes';
 
-/** Keep the original operation live until the existing tracked-runner owner observes native open. */
+/** Keep the original operation live until the tracked-runner owner observes native open or refusal. */
 export function createSessionStartupProjectSpawn(input: Readonly<{
     context: Parameters<SessionLifecycleActionHandler>[1];
     spawnSession: SessionLifecycleMachineHandlers['spawnSession'];
@@ -26,6 +27,9 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
         }
         const result = await input.spawnSession({ ...options, ...(operation ? { projectSetupOperation: operation } : {}) });
         if (result.type !== 'success' || !result.sessionId || !operation) return result;
+        // The native-fork owner awaits this same attestation inside its child
+        // cleanup scope. Keep its physical child id available before refusal.
+        if (options.nativeForkSource) return result;
         // The webhook acknowledges physical launch. The original execution
         // remains active, retaining its setup review and cancellation custody.
         if (operation.operationAcceptance?.actionId === 'session.spawn_new') {
@@ -34,8 +38,13 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
         const opened = await input.awaitAgentSessionOpen!({ sessionId: result.sessionId,
             timeoutMs: null, signal: operation.signal });
         operation.signal.throwIfAborted();
-        return opened.status === 'opened' ? result
-            : { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
-                errorMessage: 'Agent runner exited before native Session startup completed' };
+        // Startup has already been admitted. Returning a spawn response would
+        // let creation reconciliation turn the committed row into success.
+        if (opened.status === 'refused') throw new SessionStartupInputRefusalError({ code: opened.code,
+            message: 'The selected native Agent mode is not available in this Session.' });
+        if (opened.status !== 'opened') throw Object.assign(
+            new Error('Agent runner exited before native Session startup completed'),
+            { code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED });
+        return result;
     };
 }

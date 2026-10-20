@@ -327,6 +327,8 @@ describe('attemptNativeForkOpen', () => {
                 },
             },
         },
+        { label: 'a refused native open', attestation: { status: 'refused' as const,
+            code: 'native_agent_session_mode_unavailable' as const } },
     ])('does not publish provider-native provenance after $label', async ({ label, attestation }) => {
         const spawnSession = vi.fn(async () => ({ type: 'success' as const, sessionId: 'host-child' }));
         const stopSession = vi.fn();
