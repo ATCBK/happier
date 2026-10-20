@@ -67,6 +67,16 @@ it('shows a useful patch while full content is pending', async () => {
     expect(current.fileContent).toBe(null);
     await act(async () => { finishRead({ success: true, content: 'bmV3Cg==' }); tree.unmount(); });
 });
+it('publishes the saved version and rejects a read that started before that write', async () => {
+    let finishRead!: (value: { success: true; content: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} />); });
+    await act(async () => { current.publishSavedFile({ text: 'saved', hash: 'saved-hash' }); });
+    await act(async () => { finishRead({ success: true, content: 'b2xkCg==' }); });
+    expect(current.fileContent).toMatchObject({ content: 'saved', contentHash: 'saved-hash' });
+    await act(async () => { tree.unmount(); });
+});
 it('aborts a preview transfer on hide, superseding refresh, and unmount without publishing stale content', async () => {
     const signals: AbortSignal[] = [];
     const finishReads: Array<(value: { success: true; content: string }) => void> = [];
@@ -117,6 +127,28 @@ it('reuses full content for a mode-only switch but rereads on explicit refresh',
     expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(2);
     await act(async () => { tree.unmount(); });
 });
+it('uses the selected slice in read identity and never reuses head bytes for tail', async () => {
+    transport.stat.mockResolvedValue({ success: true, exists: true, sizeBytes: 1000002 });
+    workspaceFileDetailsActionBoundary.read.mockImplementation((request: { payload: { offset?: number; length?: number } }) => ({
+        success: true, content: Buffer.alloc(request.payload.length ?? 0, request.payload.offset ? 't' : 'h').toString('base64'),
+        sizeBytes: 1000002, eof: request.payload.offset === 2,
+    }));
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} includeDiff={false} includeFile />); });
+    expect(current.tooLarge).toEqual({ sizeBytes: 1000002, maxPreviewBytes: 1000000 });
+    expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
+    await act(async () => { tree.update(<Harness {...input} includeFile previewSlice="head" />); });
+    expect(current.fileContent?.partial).toEqual({ slice: 'head', offset: 0, length: 1000000, totalBytes: 1000002 });
+    expect(current.fileWriteSupported).toBe(false);
+    expect(current.tooLarge).toBe(null);
+    expect(current.diffContent).toBe(null);
+    expect(transport.diff).not.toHaveBeenCalled();
+    await act(async () => { tree.update(<Harness {...input} includeDiff={false} includeFile previewSlice="tail" />); });
+    expect(current.fileContent?.partial?.slice).toBe('tail');
+    expect(current.fileContent?.content.startsWith('t')).toBe(true);
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(2);
+    await act(async () => { tree.unmount(); });
+});
 it('retains useful content on refresh failure but never carries it into another file', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = renderer.create(<Harness {...input} />); });
@@ -127,11 +159,59 @@ it('retains useful content on refresh failure but never carries it into another 
     expect(current.fileContent).toBe(content);
     expect(current.diffContent).toBe(patch('new'));
     expect(current.error).toBe('offline');
+    expect(current.fileWriteSupported).toBe(true);
+    expect(current.staleSince).toEqual(expect.any(Number));
+    const staleSince = current.staleSince;
+    await act(async () => { await current.refreshAll(); });
+    expect(current.staleSince).toBe(staleSince);
     await act(async () => { tree.update(<Harness {...input} filePath="other.txt" />); });
     expect(current.fileContent).toBe(null);
     expect(current.diffContent).toBe(null);
+    expect(current.staleSince).toBe(null);
     await act(async () => { tree.unmount(); });
 });
+
+it('drops the old comparison as soon as a slice is selected, including when that read fails', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} />); });
+    expect(current.diffContent).toBe(patch('new'));
+    transport.stat.mockResolvedValue({ success: true, exists: true, sizeBytes: 1000002 });
+    let failRead!: (value: { success: false; error: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { failRead = resolve; }));
+    await act(async () => { tree.update(<Harness {...input} previewSlice="head" />); });
+    expect(current.diffContent).toBe(null);
+    expect(current.isDiffLoading).toBe(false);
+    await act(async () => { failRead({ success: false, error: 'offline' }); });
+    expect(current.diffContent).toBe(null);
+    expect(current.error).toBe('offline');
+    await act(async () => { tree.unmount(); });
+});
+
+it('clears stale freshness after a successful reread', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} />); });
+    workspaceFileDetailsActionBoundary.read.mockResolvedValueOnce({ success: false, error: 'offline' });
+    await act(async () => { await current.refreshAll(); });
+    expect(current.staleSince).toEqual(expect.any(Number));
+    await act(async () => { await current.refreshAll(); });
+    expect(current.staleSince).toBe(null);
+    expect(current.error).toBe(null);
+    await act(async () => { tree.unmount(); });
+});
+
+it('remembers only acknowledged own-write hashes and resets them for another resource', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} />); });
+    expect(current.lastOwnWriteHash).toBe(null);
+    await act(async () => { current.publishSavedFile({ text: 'mine', hash: 'own-ack' }); });
+    expect(current.lastOwnWriteHash).toBe('own-ack');
+    await act(async () => { await current.refreshAll(); });
+    expect(current.lastOwnWriteHash).toBe('own-ack');
+    await act(async () => { tree.update(<Harness {...input} filePath="other.txt" />); });
+    expect(current.lastOwnWriteHash).toBe(null);
+    await act(async () => { tree.unmount(); });
+});
+
 
 it('never presents another diff area while the new area loads or fails', async () => {
     let tree!: renderer.ReactTestRenderer;
