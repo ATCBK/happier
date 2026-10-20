@@ -86,6 +86,48 @@ describe('runCatalogDefinedAcpAgent', () => {
     }));
   });
 
+  /**
+   * Nested Happier CLI actions need HAPPIER_SESSION_ID in the agent process env
+   * (see PR #310). runStandardAcpProvider supplies processEnv via withCurrentHappierSessionId;
+   * catalog createRuntime must forward it or agy/devin/kimi stay stuck as cli-global.
+   */
+  it('forwards processEnv to the catalog ACP runtime so HAPPIER_SESSION_ID reaches the agent', async () => {
+    let capturedConfig: null | Readonly<{ createRuntime: (args: any) => unknown }> = null;
+    runStandardAcpProviderMock.mockImplementation(async (_opts: unknown, config: unknown) => {
+      capturedConfig = config as Readonly<{ createRuntime: (args: any) => unknown }>;
+    });
+    createCatalogProviderAcpRuntimeMock.mockReturnValue({ kind: 'runtime' });
+
+    await runCatalogDefinedAcpAgent('agy', {
+      credentials: { token: 'token' } as any,
+    });
+    if (!capturedConfig) {
+      throw new Error('Expected ACP runtime config to be captured');
+    }
+
+    const processEnv = {
+      PATH: '/usr/bin',
+      HAPPIER_SESSION_ID: 'happier-session-from-runner',
+    };
+    (capturedConfig as Readonly<{ createRuntime: (args: any) => unknown }>).createRuntime({
+      directory: '/repo',
+      machineId: 'machine-123',
+      session: { sessionId: 'happier-session-from-runner' },
+      messageBuffer: {},
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn() },
+      setThinking: vi.fn(),
+      getPermissionMode: () => 'default',
+      memoryRecallGuidanceEnabled: false,
+      processEnv,
+    });
+
+    expect(createCatalogProviderAcpRuntimeMock).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'agy',
+      processEnv,
+    }));
+  });
+
   it('lets the Grok catalog entry attach its live-session notification adapter without a shared provider branch', async () => {
     let capturedConfig: null | Readonly<{ createRuntime: (args: any) => unknown }> = null;
     runStandardAcpProviderMock.mockImplementation(async (_opts: unknown, config: unknown) => {
