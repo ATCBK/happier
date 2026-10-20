@@ -29,7 +29,6 @@ import {
     validateCurrentMachineSocket,
 } from "@/app/machines/validateCurrentMachineSocket";
 import { readHappierSocketData } from "./socketData";
-import { markRelayedPublisherStopRequested } from "./publisherStopRequestRelay";
 import type {
     CaptureExplicitMachineStopResult,
     createSessionPublisherPresence,
@@ -230,24 +229,6 @@ function readExplicitMachineStopRequest(method: string, value: unknown): Readonl
     return { machineId, sessionId: trimmedSessionId };
 }
 
-function isSessionStopRequestMethod(method: string): boolean {
-    return method.endsWith(`:${RPC_METHODS.KILL_SESSION}`);
-}
-
-/**
- * Whether a runner accepted a session-scoped `killSession`. Session RPC results are end-to-end
- * encrypted unless the session is plaintext, so the relay can only read plaintext results; an opaque
- * ciphertext acknowledgement is treated as accepted because the released runner handler always
- * answers `{ status: 'requested' }` and only transport-level failures (timeouts, missing targets)
- * are visible here as rejections.
- */
-function isAcceptedSessionStopAcknowledgement(result: unknown): boolean {
-    if (typeof result === "string") return result.length > 0;
-    if (!result || typeof result !== "object" || Array.isArray(result)) return false;
-    const candidate = result as { status?: unknown; success?: unknown };
-    return candidate.status === "requested" || candidate.status === "stopped" || candidate.success === true;
-}
-
 function buildForbiddenRpcResponse() {
     return {
         ok: false,
@@ -266,7 +247,7 @@ export function rpcHandler(
         redisRegistry: RpcRedisRegistryConfig;
         sessionPublisherPresence?: Pick<
             ReturnType<typeof createSessionPublisherPresence>,
-            "captureExplicitMachineStop" | "finalizeExplicitMachineStop" | "markPublisherStopRequested"
+            "captureExplicitMachineStop" | "finalizeExplicitMachineStop"
         >;
     },
 ) {
@@ -472,31 +453,12 @@ export function rpcHandler(
             };
             // Explicit machine-stop lifecycle work is independent from whether the caller
             // supplied an acknowledgement callback, so every successful forward runs it.
-            // `target` is the socket that answered: an in-process Socket, or the id of a socket reached
-            // through the cluster adapter whose publisher registration lives on its owning instance.
-            const forwardTargetResponse = async (
-                targetResponse: unknown,
-                target: Readonly<{ socket: Socket }> | Readonly<{ socketId: string }>,
-            ) => {
+            const forwardTargetResponse = async (targetResponse: unknown) => {
                 const envelope = explicitMachineStopRequest
                     ? SocketRpcTransportResponseEnvelopeV1Schema.safeParse(targetResponse)
                     : null;
                 const targetResult = envelope?.success ? envelope.data.result : targetResponse;
                 const forwarded = forwardedRpcTargetResponse({ method, targetResponse: targetResult });
-                const stopPresence = ctx.sessionPublisherPresence;
-                if (
-                    stopPresence
-                    && forwarded.ok
-                    && isSessionStopRequestMethod(method)
-                    && isAcceptedSessionStopAcknowledgement(forwarded.result)
-                ) {
-                    // A runner cannot report its own exit; its next disconnect closes its publisher.
-                    if ("socket" in target) {
-                        stopPresence.markPublisherStopRequested({ socket: target.socket });
-                    } else {
-                        markRelayedPublisherStopRequested({ io: ctx.io, presence: stopPresence, socketId: target.socketId });
-                    }
-                }
                 if (!explicitMachineStopRequest || explicitMachineStopCapture?.status !== "captured") {
                     return forwarded;
                 }
@@ -662,7 +624,7 @@ export function rpcHandler(
                         // Evaluated before the optional call: `callback?.(await ...)` would
                         // short-circuit its argument and skip the stop lifecycle entirely
                         // when the caller emitted without an acknowledgement.
-                        const forwardedResponse = await forwardTargetResponse(response, { socket: fallbackSocket });
+                        const forwardedResponse = await forwardTargetResponse(response);
                         callback?.(forwardedResponse);
                         return;
                     }
@@ -760,9 +722,7 @@ export function rpcHandler(
                     }
                     const response = Array.isArray(responses) ? responses[0] : responses;
 
-                    // This branch only runs with the cluster adapter enabled, so a cross-instance
-                    // target's stop request can be marked on its owning instance.
-                    const forwardedResponse = await forwardTargetResponse(response, { socketId: targetSocketId });
+                    const forwardedResponse = await forwardTargetResponse(response);
                     callback?.(forwardedResponse);
                     return;
                 }
@@ -836,7 +796,7 @@ export function rpcHandler(
                     ),
                 });
 
-                const forwardedResponse = await forwardTargetResponse(response, { socket: activeTargetSocket });
+                const forwardedResponse = await forwardTargetResponse(response);
                 callback?.(forwardedResponse);
 
             } catch (error) {

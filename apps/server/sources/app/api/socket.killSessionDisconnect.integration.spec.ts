@@ -1,11 +1,9 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
 import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { io as ioClient } from "socket.io-client";
 import type { Redis } from "ioredis";
 
-import { SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT } from "@happier-dev/protocol";
+import { SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT, SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT } from "@happier-dev/protocol";
 import { RPC_METHODS } from "@happier-dev/protocol/rpc";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 import { auth } from "@/app/auth/auth";
@@ -180,7 +178,7 @@ afterEach(async () => {
 });
 
 describe("session-scoped killSession followed by runner disconnect", () => {
-    async function runKillThenDisconnect(runnerKillResponse: unknown) {
+    async function runKillThenDisconnect(runnerKillResponse: unknown, closePublisher = false) {
         const seeded = await seedRunnerSession();
         const node = await startNode();
         const runner = createRunner(node.url, seeded);
@@ -200,15 +198,25 @@ describe("session-scoped killSession followed by runner disconnect", () => {
                 params: "opaque-encrypted-kill-request",
             });
             expect(killed).toEqual({ ok: true, result: runnerKillResponse });
-            // The acknowledgement alone proves only that the request was accepted.
+            // An RPC response cannot prove that the runner physically exited.
             await expect(db.session.findUniqueOrThrow({
                 where: { id: seeded.sessionId },
                 select: { active: true },
             })).resolves.toEqual({ active: true });
 
+            if (closePublisher) {
+                const closed = await runner.timeout(5_000).emitWithAck(SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT, {
+                    sessionId: seeded.sessionId,
+                });
+                expect(closed).toMatchObject({ status: "closed", sessionId: seeded.sessionId });
+            }
+
             runner.close();
             // Every disconnect of the current publisher settles Activity away from `active`.
             const settled = await waitForDisconnectSettlement(seeded.sessionId);
+            if (closePublisher) {
+                await waitFor(async () => (sessionUpdates.some((body) => body.active === false) ? true : null), "inactive update");
+            }
             return { settled, sessionUpdates };
         } finally {
             runner.close();
@@ -217,74 +225,37 @@ describe("session-scoped killSession followed by runner disconnect", () => {
         }
     }
 
-    it("closes the publisher when the runner disconnects after accepting killSession", async () => {
-        // Session RPC results are end-to-end encrypted; the relay sees only the opaque acknowledgement.
-        const { settled, sessionUpdates } = await runKillThenDisconnect("opaque-encrypted-requested-ack");
-
-        expect(settled.active).toBe(false);
-        await waitFor(async () => (sessionUpdates.some((body) => body.active === false) ? true : null), "inactive update");
-    }, 30_000);
-
-    it("keeps the session active when the runner rejected killSession before disconnecting", async () => {
-        const { settled } = await runKillThenDisconnect({ error: "Kill failed", errorCode: "RPC_FAILED" });
+    it.each([
+        { label: "an opaque encrypted response", response: "opaque-encrypted-response" },
+        { label: "an accepted stop request", response: { status: "requested" } },
+        { label: "a rejected stop request", response: { error: "Kill failed", errorCode: "RPC_FAILED" } },
+    ])("keeps the session active after $label and an ordinary disconnect", async ({ response }) => {
+        const { settled, sessionUpdates } = await runKillThenDisconnect(response);
 
         expect(settled).toEqual({ active: true, runtimeActivityState: "unknown" });
+        expect(sessionUpdates.some((body) => body.active === false)).toBe(false);
+    }, 30_000);
+
+    it("closes the publisher through the runner's acknowledged clean-close event", async () => {
+        const { settled, sessionUpdates } = await runKillThenDisconnect("opaque-encrypted-response", true);
+
+        expect(settled).toEqual({ active: false, runtimeActivityState: "unknown" });
+        expect(sessionUpdates.some((body) => body.active === false)).toBe(true);
     }, 30_000);
 });
 
-async function findFreePort(): Promise<number> {
-    return await new Promise((resolve, reject) => {
-        const server = createServer();
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            server.close(() => (typeof address === "object" && address ? resolve(address.port) : reject(new Error("no port"))));
-        });
-    });
-}
+// Cluster validation consumes the lane's Redis service; the normal integration lane does not download
+// or compile a Redis binary as part of a timed test hook.
+const redisUrl = process.env.REDIS_URL?.trim();
 
-/** Starts a throwaway local `redis-server` (an external system boundary) for the cluster-adapter test. */
-async function startLocalRedis(): Promise<{ url: string; process: ChildProcess }> {
-    const port = await findFreePort();
-    const child = spawn("redis-server", ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no"], {
-        stdio: ["ignore", "pipe", "inherit"],
-    });
-    await new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code) => reject(new Error(`redis-server exited early (${code})`)));
-        child.stdout?.on("data", (chunk: Buffer) => {
-            if (chunk.toString().includes("Ready to accept connections")) resolve();
-        });
-    });
-    return { url: `redis://127.0.0.1:${port}`, process: child };
-}
-
-// Real Redis is required for the cross-instance RPC registry and streams adapter. Use REDIS_URL when the
-// lane provides one, otherwise a local `redis-server`; skip only when neither exists.
-const externalRedisUrl = process.env.REDIS_URL?.trim() || null;
-const hasLocalRedisServer = spawnSync("redis-server", ["--version"], { stdio: "ignore" }).status === 0;
-
-describe.skipIf(!externalRedisUrl && !hasLocalRedisServer)("session-scoped killSession relayed to a runner on another Redis-adapter instance", () => {
-    let redisUrl: string;
-    let localRedis: ChildProcess | null = null;
-
-    beforeAll(async () => {
-        if (externalRedisUrl) {
-            redisUrl = externalRedisUrl;
-            return;
-        }
-        const started = await startLocalRedis();
-        redisUrl = started.url;
-        localRedis = started.process;
-    }, 30_000);
+describe.skipIf(!redisUrl)("session-scoped killSession relayed to a runner on another Redis-adapter instance", () => {
     afterAll(async () => {
         await Promise.all(adapterRedisClients.map(async (client) => await client.quit()));
         await getRedisClient().quit();
-        localRedis?.kill();
     });
     beforeEach(() => harness.resetEnv({ HAPPIER_SOCKET_ADAPTER: "redis-streams", REDIS_URL: redisUrl }));
 
-    it("closes the publisher on the runner's instance when the runner disconnects after accepting", async () => {
+    it("closes the publisher on its owning instance through the runner's acknowledged clean-close event", async () => {
         const seeded = await seedRunnerSession();
         const runnerNode = await startNode();
         const callerNode = await startNode();
@@ -306,14 +277,12 @@ describe.skipIf(!externalRedisUrl && !hasLocalRedisServer)("session-scoped killS
                 params: "opaque-encrypted-kill-request",
             });
             expect(killed).toEqual({ ok: true, result: "opaque-encrypted-requested-ack" });
-            // The runner's instance learns about the accepted stop over the adapter stream after the
-            // acknowledgement. A real runner spends this long in cleanup; one that exits before the mark
-            // lands still settles only through the presence timeout (an accepted race).
-            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            const closed = await runner.timeout(5_000).emitWithAck(SESSION_RUNTIME_ACTIVITY_CLOSE_EVENT, {
+                sessionId: seeded.sessionId,
+            });
+            expect(closed).toMatchObject({ status: "closed", sessionId: seeded.sessionId });
 
             runner.close();
-            // Without the cross-instance mark the runner instance treats this as a plain disconnect and
-            // the session stays active until the presence timeout.
             const settled = await waitForDisconnectSettlement(seeded.sessionId);
             expect(settled.active).toBe(false);
         } finally {

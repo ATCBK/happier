@@ -886,34 +886,6 @@ describe("session publisher presence on SQLite", () => {
         })).resolves.toEqual({ active: true, runtimeActivityState: "unknown", runtimeActivityRevision: 2n });
     });
 
-    it("does not let a stop-requested predecessor disconnect close a successor publisher", async () => {
-        const seeded = await seed();
-        const presence = createSessionPublisherPresence({ now: () => new Date(seeded.fence.getTime() + 10) });
-        const predecessor = {};
-        const first = await presence.registerPublisher({
-            socket: predecessor,
-            binding: seeded.binding,
-            completeActivitySnapshot: { state: "active", activeCount: 1 },
-        });
-        if (first.status !== "registered") throw new Error("expected registration");
-        presence.markPublisherStopRequested({ socket: predecessor });
-        const successor = await presence.registerPublisher({
-            socket: {},
-            binding: seeded.binding,
-            completeActivitySnapshot: { state: "active", activeCount: 1 },
-        });
-        if (successor.status !== "registered") throw new Error("expected successor registration");
-
-        await expect(presence.forgetDisconnectedPublisher({ socket: predecessor })).resolves.toEqual({
-            status: "stop_not_applied",
-            result: { status: "superseded" },
-        });
-        await expect(db.session.findUniqueOrThrow({
-            where: { id: seeded.binding.sessionId },
-            select: { active: true, lastActiveAt: true, runtimeActivityState: true },
-        })).resolves.toEqual({ active: true, lastActiveAt: successor.committedFence, runtimeActivityState: "active" });
-    });
-
     it("restores the successor baseline after the exact-current predecessor disconnect commits unknown", async () => {
         const seeded = await seed();
         let now = new Date(seeded.fence.getTime() + 10);

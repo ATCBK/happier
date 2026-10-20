@@ -112,10 +112,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
     const registrations = new WeakMap<object, Registration>();
     const registrationAttempts = new WeakMap<object, RegistrationAttempt>();
     const closeResults = new WeakMap<object, Promise<ClosePublisherResult>>();
-    // Sockets whose runner acknowledged an accepted session stop request. Their next disconnect is the
-    // runner's exit rather than a network blip, so it closes this exact registration (fenced) instead
-    // of only recording observer loss.
-    const stopRequestedSockets = new WeakSet<object>();
     const operationLocks = new WeakMap<object, AsyncLock>();
 
     const serialize = async <T>(
@@ -407,23 +403,21 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             : `explicit-machine-stop:legacy-heartbeat:${params.target.authority.committedFence.getTime()}`,
     });
 
-    const closeRegistration = async (registration: Registration): Promise<ClosePublisherResult> => await closeBinding({
-        binding: registration.binding,
-        authority: {
-            kind: "heartbeat",
-            committedFence: registration.committedFence,
-            publisherGeneration: registration.publisherGeneration,
-        },
-        mutationId: `publisher-close:${registration.committedFence.getTime()}`,
-    });
-
     const closePublisher = (params: Readonly<{ socket: object }>): Promise<ClosePublisherResult> => {
         const existing = closeResults.get(params.socket);
         if (existing) return existing;
         const result = serialize(params.socket, async (): Promise<ClosePublisherResult> => {
             const registration = registrations.get(params.socket);
             if (!registration) return { status: "superseded" };
-            return await closeRegistration(registration);
+            return await closeBinding({
+                binding: registration.binding,
+                authority: {
+                    kind: "heartbeat",
+                    committedFence: registration.committedFence,
+                    publisherGeneration: registration.publisherGeneration,
+                },
+                mutationId: `publisher-close:${registration.committedFence.getTime()}`,
+            });
         });
         closeResults.set(params.socket, result);
         void result.then((settled) => {
@@ -721,26 +715,11 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         runAsCurrentPublisher,
         runAsCurrentPublisherInTx,
         publishSnapshot,
-        /**
-         * Record that this socket's runner accepted a session stop request. Only the disconnect that
-         * follows changes meaning; heartbeats and snapshots keep their normal authority meanwhile.
-         */
-        markPublisherStopRequested: (params: Readonly<{ socket: object }>): void => {
-            stopRequestedSockets.add(params.socket);
-        },
         forgetDisconnectedPublisher: async (params: Readonly<{ socket: object }>) => await serialize(params.socket, async () => {
             try {
                 const registration = registrations.get(params.socket);
                 if (!registration) return { status: "unregistered" } as const;
                 if (closeResults.has(params.socket)) return { status: "closed" } as const;
-                if (stopRequestedSockets.has(params.socket)) {
-                    // Same fenced close as an explicit publisher close: a runner that resumed on a
-                    // successor socket advanced the generation, so this resolves `superseded`.
-                    const closed = await closeRegistration(registration);
-                    return closed.status === "closed"
-                        ? { ...closed, status: "stopped" as const }
-                        : { status: "stop_not_applied" as const, result: closed };
-                }
                 return await inTx(async (tx) => {
                     const session = await tx.session.findUnique({
                         where: { id: registration.binding.sessionId },
@@ -779,7 +758,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 registrations.delete(params.socket);
                 registrationAttempts.delete(params.socket);
                 closeResults.delete(params.socket);
-                stopRequestedSockets.delete(params.socket);
             }
         }),
     };
