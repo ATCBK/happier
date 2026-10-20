@@ -23,8 +23,21 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 import type { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { createRuntimeProviderServices } from './runtimeServices';
 import { createProviderManagedCatalogRuntimePort } from './managedRuntime';
+import { exerciseGatewayStreamJourney, startGatewayJourneyUpstream } from './gatewayJourney.testkit';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
+import { ApiSessionClient } from '@/api/session/sessionClient';
+import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
+import { createMockSession } from '@/testkit/backends/sessionFixtures';
+import { bindApiSessionSocketPairMock, createApiSessionSocketStub, resolveApiSessionSocketDefaultAck } from '@/testkit/backends/apiSessionSocketHarness';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 
 const transport = vi.hoisted(() => ({ call: vi.fn<typeof callExactMachineRpc>() }));
+const socketBoundary = vi.hoisted(() => ({ io: vi.fn() }));
+vi.mock('socket.io-client', () => ({ io: socketBoundary.io }));
 // Only the authenticated inter-Machine network boundary is replaced. Both
 // daemons' catalog, authorization, managed process and endpoint owners are real.
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: transport.call }));
@@ -61,12 +74,14 @@ it('reports unavailable catalog preparation rather than an endpoint outage when 
     }
   }));
 
-it('honours a committed peer grant on the next probe and model read through its selected hub', () =>
+it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pending, slow auth and grant recovery', () =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-peer-' }, async ({ homeDir }) => {
     let onTargetRead: () => void | Promise<void> = () => {};
     let pool = { generation: 1, policy: { autoSwitch: false } };
+    const upstream = await startGatewayJourneyUpstream();
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
+      upstreamUrl: upstream.url, experimental: true,
       catalogModels: [{ id: 'gateway-model' }],
       resolveAccountTarget: async (target, signal) => {
         signal.throwIfAborted();
@@ -75,7 +90,8 @@ it('honours a committed peer grant on the next probe and model read through its 
           : { service: target.service, accountId: 'upstream-account' }, displayName: 'Upstream',
           ...(target.kind === 'group' ? { group: { groupId: target.groupId, generation: pool.generation } } : {}) };
       },
-    });
+    }).catch(async error => { await upstream.close(); throw error; });
+    upstream.bind(fixture);
     try {
       if (!fixture.gateway) throw new Error('Expected physical gateway');
       const peerId = 'peer-worker';
@@ -112,6 +128,8 @@ it('honours a committed peer grant on the next probe and model read through its 
           status: 'present', revision, content: { t: 'plain', v: catalog } } };
         if (path === '/v2/account/settings') return { status: 200, data: { version: settingsVersion, content: { t: 'plain', v: {} } } };
         if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+        if (path === '/v2/sessions/main-two') return { status: 404, data: { error: 'Session not found' } };
+        if (path === '/v1/auth/ping') return { status: 200, data: {} };
         const history = emptyAccountSettingsHistoryCaptureResponse(path);
         if (history) return history;
         throw new Error(`Unexpected catalog HTTP boundary: ${path}`);
@@ -148,12 +166,25 @@ it('honours a committed peer grant on the next probe and model read through its 
         },
         modelSettingsMutation: async (): Promise<never> => { throw new Error('No model-settings mutation'); },
       });
+      const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, localMachineId: fixture.machineId,
+        encryptionMode: 'plain', logger: () => {}, authorizeRequest: request => authorizeMachineRpcRequest(request, {
+          machineId: fixture.machineId, resolveCustodianAccountId: async () => 'account', resolveInstallationId: () => 'installation',
+          verifyMachineAdmission: async () => true,
+        }) });
+      rpc.registerHandler(RPC_METHODS.DAEMON_PROVIDERS_PROBE, (request, context) => hub.probe(request, 'manual_refresh', { signal: context?.signal }));
+      rpc.registerHandler('daemon.providers.models', request => hub.models(request));
+      rpc.registerHandler(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
+        request => hubModels.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request)));
       transport.call.mockImplementation(async ({ machineId, method, request, signal }) => {
         expect(machineId).toBe(fixture.machineId);
-        if (method === RPC_METHODS.DAEMON_PROVIDERS_PROBE) return DaemonProviderProbeResponseV1Schema.parse(await hub.probe(request, 'manual_refresh', { signal }));
-        if (method === 'daemon.providers.models') return DaemonProviderModelsResponseV1Schema.parse(await hub.models(request));
-        if (method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) return DaemonProviderModelProjectionResponseV1Schema.parse(await hubModels.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request)));
-        throw new Error('Unexpected hub RPC');
+        signal?.throwIfAborted();
+        const result = await rpc.handleRequest({ method: `${machineId}:${method}`, params: request,
+          machineAdmission: { actorAccountId: 'account', custodianAccountId: 'account', machineId,
+            installationId: 'installation', role: 'manage', encryptionMode: 'plain' } });
+        signal?.throwIfAborted();
+        if (method === RPC_METHODS.DAEMON_PROVIDERS_PROBE) return DaemonProviderProbeResponseV1Schema.parse(result);
+        if (method === 'daemon.providers.models') return DaemonProviderModelsResponseV1Schema.parse(result);
+        return DaemonProviderModelProjectionResponseV1Schema.parse(result);
       });
       const peer = createRuntimeProviderServices({ machineId: peerId, happyHomeDir: homeDir,
         featureGate: { isEnabled: () => true }, registry: fixture.contributes,
@@ -188,6 +219,22 @@ it('honours a committed peer grant on the next probe and model read through its 
       expect(await peer.probe(request)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
       expect(await peer.models(request)).toMatchObject({ status: 'success', connectionId: request.connectionId,
         models: expect.arrayContaining([expect.objectContaining({ id: 'gateway-model' })]) });
+      const experimental = await projectPeerModels();
+      if (experimental.status !== 'success') throw new Error('Expected experimental source projection');
+      const row = experimental.groups[0]!.rows.find(row => row.ref.modelId === 'gateway-model')!;
+      expect(row.compatibility).toMatchObject({ result: { status: 'experimental' }, confirmed: false });
+      const confirm = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 2,
+        readCatalog: async () => ({ status: 'ready', revision, catalog }),
+        readDefinitions: async () => [...fixture.contributes.providersByContributionKey].map(([contributionKey, contribution]) => ({
+          contributionKey, definition: contribution.definition, provenance: contribution.provenance })),
+        writeCatalog: async value => { expect(value.expectedRevision).toBe(revision); catalog = value.catalog; revision += 1;
+          setActiveAccountSettingsSnapshot(snapshot()); return { status: 'updated' }; },
+      });
+      expect(await confirm(parseProviderActionRequestV1('providers.models.experimental.confirm', { action: 'confirmExperimental',
+        connectionId: request.connectionId, expectedConnectionRevision: experimental.groups[0]!.connectionRevision,
+        agentTargetKey: fixture.agentTargetKey, modelId: row.compatibility.result.status === 'experimental'
+          && row.compatibility.result.confirmationScope.kind === 'model' ? row.ref.modelId : null,
+        compatibilityFingerprint: row.compatibility.compatibilityFingerprint }), {})).toMatchObject({ ok: true, result: { status: 'success' } });
       // Account preferences have their own version. A publication while the
       // hub resolves its upstream must not revoke an unchanged Gateway grant.
       pool = { generation: pool.generation + 1, policy: { autoSwitch: true } };
@@ -260,6 +307,7 @@ it('honours a committed peer grant on the next probe and model read through its 
           expect(prepared.runtimeBindingBasis.deployment).toMatchObject({ kind: 'managedLocal',
             gatewayPlacement: { kind: 'machine', machineId: fixture.machineId } });
           expect(prepared.model.id).toBe('gateway-model');
+          expect(transport.call.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(2);
           admitted.attempt.cleanupOnFailure();
         }
       } finally {
@@ -324,6 +372,47 @@ it('honours a committed peer grant on the next probe and model read through its 
       expect(await setEnabled(true)).toMatchObject({ status: 'success' });
       expect(await projectPeerModels()).toMatchObject({ status: 'success',
         groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
+      await exerciseGatewayStreamJourney({ fixture, upstream, snapshot, hubModels, peerId, setEnabled,
+        deliverPending: async send => {
+          const nativeFetch = globalThis.fetch;
+          vi.stubGlobal('fetch', ((url, init) => String(url).endsWith('/features')
+            ? Promise.resolve(new Response(JSON.stringify({ features: {}, capabilities: { session: {
+              runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 1 }, publisherAuthority: { protocolVersion: 1 },
+            } } }), { status: 200, headers: { 'content-type': 'application/json' } })) : nativeFetch(url, init)) satisfies typeof fetch);
+          let claims = 0;
+          const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+            if (event !== 'pending-materialize-next') return resolveApiSessionSocketDefaultAck(event, payload);
+            claims += 1;
+            return { ok: true, didMaterialize: true, didWrite: false, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2,
+              deliveryState: { mode: 'provider', unresolved: true }, message: { id: null, seq: null, localId: 'fresh-original',
+                messageRole: 'user', providerAction: 'send', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'pending-fresh' },
+                  meta: { source: 'ui' } } }, createdAt: 1, updatedAt: 1 } };
+          } });
+          bindApiSessionSocketPairMock(socketBoundary.io, { sessionSocket: socket, userSocket: createApiSessionSocketStub(), fallbackSocket: socket });
+          const client = createTestApiSessionClient(ApiSessionClient, credentials.token,
+            createMockSession({ id: 'main-two', encryptionMode: 'plain', pendingCount: 1, pendingVersion: 1 }),
+            { localMachineId: fixture.machineId, durableMutationDeliveryInitiallyActive: false });
+          const queue = new MessageQueue2<{ id: string }>(() => 'mode');
+          client.onUserMessage(message => queue.pushImmediate(message.content.text, { id: 'mode' }));
+          const consumer = createSessionProviderInputConsumer({ messageQueue: queue, refreshBeforeQueuedBatch: false, reconcileWhenEmpty: 'skip',
+            session: { waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal), getMetadataSnapshot: () => client.getMetadataSnapshot(),
+              materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
+              hasPendingProviderInput: () => client.hasPendingProviderInput(),
+              reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization() } });
+          const stop = new AbortController();
+          try {
+            if (!Reflect.get(client, 'sessionSyncPendingInputServerContractResult')) {
+              await new Promise<void>(resolve => client.once('session-sync-server-contract', resolve));
+            }
+            expect(Reflect.get(client, 'sessionSyncPendingInputServerContractResult')).toMatchObject({ pendingInputProtocolVersion: 1 });
+            const batch = await consumer.waitForNextInput({ abortSignal: stop.signal });
+            expect(batch?.message).toBe('pending-fresh');
+            if (!batch) throw new Error('Expected retained Pending input');
+            await send(batch.message);
+            expect(claims).toBe(1); expect(queue.size()).toBe(0);
+            expect(client.hasPendingProviderInput('fresh-original')).toBe(true);
+          } finally { stop.abort(); await client.close(); vi.unstubAllGlobals(); }
+        } });
       const ownedSnapshot = getActiveAccountSettingsSnapshot();
       resetActiveAccountSettingsSnapshotForTests();
       expect(await peerModels.projectModelsForAccount({ machineId: peerId, agentTargetKey: fixture.agentTargetKey,
@@ -332,5 +421,5 @@ it('honours a committed peer grant on the next probe and model read through its 
         resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
         signal: new AbortController().signal, isCurrent: () => true,
       })).toMatchObject({ status: 'success', groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
-    } finally { await fixture.cleanup(); }
-  }));
+    } finally { await upstream.close(); await fixture.cleanup(); }
+  }), 120_000);

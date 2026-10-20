@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { enqueueRuntimeAuthFailureReportOutboxItem, readRuntimeAuthFailureReportOutboxItems } from './runtimeAuthFailureReportOutbox';
+import { drainRuntimeAuthFailureReportOutboxToDaemon } from './runtimeAuthFailureReportOutboxDrain';
+
 import {
   resetRuntimeAuthFailureReportOutboxDrainSchedulerForTests,
   scheduleRuntimeAuthFailureReportOutboxDrainToDaemon,
@@ -14,6 +18,58 @@ describe('runtimeAuthFailureReportOutboxDrainScheduler', () => {
   afterEach(() => {
     resetRuntimeAuthFailureReportOutboxDrainSchedulerForTests();
     vi.useRealTimers();
+  });
+
+  it('delivers every retained report after daemon replacement even beyond eight items and eight failed attempts', async () => {
+    const outboxDir = await createTempDir('happier-outbox-scheduler-retained-');
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        await enqueueRuntimeAuthFailureReportOutboxItem({
+          outboxDir,
+          report: {
+            sessionId: `session-${index}`,
+            classification: {
+              kind: 'auth_expired',
+              serviceId: 'claude-subscription',
+              profileId: 'primary',
+              groupId: null,
+              resetsAtMs: null,
+              planType: null,
+              rateLimits: null,
+              source: 'structured_provider_error',
+            },
+          },
+        });
+      }
+      let available = false;
+      let pendingDrain: Promise<unknown> | undefined;
+      scheduleRuntimeAuthFailureReportOutboxDrainToDaemon({
+        outboxDir,
+        delayMs: 0,
+        retryDelayMs: 1,
+        drain: (input) => {
+          const operation = drainRuntimeAuthFailureReportOutboxToDaemon({
+            ...input,
+            notify: async ({ reportId }) => available
+              ? { ok: true, result: { status: 'credential_refreshed' }, recoveryReceipt: { reportId, attemptId: `attempt-${reportId}` } }
+              : { ok: false, errorCode: 'daemon_unavailable' },
+          });
+          pendingDrain = operation;
+          return operation;
+        },
+      });
+      for (let attempt = 0; attempt < 9; attempt += 1) {
+        await vi.advanceTimersToNextTimerAsync();
+        await pendingDrain;
+      }
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toHaveLength(10);
+      available = true;
+      await vi.advanceTimersToNextTimerAsync();
+      await pendingDrain;
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally {
+      await removeTempDir(outboxDir);
+    }
   });
 
   it('coalesces duplicate schedules into one outbox drain while active', async () => {

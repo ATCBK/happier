@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
@@ -8,6 +9,27 @@ import { importConnectedServiceSessionFiles } from './importConnectedServiceSess
 import { reconcileCodexSharedJsonlState } from '../../../../../../packages/plugins/codex/src/agent/auth/services/home/sync/fixedJsonlState';
 
 describe('importConnectedServiceSessionFiles', () => {
+  it('preserves valid session imports beyond one hundred occupied conflict names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-session-many-conflicts-'));
+    const sourceRoot = join(root, 'source');
+    const destinationRoot = join(root, 'destination');
+    const source = 'source-session\n';
+    const hash = createHash('sha256').update(source).digest('hex').slice(0, 12);
+    try {
+      await mkdir(sourceRoot);
+      await mkdir(destinationRoot);
+      await writeFile(join(sourceRoot, 'rollout.jsonl'), source);
+      await writeFile(join(destinationRoot, 'rollout.jsonl'), 'retained-session');
+      await Promise.all(Array.from({ length: 105 }, (_, index) => writeFile(
+        join(destinationRoot, `rollout.happier-import-${hash}${index === 0 ? '' : `-${index}`}.jsonl`), `retained-conflict-${index}`,
+      )));
+      const result = await importConnectedServiceSessionFiles({ roots: [{ sourceRoot, destinationRoot, includeFile: () => true }] });
+      expect(result).toMatchObject({ conflicted: 1 });
+      expect(await readFile(join(destinationRoot, `rollout.happier-import-${hash}-105.jsonl`), 'utf8')).toBe(source);
+      expect(await readFile(join(destinationRoot, 'rollout.jsonl'), 'utf8')).toBe('retained-session');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('adopts fixed-name native state through the pure codec before linking without duplicating data or dropping generic conflicts', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-native-state-import-'));
     const sourceRoot = join(root, 'private');

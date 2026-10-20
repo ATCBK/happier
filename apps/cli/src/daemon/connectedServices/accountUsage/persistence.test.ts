@@ -73,6 +73,35 @@ const plainCredentials = {
 } satisfies StoredCredentials;
 
 describe('provider account usage persistence scheduler', () => {
+    it('persists every valid queued source beyond 500 records and ten minutes of delayed Home writes', async () => {
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const post = vi.spyOn(axios, 'post').mockImplementation(async () => {
+            await held;
+            return { status: 200, data: { success: true, source: { status: 'linked' } } };
+        });
+        let now = 1_500;
+        const scheduler = createProviderAccountUsagePersistenceScheduler({
+            api: { getAccountEncryptionMode: async () => 'plain' }, credentials: plainCredentials,
+            now: () => now, fingerprintKey: new Uint8Array(32).fill(3),
+        });
+        const snapshot = createSnapshot({ staleAfterMs: 24 * 60 * 60_000 });
+        try {
+            for (let index = 0; index < 505; index += 1) {
+                const original = createTarget();
+                await scheduler.recordInBandSnapshot(snapshot, { targets: [createTarget({ source: {
+                    ...original.source, ref: { ...original.source.ref, accountId: `account-${index}` },
+                } })] });
+            }
+            now += 11 * 60_000;
+            release();
+            await scheduler.flush(5_000);
+            expect(post).toHaveBeenCalledTimes(505);
+            const accounts = new Set(post.mock.calls.map((call) => QualifiedProviderAccountUsageWriteV4Schema.parse(call[1]).source.ref.accountId));
+            expect(accounts.size).toBe(505);
+        } finally { release(); scheduler.dispose(); post.mockRestore(); }
+    });
+
     it.each(['plain', 'e2ee'] as const)('rereads %s current content after conflict exhaustion instead of blindly rewriting it', async mode => {
         const snapshot = createSnapshot();
         const target = createTarget();

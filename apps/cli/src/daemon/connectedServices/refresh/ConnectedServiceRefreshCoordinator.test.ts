@@ -1179,6 +1179,42 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     vi.useRealTimers();
   });
 
+  it('retains settled refresh attempt receipts across more than 256 account bindings', async () => {
+    const credentials: Credentials = { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } };
+    const now = 1_000_000;
+    const revision = 'csr_0123456789ABCDEFGHJKMNPQRS';
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain'),
+      getConnectedServiceCredentialPlain: vi.fn(async ({ profileId }: { profileId: string }) => ({
+        credentialRevision: revision,
+        content: { t: 'plain' as const, v: buildConnectedServiceCredentialRecord({
+          now, serviceId: 'openai-codex', profileId, kind: 'oauth', expiresAt: null,
+          oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', idToken: null,
+            scope: null, tokenType: null, providerAccountId: profileId, providerEmail: null },
+        }) },
+      })),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+    } as unknown as ApiClient;
+    completeCredentialAuthorityBoundaryFixture(api);
+    const fetchMock = vi.fn(async (): Promise<never> => { throw new Error('provider offline'); });
+    installGlobalFetchMock(fetchMock);
+    const coordinator = createRefreshCoordinator({ api, credentials, machineIdProvider: () => 'machine-1',
+      activeServerDir: '/tmp/happier-active', baseDir: '/tmp/happier-base', refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000, now: () => now });
+    const request = (index: number) => ({ refreshAttemptId: `attempt-${index}`,
+      selection: { kind: 'profile' as const, serviceId: 'openai-codex' as const, profileId: `work-${index}` },
+      chatgptPlanType: null, forceRefresh: true, expectedCredentialRevision: revision });
+    for (let index = 0; index < 260; index += 1) {
+      await expect(coordinator.refreshOpenAiCodexChatGptTokensForBridge(request(index)))
+        .rejects.toThrow('connected_service_credential_refresh_unavailable');
+    }
+    const requestsBeforeReplay = fetchMock.mock.calls.length;
+    await expect(coordinator.refreshOpenAiCodexChatGptTokensForBridge(request(0)))
+      .rejects.toThrow('connected_service_credential_refresh_unavailable');
+    expect(fetchMock.mock.calls.length).toBe(requestsBeforeReplay);
+  });
+
   it('allows a new refresh attempt to retry the same credential revision after the prior attempt rejects', async () => {
     const credentials: Credentials = {
       token: 'happy-token',

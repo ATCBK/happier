@@ -55,10 +55,10 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
         store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected,
             subscribe: () => ({ dispose() {} }) },
         selectTarget: unexpected, resolveTarget: input.resolveAccountTarget ?? unexpected,
-        ...(input.upstreamUrl ? { resolveCredentialRevision: async () => 'fixture-revision' } : {}),
+        ...(input.upstreamUrl ? { resolveCredentialRevision: async () => 'csr_0123456789ABCDEFGHJKMNPQRS' } : {}),
         materializeAccount: input.upstreamUrl ? async request => {
             request.signal.throwIfAborted();
-            request.credentialRevisionBasis?.captureCredentialRevision('fixture-revision');
+            request.credentialRevisionBasis?.captureCredentialRevision('csr_0123456789ABCDEFGHJKMNPQRS');
             return { kind: 'httpHeaders' as const, headers: { authorization: 'Bearer fixture-upstream' } };
         } : unexpected,
         projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
