@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
@@ -737,6 +738,7 @@ import {
 import {
   createProviderAccountUsagePersistenceScheduler,
   flushProviderAccountUsagePersistenceForTrackedSessions,
+  ProviderAccountUsageSourceQualificationError,
 } from '../connectedServices/accountUsage/persistence';
 import {
   recordProviderAccountUsageAdoptionForSession,
@@ -3481,7 +3483,7 @@ export async function startDaemonSessionControlRuntime(
         if (!providerAccountId) return [];
         const listedAccountsByService = new Map<
           string,
-          Awaited<ReturnType<typeof listQualifiedConnectedAccountsV4>> | null
+          Awaited<ReturnType<typeof listQualifiedConnectedAccountsV4>>
         >();
         const targets: QualifiedProviderAccountUsagePersistenceTarget[] = [];
         for (const binding of candidateBindings) {
@@ -3503,10 +3505,13 @@ export async function startDaemonSessionControlRuntime(
                 accountContext?.bootstrap.credentials.token ??
                 params.credentials.token,
               service,
-            }).catch(() => null);
+            }).catch((error: unknown) => {
+              if (axios.isCancel(error) || (error instanceof Error && error.name === 'AbortError')) throw error;
+              throw new ProviderAccountUsageSourceQualificationError('qualified_account_listing_failed', error);
+            });
             listedAccountsByService.set(serviceKey, listed);
           }
-          const profile = listed?.accounts.find(
+          const profile = listed.accounts.find(
             (candidate) =>
               candidate.ref.accountId === binding.profileId &&
               candidate.providerIdentity?.accountId === providerAccountId,
@@ -3522,8 +3527,11 @@ export async function startDaemonSessionControlRuntime(
                 profileId: binding.profileId,
               },
             ],
-          }).catch(() => null);
-          const resolution = resolutions?.get(legacyServiceId) ?? null;
+          }).catch((error: unknown) => {
+            if (axios.isCancel(error) || (error instanceof Error && error.name === 'AbortError')) throw error;
+            throw new ProviderAccountUsageSourceQualificationError('credential_resolution_failed', error);
+          });
+          const resolution = resolutions.get(legacyServiceId) ?? null;
           if (
             !resolution ||
             resolution.revisionSemantics !== 'revisioned' ||
