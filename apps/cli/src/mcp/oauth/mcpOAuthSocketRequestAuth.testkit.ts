@@ -145,6 +145,9 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
   const tls = await createEphemeralTlsServerFixture();
   cleanup.push(() => tls.cleanup());
   let acceptedToken = 'access-1';
+  let acceptedTokenExpiresAt = Number.POSITIVE_INFINITY;
+  let nextTokenExpiresIn = 3600;
+  let delayedAuthenticationFailures: { releases: Array<() => void>; ready(): void } | null = null;
   let failNextRequest = false;
   let failToolsDiscovery = false;
   const bearerRequests: string[] = [];
@@ -154,7 +157,14 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
     bearerRequests.push(request.headers.authorization ?? '');
     upstreamRequests.push({ method: request.method, path: request.url,
       authenticated: request.headers.authorization === `Bearer ${acceptedToken}` });
-    if (failNextRequest || request.headers.authorization !== `Bearer ${acceptedToken}`) {
+    if (request.method === 'POST' && delayedAuthenticationFailures && delayedAuthenticationFailures.releases.length < 2) {
+      delayedAuthenticationFailures.releases.push(() => {
+        response.writeHead(401, { 'www-authenticate': 'Bearer error="invalid_token"' }).end('{}');
+      });
+      if (delayedAuthenticationFailures.releases.length === 2) delayedAuthenticationFailures.ready();
+      return;
+    }
+    if (failNextRequest || request.headers.authorization !== `Bearer ${acceptedToken}` || Date.now() >= acceptedTokenExpiresAt) {
       failNextRequest = false;
       response.writeHead(401, { 'www-authenticate': 'Bearer error="invalid_token"' }).end('{}');
       return;
@@ -198,8 +208,9 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
       authorizationBodies.push(new URLSearchParams(Buffer.concat(body).toString('utf8')));
       tokenSequence++;
       acceptedToken = `access-${tokenSequence}`;
+      acceptedTokenExpiresAt = Date.now() + nextTokenExpiresIn * 1000;
       response.end(JSON.stringify({ access_token: acceptedToken, refresh_token: `refresh-${tokenSequence}`,
-        token_type: 'Bearer', expires_in: 3600, scope: 'read' }));
+        token_type: 'Bearer', expires_in: nextTokenExpiresIn, scope: 'read' }));
     } else { response.writeHead(404).end('{}'); }
   });
   await new Promise<void>(resolve => as.listen(0, '127.0.0.1', resolve));
@@ -472,7 +483,7 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
     expect(getActiveAccountSettingsSnapshot()?.mcpServerCatalog?.status).toBe('ready');
     failToolsDiscovery = true;
     const failedProbe = DaemonMcpServersTestResponseSchema.parse(await call(RPC_METHODS.DAEMON_MCP_SERVERS_TEST, testInput, false));
-    expect(failedProbe).toMatchObject({ ok: false, errorCode: 'mcp_connect_failed' });
+    expect(failedProbe).toMatchObject({ ok: false, errorCode: 'mcp_list_tools_failed' });
     failToolsDiscovery = false;
     expect(testCapabilityPaths).toHaveLength(2);
     for (const path of testCapabilityPaths) await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -553,6 +564,36 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
   expect(CallToolResultSchema.parse(await client.callTool({ name: 'ping', arguments: {} })).content).toEqual([{ type: 'text', text: 'pong' }]);
   expect(bearerRequests.slice(rotatedRequestStart)).toContain('Bearer access-3');
   expect(bearerRequests.slice(rotatedRequestStart)).not.toContain('Bearer access-2');
+  for (const replacementState of ['fresh', 'expired'] as const) {
+    const rejectedLease = await requestClient.lookupConnectedAccountRequestAuth({ purpose: MCP_REQUEST_AUTH_PURPOSE });
+    const tokenRequestsBefore = authorizationBodies.length;
+    const releaseFailures: Array<() => void> = [];
+    const requestsDelayed = new Promise<void>(ready => { delayedAuthenticationFailures = { releases: releaseFailures, ready }; });
+    const lateCalls = Promise.all(Array.from({ length: 2 }, () => client.callTool({ name: 'ping', arguments: {} })));
+    await Promise.race([requestsDelayed, lateCalls.then(() => { throw new Error('Parallel tool calls finished before reaching the delayed upstream'); })]);
+    const current = await readQualifiedConnectedAccountCredentialV4({ token, ref: beforeRefresh.ref });
+    if (!current || current.revisionSemantics !== 'revisioned') throw new Error('Persisted OAuth credential unavailable');
+    nextTokenExpiresIn = replacementState === 'expired' ? 0 : 3600;
+    expect(await refreshCoordinator.refreshQualifiedConnectedAccountCredentialForRequestAuth({ account: current.ref,
+      expectedCredentialRevision: current.credentialRevision })).toBe(true);
+    nextTokenExpiresIn = 3600;
+    const replacementLease = await requestClient.lookupConnectedAccountRequestAuth({ purpose: MCP_REQUEST_AUTH_PURPOSE });
+    expect(replacementLease.credentialContext.credentialRevision).not.toBe(rejectedLease.credentialContext.credentialRevision);
+    delayedAuthenticationFailures = null;
+    expect(releaseFailures).toHaveLength(2);
+    for (const release of releaseFailures) release();
+    for (const result of await lateCalls) {
+      expect(CallToolResultSchema.parse(result).content, `parallel late 401 with ${replacementState} replacement`)
+        .toEqual([{ type: 'text', text: 'pong' }]);
+    }
+    expect(authorizationBodies).toHaveLength(tokenRequestsBefore + (replacementState === 'expired' ? 2 : 1));
+    expect(CallToolResultSchema.parse(await client.callTool({ name: 'ping', arguments: {} })).content)
+      .toEqual([{ type: 'text', text: 'pong' }]);
+    const accounts = await listQualifiedConnectedAccountsV4({ token, service: beforeRefresh.ref.service });
+    const account = accounts.accounts.find(account => account.ref.accountId === beforeRefresh.ref.accountId);
+    expect(account).toBeDefined();
+    expect(account?.status).not.toBe('needs_reauth');
+  }
   active = false;
   await subjects.retireSessionCapabilities({ parentSessionId: issuance.parentSessionId, materializationId: 'composed-bridge' });
   await expect(stat(capability.capabilityFile)).rejects.toMatchObject({ code: 'ENOENT' });
