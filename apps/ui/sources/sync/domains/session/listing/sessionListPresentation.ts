@@ -16,6 +16,29 @@ export function resolveSessionListCacheServerId(
     return null;
 }
 
+// Immutable snapshots may outlive Home identity discovery. Preserve each unchanged row's
+// projected identity when another Home publishes or archive progress recomputes the list.
+const scopedSessionListItems = new WeakMap<SessionListViewItem, Map<string, SessionListViewItem>>();
+
+export function bindSessionListItemToServerScope(item: SessionListViewItem, serverId: string): SessionListViewItem {
+    if ((!item.serverId || item.serverId === serverId)
+        && (item.type !== 'header' || !item.workspaceScopeHint || item.workspaceScopeHint.serverId === serverId)) {
+        return item;
+    }
+    let byServer = scopedSessionListItems.get(item);
+    if (!byServer) {
+        byServer = new Map();
+        scopedSessionListItems.set(item, byServer);
+    }
+    const existing = byServer.get(serverId);
+    if (existing) return existing;
+    const scoped = item.type === 'header' && item.workspaceScopeHint
+        ? { ...item, serverId, workspaceScopeHint: { ...item.workspaceScopeHint, serverId } }
+        : { ...item, serverId };
+    byServer.set(serverId, scoped);
+    return scoped;
+}
+
 type ApplySessionListPresentationParams = Readonly<{
     enabled: boolean;
     presentation: ServerSelectionPresentation;
@@ -80,7 +103,7 @@ export function resolveSessionListSourceData(
         if (source.length === 0) continue;
         // Cached rows can predate identity discovery; presentation consumes current selected scopes.
         for (const item of source) {
-            merged.push(item.serverId && item.serverId !== serverId ? { ...item, serverId } : item);
+            merged.push(bindSessionListItemToServerScope(item, serverId));
         }
     }
 

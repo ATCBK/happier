@@ -255,7 +255,11 @@ pending operations; logging out clears them. Discovering a server identity while
 an archive is pending preserves progress and duplicate prevention across its
 equivalent profile identifiers. Archive and unarchive success update the request's
 captured server scope, including cached rows created before identity discovery
-and completion after the user switches servers. A missing runner permits an archive attempt,
+and completion after the user switches servers. The shared session-list cache
+publisher normalizes Home identifiers and retires equivalent alias buckets, so
+periodic refreshes and mutations update the same snapshot. Legacy warm rows retain
+stable projected identities while a Home's identity is discovered.
+A missing runner permits an archive attempt,
 but a server `session_active` conflict still fails immediately; it is not proof
 that the session stopped.
 
@@ -264,7 +268,9 @@ consumption, and any inactivity retries. It starts after Stop and defaults to
 75 seconds. `EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS=0` disables
 inactivity polling while retaining one request with the default finite deadline.
 Expiration cancels the HTTP read and releases admission so a user can retry;
-it does not prove that the server rolled back a write. Cold shared reachability
+the operation returns `session_archive_timeout` without a raw display message,
+so action surfaces use their existing translated archive failure message.
+Expiration does not prove that the server rolled back a write. Cold shared reachability
 activation retains its existing finite probe budget; a shorter archive deadline
 is observed after that activation finishes. Response consumers run
 inside the existing HTTP cancellation lifetime, and parsing failures do not
