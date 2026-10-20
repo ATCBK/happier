@@ -2637,6 +2637,8 @@ const pl: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `Nie udało się umieścić ${item} pod ${target}`,
         refused: ({ verb }) => `${verb}: nie udało się`,
         unknown: ({ verb }) => `Nie wiadomo, czy „${verb}” się udało`,
+        pendingTitle: 'Nie udało się przenieść',
+        pendingDetail: 'Happier wciąż sprawdzał to miejsce. Spróbuj ponownie.',
         dismiss: 'Zamknij',
     },
     reasons: {

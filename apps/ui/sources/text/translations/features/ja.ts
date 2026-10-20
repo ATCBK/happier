@@ -2624,6 +2624,8 @@ const ja: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `${item} を ${target} の下に置けませんでした`,
         refused: ({ verb }) => `${verb}：完了しませんでした`,
         unknown: ({ verb }) => `「${verb}」が完了したか不明です`,
+        pendingTitle: '移動できませんでした',
+        pendingDetail: 'Happier はまだその場所を確認していました。もう一度お試しください。',
         dismiss: '閉じる',
     },
     reasons: {

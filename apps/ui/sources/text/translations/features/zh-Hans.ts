@@ -2619,6 +2619,8 @@ const zhHans: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `无法将 ${item} 放到 ${target} 之下`,
         refused: ({ verb }) => `${verb}：未完成`,
         unknown: ({ verb }) => `不确定“${verb}”是否已完成`,
+        pendingTitle: '无法移动',
+        pendingDetail: 'Happier 仍在确认该位置。请重试。',
         dismiss: '关闭',
     },
     reasons: {

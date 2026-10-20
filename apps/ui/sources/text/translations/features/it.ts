@@ -2626,6 +2626,8 @@ const it: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `Impossibile mettere ${item} sotto ${target}`,
         refused: ({ verb }) => `${verb}: non è andato a buon fine`,
         unknown: ({ verb }) => `Non è chiaro se «${verb}» sia andato a buon fine`,
+        pendingTitle: 'Non è stato possibile spostarla',
+        pendingDetail: 'Happier stava ancora verificando quel punto. Riprova.',
         dismiss: 'Ignora',
     },
     reasons: {

@@ -2626,6 +2626,8 @@ const fr: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `Impossible de placer ${item} sous ${target}`,
         refused: ({ verb }) => `${verb} : n’a pas abouti`,
         unknown: ({ verb }) => `Pas sûr que « ${verb} » ait abouti`,
+        pendingTitle: 'Déplacement impossible',
+        pendingDetail: 'Happier vérifiait encore cet emplacement. Réessayez.',
         dismiss: 'Ignorer',
     },
     reasons: {

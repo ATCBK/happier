@@ -2620,6 +2620,8 @@ const de: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `${item} konnte nicht unter ${target} eingeordnet werden`,
         refused: ({ verb }) => `${verb}: hat nicht geklappt`,
         unknown: ({ verb }) => `Unklar, ob „${verb}“ geklappt hat`,
+        pendingTitle: 'Konnte nicht verschoben werden',
+        pendingDetail: 'Happier hat diese Stelle noch geprüft. Versuche es erneut.',
         dismiss: 'Ausblenden',
     },
     reasons: {

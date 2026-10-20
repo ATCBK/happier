@@ -2646,6 +2646,8 @@ const ru: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `Не удалось поместить ${item} под ${target}`,
         refused: ({ verb }) => `${verb}: не получилось`,
         unknown: ({ verb }) => `Неясно, получилось ли «${verb}»`,
+        pendingTitle: 'Не удалось переместить',
+        pendingDetail: 'Happier ещё проверял это место. Попробуйте ещё раз.',
         dismiss: 'Скрыть',
     },
     reasons: {

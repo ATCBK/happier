@@ -2626,6 +2626,8 @@ const ca: EntityDragDropTranslations = {
         refusedPutUnder: ({ item, target }) => `No s’ha pogut posar ${item} sota ${target}`,
         refused: ({ verb }) => `${verb}: no s’ha completat`,
         unknown: ({ verb }) => `No és segur que «${verb}» s’hagi completat`,
+        pendingTitle: 'No s’ha pogut moure',
+        pendingDetail: 'Happier encara estava comprovant aquest lloc. Torna-ho a provar.',
         dismiss: 'Descarta',
     },
     reasons: {
