@@ -448,6 +448,12 @@ export async function claudeLocalLauncher(
             const resumeFromSessionId = session.sessionId;
             const resumeFromTranscriptPath = session.transcriptPath;
             const expectsFork = resumeFromSessionId !== null;
+            const restoreUnconfirmedFork = () => {
+                if (expectsFork && session.sessionId === null) {
+                    session.sessionId = resumeFromSessionId;
+                    session.transcriptPath = resumeFromTranscriptPath;
+                }
+            };
             if (expectsFork) {
                 // Starting local mode from an existing session uses `--resume`, which forks
                 // to a new Claude session ID and transcript file. Clear the current
@@ -509,6 +515,12 @@ export async function claudeLocalLauncher(
                     lifecycleTracker.observeProcessExit({ providerStopped: providerStopped === true });
                     await Promise.resolve();
                 }
+                // A cancelled pre-spawn attempt has no child exit and cannot have forked the
+                // native session. Keep the prior resume identity and unconsumed launch flags.
+                if (processAbortController.signal.aborted && providerStopped === undefined) {
+                    restoreUnconfirmedFork();
+                    break;
+                }
                 if (providerStopped === false && abortingForModeSwitch) {
                     throw new ClaudeNativeProviderExitUnverifiedError();
                 }
@@ -530,12 +542,6 @@ export async function claudeLocalLauncher(
                     ? new AggregateError([e, new ClaudeNativeProviderExitUnverifiedError()],
                         'Claude local replacement refused with unverified provider termination', { cause: e })
                     : e;
-                const restoreUnconfirmedFork = () => {
-                    if (expectsFork && session.sessionId === null) {
-                        session.sessionId = resumeFromSessionId;
-                        session.transcriptPath = resumeFromTranscriptPath;
-                    }
-                };
                 if (hasUnverifiedProviderTermination(launchError)) {
                     restoreUnconfirmedFork();
                     session.client.sendSessionEvent({ type: 'message', message: formatErrorForUi(launchError) });

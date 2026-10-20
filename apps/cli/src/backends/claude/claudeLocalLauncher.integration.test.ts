@@ -711,6 +711,27 @@ describe('claudeLocalLauncher', () => {
     expect(mockClaudeLocal).toHaveBeenCalledOnce();
   });
 
+  it('retains the resume identity and one-time args when a mode switch cancels before the child starts', async () => {
+    const { session, switchHandlerReady } = createLocalHarness();
+    session.sessionId = 'retained-native-session';
+    session.transcriptPath = '/tmp/retained-native-session.jsonl';
+    session.claudeArgs = ['--continue'];
+    let switching: Promise<unknown> | undefined;
+    mockClaudeLocal.mockImplementationOnce(async opts => {
+      // The process adapter returns without an exit observation when its pre-spawn guard fires.
+      const switchHandler = await switchHandlerReady;
+      switching = Promise.resolve(switchHandler({ to: 'remote' }));
+      await waitForAbort(opts.abort);
+    });
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+
+    await expect(claudeLocalLauncher(session)).resolves.toEqual({ type: 'switch' });
+    await switching;
+    expect(session.sessionId).toBe('retained-native-session');
+    expect(session.transcriptPath).toBe('/tmp/retained-native-session.jsonl');
+    expect(session.claudeArgs).toContain('--continue');
+  });
+
   it('ends a local retry backoff promptly when runner termination aborts the launcher', async () => {
     const { session } = createLocalHarness();
     const launchFailed = createDeferred<void>();
