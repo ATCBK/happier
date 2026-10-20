@@ -3716,12 +3716,29 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return await createUiAccountAction({ account: accountContext })(invocation);
     },
     sessionTranscriptGet: async (input) => {
-      if (input.context.surface !== 'voice') {
-        if (!accountContext) return { ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' };
-        return await readSessionTranscriptForAction(input, { serverId: accountContext.serverId, accountId: accountContext.accountId });
+      // Natural Voice references acquire their exact Home at the target resolver,
+      // after the outer executor's Account capture. Borrow that resolved Home's
+      // canonical lifetime here; focus and attempt-local state confer no authority.
+      let captured: LazyActionAccountContext | undefined;
+      try {
+        if (!accountContext && input.serverId) captured = await captureLazyActionAccountContext(input.serverId, input.signal);
+        const account = accountContext ?? captured;
+        if (!account) return { ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' };
+        assertExpectedActionAccount(account, input.context);
+        account.assertCurrent();
+        const scope = { serverId: account.serverId, accountId: account.accountId };
+        const result = input.context.surface === 'voice'
+          ? await getSessionTranscriptForVoiceTool(input, scope)
+          : await readSessionTranscriptForAction(input, scope);
+        account.assertCurrent();
+        return result;
+      } catch (error) {
+        if (isActionAccountScopeChangedError(error)) return { ok: false, errorCode: 'action_account_scope_changed', errorMessage: 'action_account_scope_changed' };
+        if (error instanceof ActionAdmissionHomeUnreachableError) return { ok: false, errorCode: 'server_unreachable', errorMessage: 'server_unreachable' };
+        throw error;
+      } finally {
+        captured?.dispose();
       }
-      return await getSessionTranscriptForVoiceTool(input, accountContext
-        ? { serverId: accountContext.serverId, accountId: accountContext.accountId } : undefined);
     },
     sessionRecentMessagesGet: async ({ sessionId, serverId, limit, cursor, includeUser, includeAssistant, maxCharsPerMessage }) =>
       await getSessionRecentMessagesForVoiceTool({ sessionId, serverId, limit, cursor, includeUser, includeAssistant, maxCharsPerMessage }),
