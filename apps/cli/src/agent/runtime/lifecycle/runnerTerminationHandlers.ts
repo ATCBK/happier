@@ -113,6 +113,7 @@ export function registerRunnerTerminationHandlers(params: Readonly<{
             terminationKind: event.kind,
             cause: formatErrorForUi(error),
           });
+          logger.flushSync();
         } catch {
           // Diagnostics must never replace the original termination outcome.
         }

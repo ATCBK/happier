@@ -2554,6 +2554,32 @@ describe('managed-services SVC09 owner', () => {
         expect(hostFetch).not.toHaveBeenCalled();
     });
 
+    it('admits a complete request at the SVC09 body boundary and rejects contract violations before transport', async () => {
+        const hostFetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+        const harness = createHarness(hostFetch);
+        const handle = await harness.owner.bindScope(harness.scope, exec).supervise({
+            id: 'gateway',
+            mode: { kind: 'spawn', launch: { executable: {} as never },
+                endpoint: { kind: 'assignAndInject', port: { kind: 'fixed', port: 4312 } } },
+        });
+        try {
+            for (const request of [
+                { body: new Uint8Array(16 * 1024 * 1024 + 1) },
+                { timeoutMs: 300_001 },
+            ]) {
+                await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST', ...request }))
+                    .rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
+            }
+            expect(hostFetch).not.toHaveBeenCalled();
+            await expect(handle.request({ pathAndQuery: '/prompt', method: 'POST',
+                body: new Uint8Array(16 * 1024 * 1024), timeoutMs: 300_000 }))
+                .resolves.toMatchObject({ status: 204 });
+            expect(hostFetch).toHaveBeenCalledOnce();
+        } finally {
+            await handle.dispose();
+        }
+    });
+
     // Cancellation provenance while response headers are still outstanding. Both cases fail at the
     // same owner statement, so they are only distinguishable if that statement reads the caller's
     // own signal instead of the composed lifetime.

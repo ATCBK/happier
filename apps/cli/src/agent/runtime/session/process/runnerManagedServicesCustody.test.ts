@@ -642,6 +642,61 @@ describe('runner managed-services Provider custody', () => {
         });
     });
 
+    it('waits for exact-handle response headers under caller lifetime and propagates cancellation', async () => {
+        vi.useFakeTimers();
+        const scope = providerScope('session-delayed-headers', 'provider-p');
+        const cancelled: string[] = [];
+        const dispatch: RunnerManagedServicesCustodyDispatchV1 = async (request) => {
+            if (request.kind !== 'adopt') throw new Error('Expected adoption');
+            return { v: 1, kind: 'handle', custodyScope: scope, snapshot: snapshot(request.serviceId) };
+        };
+        const service = await createRunnerManagedServicesClient({
+            claim: providerClaim(scope),
+            dependencies: {} as ManagedDependenciesService,
+            dispatch,
+            endpointReadRpc: {
+                async call(input) {
+                    const request = input.request as { requestId: string };
+                    if (input.method === MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.CANCEL) {
+                        cancelled.push(request.requestId);
+                        return { v: 1, requestId: request.requestId, status: 'cancelled', cancelled: true };
+                    }
+                    return await new Promise<unknown>((resolve, reject) => {
+                        const timer = setTimeout(() => reject(new Error('RPC call timeout')), input.timeoutMs);
+                        const response = setTimeout(() => {
+                            clearTimeout(timer);
+                            resolve({ v: 1, requestId: request.requestId, status: 'opened',
+                                response: { status: 204, statusText: 'No Content', headers: [], hasBody: false } });
+                        }, 350_000);
+                        const abort = () => {
+                            clearTimeout(timer);
+                            clearTimeout(response);
+                            reject(input.signal?.reason);
+                        };
+                        input.signal?.addEventListener('abort', abort, { once: true });
+                        if (input.signal?.aborted) abort();
+                    });
+                },
+            },
+        }).adopt(spec.id);
+        try {
+            const pending = service.request({ pathAndQuery: '/prompt' })
+                .then(value => ({ status: value.status }), error => ({ error }));
+            await vi.advanceTimersByTimeAsync(350_000);
+            expect(await pending).toEqual({ status: 204 });
+
+            const caller = new AbortController();
+            const cancelledRequest = service.request({ pathAndQuery: '/prompt', signal: caller.signal })
+                .then(() => null, error => error);
+            await vi.advanceTimersByTimeAsync(1);
+            caller.abort('caller cancelled');
+            expect(await cancelledRequest).toMatchObject({ code: 'plugin_operation_aborted' });
+            expect(cancelled).toHaveLength(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('keeps a streamed exact-handle response readable beyond its establishment timeout while caller abort still cancels', async () => {
         vi.useFakeTimers();
         const scope = providerScope(
