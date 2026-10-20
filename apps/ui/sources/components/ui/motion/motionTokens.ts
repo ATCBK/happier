@@ -2,6 +2,11 @@ import { HAPPIER_MOTION_V1, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugi
 import { Easing } from 'react-native';
 
 export const motionTokens = {
+    gesture: {
+        /** Shared movement tolerance before a tap becomes a drag. */
+        slopPx: 12,
+        doubleTapMs: 300,
+    },
     durationMs: {
         instant: 0,
         /** Press acknowledgement: fast enough to feel immediate under the finger. */

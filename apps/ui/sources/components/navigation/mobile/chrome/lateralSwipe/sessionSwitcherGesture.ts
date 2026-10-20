@@ -22,6 +22,7 @@
  */
 
 import type { SessionNavigationDirection } from '@/sync/domains/session/navigation/sessionNavigationOrder';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 // Worklet-safe primitives stay ABOVE every worklet that uses them: Reanimated's plugin turns a
 // hoisted `function` into a non-hoisted assignment, so a worklet built earlier would capture
@@ -37,7 +38,7 @@ function abs(value: number): number {
 }
 
 /** Movement before the bar's gesture claims the touch. Wider than a tab's `hitSlop: 8`, so a sloppy tap never arms it. */
-export const SESSION_SWITCHER_ACTIVATION_PX = 12;
+export const SESSION_SWITCHER_ACTIVATION_PX = motionTokens.gesture.slopPx;
 /** Upward travel at which the ghost locks into the scrubber (≈⅕ of the space above the bar on a 390×844 phone). Device-tunable. */
 export const SESSION_SWITCHER_LOCK_PX = 120;
 /** The bar rises at this fraction of the finger, so after the lock the thumb lands on the first row with room below it. */
