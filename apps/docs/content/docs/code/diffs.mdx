@@ -144,9 +144,9 @@ a finding or opening code does not mark it reviewed. Loading marks is an unknown
 state, not a confirmed zero count. Deleting a saved explanation leaves your marks
 intact; use Reset review to clear them.
 
-That content retention is implemented for working-tree, Session and turn
-reviews. Refreshing a PR's base or head can still reset visible marks in this
-development integration; that path is not complete.
+That content retention also applies when a PR's base or head is refreshed:
+unchanged change content keeps its marks within the same repository and PR scope.
+This is unreleased development behavior, with live integration still being validated.
 
 ### Edit or discuss a saved walkthrough
 

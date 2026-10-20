@@ -773,9 +773,10 @@ Retained bare-turn capture and saved-result comparisons are qualified on read
 from their stored Session/turn/receipt metadata by the capture source owner.
 This is a projection, not a database or Account-KV backfill; comparison and
 occurrence IDs remain unchanged. Ambiguous old bare-turn mark records are not
-guessed into new scopes or deleted. PR witness refresh currently changes the
-reviewed scope key; endpoint-independent PR marks remain an unresolved
-development contract, not a completed compatibility guarantee.
+guessed into new scopes or deleted. PR reviewed scopes reuse the existing
+comparison identity without endpoint or request-witness inputs. A witness refresh
+does not change that scope; the request freshness key remains witness-sensitive.
+Other reviewed scope keys are unchanged. This is unreleased development behavior.
 
 V2 is an explicit operation epoch because the captured selector is an
 authority-bearing input, not an ignorable optional field. A terminal supporting
