@@ -86,6 +86,7 @@ async function render(
   state: 'ready' | 'error' | 'machine_unreachable' | 'resolving' = 'ready',
   options: Readonly<{
     preview?: boolean;
+    knownRows?: Readonly<{ skills: number; mcp: number }>;
     undo?: Parameters<
       typeof import('./SessionCapabilitiesContent').SessionCapabilitiesContent
     >[0]['undo'];
@@ -123,6 +124,7 @@ async function render(
       }}
       onRetry={onRetry}
       undo={options.undo}
+      knownRows={options.knownRows}
       machineName="nl2"
       testID="caps"
     />,
@@ -247,6 +249,21 @@ describe('SessionCapabilitiesContent', () => {
     expect(
       loading.screen.findAll((node) => node.props?.children === t('capabilities.session.costUnknown')),
     ).toHaveLength(0);
+  });
+
+  it('reserves the box the loaded groups will fill: what each held when last seen, else a full preview', async () => {
+    const placeholders = (screen: Awaited<ReturnType<typeof render>>['screen'], testID: string) =>
+      screen.findAll((node) => node.props?.testID === `${testID}:skeleton-row`).length;
+    const unknown = await render([], 'resolving', { preview: false });
+    const known = await render([], 'resolving', { preview: false, knownRows: { skills: 3, mcp: 9 } });
+    const fullPreview = placeholders(unknown.screen, 'caps:resolving');
+    // Unknown: a full preview in both groups. Known: 3 rows for the skills group; the MCP group (9) reserves a full
+    // preview and the "n more" line below it.
+    expect(placeholders(unknown.screen, 'caps:resolving:mcp')).toBe(fullPreview);
+    expect(placeholders(known.screen, 'caps:resolving')).toBeLessThan(fullPreview);
+    expect(placeholders(known.screen, 'caps:resolving:mcp')).toBe(fullPreview);
+    expect(known.screen.findAll((node) => node.props?.testID === 'caps:resolving-more:mcp').length).toBeGreaterThan(0);
+    expect(known.screen.findAll((node) => node.props?.testID === 'caps:resolving-more:skills')).toHaveLength(0);
   });
 
   it('says an offline machine once and never claims empty groups it could not check', async () => {

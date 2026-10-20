@@ -52,7 +52,7 @@ const { resolveSessionCapabilitiesV1 } = await import('@happier-dev/protocol/rea
 const { SessionCapabilitiesGetOutputV1Schema } = await import('@happier-dev/protocol/actions/specs/sessionCapabilities');
 const { buildSessionCapabilitiesModel } = await import('./sessionCapabilitiesModel');
 const { SessionCapabilitiesContent } = await import('./SessionCapabilitiesContent');
-const { applyMcpServerCatalogSnapshot } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
+const { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
 const { McpServerCatalogV1Schema } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
 const { MetadataSchema } = await import('@happier-dev/session-core/state');
 const { SessionSkillCatalogListResponseV1Schema } = await import('@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc');
@@ -301,14 +301,24 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
     groups: expect.arrayContaining([expect.objectContaining({ kind: 'mcp', rows: expect.arrayContaining([
       expect.objectContaining({ id: 'linear', line2: { kind: 'cost', cost: { toolCount: 1, tokensPerTurn: 1400 } } }),
     ]) })]) });
-  expect(sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[0].nativeRow.rows.map((row: { id: string }) => row.id)).toEqual(['native-review']);
+  // Closing the sheet drops its detail owners. A reopened sheet shows the cost facts the Session's sheet last knew
+  // while the Account rows they come from are read again, and holds the rows it had.
+  await sheet.unmount();
+  resetMcpServerCatalogSnapshotsForTests();
+  const reopened = await renderScreen(<>{content({ maxHeight: 500, requestClose: () => {} })}</>);
+  const reopenedLinear = reopened.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows
+    .find((row: { id: string }) => row.id === 'linear');
+  expect(reopenedLinear).toMatchObject({ line2: { kind: 'cost', cost: { toolCount: 1, tokensPerTurn: 1400 } } });
+  // The re-read lands: the same facts, now from the rows themselves.
+  await act(async () => applyMcpServerCatalogSnapshot(scope, { status: 'ready', revision: 2, catalog, authority: 'active', diagnostics: [] }, true));
+  expect(reopened.findByType(SessionCapabilitiesContent)?.props.model.groups[0].nativeRow.rows.map((row: { id: string }) => row.id)).toEqual(['native-review']);
   const notice = normalizeRawMessage('capability-failure', null, 2, { role: 'agent', content: { type: 'event', id: 'capability-failure', data: {
     type: 'message', message: 'Optional server failed', capabilityNoticeV1: { v: 1,
       items: [{ kind: 'mcp_server', itemId: 'linear', name: 'linear', code: 'spawn_failed' }] },
   } } });
   if (!notice) throw new Error('Expected a normalized capability notice');
   await act(async () => { getStorage().getState().applyMessages(sessionId, [notice]); });
-  const failedRow = sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows.find((row: { id: string }) => row.id === 'linear');
+  const failedRow = reopened.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows.find((row: { id: string }) => row.id === 'linear');
   expect(failedRow).toMatchObject({ line2: { kind: 'status', status: { kind: 'error' } } });
   expect(failedRow.line2.status.detail).toBeUndefined();
   const callsAfterFacts = transport.mock.calls.length;
