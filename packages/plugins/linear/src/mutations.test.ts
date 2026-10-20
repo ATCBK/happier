@@ -3,6 +3,32 @@ import { createLinearIssue, editLinearIssue, transitionLinearIssue, commentLinea
 import { host, instance, issue, localRef, page } from './fixtures.test-support.js';
 
 describe('Linear native writes', () => {
+  it('requires a team for workspace creation and authorizes the selected team before dispatch', async () => {
+    const scoped = (teams: unknown) => ({ ...instance, localInstanceKey: 'linear',
+      configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams, involvement: 'mine' }) } });
+    let returnedTeam = issue.team;
+    const h = host(({ operationName, variables }) => {
+      if (operationName === 'LinearTeam') return { team: { id: 'team-1' } };
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearCreate') {
+        expect(variables.input).toEqual({ teamId: 'team-1', title: 'Workspace task' });
+        return { issueCreate: { success: true, issue: { id: issue.id } } };
+      }
+      return { issue: { ...issue, team: returnedTeam, title: 'Workspace task' } };
+    });
+    const all = scoped({ kind: 'all' });
+    expect(await createLinearIssue({ v: 1, instance: all, kindId: 'issue', fields: { title: 'Workspace task' } }, h.context))
+      .toEqual({ kind: 'refused', reason: 'linear/teamRequired' });
+    expect(await createLinearIssue({ v: 1, instance: scoped({ kind: 'selected', unitIds: ['team-2'] }), kindId: 'issue',
+      fields: { title: 'Workspace task', scopeId: 'team-1' } }, h.context)).toEqual({ kind: 'refused', reason: 'linear/teamMismatch' });
+    expect(h.request).not.toHaveBeenCalled();
+    expect(await createLinearIssue({ v: 1, instance: all, kindId: 'issue', fields: { title: 'Workspace task', scopeId: 'team-1' } }, h.context))
+      .toMatchObject({ kind: 'applied', observation: { snapshot: { title: 'Workspace task' } } });
+    returnedTeam = { id: 'team-2', name: 'Operations', key: 'OPS' };
+    expect(await createLinearIssue({ v: 1, instance: all, kindId: 'issue', fields: { title: 'Workspace task', scopeId: 'team-1' } }, h.context))
+      .toMatchObject({ kind: 'uncertain' });
+  });
+
   it('creates once in the configured team and confirms the returned fields by rereading', async () => {
     let created = false;
     const h = host(({ operationName, variables }) => {
