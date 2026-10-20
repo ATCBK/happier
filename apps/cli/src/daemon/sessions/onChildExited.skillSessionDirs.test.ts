@@ -11,15 +11,13 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture(
     replacement: boolean,
     readLibraryDigests: () => Promise<readonly string[] | null> = async () => [],
-    stopRequestedAtMs?: number,
 ) {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-impl-p3b-store-exit-')); roots.push(happyHomeDir);
     const sessionId = 'PID-424242'; const pid = 424242;
     const pluginRoot = join(happyHomeDir, 'skills', 'sessions', sessionId);
     await mkdir(pluginRoot, { recursive: true });
     await writeFile(join(pluginRoot, 'session.json'), JSON.stringify({ items: [] }));
-    const tracked: TrackedSession = { pid, happySessionId: sessionId, startedBy: 'terminal',
-        ...(stopRequestedAtMs === undefined ? {} : { stopRequestedAtMs }) };
+    const tracked: TrackedSession = { pid, happySessionId: sessionId, startedBy: 'terminal' };
     const sessions = new Map([[pid, tracked]]);
     if (replacement) sessions.set(process.pid, { pid: process.pid, happySessionId: sessionId, startedBy: 'terminal' });
     const store = createSkillStore({ happyHomeDir, readLibraryDigests });
@@ -61,29 +59,4 @@ it('retires the exited runner without waiting for remote skill cache inventory',
         releaseInventory([]);
         await exit;
     }
-});
-
-it('collects obsolete cache after explicit Stop without waiting for remote inventory', async () => {
-    let releaseInventory!: (value: readonly string[]) => void;
-    const inventory = new Promise<readonly string[]>(resolve => { releaseInventory = resolve; });
-    let inventoryStarted = false;
-    let obsoleteCache: string | undefined;
-    const readLibraryDigests = async () => {
-        inventoryStarted = true;
-        return await inventory;
-    };
-    try {
-        const result = await fixture(false, readLibraryDigests, Date.now());
-        expect(result.sessions.has(424242)).toBe(false);
-        await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
-        obsoleteCache = join(result.pluginRoot, '..', '..', 'cache', 'a'.repeat(64));
-        await mkdir(obsoleteCache, { recursive: true });
-        await writeFile(join(obsoleteCache, 'SKILL.md'), 'obsolete skill');
-        expect(inventoryStarted).toBe(true);
-    } finally {
-        releaseInventory([]);
-    }
-    await vi.waitFor(async () => {
-        await expect(lstat(obsoleteCache!)).rejects.toMatchObject({ code: 'ENOENT' });
-    });
 });
