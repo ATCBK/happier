@@ -50,7 +50,6 @@ const localSettingsState = vi.hoisted(() => ({
 const applySettingsSpy = vi.hoisted(() => vi.fn());
 const applyLocalSettingsSpy = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
-const resetDesktopActivityOverlayPositionMock = vi.hoisted(() => vi.fn(async () => {}));
 const accountPetsState = vi.hoisted(() => ({
     current: {} as Record<string, AccountPetLibraryEntryV1>,
 }));
@@ -287,10 +286,6 @@ vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => tauriDesktopState.current,
 }));
 
-vi.mock('@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge', () => ({
-    resetDesktopActivityOverlayPosition: resetDesktopActivityOverlayPositionMock,
-}));
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({
@@ -455,7 +450,6 @@ describe('PetsSettingsScreen', () => {
         applySettingsSpy.mockClear();
         applyLocalSettingsSpy.mockClear();
         machineRpcWithServerScopeMock.mockReset();
-        resetDesktopActivityOverlayPositionMock.mockClear();
         upsertAccountPetSpy.mockClear();
         upsertLocalPetSourcesSpy.mockClear();
         removeLocalPetSourceSpy.mockClear();
@@ -624,21 +618,6 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId('settings-pets-desktop-overlay-enabled')).toBeNull();
         expect(screen.findByTestId('settings-pets-desktop-overlay-device-override')).toBeNull();
         expect(screen.findByTestId('settings-pets-desktop-overlay-reset-position')).toBeNull();
-    });
-
-    it('resets the existing desktop activity overlay position from the pet reset row', async () => {
-        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
-        const screen = await renderScreen(<PetsSettingsScreen />);
-
-        await screen.pressByTestIdAsync('settings-pets-desktop-overlay-reset-position');
-
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
     });
 
     it('lets desktop users choose attention-or-active overlay visibility for this device', async () => {

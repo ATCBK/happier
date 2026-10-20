@@ -7,7 +7,6 @@ import type { SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoic
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { resetDesktopActivityOverlayPosition } from '@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge';
 import {
     BUILT_IN_PET_IDS,
     resolveBuiltInPetPackage,
@@ -27,6 +26,8 @@ import { normalizeLocalPetSourceMetadata } from '@/sync/domains/pets/normalizeLo
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { PETS_SETTINGS } from '@/components/settings/pets/petsSettings';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -95,6 +96,7 @@ export function PetsSettingsScreen() {
     const localPetSourcesBySourceKey = storage((state) => state.localPetSourcesBySourceKey);
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const writeSetting = useSettingActionWriter();
     const companionEnabled = useFeatureEnabled('pets.companion');
     const syncEnabled = useFeatureEnabled('pets.sync');
     const [desktopOverlayVisibilityModeOpen, setDesktopOverlayVisibilityModeOpen] = React.useState(false);
@@ -409,16 +411,10 @@ export function PetsSettingsScreen() {
     }, [applyLocalSettings, applySettings, localSettings.petsSelectedPetOverride.kind]);
 
     const handleResetDesktopOverlayPosition = React.useCallback(() => {
-        applyLocalSettings({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        fireAndForget(resetDesktopActivityOverlayPosition(), {
+        fireAndForget(writeSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored'), {
             tag: 'PetsSettingsScreen.resetDesktopActivityOverlayPosition',
         });
-    }, [applyLocalSettings]);
+    }, [writeSetting]);
 
     const selectedBuiltInPetId =
         localSettings.petsSelectedPetOverride.kind === 'inherit'
