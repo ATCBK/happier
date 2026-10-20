@@ -76,8 +76,9 @@ function describeWidgetAdmissionPending(verdict: HappierDropVerdict): HappierRel
     const admission = verdict.admission;
     if (admission?.status !== 'refused' || admission.reason.code !== WIDGET_MOVE_PENDING_CODE) return null;
     if (verdict.phase === 'carrying') return { tone: 'quiet', glyph: 'move', title: admission.reason.message };
+    // Released before the answer: the card came back, and the line says why in the past tense.
     return verdict.phase === 'settled'
-        ? { tone: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: admission.reason.message } : null;
+        ? { tone: 'refused', title: t('entityDragDrop.settled.pendingTitle'), detail: t('entityDragDrop.settled.pendingDetail') } : null;
 }
 
 /** The release preview for the drag owner's verdict, in Happier's words. */

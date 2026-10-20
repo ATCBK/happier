@@ -79,10 +79,12 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
         const carrying = describeEntityDropOutcome({ phase: 'carrying', admission });
         expect(carrying).toMatchObject({ tone: 'quiet', title: checking });
         expect(carrying?.title).not.toContain('Move below');
-        // Released before the answer: it springs back with the reason, and the source row keeps the same line.
+        // Released before the answer: it springs back, and the source card keeps one coherent line: it could not move, and why, in the past tense.
+        const settledLine = { title: t('entityDragDrop.settled.pendingTitle'), detail: t('entityDragDrop.settled.pendingDetail') };
         const verdict = { phase: 'settled' as const, admission, outcome: { status: 'refused' as const, reason: admission.reason } };
-        expect(describeEntityDropOutcome(verdict)).toEqual({ tone: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
-        expect(describeEntityDropSettled(verdict)).toMatchObject({ kind: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
+        expect(describeEntityDropOutcome(verdict)).toEqual({ tone: 'refused', ...settledLine });
+        expect(describeEntityDropSettled(verdict)).toMatchObject({ kind: 'refused', ...settledLine });
+        expect(settledLine.detail).not.toBe(checking);
     });
 
     it('names a late relation refusal by item and lead, and any other one by its verb', () => {

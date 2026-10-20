@@ -225,7 +225,11 @@ export function SessionSurfaceEntityFeedback(props: Readonly<{ kind: SurfaceFeed
     const snapshot = useEntityDragDropSnapshot(runtime);
     const hints = useEntityStagedMoveHints();
     const latest = React.useRef(props); latest.current = props;
-    const settledMatch = React.useMemo<EntityDropSettledMatch>(() => ({ item: item => surfaceFeedbackMatches(item, latest.current) }), []);
+    // A Home card keeps its lasting line under itself (HubWidgetSection), where the person released it;
+    // the page-level host never repeats it far from the card.
+    const settledMatch = React.useMemo<EntityDropSettledMatch>(() => ({
+        item: item => item.kind !== 'home-section' && surfaceFeedbackMatches(item, latest.current),
+    }), []);
     // A foreground list announces and clears its own move from acknowledged
     // order. The surrounding surface must not keep a second runtime-only voice.
     const sourceAnnounces = snapshot.sourceId !== null && runtime.describeSource(snapshot.sourceId)?.announcementOwner === 'source';

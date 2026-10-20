@@ -24,6 +24,7 @@ import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCar
 import { WidgetFrameBodyCaptionContext, WidgetFrameBodyMetaContext } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { widgetGroupFollowSource } from '@/components/widgets/group/widgetGroupInputs';
 import { useIsTablet } from '@/utils/platform/responsive';
+import { EntityDropSettledFeedback, type EntityDropSettledMatch } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
 import { useSessionSurfaceEntityDrag, useSessionSurfaceCarriedStyle, SessionSurfaceEntityDragHandle, SessionSurfaceEntityTargetFeedback, type SessionSurfaceEntityBinding } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 
 
@@ -168,9 +169,14 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
         ),
     }), [active, bodyHeight, onBodyLayout, props.testID, descriptor, props.instance, props.onRepairInputs, size]);
 
+    const settledMatch = React.useMemo<EntityDropSettledMatch>(() => ({
+        item: item => item.kind === 'home-section' && item.sectionId === props.instance.id,
+    }), [props.instance.id]);
     if (switchedOff) return null;
     return (
         <View ref={node => { sectionRef.current = node; drag.ref(node); }} collapsable={false} testID={props.testID} onLayout={() => { measure(); drag.onLayout(); }} style={[styles.cell, carriedStyle]} {...props.hoverProps}>
+            {/* A released move that came back keeps its one line under this card, where it was let go. */}
+            <EntityDropSettledFeedback runtime={drag.runtime} match={settledMatch} fill testID={`${props.testID}.drop-feedback`}>
             <WidgetFrame
                 testID={`${props.testID}.frame`}
                 frameStyle={props.frameStyle}
@@ -190,6 +196,7 @@ export const HubWidgetSection = React.memo(function HubWidgetSection(props: Read
                 body={body}
                 footer={props.sectionHost ? null : footer}
             />
+            </EntityDropSettledFeedback>
             <SessionSurfaceEntityTargetFeedback drag={drag} testID={`${props.testID}.drop`} />
         </View>
     );

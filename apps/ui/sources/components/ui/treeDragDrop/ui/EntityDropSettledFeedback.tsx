@@ -137,6 +137,8 @@ function SettledFlash(props: Readonly<{ style?: StyleProp<ViewStyle>; testID?: s
     );
 }
 
+const FILL_STYLE = { flexGrow: 1 } as const;
+
 export function EntityDropSettledFeedback(props: Readonly<{
     runtime: EntityDragDropRuntime;
     match: EntityDropSettledMatch;
@@ -144,6 +146,8 @@ export function EntityDropSettledFeedback(props: Readonly<{
     flashStyle?: StyleProp<ViewStyle>;
     /** Where the line sits under the row (its inset matches the row's content). */
     lineStyle?: StyleProp<ViewStyle>;
+    /** The row stretches to its grid cell, so the wrappers carry that room down to it. */
+    fill?: boolean;
     testID?: string;
     children?: React.ReactNode;
 }>): React.ReactElement {
@@ -153,8 +157,8 @@ export function EntityDropSettledFeedback(props: Readonly<{
     const outcome = notice?.verdict.outcome;
     const dismiss = settledNotices(props.runtime).dismiss;
     return (
-        <View>
-            <View>
+        <View style={props.fill ? FILL_STYLE : undefined}>
+            <View style={props.fill ? FILL_STYLE : undefined}>
                 {props.children}
                 {settled || landed ? <SettledFlash key={notice?.sourceId} style={props.flashStyle}
                     testID={props.testID && landed ? `${props.testID}-landed` : undefined} /> : null}
