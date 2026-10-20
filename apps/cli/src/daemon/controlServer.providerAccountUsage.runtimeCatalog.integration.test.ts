@@ -6,7 +6,9 @@ import {
     type ProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import type { ProviderAccountUsageAdoptionV1 } from './connectedServices/accountUsage/adoption';
+import { createProviderAccountUsagePersistenceScheduler } from './connectedServices/accountUsage/persistence';
 import { recordProviderAccountUsageAdoptionForSession } from './connectedServices/accountUsage/recordProviderAccountUsageSnapshotForSession';
 import { createProviderAccountUsageStore } from './connectedServices/accountUsage/store';
 
@@ -79,7 +81,7 @@ describe('createDaemonControlApp provider account usage routes', () => {
     it('dispatches canonical provider account usage snapshots to the daemon handler', async () => {
         const snapshot = createSnapshot();
         const source: ConnectedServiceUsageSourceV1 = {
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'work',
             bindingKind: 'profile',
         };
@@ -274,22 +276,32 @@ describe('createDaemonControlApp provider account usage routes', () => {
     it('returns retryable unavailability before adoption custody and commits one identical live-route retry', async () => {
         const adoption = createAdoption();
         const store = createProviderAccountUsageStore();
-        const persistence = {
-            recordInBandSnapshot: vi.fn()
-                .mockRejectedValueOnce(new Error('provider account usage persistence unavailable'))
-                .mockResolvedValue({ status: 'enqueued' }),
-        };
-        store.recordSnapshot(createSnapshot());
-        const handleProviderAccountUsageAdoption = vi.fn(async (input: Readonly<{
+        const write = vi.spyOn(axios, 'post').mockResolvedValue({
+            status: 200, data: { success: true, source: { status: 'linked' } },
+        });
+        const persistence = createProviderAccountUsagePersistenceScheduler({
+            api: { getAccountEncryptionMode: async () => 'plain' },
+            credentials: { token: 'token', encryption: null },
+            now: () => 2_000, fingerprintKey: new Uint8Array(32).fill(3),
+        });
+        const handleProviderAccountUsageAdoption = async (input: Readonly<{
             sessionId: string;
             adoption: ProviderAccountUsageAdoptionV1;
         }>) => await recordProviderAccountUsageAdoptionForSession({
             getChildren: () => [{ happySessionId: 'sess_1' }],
             store,
             persistence,
+            resolvePersistenceTargets: async () => [{
+                source: { ref: {
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+                    accountId: 'work',
+                }, bindingKind: 'account' },
+                expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+                expectedConfigurationRevision: 'cfg-work',
+            }],
             sessionId: input.sessionId,
             adoption: input.adoption,
-        }));
+        });
         const app = createApp({
             handleProviderAccountUsageAdoption,
         } as Partial<Parameters<typeof createDaemonControlApp>[0]>);
@@ -311,6 +323,12 @@ describe('createDaemonControlApp provider account usage routes', () => {
                 errorCode: 'provider_account_usage_adoption_intake_failed',
             });
             expect(store.resolveRecordId(adoption.fromRecordId)).toBeNull();
+
+            store.recordSnapshot({
+                ...createSnapshot(), recordId: adoption.fromRecordId,
+                recordKey: { providerId: 'codex', accountSubjectId: 'provisional:native', subjectKind: 'unknown', quotaScope: 'account' },
+                accountSubject: { kind: 'provisionalLocalSubject', id: 'provisional:native' },
+            });
 
             const retryResponse = await app.inject({
                 method: 'POST',
@@ -352,9 +370,13 @@ describe('createDaemonControlApp provider account usage routes', () => {
                     persisted: true,
                 },
             });
-            expect(persistence.recordInBandSnapshot).toHaveBeenCalledTimes(2);
-            expect(handleProviderAccountUsageAdoption).toHaveBeenCalledTimes(3);
+            await persistence.flush(1_000);
+            expect(write.mock.calls.map((call) => call[1])).toEqual([
+                expect.objectContaining({ recordId: adoption.toRecordId }),
+            ]);
         } finally {
+            persistence.dispose();
+            write.mockRestore();
             await app.close();
         }
     });

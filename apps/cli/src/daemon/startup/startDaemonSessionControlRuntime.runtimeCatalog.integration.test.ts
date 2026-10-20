@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import axios from 'axios';
+import axios, { CanceledError } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -13716,7 +13716,7 @@ describe('startDaemonSessionControlRuntime', () => {
             },
         });
         const runtimeRegistry = new ConnectedServiceRuntimeRegistry();
-        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockResolvedValue({
+        const listedUsageAccounts = {
             status: 200,
             data: {
                 service: CODEX_QUALIFIED_SERVICE,
@@ -13735,6 +13735,17 @@ describe('startDaemonSessionControlRuntime', () => {
                     scopes: [],
                 }],
             },
+        };
+        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v4/connect/qualified/accounts') return listedUsageAccounts;
+            if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected usage HTTP read: ${path}`);
+            return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+                ref: { service: CODEX_QUALIFIED_SERVICE, accountId: 'work' },
+                authenticationModeId: 'oauth', configurationRevision: 'cfg-work',
+                revisionSemantics: 'revisioned', credentialRevision,
+                content: { t: 'plain', v: connectedCredential }, metadata: { scopes: [] },
+            }) };
         });
         const writeProviderAccountUsage = vi.spyOn(axios, 'post').mockResolvedValue({
             status: 200,
@@ -13753,11 +13764,6 @@ describe('startDaemonSessionControlRuntime', () => {
             },
             api: {
                 getAccountEncryptionMode: vi.fn(async () => 'plain'),
-                getConnectedServiceCredentialPlain: vi.fn(async () => ({
-                    content: { t: 'plain' as const, v: connectedCredential },
-                    revisionSemantics: 'revisioned' as const,
-                    credentialRevision,
-                })),
             } as never,
             connectedServicesMaterializationBaseDir: '/tmp/connected-services',
             getConnectedServiceRefreshCoordinator: () => null,
@@ -13842,6 +13848,38 @@ describe('startDaemonSessionControlRuntime', () => {
                     } }),
                 );
                 expect(writeProviderAccountUsage).not.toHaveBeenCalled();
+
+                listQualifiedAccounts.mockResolvedValueOnce(listedUsageAccounts)
+                    .mockRejectedValueOnce(new Error('Home credential read unavailable'));
+                const credentialFailed = await app.inject({
+                    method: 'POST', url: '/provider-account-usage-snapshot',
+                    headers: { 'x-happier-daemon-token': 'usage-intake-test' },
+                    payload: { sessionId: 'sess_usage', snapshot },
+                });
+                expect(credentialFailed.statusCode).toBe(503);
+                expect(logger.warn).toHaveBeenCalledWith(
+                    '[CONTROL SERVER] Provider account usage snapshot canonical intake failed',
+                    expect.objectContaining({ observation: {
+                        status: 'source_qualification_failed', reason: 'credential_resolution_failed',
+                        recordId: snapshot.recordId, persisted: false,
+                    } }),
+                );
+                expect(runtime.providerAccountUsageStore.resolveRecordId(snapshot.recordId)?.fetchedAtMs).toBe(999);
+                expect(writeProviderAccountUsage).not.toHaveBeenCalled();
+
+                for (const cancellation of [new DOMException('Caller retired', 'AbortError'), new CanceledError('Caller retired')]) {
+                    listQualifiedAccounts.mockRejectedValueOnce(cancellation);
+                    const cancelled = await app.inject({
+                        method: 'POST', url: '/provider-account-usage-snapshot',
+                        headers: { 'x-happier-daemon-token': 'usage-intake-test' },
+                        payload: { sessionId: 'sess_usage', snapshot },
+                    });
+                    expect(cancelled.statusCode).toBe(503);
+                    expect(logger.warn).toHaveBeenLastCalledWith(
+                        '[CONTROL SERVER] Provider account usage snapshot canonical intake failed',
+                        expect.objectContaining({ error: expect.objectContaining({ name: cancellation.name }) }),
+                    );
+                }
             } finally {
                 await app.close();
             }
@@ -13938,7 +13976,10 @@ describe('startDaemonSessionControlRuntime', () => {
         const runtimeRegistry = new ConnectedServiceRuntimeRegistry();
         let credentialRevisionSemantics:
             'revisioned' | 'legacy_unfenced' = 'revisioned';
-        const getConnectedServiceCredentialPlain = vi.fn(async () => ({
+        const readQualifiedUsageCredential = vi.fn(() => QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+            ref: { service: CODEX_QUALIFIED_SERVICE, accountId: 'primary' },
+            authenticationModeId: 'oauth', configurationRevision: 'cfg-team',
+            metadata: { scopes: [] },
             content: { t: 'plain' as const, v: connectedCredential },
             ...(credentialRevisionSemantics === 'revisioned'
                 ? {
@@ -13950,7 +13991,7 @@ describe('startDaemonSessionControlRuntime', () => {
                     credentialRevision: null,
                 }),
         }));
-        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockResolvedValue({
+        const listedGroupUsageAccounts = {
             status: 200,
             data: {
                 service: CODEX_QUALIFIED_SERVICE,
@@ -13969,6 +14010,12 @@ describe('startDaemonSessionControlRuntime', () => {
                     scopes: [],
                 }],
             },
+        };
+        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v4/connect/qualified/accounts') return listedGroupUsageAccounts;
+            if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected group usage HTTP read: ${path}`);
+            return { status: 200, data: readQualifiedUsageCredential() };
         });
         const writeProviderAccountUsage = vi.spyOn(axios, 'post').mockResolvedValue({
             status: 200,
@@ -13987,7 +14034,6 @@ describe('startDaemonSessionControlRuntime', () => {
             },
             api: {
                 getAccountEncryptionMode: vi.fn(async () => 'plain'),
-                getConnectedServiceCredentialPlain,
             } as never,
             connectedServicesMaterializationBaseDir: '/tmp/connected-services',
             getConnectedServiceRefreshCoordinator: () => null,
@@ -14006,13 +14052,13 @@ describe('startDaemonSessionControlRuntime', () => {
                         connectedServices: {
                             v: 1,
                             bindingsByServiceId: {
-                                'openai-codex': { source: 'connected', selection: 'group', groupId: 'team' },
+                                'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'team' },
                             },
                         },
                         environmentVariables: {
                             [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                                 kind: 'group',
-                                serviceId: 'openai-codex',
+                                serviceId: 'happier.agent.codex/openai-codex',
                                 groupId: 'team',
                                 activeProfileId: 'primary',
                                 fallbackProfileId: 'primary',
@@ -14044,13 +14090,13 @@ describe('startDaemonSessionControlRuntime', () => {
             connectedServicesBindingsRaw: {
                 v: 1,
                 bindingsByServiceId: {
-                    'openai-codex': { source: 'connected', selection: 'group', groupId: 'team' },
+                    'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'team' },
                 },
             },
             connectedServiceSelectionsEnv: {
                 [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
                     kind: 'group',
-                    serviceId: 'openai-codex',
+                    serviceId: 'happier.agent.codex/openai-codex',
                     groupId: 'team',
                     activeProfileId: 'primary',
                     fallbackProfileId: 'primary',
@@ -14072,7 +14118,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionId: 'sess_usage_group',
             snapshot,
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'group_member',
                 groupId: 'team',
@@ -14090,14 +14136,14 @@ describe('startDaemonSessionControlRuntime', () => {
         });
         expect(runtimeRegistry.getBySessionId('sess_usage_group')?.activeBindings).toContainEqual(
             expect.objectContaining({
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 groupId: 'team',
                 groupGeneration: 7,
             }),
         );
         expect(runtime.providerAccountUsageStore.resolveBySource({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             bindingKind: 'group_member',
             groupId: 'team',
@@ -14106,7 +14152,7 @@ describe('startDaemonSessionControlRuntime', () => {
         releasePolicy();
         await vi.waitFor(() => expect(handleAccountUsageChanged).toHaveBeenCalledWith({
             sessionId: 'sess_usage_group',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             groupId: 'team',
             groupGeneration: 7,
@@ -14120,7 +14166,7 @@ describe('startDaemonSessionControlRuntime', () => {
         await vi.waitFor(() => expect(markQuotaProof).toHaveBeenCalledWith({
             sessionId: 'sess_usage_group',
             proofKind: 'quota_probe_fresh',
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             groupId: 'team',
             groupGeneration: 7,
@@ -14133,7 +14179,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionId: 'sess_usage_group',
             snapshot: { ...snapshot, observedAtMs: 1_001, fetchedAtMs: 1_001 },
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'group_member',
                 groupId: 'team',
@@ -14148,7 +14194,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionId: 'sess_usage_group',
             snapshot: { ...snapshot, observedAtMs: 1_002, fetchedAtMs: 1_002 },
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'group_member',
                 groupId: 'team',
@@ -14158,7 +14204,7 @@ describe('startDaemonSessionControlRuntime', () => {
         });
         await vi.waitFor(() => expect(handleAccountUsageChanged).toHaveBeenCalledTimes(3));
         await vi.waitFor(() => expect(markQuotaProof).toHaveBeenCalledWith(expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             groupId: 'team',
             groupGeneration: 7,
@@ -14184,7 +14230,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionId: 'sess_usage_group',
             snapshot: { ...snapshot, observedAtMs: 1_003, fetchedAtMs: 1_003 },
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'profile',
             },
@@ -14192,7 +14238,7 @@ describe('startDaemonSessionControlRuntime', () => {
         });
         await vi.waitFor(() => expect(handleAccountUsageChanged).toHaveBeenCalledTimes(4));
         await vi.waitFor(() => expect(markQuotaProof).toHaveBeenCalledWith(expect.objectContaining({
-            serviceId: 'openai-codex',
+            serviceId: 'happier.agent.codex/openai-codex',
             profileId: 'primary',
             groupId: 'team',
             groupGeneration: 7,
@@ -14217,7 +14263,7 @@ describe('startDaemonSessionControlRuntime', () => {
             sessionId: 'sess_usage_group',
             snapshot,
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'group_member',
                 groupId: 'team',
@@ -14235,7 +14281,7 @@ describe('startDaemonSessionControlRuntime', () => {
         markQuotaProof.mockClear();
         credentialRevisionSemantics = 'legacy_unfenced';
         const credentialReadCount =
-            getConnectedServiceCredentialPlain.mock.calls.length;
+            readQualifiedUsageCredential.mock.calls.length;
         await expect(controlServerInput?.handleProviderAccountUsageSnapshot?.({
             sessionId: 'sess_usage_group',
             snapshot: {
@@ -14244,7 +14290,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 fetchedAtMs: 1_004,
             },
             source: {
-                serviceId: 'openai-codex',
+                serviceId: 'happier.agent.codex/openai-codex',
                 profileId: 'primary',
                 bindingKind: 'group_member',
                 groupId: 'team',
@@ -14254,12 +14300,9 @@ describe('startDaemonSessionControlRuntime', () => {
                 computeConnectedServiceAccessTokenFingerprint(
                     'current-access-token',
                 ),
-        })).resolves.toMatchObject({
-            status: 'credential_fingerprint_mismatch',
-            persisted: false,
-        });
+        })).rejects.toThrow('Connected-account credential snapshot is unfenced');
         await vi.waitFor(() => {
-            expect(getConnectedServiceCredentialPlain.mock.calls.length)
+            expect(readQualifiedUsageCredential.mock.calls.length)
                 .toBeGreaterThan(credentialReadCount);
         });
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -14371,7 +14414,7 @@ describe('startDaemonSessionControlRuntime', () => {
             },
         });
         const runtimeRegistry = new ConnectedServiceRuntimeRegistry();
-        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockResolvedValue({
+        const listedShutdownUsageAccounts = {
             status: 200,
             data: {
                 service: CODEX_QUALIFIED_SERVICE,
@@ -14390,6 +14433,17 @@ describe('startDaemonSessionControlRuntime', () => {
                     scopes: [],
                 }],
             },
+        };
+        const listQualifiedAccounts = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v4/connect/qualified/accounts') return listedShutdownUsageAccounts;
+            if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected shutdown usage HTTP read: ${path}`);
+            return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+                ref: { service: CODEX_QUALIFIED_SERVICE, accountId: 'work' },
+                authenticationModeId: 'oauth', configurationRevision: 'cfg-work',
+                revisionSemantics: 'revisioned', credentialRevision,
+                content: { t: 'plain', v: connectedCredential }, metadata: { scopes: [] },
+            }) };
         });
         const writeProviderAccountUsage = vi.spyOn(axios, 'post').mockResolvedValue({
             status: 200,
@@ -14407,11 +14461,6 @@ describe('startDaemonSessionControlRuntime', () => {
             },
             api: {
                 getAccountEncryptionMode: vi.fn(async () => 'plain'),
-                getConnectedServiceCredentialPlain: vi.fn(async () => ({
-                    content: { t: 'plain' as const, v: connectedCredential },
-                    revisionSemantics: 'revisioned' as const,
-                    credentialRevision,
-                })),
             } as never,
             connectedServicesMaterializationBaseDir: '/tmp/connected-services',
             getConnectedServiceRefreshCoordinator: () => null,
