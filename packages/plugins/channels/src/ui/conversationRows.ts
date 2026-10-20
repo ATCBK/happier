@@ -2,9 +2,11 @@ import * as React from 'react';
 import type { ResourceContent } from '@happier-dev/plugin-sdk/ui';
 import {
   useLivePluginResource,
+  useSessionStates,
   usePluginUiDataClient,
   type PluginUiAccountCollectionForDefinition,
   type PluginUiResourceSnapshot,
+  type SessionStateReadV1,
 } from '@happier-dev/plugin-ui';
 import {
   CONVERSATION_CORE_PLUGIN_ID_V1,
@@ -28,6 +30,7 @@ import {
   type ConversationConnectionPollFailureAttentionV1,
 } from '../connectionPollFailure.js';
 import { readConversationOutwardDeliveryConnectionAttention } from '../outwardDelivery.js';
+import { selectChannelsConversationSessionState, type ChannelsConversationSessionState } from './conversationSessionState.js';
 
 /**
  * The Channels UI's one reading of its two Account-wide rows — conversation
@@ -411,6 +414,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
   const endpointLabel = value.endpoint.label;
   const targetKind = value.target.kind;
   const targetSummary = value.target.summary;
+  const sessionId = value.target.sessionId;
   const inputMode = value.inputMode;
   const deliveryMode = value.deliveryMode;
   const deletionState = value.deletionState;
@@ -422,6 +426,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
     || (endpointLabel !== undefined && typeof endpointLabel !== 'string')
     || !isBindingTargetKind(targetKind)
     || !isNonEmptyString(targetSummary)
+    || (sessionId !== undefined && (targetKind !== 'session' || !isNonEmptyString(sessionId)))
     || !isBindingInputMode(inputMode)
     || !isBindingDeliveryMode(deliveryMode)
     || !isBindingDeletionState(deletionState)
@@ -440,7 +445,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
       audience,
       ...(endpointLabel === undefined ? {} : { label: endpointLabel }),
     },
-    target: { kind: targetKind, summary: targetSummary },
+    target: { kind: targetKind, summary: targetSummary, ...(sessionId === undefined ? {} : { sessionId }) },
     inputMode,
     deliveryMode,
     approval,
@@ -825,6 +830,7 @@ export type ChannelsConversationIndexRow = Readonly<{
   connection?: ChannelsConnection;
   title: string;
   status?: ChannelsConversationRowStatus;
+  session?: SessionStateReadV1<ChannelsConversationSessionState>;
 }>;
 
 export type ChannelsConversationIndexGroup = Readonly<{
@@ -871,6 +877,7 @@ export function buildChannelsConversationIndex(input: Readonly<{
   connections: readonly ChannelsConnection[];
   providerName: (providerPluginId: string) => string;
   t: Translate;
+  sessionStates?: ReadonlyMap<string, SessionStateReadV1<ChannelsConversationSessionState>>;
 }>): readonly ChannelsConversationIndexGroup[] {
   const connectionById = new Map(input.connections.map((connection) => [connection.connectionId, connection]));
   const botsByProvider = new Map<string, Set<string>>();
@@ -918,11 +925,14 @@ export function buildChannelsConversationIndex(input: Readonly<{
       if (attention !== undefined) group.botAttention = attention;
     }
     const status = conversationRowStatus(binding);
+    const session = binding.target.kind === 'session' && binding.target.sessionId !== undefined
+      ? input.sessionStates?.get(binding.target.sessionId) : undefined;
     group.rows.push({
       binding,
       ...(connection === undefined ? {} : { connection }),
       title: bindingRowLabel(binding),
       ...(status === undefined ? {} : { status }),
+      ...(session === undefined ? {} : { session }),
     });
   }
   return [...groups.values()]
@@ -963,6 +973,7 @@ export type ChannelsConversationSnapshot = Readonly<{
   bindings: readonly ChannelsBinding[];
   connections: readonly ChannelsConnection[];
   refresh: () => void;
+  sessionStates?: ReadonlyMap<string, SessionStateReadV1<ChannelsConversationSessionState>>;
 }>;
 
 /** A conversation needs its binding and bot; all surfaces use the same verdict. */
@@ -976,6 +987,15 @@ export function resolveChannelsConversationReadState(
 
 const NO_BINDINGS: readonly ChannelsBinding[] = Object.freeze([]);
 const NO_CONNECTIONS: readonly ChannelsConnection[] = Object.freeze([]);
+
+function useConversationSessionStates(bindings: readonly ChannelsBinding[]) {
+  const ids = React.useMemo(() => {
+    const bindingIds = new Set(bindings.map(binding => binding.bindingId));
+    return bindings.flatMap(binding => binding.target.kind === 'session' && binding.target.sessionId !== undefined
+      && !(binding.parentBindingId !== undefined && bindingIds.has(binding.parentBindingId)) ? [binding.target.sessionId] : []);
+  }, [bindings]);
+  return useSessionStates(ids, { select: selectChannelsConversationSessionState }).sessions;
+}
 
 /**
  * The daemon-served read: the same two live Resources the Settings and
@@ -1016,9 +1036,10 @@ export function useDaemonConversationSnapshot(): Readonly<{
   // sit under a placeholder group and move when the bot arrives.
   const bindings = state === 'ready' && parsedBindings?.kind === 'ready' ? parsedBindings.bindings : NO_BINDINGS;
   const connections = parsedConnections?.kind === 'ready' ? parsedConnections.connections : NO_CONNECTIONS;
+  const sessionStates = useConversationSessionStates(bindings);
   const snapshot = React.useMemo<ChannelsConversationSnapshot>(
-    () => ({ state, bindings, connections, refresh }),
-    [bindings, connections, refresh, state],
+    () => ({ state, bindings, connections, refresh, sessionStates }),
+    [bindings, connections, refresh, state, sessionStates],
   );
   return {
     snapshot,
@@ -1052,8 +1073,9 @@ export function useAccountConversationSnapshot(signal: AbortSignal): ChannelsCon
   // sit under a placeholder group and move when the bot arrives.
   const bindings = state === 'ready' ? bindingsRead.bindings ?? NO_BINDINGS : NO_BINDINGS;
   const connections = connectionsRead.connections ?? NO_CONNECTIONS;
+  const sessionStates = useConversationSessionStates(bindings);
   return React.useMemo(
-    () => ({ state, bindings, connections, refresh }),
-    [bindings, connections, refresh, state],
+    () => ({ state, bindings, connections, refresh, sessionStates }),
+    [bindings, connections, refresh, state, sessionStates],
   );
 }

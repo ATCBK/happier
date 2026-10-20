@@ -7,6 +7,7 @@ import { PluginHostApiProvider } from '../advanced/index.js';
 import { createHostApiStub } from '../surfaceFixture.testSupport.js';
 import { useSessionStates, type SessionStatesReadV1 } from './sessionState.public.js';
 import { PluginHostApiProviderInternal } from './context.js';
+import { selectChannelsConversationSessionState as select } from '../../../plugins/channels/src/ui/conversationSessionState.js';
 
 const WORKING: SessionStateV1 = {
   sessionId: 'first', lifecycle: 'active', runtime: 'working', operational: 'working',
@@ -27,7 +28,6 @@ describe('useSessionStates', () => {
         return { dispose: () => { watchers.delete(id); } };
       },
     });
-    const select = (state: SessionStateV1) => ({ lifecycle: state.lifecycle, workStatus: state.workStatus });
     let current: SessionStatesReadV1<ReturnType<typeof select>> | undefined;
     let renders = 0;
     function Probe() {
@@ -49,6 +49,13 @@ describe('useSessionStates', () => {
       await act(async () => { watchers.get('first')!({ version: 1, subscriptionId: 'first', kind: 'invalidated', digest: 'work' }); });
       expect(current!.sessions.get('first')?.state?.workStatus.bucket).toBe('idle');
       expect(current!.sessions.get('second')).toBe(settled.get('second'));
+      const beforeActivity = current!.sessions;
+      snapshots.set('first', { ...snapshots.get('first')!, hasUnreadMessages: true,
+        latestActivity: { kind: 'ready', text: 'Shared reply', createdAt: 7000 } });
+      await act(async () => { watchers.get('first')!({ version: 1, subscriptionId: 'first', kind: 'invalidated', digest: 'activity' }); });
+      expect(current!.sessions.get('first')?.state).toMatchObject({ hasUnreadMessages: true,
+        latestActivity: { kind: 'ready', text: 'Shared reply', createdAt: 7000 } });
+      expect(current!.sessions.get('second')).toBe(beforeActivity.get('second'));
     } finally {
       act(() => tree?.unmount());
     }

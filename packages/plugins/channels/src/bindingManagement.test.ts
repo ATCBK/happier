@@ -1692,7 +1692,7 @@ describe('Channels target-persisting binding management', () => {
         expect.objectContaining({
           bindingId: 'binding-001',
           endpoint: { audience: 'direct', label: 'Support binding-001' },
-          target: { kind: 'session', summary: 'session-1' },
+          target: { kind: 'session', summary: 'session-1', sessionId: 'session-1' },
         }),
         expect.objectContaining({ bindingId: 'binding-257' }),
       ]),

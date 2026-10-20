@@ -26,6 +26,9 @@ it('preserves router and child relations from the binding Resource without treat
   expect(parseBinding(row)).toEqual(row);
   const child = { ...row, bindingId: 'child-1', parentBindingId: 'router-1', target: { kind: 'session', summary: 'session-1' }, deliveryMode: 'repliesOnly', approval: { kind: 'off' } };
   expect(parseBinding(child)).toEqual(child);
+  const exactChild = { ...child, target: { ...child.target, sessionId: 'session-1-exact-unshortened-id' } };
+  expect(parseBinding(exactChild)).toEqual(exactChild);
+  expect(parseBinding({ ...exactChild, target: { ...exactChild.target, sessionId: '' } })).toBeUndefined();
   expect(parseBinding({ ...row, deliveryMode: 'finalResult' })).toBeUndefined();
 });
 
@@ -87,6 +90,21 @@ it('lists a router once in the conversation index and leaves its threads to the 
   if (router === undefined || thread === undefined || orphan === undefined) throw new Error('fixture rows must parse');
   const groups = buildChannelsConversationIndex({ bindings: [router, thread, orphan], connections: [], providerName: (id) => id, t });
   expect(groups.flatMap((group) => group.rows.map((row) => row.binding.bindingId)).sort()).toEqual(['router-1', 'thread-2']);
+});
+
+it('joins activity only by the exact retained Session id and retains the selected read reference', () => {
+  const binding = parseBinding({ bindingId: 'binding-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'shared' },
+    target: { kind: 'session', summary: 'a-shortened-prefix', sessionId: 'an-exact-session-id' }, inputMode: 'allAllowedMessages',
+    deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' });
+  if (!binding) throw new Error('Expected a binding');
+  const read = { status: 'ready' as const, state: { hasUnreadMessages: true,
+    workStatus: { bucket: 'working' as const, tone: 'neutral' as const, word: 'Working' },
+    latestActivity: { kind: 'ready' as const, text: 'Approved reply', createdAt: 3000 } } };
+  const build = (sessionStates: ReadonlyMap<string, typeof read>) => buildChannelsConversationIndex({
+    bindings: [binding], connections: [], providerName: id => id, t, sessionStates,
+  })[0]?.rows[0];
+  expect(build(new Map([['a-shortened-prefix', read]]))?.session).toBeUndefined();
+  expect(build(new Map([['an-exact-session-id', read]]))?.session).toBe(read);
 });
 
 it('says a bot needs you once per group, in the same words whatever its cause', () => {

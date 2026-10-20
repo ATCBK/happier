@@ -116,6 +116,8 @@ export type ConversationBindingManagementRow = Readonly<{
   target: Readonly<{
     kind: 'session' | 'automation' | 'threadRouter';
     summary: string;
+    /** Exact retained identity; summary is display-only and may be shortened. */
+    sessionId?: string;
   }>;
   inputMode: 'directMentionsOnly' | 'addressedMessages' | 'allAllowedMessages';
   deliveryMode: 'repliesOnly' | 'mirrorSession' | 'finalResult' | 'none';
@@ -1038,6 +1040,7 @@ function projectConversationBindingManagementRow(
     target: {
       kind: current.binding.target.kind,
       summary: targetSummary,
+      ...(current.binding.target.kind === 'session' ? { sessionId: current.binding.target.sessionId } : {}),
     },
     inputMode: current.binding.inputMode,
     deliveryMode,
