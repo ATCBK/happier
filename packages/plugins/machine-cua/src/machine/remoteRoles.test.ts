@@ -103,6 +103,14 @@ describe('activated Cua remote contributions', () => {
             await expect(connectedAccountRuntime(kind).materialize({ kind: 'environment', keys: ['FLEETS_TOKEN'] }, context)).rejects.toThrow('cua_connection_unavailable');
         }
     });
+    it('names each connected native account once: service title, completion and status agree', async () => {
+        const context = { configuration: { values: { nativeHome: '/native/selected' } }, credentials: { async get() { return null; } } } as unknown as ConnectedAccountReadContext;
+        const declared = { cloud: 'cloud-native', cua: 'cua-account' } as const;
+        for (const kind of ['cloud', 'cua'] as const) {
+            const title = CUA_PLUGIN.manifest.contributes.connectedAccountDescriptors?.find(entry => entry.id === declared[kind])?.title;
+            expect(await connectedAccountRuntime(kind).status(context)).toMatchObject({ status: 'connected', displayName: title });
+        }
+    });
     it('fails BYOC check for a cua CLI older than the first release with every flag called, before any native call', async () => {
         const h = await harness({ cliVersion: '0.2.9' });
         expect(await h.invoke('byoc-check', {})).toMatchObject({ available: false, code: 'cua_native_outdated' });

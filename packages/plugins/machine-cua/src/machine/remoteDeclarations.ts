@@ -6,7 +6,7 @@ import { MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerCheckResu
 import { ByocLaunchV1Schema, ByocResourceV1Schema, ByocNativeOperationV1Schema, ByocOptionsQueryV1Schema } from './remoteSchemas.js';
 import { ByocProvisionerSchemas as schemas, ByocReconciliationSchemas as reconciliation, byocReconciliationOperation } from './remoteProvisionerSchemas.js';
 import type { CuaRemoteRole } from './remoteProvisioner.js';
-import { machinePresentationLabel, machineCheckPresentation, configurationLabel } from '../ui/translations.js';
+import { machinePresentationLabel, machineCheckPresentation, configurationLabel, CUA_ACCOUNT_NAMES } from '../ui/translations.js';
 
 const cloudPurpose = 'cloud-account', cuaPurpose = 'cua-account';
 const id = 'byoc';
@@ -97,6 +97,6 @@ const nativeMode = { id: 'native', kind: 'manual', title: 'Existing native setup
     fields: [], configuration: { scope: 'account', changeBehavior: 'reconnect', fields: [{ id: 'nativeHome',
         title: 'Native Cua home directory', schema: { type: 'string', minLength: 1 }, required: true, secret: false }] } } as const;
 export const remoteAccounts = {
-    'cloud-native': { declaration: { title: 'Cua native cloud account', authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cloud') },
-    'cua-account': { declaration: { title: 'Cua login', authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cua') },
+    'cloud-native': { declaration: { title: CUA_ACCOUNT_NAMES.cloud, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cloud') },
+    'cua-account': { declaration: { title: CUA_ACCOUNT_NAMES.cua, authentication: { defaultModeId: 'native', modes: [nativeMode] } }, runtime: lazyAccount('cua') },
 };

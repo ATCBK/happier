@@ -4,7 +4,7 @@ import type { UiTranslationBundle } from '@happier-dev/plugin-sdk/ui';
 export const LUME_CONFIGURATION_LABELS = {
   en: {
     storage: 'Storage', storageDescription: 'Exact native storage name from the available locations.',
-    cpu: 'CPU cores', memory: 'Memory in bytes', disk: 'Disk size in bytes', imageKind: 'Image selection',
+    cpu: 'CPU cores', memory: 'Memory (bytes)', disk: 'Disk (bytes)', imageKind: 'Image selection',
     publishedImage: 'Published image', nativeReference: 'Native image reference', publishedReference: 'Published image reference',
     nativeDescription: 'A tagged or digest-qualified Lume-format image prepared for this guest.',
     privateCarrier: 'Prepared private connection',
@@ -14,7 +14,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   de: {
     storage: 'Speicherort', storageDescription: 'Der genaue native Speichername aus den verfügbaren Speicherorten.',
-    cpu: 'CPU-Kerne', memory: 'Arbeitsspeicher in Bytes', disk: 'Festplattengröße in Bytes', imageKind: 'Image-Auswahl',
+    cpu: 'CPU-Kerne', memory: 'Arbeitsspeicher (Bytes)', disk: 'Festplatte (Bytes)', imageKind: 'Image-Auswahl',
     publishedImage: 'Veröffentlichtes Image', nativeReference: 'Native Image-Referenz', publishedReference: 'Referenz des veröffentlichten Images',
     nativeDescription: 'Ein für diesen Gast vorbereitetes Image im Lume-Format mit Tag oder Digest.',
     privateCarrier: 'Vorbereitete private Verbindung',
@@ -24,7 +24,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ru: {
     storage: 'Хранилище', storageDescription: 'Точное нативное имя хранилища из доступных расположений.',
-    cpu: 'Ядра CPU', memory: 'Память в байтах', disk: 'Размер диска в байтах', imageKind: 'Выбор образа',
+    cpu: 'Ядра CPU', memory: 'Память (байты)', disk: 'Диск (байты)', imageKind: 'Выбор образа',
     publishedImage: 'Опубликованный образ', nativeReference: 'Ссылка на нативный образ', publishedReference: 'Ссылка на опубликованный образ',
     nativeDescription: 'Образ в формате Lume с тегом или дайджестом, подготовленный для этого гостя.',
     privateCarrier: 'Подготовленное приватное подключение',
@@ -34,7 +34,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   pl: {
     storage: 'Magazyn', storageDescription: 'Dokładna natywna nazwa magazynu z dostępnych lokalizacji.',
-    cpu: 'Rdzenie CPU', memory: 'Pamięć w bajtach', disk: 'Rozmiar dysku w bajtach', imageKind: 'Wybór obrazu',
+    cpu: 'Rdzenie CPU', memory: 'Pamięć (bajty)', disk: 'Dysk (bajty)', imageKind: 'Wybór obrazu',
     publishedImage: 'Opublikowany obraz', nativeReference: 'Odwołanie do natywnego obrazu', publishedReference: 'Odwołanie do opublikowanego obrazu',
     nativeDescription: 'Obraz w formacie Lume z tagiem lub skrótem, przygotowany dla tego gościa.',
     privateCarrier: 'Przygotowane połączenie prywatne',
@@ -44,7 +44,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   es: {
     storage: 'Almacenamiento', storageDescription: 'El nombre nativo exacto del almacenamiento entre las ubicaciones disponibles.',
-    cpu: 'Núcleos de CPU', memory: 'Memoria en bytes', disk: 'Tamaño del disco en bytes', imageKind: 'Selección de imagen',
+    cpu: 'Núcleos de CPU', memory: 'Memoria (bytes)', disk: 'Disco (bytes)', imageKind: 'Selección de imagen',
     publishedImage: 'Imagen publicada', nativeReference: 'Referencia de imagen nativa', publishedReference: 'Referencia de imagen publicada',
     nativeDescription: 'Una imagen en formato Lume con etiqueta o resumen, preparada para este huésped.',
     privateCarrier: 'Conexión privada preparada',
@@ -54,7 +54,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   fr: {
     storage: 'Stockage', storageDescription: 'Le nom natif exact du stockage parmi les emplacements disponibles.',
-    cpu: 'Cœurs du processeur', memory: 'Mémoire en octets', disk: 'Taille du disque en octets', imageKind: 'Choix de l’image',
+    cpu: 'Cœurs du processeur', memory: 'Mémoire (octets)', disk: 'Disque (octets)', imageKind: 'Choix de l’image',
     publishedImage: 'Image publiée', nativeReference: 'Référence d’image native', publishedReference: 'Référence d’image publiée',
     nativeDescription: 'Une image au format Lume avec une étiquette ou une empreinte, préparée pour cet invité.',
     privateCarrier: 'Connexion privée préparée',
@@ -64,7 +64,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   it: {
     storage: 'Archiviazione', storageDescription: 'Il nome nativo esatto dell’archiviazione tra le posizioni disponibili.',
-    cpu: 'Core CPU', memory: 'Memoria in byte', disk: 'Dimensione del disco in byte', imageKind: 'Selezione dell’immagine',
+    cpu: 'Core CPU', memory: 'Memoria (byte)', disk: 'Disco (byte)', imageKind: 'Selezione dell’immagine',
     publishedImage: 'Immagine pubblicata', nativeReference: 'Riferimento all’immagine nativa', publishedReference: 'Riferimento all’immagine pubblicata',
     nativeDescription: 'Un’immagine in formato Lume con tag o digest, preparata per questo ospite.',
     privateCarrier: 'Connessione privata preparata',
@@ -74,7 +74,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   pt: {
     storage: 'Armazenamento', storageDescription: 'O nome nativo exato do armazenamento entre os locais disponíveis.',
-    cpu: 'Núcleos de CPU', memory: 'Memória em bytes', disk: 'Tamanho do disco em bytes', imageKind: 'Seleção da imagem',
+    cpu: 'Núcleos de CPU', memory: 'Memória (bytes)', disk: 'Disco (bytes)', imageKind: 'Seleção da imagem',
     publishedImage: 'Imagem publicada', nativeReference: 'Referência da imagem nativa', publishedReference: 'Referência da imagem publicada',
     nativeDescription: 'Uma imagem no formato Lume com tag ou resumo, preparada para este hóspede.',
     privateCarrier: 'Conexão privada preparada',
@@ -84,7 +84,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ca: {
     storage: 'Emmagatzematge', storageDescription: 'El nom natiu exacte de l’emmagatzematge entre les ubicacions disponibles.',
-    cpu: 'Nuclis de CPU', memory: 'Memòria en bytes', disk: 'Mida del disc en bytes', imageKind: 'Selecció de la imatge',
+    cpu: 'Nuclis de CPU', memory: 'Memòria (bytes)', disk: 'Disc (bytes)', imageKind: 'Selecció de la imatge',
     publishedImage: 'Imatge publicada', nativeReference: 'Referència de la imatge nativa', publishedReference: 'Referència de la imatge publicada',
     nativeDescription: 'Una imatge en format Lume amb etiqueta o resum, preparada per a aquest convidat.',
     privateCarrier: 'Connexió privada preparada',
@@ -94,7 +94,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   'zh-Hans': {
     storage: '存储位置', storageDescription: '可用位置中的确切原生存储名称。',
-    cpu: 'CPU 核心数', memory: '内存（字节）', disk: '磁盘大小（字节）', imageKind: '镜像选择',
+    cpu: 'CPU 核心数', memory: '内存（字节）', disk: '磁盘（字节）', imageKind: '镜像选择',
     publishedImage: '已发布镜像', nativeReference: '原生镜像引用', publishedReference: '已发布镜像引用',
     nativeDescription: '为此客户机准备的带标签或摘要的 Lume 格式镜像。',
     privateCarrier: '已准备的私有连接', privateDescription: '仅选择经过审核并为使用默认密码的 Lume 原生 SSH 准备好的镜像。',
@@ -103,7 +103,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   'zh-Hant': {
     storage: '儲存位置', storageDescription: '可用位置中的確切原生儲存名稱。',
-    cpu: 'CPU 核心數', memory: '記憶體（位元組）', disk: '磁碟大小（位元組）', imageKind: '映像選擇',
+    cpu: 'CPU 核心數', memory: '記憶體（位元組）', disk: '磁碟（位元組）', imageKind: '映像選擇',
     publishedImage: '已發佈映像', nativeReference: '原生映像參照', publishedReference: '已發佈映像參照',
     nativeDescription: '為此客體準備的帶標籤或摘要的 Lume 格式映像。',
     privateCarrier: '已準備的私有連線', privateDescription: '僅選擇經過審查並為使用預設密碼的 Lume 原生 SSH 準備好的映像。',
@@ -112,7 +112,7 @@ export const LUME_CONFIGURATION_LABELS = {
   },
   ja: {
     storage: 'ストレージ', storageDescription: '利用可能な場所に含まれる正確なネイティブストレージ名。',
-    cpu: 'CPU コア数', memory: 'メモリ（バイト）', disk: 'ディスク容量（バイト）', imageKind: 'イメージの選択',
+    cpu: 'CPU コア数', memory: 'メモリ（バイト）', disk: 'ディスク（バイト）', imageKind: 'イメージの選択',
     publishedImage: '公開イメージ', nativeReference: 'ネイティブイメージの参照', publishedReference: '公開イメージの参照',
     nativeDescription: 'このゲスト用に準備された、タグまたはダイジェスト付きの Lume 形式イメージ。',
     privateCarrier: '準備済みのプライベート接続', privateDescription: 'Lume ネイティブ SSH の既定パスワードを使うよう準備された、確認済みのイメージのみ選択してください。',
@@ -130,18 +130,18 @@ const CONFIGURATION_TRANSLATION_BUNDLES = Object.freeze(Object.entries(LUME_CONF
 })) satisfies readonly UiTranslationBundle[]);
 
 export const MACHINE_PRESENTATION_LABELS = {
-  "en": {"kind":"VM","description":"A local macOS or Linux VM with your chosen image.","ready":"Installed","unavailable":"Unavailable","lume_transport":"Connection unavailable","lume_http":"Connection unavailable","lume_response":"Runtime response unavailable"},
-  "de": {"kind":"VM","description":"Eine lokale macOS- oder Linux-VM mit deinem gewählten Image.","ready":"Installiert","unavailable":"Nicht verfügbar","lume_transport":"Verbindung nicht verfügbar","lume_http":"Verbindung nicht verfügbar","lume_response":"Laufzeitantwort nicht verfügbar"},
-  "ru": {"kind":"ВМ","description":"Локальная ВМ macOS или Linux с выбранным образом.","ready":"Установлено","unavailable":"Недоступно","lume_transport":"Соединение недоступно","lume_http":"Соединение недоступно","lume_response":"Ответ среды недоступен"},
-  "pl": {"kind":"VM","description":"Lokalna maszyna macOS lub Linux z wybranym obrazem.","ready":"Zainstalowano","unavailable":"Niedostępne","lume_transport":"Połączenie niedostępne","lume_http":"Połączenie niedostępne","lume_response":"Odpowiedź środowiska niedostępna"},
-  "es": {"kind":"VM","description":"Una VM macOS o Linux local con la imagen elegida.","ready":"Instalado","unavailable":"No disponible","lume_transport":"Conexión no disponible","lume_http":"Conexión no disponible","lume_response":"Respuesta del entorno no disponible"},
-  "fr": {"kind":"VM","description":"Une VM macOS ou Linux locale avec l’image choisie.","ready":"Installé","unavailable":"Indisponible","lume_transport":"Connexion indisponible","lume_http":"Connexion indisponible","lume_response":"Réponse de l’environnement indisponible"},
-  "it": {"kind":"VM","description":"Una VM macOS o Linux locale con l’immagine scelta.","ready":"Installato","unavailable":"Non disponibile","lume_transport":"Connessione non disponibile","lume_http":"Connessione non disponibile","lume_response":"Risposta dell’ambiente non disponibile"},
-  "pt": {"kind":"VM","description":"Uma VM macOS ou Linux local com a imagem escolhida.","ready":"Instalado","unavailable":"Indisponível","lume_transport":"Conexão indisponível","lume_http":"Conexão indisponível","lume_response":"Resposta do ambiente indisponível"},
-  "ca": {"kind":"VM","description":"Una VM macOS o Linux local amb la imatge triada.","ready":"Instal·lat","unavailable":"No disponible","lume_transport":"Connexió no disponible","lume_http":"Connexió no disponible","lume_response":"Resposta de l’entorn no disponible"},
-  "zh-Hans": {"kind":"虚拟机","description":"使用所选镜像的本地 macOS 或 Linux 虚拟机。","ready":"已安装","unavailable":"不可用","lume_transport":"连接不可用","lume_http":"连接不可用","lume_response":"运行环境响应不可用"},
-  "zh-Hant": {"kind":"虛擬機","description":"使用所選映像的本地 macOS 或 Linux 虛擬機。","ready":"已安裝","unavailable":"不可用","lume_transport":"連線不可用","lume_http":"連線不可用","lume_response":"執行環境回應不可用"},
-  "ja": {"kind":"VM","description":"選択したイメージを使うローカルの macOS または Linux VM。","ready":"インストール済み","unavailable":"利用不可","lume_transport":"接続利用不可","lume_http":"接続利用不可","lume_response":"ランタイムの応答を取得できません"},
+  "en": {"kind":"VM","description":"A local macOS or Linux VM with your chosen image.","ready":"Ready","unavailable":"Unavailable","lume_not_installed":"Not installed · get it from cua.ai/docs/lume","lume_transport":"Lume isn’t running · start it with lume serve","lume_http":"Connection unavailable","lume_response":"Runtime response unavailable"},
+  "de": {"kind":"VM","description":"Eine lokale macOS- oder Linux-VM mit deinem gewählten Image.","ready":"Bereit","unavailable":"Nicht verfügbar","lume_not_installed":"Nicht installiert · auf cua.ai/docs/lume holen","lume_transport":"Lume läuft nicht · mit lume serve starten","lume_http":"Verbindung nicht verfügbar","lume_response":"Laufzeitantwort nicht verfügbar"},
+  "ru": {"kind":"ВМ","description":"Локальная ВМ macOS или Linux с выбранным образом.","ready":"Готово","unavailable":"Недоступно","lume_not_installed":"Не установлено · скачайте на cua.ai/docs/lume","lume_transport":"Lume не запущен · запустите командой lume serve","lume_http":"Соединение недоступно","lume_response":"Ответ среды недоступен"},
+  "pl": {"kind":"VM","description":"Lokalna maszyna macOS lub Linux z wybranym obrazem.","ready":"Gotowe","unavailable":"Niedostępne","lume_not_installed":"Nie zainstalowano · pobierz z cua.ai/docs/lume","lume_transport":"Lume nie działa · uruchom poleceniem lume serve","lume_http":"Połączenie niedostępne","lume_response":"Odpowiedź środowiska niedostępna"},
+  "es": {"kind":"VM","description":"Una VM macOS o Linux local con la imagen elegida.","ready":"Listo","unavailable":"No disponible","lume_not_installed":"No instalado · descárgalo en cua.ai/docs/lume","lume_transport":"Lume no está en ejecución · inícialo con lume serve","lume_http":"Conexión no disponible","lume_response":"Respuesta del entorno no disponible"},
+  "fr": {"kind":"VM","description":"Une VM macOS ou Linux locale avec l’image choisie.","ready":"Prêt","unavailable":"Indisponible","lume_not_installed":"Non installé · à obtenir sur cua.ai/docs/lume","lume_transport":"Lume n’est pas lancé · démarre-le avec lume serve","lume_http":"Connexion indisponible","lume_response":"Réponse de l’environnement indisponible"},
+  "it": {"kind":"VM","description":"Una VM macOS o Linux locale con l’immagine scelta.","ready":"Pronto","unavailable":"Non disponibile","lume_not_installed":"Non installato · scaricalo da cua.ai/docs/lume","lume_transport":"Lume non è in esecuzione · avvialo con lume serve","lume_http":"Connessione non disponibile","lume_response":"Risposta dell’ambiente non disponibile"},
+  "pt": {"kind":"VM","description":"Uma VM macOS ou Linux local com a imagem escolhida.","ready":"Pronto","unavailable":"Indisponível","lume_not_installed":"Não instalado · baixe em cua.ai/docs/lume","lume_transport":"Lume não está em execução · inicie com lume serve","lume_http":"Conexão indisponível","lume_response":"Resposta do ambiente indisponível"},
+  "ca": {"kind":"VM","description":"Una VM macOS o Linux local amb la imatge triada.","ready":"A punt","unavailable":"No disponible","lume_not_installed":"No instal·lat · baixa’l de cua.ai/docs/lume","lume_transport":"Lume no s’està executant · inicia’l amb lume serve","lume_http":"Connexió no disponible","lume_response":"Resposta de l’entorn no disponible"},
+  "zh-Hans": {"kind":"虚拟机","description":"使用所选镜像的本地 macOS 或 Linux 虚拟机。","ready":"就绪","unavailable":"不可用","lume_not_installed":"未安装 · 请从 cua.ai/docs/lume 获取","lume_transport":"Lume 未运行 · 请用 lume serve 启动","lume_http":"连接不可用","lume_response":"运行环境响应不可用"},
+  "zh-Hant": {"kind":"虛擬機","description":"使用所選映像的本地 macOS 或 Linux 虛擬機。","ready":"就緒","unavailable":"不可用","lume_not_installed":"未安裝 · 請從 cua.ai/docs/lume 取得","lume_transport":"Lume 未執行 · 請用 lume serve 啟動","lume_http":"連線不可用","lume_response":"執行環境回應不可用"},
+  "ja": {"kind":"VM","description":"選択したイメージを使うローカルの macOS または Linux VM。","ready":"準備完了","unavailable":"利用不可","lume_not_installed":"未インストール · cua.ai/docs/lume から入手","lume_transport":"Lume が実行されていません · lume serve で起動","lume_http":"接続利用不可","lume_response":"ランタイムの応答を取得できません"},
 } as const;
 
 export function machinePresentationLabel(id: keyof typeof MACHINE_PRESENTATION_LABELS.en): PresentationLocalizedString {

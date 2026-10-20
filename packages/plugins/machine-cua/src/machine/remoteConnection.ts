@@ -3,6 +3,7 @@ import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 import { createCuaNativeClient } from './nativeClient.js';
 import { resolveCuaExecutable } from './nativeDependency.js';
+import { CUA_ACCOUNT_NAMES } from '../ui/translations.js';
 
 export const CLOUD_PURPOSE = 'cloud-account';
 export const CUA_PURPOSE = 'cua-account';
@@ -25,11 +26,11 @@ export function connectedAccountRuntime(kind: 'cloud' | 'cua'): ConnectedAccount
     return {
         authentication: { modes: { native: { kind: 'manual', async complete(_input, context) {
             try { home(context.configuration.values.nativeHome);
-                return { status: 'connected', displayName: kind === 'cloud' ? 'Cua native cloud account' : 'Cua native login', scopes: [] }; }
+                return { status: 'connected', displayName: CUA_ACCOUNT_NAMES[kind], scopes: [] }; }
             catch { return { status: 'rejected', diagnostic }; }
         } } } },
         async status(context) {
-            try { return environment(context.configuration.values).CUA_HOME ? { status: 'connected', displayName: 'Cua' } : { status: 'reconnectRequired' }; }
+            try { return environment(context.configuration.values).CUA_HOME ? { status: 'connected', displayName: CUA_ACCOUNT_NAMES[kind] } : { status: 'reconnectRequired' }; }
             catch { return { status: 'unavailable', diagnostic }; }
         },
         async refresh(context, options) { return this.status(context, options); },

@@ -34,7 +34,7 @@ function errorCode(error: unknown) {
 async function runtime(context: PluginInvocationContext) {
   const status = await context.services.managedServices.dependencies.status(LUME_DEPENDENCY_ID, { signal: context.signal });
   if ((status.state !== 'ready' && status.state !== 'updateAvailable') || !status.executable) {
-    throw Object.assign(new Error('Declared native Lume executable unavailable'), { code: 'provider_unavailable' });
+    throw Object.assign(new Error('Declared native Lume executable unavailable'), { code: 'provider_unavailable', notInstalled: true });
   }
   const [{ createLumeNativeClient }, { createLumeProvider }] = await Promise.all([
     import('./machine/nativeClient.js'), import('./machine/provider.js'),
@@ -98,7 +98,11 @@ export const LUME_PLUGIN = definePlugin({
         try {
           await context.services.exec.systemTools.resolve({ toolId: 'ssh-keyscan', purpose: 'Observe the native SSH host key', signal: context.signal });
           return machineCheckPresentation(await (await runtime(context)).provider.check());
-        } catch (error) { return machineCheckPresentation({ available: false, code: errorCode(error) }); }
+        } catch (error) {
+          // A missing `lume` is its own state, so its card can say how to get it; the server's own refusals stay typed below.
+          const notInstalled = error !== null && typeof error === 'object' && 'notInstalled' in error;
+          return machineCheckPresentation({ available: false, code: notInstalled ? 'lume_not_installed' : errorCode(error) });
+        }
       },
     },
     options: { ...defaults, hostAccess: [...defaults.hostAccess, registryAccess], title: 'Read Lume image and storage choices', dangerLevel: 'safe',

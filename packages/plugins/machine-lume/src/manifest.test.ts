@@ -149,6 +149,15 @@ describe('activated Lume provisioner Actions', () => {
     expect(commands).toHaveLength(0);
   });
 
+  it('says what is wrong with each unusable Lume: not installed, its server not running, or a usable one ready', async () => {
+    const missing = await activated(false);
+    expect(await missing.action('check')({}, missing.context)).toMatchObject({ available: false, code: 'lume_not_installed' });
+    const stopped = await activated(true, async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:7777'); });
+    expect(await stopped.action('check')({}, stopped.context)).toMatchObject({ available: false, code: 'lume_transport' });
+    const ready = await activated();
+    expect(await ready.action('check')({}, ready.context)).toMatchObject({ available: true, status: { key: 'machineLume.presentation.ready' } });
+  });
+
   it('projects native Stop/disk retention facts without disclosing guest connection details', async () => {
     const { action, context } = await activated();
     expect(await action('inspect')({ resource }, context)).toEqual({ observedAt: 123, availability: 'present',
