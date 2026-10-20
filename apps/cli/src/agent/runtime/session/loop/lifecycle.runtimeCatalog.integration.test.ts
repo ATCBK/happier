@@ -264,13 +264,15 @@ describe('runSessionLoopLifecycle presence renewal', () => {
       acknowledgeTerminal();
       await vi.waitFor(() => expect(capabilityRestart).toHaveBeenCalledWith({
         sessionId: 'session-1', mode: 'force_current_cli', reason: 'capability_selection_change',
-      }));
+      }, { signal: expect.any(AbortSignal) }));
+      expect(capabilityRestart.mock.calls[0]?.[1]?.signal.aborted).toBe(false);
       expect(queue.size()).toBe(0);
     } finally {
       acknowledgeTerminal();
       listener?.(canonicalRuntimeEvent({ kind: 'runtime-ended', sessionId: 'session-1', cause: 'providerEnded', retryable: false, emittedAtMs: 3 }));
       await run;
     }
+    expect(capabilityRestart.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
   });
   it('suppresses duplicate idle publication and leaves renewal to the Session transport', async () => {
     vi.useFakeTimers();
