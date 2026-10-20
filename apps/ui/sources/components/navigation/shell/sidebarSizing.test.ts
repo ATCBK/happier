@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { HAPPIER_COLLECTION_LIST_METRICS, HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { SESSION_LIST_ROW_IDENTITY_METRICS, SESSION_LIST_ROW_WIDTH_METRICS, resolveSessionListRowTitleTextMetrics } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { resolveSidebarDockMaxWidthPx, SIDEBAR_DOCK_MIN_WIDTH_PX } from './sidebarSizing';
 import { BUILTIN_COLUMN_MINIMUM_WIDTH_PX } from './appRail/appShellColumnSizing';

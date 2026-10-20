@@ -85,23 +85,46 @@ describe('SettingsCollectionLayout', () => {
     it('restores each navigator width and keeps the preference when a narrow pane temporarily clamps it', async () => {
         getStorage().getState().applyLocalSettings({ collectionRailWidthsV1: { machines: 380, teams: 310 } });
         const screen = await renderCollection();
-        let measuredWidth = 1200;
-        const railWidth = () => measuredWidth * [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
-            .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {}).flex;
+        const railWidth = () => screen.findHostByTestId('settings-machines-layout-resize-handle')?.props['aria-valuenow'];
         await layoutAt(screen, 1200);
         expect(railWidth()).toBeCloseTo(380);
-        measuredWidth = 780;
         await layoutAt(screen, 780);
         expect(railWidth()).toBeCloseTo(300);
         expect(getStorage().getState().localSettings.collectionRailWidthsV1.machines).toBe(380);
-        measuredWidth = 1200;
         await layoutAt(screen, 1200);
         expect(railWidth()).toBeCloseTo(380);
-        await act(async () => screen.tree.update(<SettingsCollectionLayout navigator="teams" rootPathname="/settings/teams"
+        await screen.update(<SettingsCollectionLayout navigator="teams" rootPathname="/settings/teams"
             resolveChildRoute={() => 'index'} rail={<View />} railWidth="standard" detailMinWidthPx={480}
-            testID="settings-machines" />));
+            testID="settings-machines" />);
         await layoutAt(screen, 1200);
         expect(railWidth()).toBeCloseTo(310);
+    });
+
+    it('persists a divider adjustment and resets the navigator to its role default through the same handle', async () => {
+        getStorage().getState().applyLocalSettings({ collectionRailWidthsV1: { machines: 350, teams: 310 } });
+        const dividerTarget = new EventTarget();
+        const screen = await renderScreen(
+            <SettingsCollectionLayout navigator="machines" rootPathname="/settings/machines"
+                resolveChildRoute={() => '[id]'} rail={<View />} railWidth="standard" detailMinWidthPx={480}
+                testID="settings-machines" />,
+            // The platform ref is the real event boundary the shared handle listens on.
+            { createNodeMock: (element) => element.props.testID === 'settings-machines-layout-resize-handle' ? dividerTarget : null },
+        );
+        await layoutAt(screen, 1200);
+        const handle = () => screen.findHostByTestId('settings-machines-layout-resize-handle');
+        expect(handle()?.props['aria-valuenow']).toBe(350);
+        await act(async () => handle()!.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } }));
+        const adjusted = handle()!.props['aria-valuenow'];
+        expect(adjusted).toBeGreaterThan(350);
+        expect(getStorage().getState().localSettings.collectionRailWidthsV1.machines).toBe(adjusted);
+        await act(async () => { dividerTarget.dispatchEvent(new Event('dblclick')); });
+        expect(handle()?.props['aria-valuenow']).toBe(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard);
+        expect(getStorage().getState().localSettings.collectionRailWidthsV1).toEqual({ teams: 310 });
+        await screen.unmount();
+        const restored = await renderCollection();
+        await layoutAt(restored, 1200);
+        expect(restored.findHostByTestId('settings-machines-layout-resize-handle')?.props['aria-valuenow'])
+            .toBe(HAPPIER_COLLECTION_RAIL_WIDTH_PX.standard);
     });
 
     /** The options the collection gives the one phone header above both panes. */
@@ -195,9 +218,8 @@ describe('SettingsCollectionLayout', () => {
         for (const role of ['standard', 'detailed'] as const) {
             const screen = await renderRole(role);
             await layoutAt(screen, 1200);
-            const railStyle = [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
-                .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {});
-            expect(1200 * railStyle.flex).toBeCloseTo(HAPPIER_COLLECTION_RAIL_WIDTH_PX[role]);
+            expect(screen.findHostByTestId('settings-machines-layout-resize-handle')?.props['aria-valuenow'])
+                .toBe(HAPPIER_COLLECTION_RAIL_WIDTH_PX[role]);
             const needed = COLLECTION_RAIL_MIN_WIDTH_PX + 480;
             await layoutAt(screen, needed - 1);
             expect(hostByTestID(screen, 'machines-rail'), `${role} one pixel short`).toBeNull();
