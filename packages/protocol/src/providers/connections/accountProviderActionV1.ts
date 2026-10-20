@@ -104,11 +104,11 @@ export function describeAccountProviderConnectionV1(settings: ProviderSettingsV1
     deployment: connection.deployment.kind === 'managedLocal' ? { kind: 'managedLocal', targetMachineId: connection.gatewayPlacement?.kind === 'machine' ? connection.gatewayPlacement.machineId : null,
       effects: managed && identity ? { implementationIdentity: identity, protocols: contribution?.endpointTemplates.filter(endpoint => managed.endpointTemplateIds.includes(endpoint.id)).map(endpoint => endpoint.protocol) ?? [],
         connectedAccountPurposes: managed.connectedAccounts.filter(declaration => connection.purposeBindingDefaults?.[declaration.purpose])
-          .map(({ endpointTemplateIds: _endpoints, ...declaration }) => ({ ...declaration, target: connection.purposeBindingDefaults?.[declaration.purpose] })),
+          .map(({ endpointTemplateIds: _endpoints, staticModels: _models, ...declaration }) => ({ ...declaration, target: connection.purposeBindingDefaults?.[declaration.purpose] })),
         ...(managed.connectedAccountPurposeBindingPolicy ? { connectedAccountPurposeBindingPolicy: managed.connectedAccountPurposeBindingPolicy } : {}) } : null } : { kind: 'external' },
     ...(connection.gatewayPlacement ? { gatewayPlacement: connection.gatewayPlacement } : {}),
     ...(connection.claudeHelperModels ? { claudeHelperModels: connection.claudeHelperModels } : {}),
-    managedLocalOption: managed ? { targetMachineId: null, connectedAccountPurposes: managed.connectedAccounts.map(({ endpointTemplateIds: _endpoints, ...declaration }) => declaration),
+    managedLocalOption: managed ? { targetMachineId: null, connectedAccountPurposes: managed.connectedAccounts.map(({ endpointTemplateIds: _endpoints, staticModels: _models, ...declaration }) => declaration),
       ...(managed.connectedAccountPurposeBindingPolicy ? { connectedAccountPurposeBindingPolicy: managed.connectedAccountPurposeBindingPolicy } : {}) } : null,
     endpoints: source ? accountEndpoints(connection, source).map(({ publicHeaders: _headers, ...endpoint }) => endpoint) : [],
     scope: null, authorized: false, authorizationError: source ? null : createProviderErrorV1('provider_contribution_unavailable', { connectionId: connection.id }),

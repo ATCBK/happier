@@ -1,0 +1,218 @@
+// Generates credential-free compatibility rows from the pinned public module's
+// embedded source. The SDK exposes its static accessors only from an internal
+// package; source inspection avoids importing that package or starting a service.
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+)
+
+const sdkModule = "github.com/router-for-me/CLIProxyAPI/v7"
+
+type model struct {
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Capabilities map[string]string `json:"capabilities"`
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	data, err := exec.Command("go", "list", "-m", "-json", sdkModule).Output()
+	if err != nil {
+		return err
+	}
+	var module struct {
+		Dir, Version string
+		Replace      *json.RawMessage
+	}
+	if err := json.Unmarshal(data, &module); err != nil {
+		return err
+	}
+	if module.Replace != nil {
+		return fmt.Errorf("static catalog requires the unmodified pinned public SDK")
+	}
+	output, err := generate(module.Dir, module.Version)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join("..", "src", "provider", "staticModels.generated.ts"), output, 0o644)
+}
+
+func generate(moduleDir, version string) ([]byte, error) {
+	registryDir := filepath.Join(moduleDir, "internal", "registry")
+	data, err := os.ReadFile(filepath.Join(registryDir, "models", "models.json"))
+	if err != nil {
+		return nil, err
+	}
+	var embedded map[string][]struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &embedded); err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(registryDir, "model_definitions.go"), nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	functions := map[string]*ast.FuncDecl{}
+	constants := map[string]string{}
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.FuncDecl:
+			functions[value.Name.Name] = value
+		case *ast.GenDecl:
+			if value.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range value.Specs {
+				entry := spec.(*ast.ValueSpec)
+				for index, expression := range entry.Values {
+					if literal, ok := expression.(*ast.BasicLit); ok && literal.Kind == token.STRING {
+						constants[entry.Names[index].Name], err = strconv.Unquote(literal.Value)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		}
+	}
+	// These are the exact accessor branches chosen by the wrapper's runtime-only
+	// auth entries (Codex uses the widest compatibility tier, never entitlement).
+	for name, expected := range map[string]string{
+		"GetClaudeModels":   "cloneModelInfos(getModels().Claude)",
+		"GetCodexProModels": "WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))",
+	} {
+		expression, err := returnExpression(functions[name])
+		if err != nil {
+			return nil, err
+		}
+		var source bytes.Buffer
+		if err := format.Node(&source, fset, expression); err != nil {
+			return nil, err
+		}
+		if source.String() != expected {
+			return nil, fmt.Errorf("SDK accessor %s changed: %s", name, source.String())
+		}
+	}
+	rows := map[string][]model{}
+	for provider, key := range map[string]string{"codex": "codex-pro", "claude": "claude"} {
+		ids := map[string]bool{}
+		for _, entry := range embedded[key] {
+			ids[entry.ID] = true
+		}
+		if provider == "codex" {
+			expression, err := returnExpression(functions["WithCodexBuiltins"])
+			if err != nil {
+				return nil, err
+			}
+			call, ok := expression.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return nil, fmt.Errorf("SDK Codex builtin insertion changed")
+			}
+			callee, ok := call.Fun.(*ast.Ident)
+			if !ok || callee.Name != "upsertModelInfos" {
+				return nil, fmt.Errorf("SDK Codex builtin insertion changed")
+			}
+			for _, argument := range call.Args[1:] {
+				builtin, ok := argument.(*ast.CallExpr)
+				if !ok {
+					return nil, fmt.Errorf("SDK Codex builtin constructor changed")
+				}
+				name, ok := builtin.Fun.(*ast.Ident)
+				if !ok || len(builtin.Args) != 0 {
+					return nil, fmt.Errorf("SDK Codex builtin constructor changed")
+				}
+				id, err := builtinID(functions[name.Name], constants)
+				if err != nil {
+					return nil, err
+				}
+				ids[id] = true
+			}
+		}
+		for id := range ids {
+			if id == "" {
+				return nil, fmt.Errorf("SDK %s catalog has an empty model id", provider)
+			}
+			// The existing OpenAI probe consumes id/name only. The SDK emits
+			// display_name, not name, so the existing catalog falls back to id.
+			rows[provider] = append(rows[provider], model{ID: id, Name: id, Capabilities: map[string]string{
+				"toolRoundTrips": "unknown", "reasoningControls": "unknown",
+			}})
+		}
+		if len(rows[provider]) == 0 {
+			return nil, fmt.Errorf("SDK %s catalog is empty", provider)
+		}
+		sort.Slice(rows[provider], func(i, j int) bool { return rows[provider][i].ID < rows[provider][j].ID })
+	}
+	encoded, err := json.MarshalIndent(rows, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return []byte(fmt.Sprintf("// Generated by managed-runtime/tools/catalog from %s@%s. Do not edit.\n// Compatibility only: no account entitlement or verified execution capability.\nexport const CLIPROXYAPI_STATIC_MODEL_SDK_VERSION = %q;\nexport const CLIPROXYAPI_STATIC_MODELS = %s as const;\n", sdkModule, version, version, encoded)), nil
+}
+
+func returnExpression(function *ast.FuncDecl) (ast.Expr, error) {
+	if function == nil || function.Body == nil || len(function.Body.List) != 1 {
+		return nil, fmt.Errorf("SDK static accessor shape changed")
+	}
+	statement, ok := function.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(statement.Results) != 1 {
+		return nil, fmt.Errorf("SDK static return shape changed")
+	}
+	return statement.Results[0], nil
+}
+
+func builtinID(function *ast.FuncDecl, constants map[string]string) (string, error) {
+	expression, err := returnExpression(function)
+	if err != nil {
+		return "", err
+	}
+	pointer, ok := expression.(*ast.UnaryExpr)
+	if !ok || pointer.Op != token.AND {
+		return "", fmt.Errorf("SDK builtin literal shape changed")
+	}
+	literal, ok := pointer.X.(*ast.CompositeLit)
+	if !ok {
+		return "", fmt.Errorf("SDK builtin literal shape changed")
+	}
+	for _, element := range literal.Elts {
+		field, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := field.Key.(*ast.Ident)
+		if !ok || key.Name != "ID" {
+			continue
+		}
+		switch value := field.Value.(type) {
+		case *ast.Ident:
+			if id, ok := constants[value.Name]; ok {
+				return id, nil
+			}
+		case *ast.BasicLit:
+			if value.Kind == token.STRING {
+				return strconv.Unquote(value.Value)
+			}
+		}
+	}
+	return "", fmt.Errorf("SDK builtin ID source changed")
+}

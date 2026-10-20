@@ -9,6 +9,33 @@ import {
 } from './managedContract.js';
 
 describe('CLIPROXYAPI_PROVIDER_CONTRIBUTION', () => {
+  it('publishes credential-free SDK compatibility models for each managed service without claiming tool support', () => {
+    const parsed = ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION);
+    const families = parsed.managedRuntime?.connectedAccounts ?? [];
+    expect(families).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        purpose: 'openai-upstream',
+        staticModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-5.5', name: 'gpt-5.5' })]),
+      }),
+      expect.objectContaining({
+        purpose: 'anthropic-upstream',
+        staticModels: expect.arrayContaining([expect.objectContaining({ id: 'claude-sonnet-4-6', name: 'claude-sonnet-4-6' })]),
+      }),
+    ]));
+    expect(families.find((family) => family.purpose === 'openai-upstream')?.staticModels)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'claude-sonnet-4-6' })]));
+    expect(families.find((family) => family.purpose === 'anthropic-upstream')?.staticModels)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'gpt-5.5' })]));
+    for (const family of families) {
+      expect(new Set(family.staticModels?.map((model) => model.id)).size).toBe(family.staticModels?.length);
+      for (const model of family.staticModels ?? []) {
+        expect(model.capabilities).toEqual({ toolRoundTrips: 'unknown', reasoningControls: 'unknown' });
+        expect(model).not.toHaveProperty('accountEntitlementVerified');
+      }
+    }
+    expect(parsed.catalog.source).toBe('probe');
+  });
+
   it('owns source-qualified upstream purposes independently of the exact downstream endpoint/protocol', () => {
     expect(resolveCLIProxyAPIManagedPurposeFamily({
       endpointTemplateId: 'cliproxyapi-openai-responses',
