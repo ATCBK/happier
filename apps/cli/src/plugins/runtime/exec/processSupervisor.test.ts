@@ -19,6 +19,28 @@ import { createDaemonizingProcessFixture } from '@/testkit/process/daemonizingPr
 import { waitForProcessExit } from '@/testkit/process/spawn';
 
 describe('spawnSupervisedPluginProcess', () => {
+    it('bounds an unanswered graceful protocol stop inside the existing termination grace and removes the child', async () => {
+        const supervised = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', `
+            process.on('SIGTERM', () => {});
+            process.stdin.on('data', () => process.stdout.write('shutdown received\\n'));
+            process.stdout.write('ready\\n');
+        `], env: {} });
+        try {
+            await once(supervised.child.stdout, 'data');
+            let aborted = false;
+            await supervised.dispose('caller', { async beforeTerminate(signal) {
+                await supervised.handle.write(Buffer.from('shutdown\n'));
+                await new Promise<void>(resolve => signal.addEventListener('abort', () => {
+                    aborted = true; resolve();
+                }, { once: true }));
+            } });
+            const result = await supervised.handle.wait();
+            expect(Buffer.from(result.stdout).toString()).toContain('shutdown received');
+            expect(aborted).toBe(true);
+            expect(await waitForProcessExit(supervised.child.pid!)).toBe(true);
+        } finally { await supervised.dispose(); }
+    });
+
     it.for([undefined, 'preserve-on-success'] as const)('settles a daemonizing launcher with descendant disposition %s', async (descendantDisposition, { task }) => {
         await withTempDir('happier-native-descendants-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);

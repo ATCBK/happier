@@ -39,6 +39,8 @@ export type CreateJsonRpcProcessClientParams = Readonly<{
     encoding?: BufferEncoding;
     maxFrameBytes?: number;
     requestTimeoutMs?: number;
+    /** Sends `{ id }` for an aborted request using its canonical wire correlation id. */
+    cancellationMethod?: string;
     handlers?: ExecClientHandlersV1['jsonRpc'];
     hooks?: ExecClientHooksV1['jsonRpc'];
     readStderrPreview?: () => string;
@@ -468,6 +470,7 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
             const requestId = String(id);
             let cancelTimeout: (() => void) | undefined;
             let onAbort: (() => void) | null = null;
+            let requestWrite: Promise<boolean> | undefined;
             const cleanup = () => {
                 pendingRequestMethods.delete(requestId);
                 cancelTimeout?.();
@@ -498,6 +501,14 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
                 }
                 if (abortSignal) {
                     onAbort = () => {
+                        if (params.cancellationMethod) {
+                            // Preserve write ordering, including cancellation while the request's
+                            // asynchronous outgoing hook or process write is still pending.
+                            void requestWrite?.then(async wrote => {
+                                if (wrote) await writeJson({ jsonrpc: '2.0', method: params.cancellationMethod, params: { id } });
+                            }).catch(error => failClient(error instanceof Error
+                                ? error : createPluginExecClientProtocolError('JSON-RPC cancellation write failed', error)));
+                        }
                         correlator.reject(requestId, createPluginExecClientAbortError());
                     };
                     if (abortSignal.aborted) {
@@ -507,7 +518,8 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
                     }
                 }
             });
-            const writeOutcome = writeJson({ jsonrpc: '2.0', id, method, params: requestParams }).then(
+            requestWrite = writeJson({ jsonrpc: '2.0', id, method, params: requestParams });
+            const writeOutcome = requestWrite.then(
                 (wrote) => ({ kind: 'write' as const, wrote }),
                 (error: unknown) => ({ kind: 'writeError' as const, error }),
             );

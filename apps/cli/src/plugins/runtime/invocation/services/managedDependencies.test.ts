@@ -17,6 +17,7 @@ import {
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 
 import { createStablePluginManagedDependenciesHost } from './managedDependencies';
+import { createStableManagedExecutableResolver } from './managedExecutableResolver';
 import { createV2ManagedDependencySourceModel } from './managedDependencySourceModel';
 
 function descriptor(
@@ -230,7 +231,11 @@ describe('ready-only preflight executable resolution', () => {
             detectLaunchResolution: async () => ({ availability: { ok: false, errorMessage: 'Not installed' }, canAutoInstall: true, canBackgroundAutoUpdate: false }),
             installOrUpgrade: install,
         }));
-        await expect(host.resolveExecutable({ kind: 'managedDependency', id: 'native-acp' }, 'acme.plugin', { requireReady: true }))
+        const resolveExecutable = createStableManagedExecutableResolver({
+            systemTools: [], managedDependencies: host,
+            resolveSystemTool: async () => { throw new Error('No system tool is declared'); },
+        });
+        await expect(resolveExecutable({ kind: 'managedDependency', id: 'native-acp' }, 'acme.plugin', undefined, { requireReady: true }))
             .rejects.toMatchObject({ code: 'plugin_managed_dependency_executable_unavailable' });
         expect(install).not.toHaveBeenCalled();
     });

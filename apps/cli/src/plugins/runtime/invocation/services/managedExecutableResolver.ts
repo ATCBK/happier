@@ -81,6 +81,7 @@ export function createStableManagedExecutableResolver(params: Readonly<{
     ref: ManagedExecutableRef,
     requestingPluginId: string,
     context?: unknown,
+    options?: Readonly<{ requireReady?: boolean }>,
 ) => Promise<ResolvedExecutable> {
     const systemTools = new Map<string, ResolvedSystemToolContribution>();
     for (const contribution of params.systemTools) {
@@ -89,9 +90,9 @@ export function createStableManagedExecutableResolver(params: Readonly<{
         systemTools.set(`${pluginId}/${contribution.definition.id}`, contribution);
     }
 
-    return async (ref, requestingPluginId, context) => {
+    return async (ref, requestingPluginId, context, options) => {
         if (ref.kind === 'managedDependency') {
-            return await params.managedDependencies.resolveExecutable(ref, requestingPluginId);
+            return await params.managedDependencies.resolveExecutable(ref, requestingPluginId, options);
         }
         if (ref.kind === 'packaged-runtime-binary') {
             if (

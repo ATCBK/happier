@@ -24,6 +24,8 @@ import { observeProcessLaunch } from '@/processes/launchNotification';
 import { logger } from '@/ui/logger';
 
 type DisposeReason = Extract<PluginProcessTerminationRequest, { kind: 'dispose' }>['reason'];
+export type SupervisedPluginGracefulStop = (signal: AbortSignal) => Promise<void>;
+const PROCESS_TERMINATION_GRACE_MS = 100;
 
 // Host-internal workload guard pending RA21 traffic/platform measurement. Authors may
 // select a smaller result buffer, but cannot turn process supervision into an
@@ -57,7 +59,7 @@ export type SupervisedPluginProcess = Readonly<{
     handle: PluginProcessHandle;
     readBufferedStderr(): Uint8Array;
     requestTermination(request: Exclude<PluginProcessTerminationRequest, { kind: 'none' }>): Promise<void>;
-    dispose(reason?: DisposeReason): Promise<void>;
+    dispose(reason?: DisposeReason, options?: Readonly<{ beforeTerminate?: SupervisedPluginGracefulStop }>): Promise<void>;
     /** An unobserved shared-owner remainder is not a cleanup guarantee. */
     waitForSettlement(): Promise<SupervisedProcessSettlement>;
     onOutcomeUncertain(listener: (error: unknown) => void): () => void;
@@ -387,7 +389,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         seal();
     });
 
-    const requestTermination = (request: Exclude<PluginProcessTerminationRequest, { kind: 'none' }>): Promise<void> => {
+    const requestTermination = (request: Exclude<PluginProcessTerminationRequest, { kind: 'none' }>, beforeTerminate?: SupervisedPluginGracefulStop): Promise<void> => {
         if (!observed && (child.exitCode !== null || child.signalCode !== null)) {
             freezeObserved(observedTermination(child.exitCode, child.signalCode));
         }
@@ -409,6 +411,28 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         }
         if (terminationPromise) return terminationPromise;
         const attempt = (async () => {
+            let gracefulStopDeadline: number | undefined;
+            if (beforeTerminate && !observed) {
+                gracefulStopDeadline = Date.now() + PROCESS_TERMINATION_GRACE_MS;
+                const controller = new AbortController();
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const expired = new Promise<void>(resolve => {
+                    timer = setTimeout(() => { controller.abort(); resolve(); }, PROCESS_TERMINATION_GRACE_MS);
+                });
+                try {
+                    await Promise.race([
+                        Promise.resolve().then(() => beforeTerminate(controller.signal)).catch(error => {
+                            logger.infoFile('[PluginExec] Graceful protocol stop did not complete', error);
+                        }),
+                        expired,
+                    ]);
+                } finally { if (timer) clearTimeout(timer); }
+            }
+            const terminationOptions = () => {
+                const graceMs = gracefulStopDeadline === undefined ? PROCESS_TERMINATION_GRACE_MS
+                    : Math.max(0, gracefulStopDeadline - Date.now());
+                return { graceMs, ...(graceMs === 0 ? { firstSignal: 'SIGKILL' as const } : {}) };
+            };
             const terminate = input.terminateProcessTree
                 ?? (async (target: ChildProcessWithoutNullStreams) => {
                     if (input.processCustody) {
@@ -420,7 +444,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
                         return;
                     }
                     await terminateProcessTree(target, {
-                        graceMs: 100,
+                        ...terminationOptions(),
                         ownedProcessGroup: process.platform !== 'win32'
                             && input.spawnOptions?.detached === true,
                     });
@@ -455,12 +479,12 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
                 // Known subtree or exclusive custody still needs the canonical
                 // terminator's absence proof even after the launcher exits.
                 if (!input.terminateProcessTree && !input.processCustody && capturedTargets?.length) {
-                    const result = await terminateProcessTree({ targets: capturedTargets, tree: false, graceMs: 100 });
+                    const result = await terminateProcessTree({ targets: capturedTargets, tree: false, ...terminationOptions() });
                     if (result.status !== 'complete') throw terminationIncompleteError();
                 } else if (!input.terminateProcessTree && !input.processCustody && observed && capturedTreeOnOutput) {
                     const captured = await capturedTreeOnOutput;
                     if (captured.status === 'ok') {
-                        const result = await terminateProcessTree({ targets: captured.capturedTargets, tree: false, graceMs: 100 });
+                        const result = await terminateProcessTree({ targets: captured.capturedTargets, tree: false, ...terminationOptions() });
                         if (result.status !== 'complete') throw terminationIncompleteError();
                     }
                     // Exact known identities do not authorize discovering peers
@@ -537,12 +561,12 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         child.stdin.end(input.stdin);
     }
 
-    const dispose = (reason: DisposeReason = 'caller'): Promise<void> => {
+    const dispose = (reason: DisposeReason = 'caller', options?: Readonly<{ beforeTerminate?: SupervisedPluginGracefulStop }>): Promise<void> => {
         // A new explicit Stop may arrive from the uncertainty observer before
         // the previous disposal's rejection reaches its outer cleanup. Join a
         // successful attempt, but retry THIS request after a failed attempt;
         // the first caller still observes its original unconfirmed outcome.
-        if (disposePromise) return disposePromise.catch(() => dispose(reason));
+        if (disposePromise) return disposePromise.catch(() => dispose(reason, options));
         const attempt = (async () => {
             for (const signal of input.signals ?? []) {
                 signal.removeEventListener('abort', abort);
@@ -551,7 +575,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
                 clearTimeout(timeout);
                 timeout = null;
             }
-            await requestTermination({ kind: 'dispose', reason });
+            await requestTermination({ kind: 'dispose', reason }, options?.beforeTerminate);
             outputListeners.clear();
         })();
         disposePromise = attempt;

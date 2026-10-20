@@ -25,6 +25,7 @@ import {
 import {
     spawnSupervisedPluginProcess,
     type SupervisedPluginProcess,
+    type SupervisedPluginGracefulStop,
 } from '../../exec/processSupervisor';
 import type { ProcessCustodySpawnSpec } from '@/subprocess/supervision/processCustody';
 import {
@@ -48,6 +49,19 @@ import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 import { logger } from '@/ui/logger';
 
 type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
+const INTERNAL_PROTOCOL_GRACEFUL_DISPOSERS = new WeakMap<PluginProtocolClientHandle<'jsonRpc'>,
+    (beforeTerminate: SupervisedPluginGracefulStop) => Promise<void>>();
+
+/** The supervisor's existing termination grace contains the entire protocol stop. */
+export async function disposePluginProtocolClientGracefullyForHost(
+    handle: PluginProtocolClientHandle<'jsonRpc'>,
+    beforeTerminate: SupervisedPluginGracefulStop,
+): Promise<void> {
+    const dispose = INTERNAL_PROTOCOL_GRACEFUL_DISPOSERS.get(handle);
+    if (!dispose) throw new PluginError({ code: 'plugin_exec_protocol_custody_unavailable', message: 'Protocol client is not owned by this host execution service' });
+    await dispose(beforeTerminate);
+}
 
 /** Prepared by the host Project owner, never accepted from an SDK Exec request. */
 export type HostProjectNativeLaunchAdmission =
@@ -1385,6 +1399,7 @@ export function createStablePluginExecService(params: Readonly<{
             framing: spec.framing,
             maxFrameBytes: spec.maxFrameBytes,
             requestTimeoutMs: spec.requestTimeoutMs,
+            cancellationMethod: spec.cancellationMethod,
             readStderrPreview: () => Buffer.from(supervised.readBufferedStderr()).toString('utf8'),
             onFailure: () => {
                 void supervised.dispose('runtimeRecovery');
@@ -1440,12 +1455,17 @@ export function createStablePluginExecService(params: Readonly<{
                 `Plugin process terminated (${result.termination.observed.kind})`,
             ));
         });
-        return Object.freeze({
+        const handle: PluginProtocolClientHandle<'jsonRpc'> = Object.freeze({
             client,
             process: supervised.handle,
             wait: () => supervised.handle.wait(),
             dispose,
         });
+        INTERNAL_PROTOCOL_GRACEFUL_DISPOSERS.set(handle, async beforeTerminate => {
+            await supervised.dispose('caller', { beforeTerminate });
+            protocol.dispose();
+        });
+        return handle;
     }
 
     async function spawnJsonStreamClient(

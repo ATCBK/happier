@@ -583,6 +583,11 @@ export type ManagedProviderAdoptedPublicOutcome = Readonly<{
 }>;
 
 export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
+    /** Host reads may launch an installed executable, but never acquire one implicitly. */
+    resolveReadyManagedExecutable?(
+        executable: ManagedExecutableRef,
+        pluginId: string,
+    ): Promise<ResolvedPluginExecutable>;
     /** Host-private Project supervision/control; the SDK remains plugin-scoped. */
     projectManagedServices: Pick<ReturnType<typeof createManagedServicesOwner>,
         'superviseProject' | 'stopForAccessLoss' | 'resolveProjectService' | 'listProjectServices' | 'activity' | 'readProcessRoots' | 'readResourceTargets'>;
@@ -7134,6 +7139,8 @@ export async function resolveExecutablePluginRuntimeRegistry(
     };
 
     const resolvedRuntimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
+        resolveReadyManagedExecutable: (executable, pluginId) =>
+            executableResolver(executable, pluginId, undefined, { requireReady: true }),
         get projectManagedServices() {
             return projectManagedServicesOwner;
         },

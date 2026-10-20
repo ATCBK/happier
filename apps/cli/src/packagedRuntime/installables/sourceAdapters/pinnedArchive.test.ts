@@ -85,6 +85,31 @@ afterEach(async () => {
 });
 
 describe('pinned archive runtime installable adapter', () => {
+  it('retains companion declarations beside a nested native executable', async () => {
+    configurationState.happyHomeDir = await makeTempHome();
+    downloadMock.mockImplementation(async (params: { destinationPath: string }) => {
+      await writeFile(params.destinationPath, 'archive fixture');
+    });
+    // Archive extraction is the OS/archive boundary; the real installer must
+    // promote the complete payload rather than only its selected executable.
+    extractRootMock.mockImplementation(async (params: { extractDir: string }) => {
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(join(params.extractDir, 'package', 'lib'), { recursive: true });
+      await writeFile(join(params.extractDir, 'package', 'lib', 'tsc'), 'native executable fixture');
+      await writeFile(join(params.extractDir, 'package', 'lib', 'lib.d.ts'), 'interface Array<T> {}\n');
+    });
+    const { createPinnedArchiveRuntimeInstallableAdapter } = await import('./pinnedArchive');
+    const adapter = createPinnedArchiveRuntimeInstallableAdapter({ installId: 'dep.language-fixture', version: '1',
+      platform: 'linux', asset: { archiveUrl: 'https://example.test/native.tgz',
+        sha256: 'a'.repeat(64), executableSubpath: 'package/lib/tsc' } });
+    await expect(adapter.installOrUpgrade()).resolves.toMatchObject({ ok: true });
+    const launch = await adapter.resolveLaunchCommand?.();
+    expect(launch).toMatchObject({ ok: true });
+    if (!launch?.ok) return;
+    const { dirname } = await import('node:path');
+    await expect(readFile(join(dirname(launch.command), 'lib.d.ts'), 'utf8')).resolves.toBe('interface Array<T> {}\n');
+  });
+
   it('writes a minimal definition receipt through the installer and uses its canonical reader and remover', async () => {
     const home = await makeTempHome();
     configurationState.happyHomeDir = home;
