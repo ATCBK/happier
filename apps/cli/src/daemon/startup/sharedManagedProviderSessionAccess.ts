@@ -30,14 +30,15 @@ export function createSharedManagedProviderSessionAccess(input: Readonly<{
     materialize?: MaterializeSharedBinding;
     endpointTemplateId: string;
     revalidate(): Promise<boolean>;
-    cleanup(): Promise<void>;
 }>) {
     return async (requestSignal?: AbortSignal) => {
         requestSignal?.throwIfAborted();
         await input.start();
         const captured = input.readProjection();
         if (!captured || !input.materialize || !await input.revalidate()) {
-            await input.cleanup();
+            // Withdraw this access claim, not its containing Session invocation.
+            // A later request must freshly reauthorize before reacquiring it.
+            await captured?.projection.cleanup();
             throw new PluginError({
                 code: 'plugin_services_managed_provider_authority_unavailable',
                 message: 'Managed gateway consumer access is unavailable',
@@ -60,7 +61,7 @@ export function createSharedManagedProviderSessionAccess(input: Readonly<{
             },
         });
         if (!result) {
-            await input.cleanup();
+            await captured.projection.cleanup();
             throw new PluginError({
                 code: 'plugin_services_managed_provider_authority_unavailable',
                 message: 'Managed gateway consumer access changed',

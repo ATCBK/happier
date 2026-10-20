@@ -8592,7 +8592,6 @@ export async function startDaemonSessionControlRuntime(
                 ...(created.materializeManagedProviderAgentBinding ? { materialize: created.materializeManagedProviderAgentBinding } : {}),
                 endpointTemplateId: basis.endpoint.endpointTemplateId,
                 revalidate,
-                cleanup: cleanupManagedProvider,
               }),
             });
           };

@@ -741,7 +741,7 @@ describe('managed-services SVC09 owner', () => {
             await rm(directory, { recursive: true, force: true });
         }
     });
-    it.each(['process-death', 'failed-start'] as const)('G1 re-enters local Session custody after %s', async failure => {
+    it.each(['process-death', 'failed-start', 'authority-refusal'] as const)('G1 re-enters local Session custody after %s', async failure => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-local-gateway-recovery-'));
         const firstProcess = createLifecycleProcess(4_591);
         const nextProcess = createLifecycleProcess(4_592);
@@ -750,10 +750,12 @@ describe('managed-services SVC09 owner', () => {
             fetch: async url => new Response(null, { status: String(url).endsWith('/_happier/consumer-access/settle') ? 200 : 204 }),
         });
         const signal = new AbortController().signal;
+        let invocationCurrent = true;
+        let authorizationReadable = true;
         const services = harness.owner.bindScope(lifecycleScope({ occurrenceId: 'local-recovery', sessionId: 'session', operationId: 'session' }), harness.exec, {
-            managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true, isPhysicalOccurrenceCurrent: () => true,
+            managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => invocationCurrent, isPhysicalOccurrenceCurrent: () => true,
                 sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId: 'session' } },
-            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, 'session.capability'), isCurrent: () => true,
+            requestAuth: { realm: 'managedProviderStart', capabilityPath: join(directory, 'session.capability'), isCurrent: () => invocationCurrent,
                 ...gatewayRequestAuthUses() },
         });
         const spec: ManagedServiceSpec = { ...lifecycleSpec({ id: 'local-recovery', port: 4_359 }),
@@ -769,8 +771,7 @@ describe('managed-services SVC09 owner', () => {
                 captured = { service, projection, endpointTemplateId: 'responses', materialize: async () => ({ v: 1, kind: 'spawnEnv', env: [] }) };
             } });
         const read = createSharedManagedProviderSessionAccess({ start, readProjection: () => captured,
-            materialize: harness.owner.materializeManagedProviderAgentBinding, endpointTemplateId: 'responses', revalidate: async () => true,
-            cleanup: async () => { await captured?.projection.cleanup(); } });
+            materialize: harness.owner.materializeManagedProviderAgentBinding, endpointTemplateId: 'responses', revalidate: async () => authorizationReadable });
         try {
             if (failure === 'failed-start') {
                 harness.exec.spawn.mockRejectedValueOnce(new Error('OS spawn temporarily unavailable'));
@@ -778,13 +779,18 @@ describe('managed-services SVC09 owner', () => {
             } else {
                 const initial = await read(signal);
                 expect(initial.endpointUrl).toBe('http://127.0.0.1:4359/v1');
-                await firstProcess.dispose();
+                if (failure === 'authority-refusal') {
+                    authorizationReadable = false;
+                    await expect(read(signal)).rejects.toMatchObject({ code: 'plugin_services_managed_provider_authority_unavailable' });
+                    authorizationReadable = true;
+                } else await firstProcess.dispose();
                 await vi.waitFor(() => expect(captured?.projection.isCurrent()).toBe(false));
             }
             const restored = await Promise.all([read(signal), read(signal)]);
             expect(restored.map(binding => binding.endpointUrl)).toEqual(['http://127.0.0.1:4359/v1', 'http://127.0.0.1:4359/v1']);
             expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
         } finally {
+            invocationCurrent = false;
             await harness.owner.dispose();
             await rm(directory, { recursive: true, force: true });
         }
@@ -843,7 +849,6 @@ describe('managed-services SVC09 owner', () => {
                     if (withdraw) firstCurrent = false;
                     return true;
                 },
-                cleanup: async () => { await projection.cleanup(); },
             });
             await expect(read(cancelledRequest.signal)).rejects.toMatchObject({ name: 'AbortError' });
             expect(await readConsumerCount()).toBe(2);
