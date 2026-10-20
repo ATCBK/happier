@@ -2,15 +2,58 @@ import fastify from 'fastify';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { resolveOfflineReconnectionBackoffDelayMs } from '@/api/offline/serverConnectionErrors';
 import { readRequesterHomeWithinActionLifetime, runWithRequesterSessionCurrentnessCheckpoint } from './requesterCurrentness';
 import { prepareRequesterSessionBootstrap } from './requesterSessionCredentials';
 import { createActiveAccountSettingsConnectedAccountPurposeBindingStore } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { createAccountSettingsConnectedAccountSecrets } from '../connectedServices/qualifiedConnectedAccountDaemonPersistence';
+
+it('paces sustained unavailable preparation reads with the Home policy and cancels the pending wait', async () => {
+  vi.useFakeTimers();
+  const random = vi.spyOn(Math, 'random').mockReturnValue(1);
+  const caller = new AbortController();
+  let reads = 0;
+  let available = false;
+  const read = async () => {
+    reads++;
+    if (!available) throw Object.assign(new Error('Home unavailable'), { response: { status: 503 } });
+    return 'prepared';
+  };
+  try {
+    const preparation = readRequesterHomeWithinActionLifetime(read, caller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    // More failures than the Home policy's delay saturation count:
+    // the Home policy caps its delay, never this accepted Action's lifetime.
+    for (let failure = 1; failure <= 12; failure++) {
+      expect(reads).toBe(failure);
+      await vi.advanceTimersByTimeAsync(resolveOfflineReconnectionBackoffDelayMs(failure) - 1);
+      expect(reads).toBe(failure);
+      if (failure === 12) available = true;
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await expect(preparation).resolves.toBe('prepared');
+    available = false;
+    const cancelled = readRequesterHomeWithinActionLifetime(read, caller.signal);
+    const rejection = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(0);
+    const beforeCancellation = reads;
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await rejection;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads).toBe(beforeCancellation);
+  } finally {
+    caller.abort();
+    random.mockRestore();
+    vi.useRealTimers();
+  }
+});
 
 it('preserves requester custody across unavailable observations and recovers safe reads inside the caller lifetime', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'requester-currentness-'));
@@ -55,6 +98,7 @@ it('preserves requester custody across unavailable observations and recovers saf
     // socket observation, Settings publication and private custody remain real.
     verifyMachineAdmissionCurrent: async () => current, signal });
   let prepared: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> = null;
+  const retryJitter = vi.spyOn(Math, 'random').mockReturnValue(0);
   try {
     prepared = await prepare();
     if (!prepared) throw new Error('Expected admitted requester');
@@ -127,6 +171,7 @@ it('preserves requester custody across unavailable observations and recovers saf
     expect(await custody.isCurrent()).toBe(false);
     expect(custody.readSnapshot()).toBeNull();
   } finally {
+    retryJitter.mockRestore();
     releasePendingProfile?.();
     await prepared?.cleanupOnFailure();
     restoreHttp();

@@ -709,8 +709,12 @@ describe('Custom ACP fresh daemon launch composition', () => {
           // The real approval owner also requires an accepted original for a durable proposal.
           : outcome === 'manager-approval-required-resume' ? 'approval_origin_unavailable'
           : outcome === 'manager-person-hold-resume' ? 'held_by_person'
+          : outcome === 'manager-requester-retired-resume' ? 'unsupported_action'
           : outcome === 'manager-not-parent-resume' ? 'authority_unavailable' : 'resume_failed';
         expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode });
+        if (outcome === 'manager-requester-retired-resume') {
+          expect(result).toMatchObject({ details: { cause: 'action_scope_restricted' } });
+        }
         expect(physicalLaunches).toBe(outcome === 'manager-launch-failed-resume' ? 1 : 0);
         const owner = StoredSessionOwnerMetadataEnvelopeV1Schema.parse(row.ownerMetadata);
         if (owner.t !== 'plain') throw new Error('Expected held manager-child owner metadata');
@@ -763,9 +767,10 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   });
 
-  it.each(['default', 'explicit', 'unsupported_binding'] as const)('admits a configured definition from the Action front door to the launch boundary (%s)', async scenario => {
+  it.each(['default', 'explicit', 'unsupported_binding', 'final_home_unavailable', 'final_requester_refused', 'final_cancelled', 'final_cancelled_refused'] as const)('admits a configured definition from the Action front door to the launch boundary (%s)', async scenario => {
     const withModel = scenario === 'explicit';
     const unsupportedBinding = scenario === 'unsupported_binding';
+    const cancellation = new AbortController();
     const definitionId = withModel ? 'beta' : 'alpha';
     const target = AgentExecutionTargetV1Schema.parse({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
       definitionId });
@@ -795,6 +800,7 @@ describe('Custom ACP fresh daemon launch composition', () => {
       throw new Error(`Unexpected FIX54 Home read ${path}`);
     });
     const originalFetch = globalThis.fetch;
+    const diagnostic = vi.spyOn(logger, 'infoFile');
     vi.stubGlobal('fetch', async (url: string | URL | Request) => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/profile') return new Response(JSON.stringify({ id: 'df38-owner' }), { status: 200 });
@@ -805,7 +811,20 @@ describe('Custom ACP fresh daemon launch composition', () => {
       const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession: async options => {
         const input = params(definitionId, async () => { reachedLaunch = true; return false; });
         const result = await executeSpawnSessionRequest({ ...input, options: { ...options,
-          beforeSessionRunnerLaunch: input.options.beforeSessionRunnerLaunch } });
+          beforeSessionRunnerLaunch: input.options.beforeSessionRunnerLaunch,
+          verifyRequesterMachineAdmissionCurrent: async () => {
+            const prepared = diagnostic.mock.calls.some(([message, payload]) => message === '[DAEMON RUN] Spawn preparation phase'
+              && payload !== null && typeof payload === 'object' && 'phase' in payload && payload.phase === 'child_environment');
+            if (prepared && scenario === 'final_cancelled_refused') {
+              cancellation.abort();
+              return false;
+            }
+            if (prepared && (scenario === 'final_home_unavailable' || scenario === 'final_cancelled')) {
+              if (scenario === 'final_cancelled') cancellation.abort();
+              throw Object.assign(new Error('Home unavailable'), { response: { status: 503 } });
+            }
+            return scenario !== 'final_requester_refused' || !prepared;
+          } } });
         daemonResult = result;
         return result;
       } });
@@ -822,15 +841,25 @@ describe('Custom ACP fresh daemon launch composition', () => {
         } : {} }, permissionMode: 'default',
         ...(withModel ? { modelSelection: { v: 1, updatedAt: 1,
           ref: { agentTargetKey: buildBackendTargetKeyV2(target), providerConnectionId: null, modelId: 'free/model' } } } : {}),
-      }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } });
+      }, { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' }, signal: cancellation.signal });
       const observed = { result, daemonResult, boundaryReads, reachedLaunch };
       expect(observed, JSON.stringify(observed)).toMatchObject(unsupportedBinding ? { reachedLaunch: false,
         daemonResult: { type: 'error', errorCode: 'SPAWN_VALIDATION_FAILED' },
         result: { ok: true, result: { type: 'error', code: 'spawn_failed',
           launchError: { code: 'connected_service_qualified_purpose_authority_unavailable' } } },
+      // Both a legacy bare refusal and the typed unavailable response keep
+      // cancellation's existing unknown-outcome custody after spawn dispatch.
+      } : scenario === 'final_cancelled' || scenario === 'final_cancelled_refused' ? { reachedLaunch: false,
+        result: { ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' } },
+      } : scenario === 'final_home_unavailable' ? { reachedLaunch: false,
+        daemonResult: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE', errorDetail: { kind: 'requester_home_unavailable' } },
+        result: { ok: true, result: { type: 'error', code: 'target_unavailable', retryable: true } },
+      } : scenario === 'final_requester_refused' ? { reachedLaunch: false,
+        daemonResult: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' },
+        result: { ok: true, result: { type: 'error', code: 'incompatible_target', retryable: false } },
       } : { reachedLaunch: true, daemonResult: { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' } });
       expect(boundaryReads).toContain('/v1/account/entity-rows/acp');
-    } finally { reads.mockRestore(); network.mockRestore(); vi.stubGlobal('fetch', originalFetch); }
+    } finally { diagnostic.mockRestore(); reads.mockRestore(); network.mockRestore(); vi.stubGlobal('fetch', originalFetch); }
   });
 
   it('reads retained bundled Agent resources from the admitted development source root', async () => {
@@ -1706,22 +1735,29 @@ describe('Custom ACP fresh daemon launch composition', () => {
     }
   });
 
-  it.each(['requester_machine_admission_unavailable', 'session_handoff_launch_custody_unavailable'] as const)(
+  it.each(['requester_machine_admission_unavailable', 'requester_home_unavailable', 'session_handoff_launch_custody_unavailable'] as const)(
     'identifies the prelaunch admission refusal cause (%s)', async (cause) => {
       const diagnostic = vi.spyOn(logger, 'infoFile');
       const input = params('alpha', async () => cause !== 'session_handoff_launch_custody_unavailable');
       // The external authority stays current until the preparation observation,
       // independent of how many earlier currentness checks the real path makes.
-      input.options.verifyRequesterMachineAdmissionCurrent = async () =>
-        cause !== 'requester_machine_admission_unavailable' || !diagnostic.mock.calls.some(([message, payload]) =>
+      input.options.verifyRequesterMachineAdmissionCurrent = async () => {
+        const prepared = diagnostic.mock.calls.some(([message, payload]) =>
           message === '[DAEMON RUN] Spawn preparation phase' && payload !== null && typeof payload === 'object'
             && 'phase' in payload && payload.phase === 'child_environment');
+        if (prepared && cause === 'requester_home_unavailable') {
+          throw Object.assign(new Error('Home unavailable'), { response: { status: 503 } });
+        }
+        return cause !== 'requester_machine_admission_unavailable' || !prepared;
+      };
       const result = await executeSpawnSessionRequest(input);
       expect(result).toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
       expect(diagnostic).toHaveBeenCalledWith('[DAEMON RUN] Spawn launch admission refused', expect.objectContaining({ cause }));
       if (result.type !== 'error') throw new Error('Expected launch admission refusal');
       expect(SpawnSessionControlErrorResponseSchema.parse(projectSpawnSessionControlErrorResponse(result)))
-        .toMatchObject({ errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+        .toMatchObject({ errorCode: 'DAEMON_RPC_UNAVAILABLE',
+          ...(cause === 'requester_home_unavailable' ? { errorDetail: { kind: 'requester_home_unavailable' } } : {}) });
+      if (cause !== 'requester_home_unavailable') expect(result.errorDetail).toBeUndefined();
     },
   );
 

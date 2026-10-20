@@ -27,7 +27,7 @@ import { buildProviderSpawnErrorResult } from '../spawn/buildProviderSpawnErrorR
 import { AcpCatalogUnavailableError, resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveBackend';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolvePreparedSessionDirectory } from './resolvePreparedSessionDirectory';
-import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
+import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 import { resolveSessionRuntimeSnapshot } from '../sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
 import {
@@ -116,10 +116,8 @@ export async function prepareExecuteSpawnSessionRequest(
     }>,
 ): Promise<PreparedExecuteSpawnSessionRequest | SpawnSessionResult> {
     const { options } = params.request;
-    if (!await isRequesterLaunchAdmissionCurrent(options)) {
-        return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-            errorMessage: 'Requester Machine admission unavailable' };
-    }
+    const requesterAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+    if (requesterAdmissionFailure) return requesterAdmissionFailure;
     const environmentVariableCount = options.environmentVariables && typeof options.environmentVariables === 'object'
         ? Object.keys(options.environmentVariables as Record<string, unknown>).length
         : 0;

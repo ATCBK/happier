@@ -6382,6 +6382,9 @@ export function createCliActionDeps(params: Readonly<{
           return { type: 'error', code: 'cancelled', retryable: true };
         }
         if (code === SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE) {
+          if (spawnErrorDetails.some(detail => detail?.kind === 'requester_home_unavailable')) {
+            return { type: 'error', code: 'target_unavailable', retryable: true };
+          }
           const predicate = SessionSpawnNewIncompatibleTargetV1Schema.safeParse(
             details.incompatibleTarget ?? readRecord(details.spawnResponse).incompatibleTarget,
           );

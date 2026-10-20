@@ -80,6 +80,14 @@ describe('spawn-session execution authorization', () => {
 });
 
 describe('spawn-session error detail contract (D2 structured continuity)', () => {
+  it('retains the bounded requester Home-unavailable cause without accepting arbitrary diagnostics', () => {
+    const detail = { kind: 'requester_home_unavailable' };
+    expect(normalizeSpawnSessionErrorDetail(detail)).toEqual(detail);
+    expect(normalizeSpawnSessionErrorDetail({ ...detail, retryable: false })).toBeUndefined();
+    expect(normalizeSpawnSessionErrorDetail({ ...detail, rawDiagnostic: '/private' })).toBeUndefined();
+    expect(normalizeSpawnSessionErrorDetail({ kind: 'requester_refused' })).toBeUndefined();
+  });
+
   it('preserves bounded launch diagnostics without accepting private paths or unknown causes', () => {
     const detail = { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' };
     expect(normalizeSpawnSessionErrorDetail(detail)).toEqual(detail);

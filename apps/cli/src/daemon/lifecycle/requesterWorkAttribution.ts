@@ -1,5 +1,8 @@
 import type { RpcHandlerContext } from '@/api/rpc/types';
-import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { rethrowRequesterHomeReadFailure } from '../sessionEncryption/requesterCurrentness';
 export { RequesterWorkAttributionV1Schema, RequesterWorkAttributionStoredReadV1Schema,
   type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 
@@ -25,5 +28,21 @@ export async function isRequesterLaunchAdmissionCurrent(options: Pick<SpawnSessi
   'verifyRequesterMachineAdmissionCurrent'>): Promise<boolean> {
   if (!options.verifyRequesterMachineAdmissionCurrent) return true;
   try { return await options.verifyRequesterMachineAdmissionCurrent(); }
-  catch { return false; }
+  catch (error) {
+    rethrowRequesterHomeReadFailure(error);
+    return false;
+  }
+}
+
+/** One spawn-result projection for every fresh requester admission checkpoint. */
+export async function resolveRequesterLaunchAdmissionFailure(options: Pick<SpawnSessionOptions,
+  'verifyRequesterMachineAdmissionCurrent'>): Promise<Extract<SpawnSessionResult, { type: 'error' }> | null> {
+  const refusal = { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+    errorMessage: 'Requester Machine admission unavailable' } as const;
+  try { return await isRequesterLaunchAdmissionCurrent(options) ? null : refusal; }
+  catch (error) {
+    if (!isPluginError(error) || error.code !== 'project_requester_home_unavailable' || error.retryable !== true) return refusal;
+    return { ...refusal, errorMessage: 'Requester Home is temporarily unavailable',
+      errorDetail: { kind: 'requester_home_unavailable' } };
+  }
 }

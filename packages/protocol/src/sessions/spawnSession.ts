@@ -104,6 +104,8 @@ export type SpawnSessionErrorCode = (typeof SPAWN_SESSION_ERROR_CODES)[keyof typ
 export const SPAWN_SESSION_ERROR_DETAIL_KINDS = {
   LAUNCH_ERROR: 'launch_error',
   LAUNCH_RETIRED: 'launch_retired',
+  /** Fresh requester Home evidence was unavailable before the runner launched. */
+  REQUESTER_HOME_UNAVAILABLE: 'requester_home_unavailable',
   SPAWN_FAILURE: 'spawn_failure',
   TERMINAL_HOST_UNAVAILABLE: 'terminal_host_unavailable',
   /**
@@ -255,9 +257,16 @@ export const SessionLaunchRetiredV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 export type SessionLaunchRetiredV1 = z.infer<typeof SessionLaunchRetiredV1Schema>;
 
+/** Content-free transient cause; neither revocation nor a missing daemon capability. */
+const RequesterHomeUnavailableSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.REQUESTER_HOME_UNAVAILABLE),
+}));
+type RequesterHomeUnavailableSpawnErrorDetail = z.infer<typeof RequesterHomeUnavailableSpawnErrorDetailSchema>;
+
 export type SpawnSessionErrorDetail =
   | SessionSpawnLaunchErrorV1
   | SessionLaunchRetiredV1
+  | RequesterHomeUnavailableSpawnErrorDetail
   | SpawnFailureSpawnErrorDetail
   | TerminalHostUnavailableSpawnErrorDetail
   | ConnectedServiceResumeUnreachableSpawnErrorDetail
@@ -522,6 +531,7 @@ export function isSessionCreationTerminalSpawnErrorDetail(
 export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSessionErrorDetail {
   return SessionSpawnLaunchErrorV1Schema.safeParse(value).success
     || SessionLaunchRetiredV1Schema.safeParse(value).success
+    || RequesterHomeUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || SpawnFailureSpawnErrorDetailSchema.safeParse(value).success
     || TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || isConnectedServiceResumeUnreachableSpawnErrorDetail(value)
@@ -535,6 +545,7 @@ export function normalizeSpawnSessionErrorDetail(value: unknown): SpawnSessionEr
   if (!detail) return undefined;
   return SessionSpawnLaunchErrorV1Schema.safeParse(detail).data
     ?? SessionLaunchRetiredV1Schema.safeParse(detail).data
+    ?? RequesterHomeUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? SpawnFailureSpawnErrorDetailSchema.safeParse(detail).data
     ?? TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? normalizeConnectedServiceResumeUnreachableDetail(detail)
