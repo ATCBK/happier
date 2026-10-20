@@ -57,8 +57,6 @@ const MAX_READ_AFTER_BOUNDARY_CODE_UNITS = 2_000;
 const MAX_READ_AFTER_DIAGNOSTIC_CODE_UNITS = 128;
 const MAX_READ_AFTER_DIAGNOSTICS = 32;
 const MAX_READ_AFTER_DIAGNOSTIC_POSITIONS = 200;
-const MAX_NATIVE_CURSOR_CODE_UNITS = 2_000;
-const MAX_QUALIFIED_CURSOR_CODE_UNITS = 4_096;
 const MAX_TRANSCRIPT_MEDIA_READ_ROOTS = 16;
 const MAX_TRANSCRIPT_MEDIA_READ_ROOT_CODE_UNITS = 4_096;
 export const EXTERNAL_SESSIONS_INVOCATION_POLICY = Object.freeze({
@@ -70,8 +68,6 @@ export const EXTERNAL_SESSIONS_INVOCATION_POLICY = Object.freeze({
     titleMaxCodeUnits: MAX_TITLE_CODE_UNITS,
     searchMaxCodeUnits: MAX_SEARCH_CODE_UNITS,
     failureMessageMaxCodeUnits: MAX_FAILURE_MESSAGE_CODE_UNITS,
-    nativeCursorMaxCodeUnits: MAX_NATIVE_CURSOR_CODE_UNITS,
-    qualifiedCursorMaxCodeUnits: MAX_QUALIFIED_CURSOR_CODE_UNITS,
     sourceMaxSerializedBytes: MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_BYTES,
 });
 
@@ -273,6 +269,7 @@ export async function bindAgentExternalSessionsManagedEndpointRead(input: Readon
 type CursorScope = Readonly<{
     method: 'listCandidates' | 'pageTranscript' | 'readAfterTranscript';
     source: AgentExternalSessionSource;
+    maxSerializedBytes: number;
     remoteSessionId?: string;
 }>;
 
@@ -557,15 +554,13 @@ function sourceDigest(source: AgentExternalSessionSource): string {
 }
 
 function cursorCodeUnitBounds(scope: CursorScope): Readonly<{ native: number; qualified: number }> {
-    // Candidate scans carry discovery/codec progress. Their whole qualified
-    // reply already has a UTF-8 byte budget; a transcript's short-cursor limit
-    // must not reject a valid candidate page before that owner measures it.
+    // Discovery and transcript cursors carry codec progress. Their whole
+    // qualified reply already has a UTF-8 byte budget; a second short-cursor
+    // limit must not reject valid progress before that owner measures it.
     // Code units cannot exceed UTF-8 bytes, so this is only an early coarse
     // check. parseAndBoundResult enforces the actual whole-envelope budget.
-    const candidateBytes = EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes;
-    return scope.method === 'listCandidates'
-        ? { native: candidateBytes, qualified: candidateBytes }
-        : { native: MAX_NATIVE_CURSOR_CODE_UNITS, qualified: MAX_QUALIFIED_CURSOR_CODE_UNITS };
+    const bytes = scope.maxSerializedBytes;
+    return { native: bytes, qualified: bytes };
 }
 
 function encodeQualifiedCursor(
@@ -591,7 +586,8 @@ function encodeQualifiedCursor(
         c: nativeCursor,
     });
     const encoded = `happier_external_cursor_v1:${Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')}`;
-    return encoded.length <= bounds.qualified ? encoded : null;
+    if (encoded.length > bounds.qualified) throw new ExternalSessionsResultAdmissionError('result_byte_budget');
+    return encoded;
 }
 
 function decodeInputCursor(
@@ -775,6 +771,7 @@ function parseTranscriptPageValue(
         ? Object.freeze({
             method: 'readAfterTranscript' as const,
             source: scope.source,
+            maxSerializedBytes: scope.maxSerializedBytes,
             ...(scope.remoteSessionId === undefined ? {} : { remoteSessionId: scope.remoteSessionId }),
         })
         : scope;
@@ -1264,8 +1261,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const searchTerm = request.searchTerm === undefined
                 ? undefined
                 : parseBoundedString(request.searchTerm, MAX_SEARCH_CODE_UNITS, true);
-            const scope = parsedSource
-                ? Object.freeze({ method: 'listCandidates' as const, source: parsedSource })
+            const scope = parsedSource && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'listCandidates' as const, source: parsedSource, maxSerializedBytes })
                 : null;
             const cursor = request.cursor === undefined || !scope
                 ? request.cursor
@@ -1402,8 +1399,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const remoteSessionId = parseBoundedString(request.remoteSessionId, MAX_ID_CODE_UNITS);
             const maxItems = readMaxItems(request.maxItems);
             const maxSerializedBytes = readMaxSerializedBytes(request.maxSerializedBytes);
-            const scope = parsedSource && remoteSessionId
-                ? Object.freeze({ method: 'pageTranscript' as const, source: parsedSource, remoteSessionId })
+            const scope = parsedSource && remoteSessionId && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'pageTranscript' as const, source: parsedSource, remoteSessionId, maxSerializedBytes })
                 : null;
             const cursor = request.cursor === undefined || !scope
                 ? request.cursor
@@ -1455,8 +1452,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const remoteSessionId = parseBoundedString(request.remoteSessionId, MAX_ID_CODE_UNITS);
             const maxItems = readMaxItems(request.maxItems);
             const maxSerializedBytes = readMaxSerializedBytes(request.maxSerializedBytes);
-            const scope = parsedSource && remoteSessionId
-                ? Object.freeze({ method: 'readAfterTranscript' as const, source: parsedSource, remoteSessionId })
+            const scope = parsedSource && remoteSessionId && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'readAfterTranscript' as const, source: parsedSource, remoteSessionId, maxSerializedBytes })
                 : null;
             const cursor = scope ? decodeInputCursor(request.cursor, params.identity, scope) : null;
             if (!parsedSource || !remoteSessionId || maxItems === null || maxSerializedBytes === null || cursor === null || !scope) {
