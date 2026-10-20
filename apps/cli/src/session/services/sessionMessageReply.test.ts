@@ -7,9 +7,16 @@ import { readSessionInputRequest, settleSessionInputRequestV1 } from '@happier-d
 import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { UserMessageSchema } from '@/api/types';
 import { deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyProgressV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
-import { projectSessionMessageReplyOutcome, recoverSessionMessageRepliesForMachine } from './sessionMessageReply';
+import { projectSessionMessageReplyOutcome, readSessionMessageReplyCapability, recoverSessionMessageRepliesForMachine } from './sessionMessageReply';
 
 afterEach(() => vi.restoreAllMocks());
+
+it('holds a missing scoped capability authorization without falling back to the Account bearer', async () => {
+  const read = vi.spyOn(axios, 'get');
+  expect(await readSessionMessageReplyCapability({ credentials: { token: 'account-token' }, sessionId: 'target',
+    resolveAuthorizationHeaders: () => null })).toBe('unavailable');
+  expect(read).not.toHaveBeenCalled();
+});
 
 it('never projects a declined private Discussion draft into public return text', async () => {
   expect(await projectSessionMessageReplyOutcome({ credentials: { token: 'token', encryption: null },

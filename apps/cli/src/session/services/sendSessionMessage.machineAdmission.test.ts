@@ -36,6 +36,8 @@ import { sendSessionMessage } from './sendSessionMessage';
 type MachineAdmissionRequest = Parameters<
   NonNullable<Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport']>
 >[0];
+type MachineAdmissionTransport = NonNullable<Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport']>;
+type MachineAdmissionTransportResult = Awaited<ReturnType<MachineAdmissionTransport>>;
 
 function requireMachineAdmissionRequest(
   request: MachineAdmissionRequest | null,
@@ -288,18 +290,14 @@ describe('sendSessionMessage machine admission', () => {
 
   it('cancels a protected machine-admission acknowledgement through transport options without serializing the signal', async () => {
     const cancellation = new AbortController();
-    const machineAdmissionTransport = vi.fn((...args: unknown[]) => {
-      const [request, options] = args as [
-        MachineAdmissionRequest,
-        Readonly<{ signal?: AbortSignal }> | undefined,
-      ];
+    const machineAdmissionTransport = vi.fn<MachineAdmissionTransport>((request, options) => {
       if (!options?.signal) {
-        return Promise.resolve<SessionInputAdmissionResultV1>({
+        return Promise.resolve<MachineAdmissionTransportResult>({
           status: 'rejected',
           code: 'session_input_target_update_required',
         });
       }
-      return new Promise<SessionInputAdmissionResultV1>((resolve) => {
+      return new Promise<MachineAdmissionTransportResult>((resolve) => {
         options.signal?.addEventListener('abort', () => resolve({
           status: 'outcomeUnknown',
           localId: request.localId,

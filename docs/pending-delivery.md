@@ -66,6 +66,16 @@ settlement commits the accepted transcript and retires the reservation.
 not accepted execution, and is not an answer, pass, or task expiry. New reply
 intent fails closed when the target Home does not support its protocol.
 
+In 0.3 development, the shared reply-capability reader distinguishes an
+affirmative unsupported result from an unavailable read. Transport failures,
+authentication failures, missing scoped authorization and invalid responses
+hold the exact input with `outcomeUnknown`; they cannot permanently reject it
+as `session_input_target_update_required`. Recovery retains the original local
+id. The current Home's `404 { error: 'Session not found' }` is also unavailable:
+it masks missing Session access rather than proving the capability route absent.
+An absent route still reports unsupported. The reader logs only the route,
+Session id and content-free failure class.
+
 `none` creates no answer obligation. `wait` observes one exact answer inline;
 ending that observation does not promise an unsolicited later return. `return`
 retains the admitted return destination when its inline consumer retires. A

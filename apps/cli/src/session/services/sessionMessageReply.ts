@@ -8,6 +8,7 @@ import { deriveSessionMessageReplyReturnLocalIdV1, SessionMessageReplyReadResult
   type SessionMessageReplyAccountMutationV1,
   type SessionMessageReplyMutationResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
+import { V2SessionByIdNotFoundSchema } from '@happier-dev/protocol/sessions/control/contract';
 import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 import type { DiscussionAgentPostResponseV1 } from '@happier-dev/protocol/discussions/api';
@@ -18,6 +19,8 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { StoredCredentials } from '@/persistence';
 import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
+import { logger } from '@/ui/logger';
 import { sendSessionMessage, waitForSessionInputResult } from './sendSessionMessage';
 
 type ReplyPublisher = Pick<ApiSessionClient, 'mutateSessionMessageReply'>;
@@ -52,21 +55,38 @@ function requestOptions(input: Pick<ReplyAddress, 'credentials' | 'signal' | 're
     ...(scoped ?? { Authorization: `Bearer ${input.credentials.token}` }) }, ...(input.signal ? { signal: input.signal } : {}) };
 }
 
-/** New intent must not become an ordinary send on a supported older host. */
-export async function supportsSessionMessageReply(input: Omit<ReplyAddress, 'localId'> & Readonly<{
+/** Only an authoritative capability response can prove support or its absence. */
+export async function readSessionMessageReplyCapability(input: Omit<ReplyAddress, 'localId'> & Readonly<{
   resolveAuthorizationHeaders?: (request: Readonly<{ method: string; path: string }>) => Readonly<Record<string, string>> | null;
-}>) {
+}>): Promise<'supported' | 'unsupported' | 'unavailable'> {
   const path = `/v2/sessions/${encodeURIComponent(input.sessionId)}/messages/reply-capability`;
   const headers = input.resolveAuthorizationHeaders?.({ method: 'GET', path })
     ?? (input.resolveAuthorizationHeaders ? null : requestOptions(input).headers);
-  if (!headers) return false;
+  const unavailable = (diagnostic: Readonly<{ reason: string; httpStatus?: number; errorCode?: string | null }>) => {
+    logger.infoFile('[SessionReply] Capability read unavailable', { sessionId: input.sessionId, path, ...diagnostic });
+    return 'unavailable' as const;
+  };
+  if (!headers) return unavailable({ reason: 'authorization_unavailable' });
   try {
     const response = await axios.get(`${resolveServerHttpBaseUrl()}${path}`, {
       headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
     });
+    // The current Home masks missing access with a Session-not-found response;
+    // that resource failure does not establish an absent capability route.
+    if (response.status === 404 && V2SessionByIdNotFoundSchema.safeParse(response.data).success) {
+      return unavailable({ reason: 'session_unavailable', httpStatus: response.status });
+    }
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      logger.infoFile('[SessionReply] Capability unsupported', { sessionId: input.sessionId, path, httpStatus: response.status });
+      return 'unsupported';
+    }
+    if (response.status !== 200) return unavailable({ reason: 'http_error', httpStatus: response.status });
     const parsed = SessionMessageReplyCapabilityV1Schema.safeParse(response.data);
-    return response.status === 200 && parsed.success && parsed.data.protocolVersions.includes(1);
-  } catch { return false; }
+    if (!parsed.success) return unavailable({ reason: 'invalid_response', httpStatus: response.status });
+    return 'supported';
+  } catch (error) {
+    return unavailable({ reason: input.signal?.aborted ? 'cancelled' : 'transport', errorCode: readNormalizedConnectionErrorCode(error) });
+  }
 }
 
 /** Current original-input custody only; this grants no access to the source transcript. */

@@ -251,7 +251,7 @@ import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationV1Sch
     SessionMessageReplyMutationResultV1Schema, SessionMessageExplicitReplyV1Schema, deriveSessionMessageReplyAnswerLocalIdV1,
     type SessionMessageReplyOperationV1, type SessionMessageExplicitReplyV1, type SessionMessageReplyMutationResultV1,
     type SessionMessageReplyOutcomeV1, type SessionMessageReplySourceTurnReleaseResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
-import { readSessionMessageReply, supportsSessionMessageReply } from '@/session/services/sessionMessageReply';
+import { readSessionMessageReply, readSessionMessageReplyCapability } from '@/session/services/sessionMessageReply';
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { extractAssistantTextSnapshotFromSessionContent } from './turns/extractAssistantTextSnapshot';
 import { isPendingDeliveryArchivedUncertaintyReasonV1, isPendingDeliveryProviderEffectPossibleV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
@@ -4461,10 +4461,10 @@ export class ApiSessionClient extends EventEmitter {
             ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
             : this.socketAckAbortController.signal;
         if (this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
-        const supported = await this.runSessionRequest(() => supportsSessionMessageReply({
+        const capability = await this.runSessionRequest(() => readSessionMessageReplyCapability({
             credentials: { token: this.token }, sessionId: this.sessionId, signal,
         }));
-        if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        if (capability !== 'supported' || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
         const raw = await emitSocketWithAck({
             socket: this.socket,
             event: SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
@@ -4485,10 +4485,10 @@ export class ApiSessionClient extends EventEmitter {
             ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
             : this.socketAckAbortController.signal;
         if (this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
-        const supported = await this.runSessionRequest(() => supportsSessionMessageReply({
+        const capability = await this.runSessionRequest(() => readSessionMessageReplyCapability({
             credentials: { token: this.token }, sessionId: this.sessionId, signal,
         }));
-        if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        if (capability !== 'supported' || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
         const raw = await emitSocketWithAck({
             socket: this.socket,
             event: SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,

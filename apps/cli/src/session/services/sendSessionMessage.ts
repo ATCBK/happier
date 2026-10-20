@@ -1449,10 +1449,15 @@ export async function sendSessionMessage(
   }
   const replyIntent = protectedAdmission?.request.replyIntent;
   if (replyIntent) {
-    const { supportsSessionMessageReply } = await import('./sessionMessageReply');
-    if (!(await supportsSessionMessageReply({ credentials: params.credentials, sessionId,
+    const { readSessionMessageReplyCapability } = await import('./sessionMessageReply');
+    const capability = await readSessionMessageReplyCapability({ credentials: params.credentials, sessionId,
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
-      ...(params.signal ? { signal: params.signal } : {}) }))) return { ok: false, code: 'unsupported',
+      ...(params.signal ? { signal: params.signal } : {}) });
+    const cancelled = cancelledBeforeAdmission(params.signal, protectedAdmission !== null);
+    if (cancelled) return cancelled;
+    if (capability === 'unavailable') return { ok: false, code: 'authority_unavailable',
+      admissionResult: { status: 'outcomeUnknown', localId, code: 'session_input_reply_capability_unavailable' } };
+    if (capability === 'unsupported') return { ok: false, code: 'unsupported',
         admissionResult: { status: 'rejected', code: 'session_input_target_update_required' } };
   }
   const replyAdmission = replyIntent ? { ...replyIntent,
