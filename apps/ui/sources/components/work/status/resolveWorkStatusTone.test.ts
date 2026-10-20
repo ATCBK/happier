@@ -188,7 +188,7 @@ describe('resolveWorkStatusTone', () => {
             .toBe('working');
     });
 
-    it('uses session awareness and does not promote background activity to primary work', () => {
+    it('uses session awareness to keep foreground and background activity in Working', () => {
         expect(resolveWorkStatusTone({ kind: 'session', facts: {
             awareness: { runtime: 'waiting', operational: { primary: 'permission_required', reasons: ['permission_required'] } }, word: 'Needs your permission',
         } })).toEqual({ bucket: 'needs_you', tone: 'attention', word: 'Needs your permission' });
@@ -197,7 +197,7 @@ describe('resolveWorkStatusTone', () => {
         } }).bucket).toBe('working');
         expect(resolveWorkStatusTone({ kind: 'session', facts: {
             awareness: { runtime: 'background_active', operational: { primary: 'none', reasons: ['background_activity'] } }, word: 'Background activity',
-        } })).toEqual({ bucket: 'idle', tone: 'neutral', word: 'Background activity' });
+        } })).toEqual({ bucket: 'working', tone: 'neutral', word: 'Background activity' });
     });
 
     it('orders machine presence before attention before running session counts', () => {

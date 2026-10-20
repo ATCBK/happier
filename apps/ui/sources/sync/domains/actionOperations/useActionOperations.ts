@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { actionOperationSelectors } from './actionOperationSelectors';
+import { actionOperationSelectors, selectTerminalActionOperationState, type TerminalActionOperationQuery } from './actionOperationSelectors';
 import { actionOperationStore } from './actionOperationStore';
 import type { ActionOperationAddress, ActionOperationSessionAddress, ActionOperationProjectScriptQuery, ActionOperationProjectWorkspaceQuery, ActionOperationManagedMachineQuery, ActionOperationProjectServicesQuery } from './qualifiedActionOperation';
 
@@ -10,6 +10,14 @@ function useActionOperationSelector<T>(selector: () => T): T {
         selector,
         selector,
     );
+}
+
+const subscribeToNothing = () => () => {};
+
+/** Only a mounted borrowed terminal subscribes, and it observes a stable scalar outcome. */
+export function useTerminalActionOperationState(query: TerminalActionOperationQuery) {
+    const read = () => selectTerminalActionOperationState(actionOperationStore.getSnapshot(), query);
+    return React.useSyncExternalStore(query.terminalId ? actionOperationStore.subscribe : subscribeToNothing, read, read);
 }
 
 /** Imperative read for decision points that must not rely on a render snapshot. */

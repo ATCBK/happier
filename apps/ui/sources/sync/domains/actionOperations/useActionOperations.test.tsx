@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { actionOperationStore } from './actionOperationStore';
-import { readAllActionOperations, useActionOperation, useActionOperationsHaveAttention, useManagedMachineActionOperation } from './useActionOperations';
+import { readAllActionOperations, useActionOperation, useActionOperationsHaveAttention, useManagedMachineActionOperation, useTerminalActionOperationState } from './useActionOperations';
 
 describe('useActionOperations', () => {
     let tree: renderer.ReactTestRenderer | null = null;
@@ -14,6 +14,32 @@ describe('useActionOperations', () => {
         tree = null;
         actionOperationStore.reset();
         vi.restoreAllMocks();
+    });
+
+    it('binds terminal outcome to its target Home, Account and actual worker without rerendering on unrelated operations', async () => {
+        const observed: Array<string | null> = [];
+        function TerminalObserver() {
+            observed.push(useTerminalActionOperationState({ serverId: 'target-home', accountId: 'requester', machineId: 'worker', terminalId: 'pty' }));
+            return null;
+        }
+        tree = (await renderScreen(<TerminalObserver />)).tree;
+        const snapshot = { version: 1 as const, operationId: 'original', revision: 1, actionId: 'projects.script.run',
+            state: 'running' as const, scope: { accountId: 'requester', machineId: 'source' }, title: 'Script', createdAt: 1,
+            cancellation: 'supported' as const, domainRef: { kind: 'projectCommand' as const, purpose: 'script' as const,
+                serverId: 'target-home', machineId: 'worker', workspaceRefId: 'worker-copy', cwd: '/repo', terminalId: 'pty' } };
+        act(() => actionOperationStore.mergeSnapshots({ serverId: 'source-home', snapshots: [snapshot] }));
+        expect(observed.at(-1)).toBe('running');
+        const before = observed.length;
+        act(() => actionOperationStore.mergeSnapshots({ serverId: 'source-home', snapshots: [
+            { ...snapshot, operationId: 'other-account', scope: { ...snapshot.scope, accountId: 'other' } },
+            { ...snapshot, operationId: 'other-home', domainRef: { ...snapshot.domainRef, serverId: 'other' } },
+            { ...snapshot, operationId: 'other-worker', domainRef: { ...snapshot.domainRef, machineId: 'other' } },
+            { ...snapshot, operationId: 'other-pty', domainRef: { ...snapshot.domainRef, terminalId: 'other' } },
+        ] }));
+        expect(observed.length).toBe(before);
+        act(() => actionOperationStore.mergeSnapshots({ serverId: 'source-home', snapshots: [{ ...snapshot, revision: 2,
+            state: 'cancelled', settledAt: 3 }] }));
+        expect(observed.at(-1)).toBe('cancelled');
     });
 
     it('binds managed row observations to the original Home, requester Account and controller without following unrelated operations', async () => {

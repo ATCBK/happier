@@ -162,13 +162,14 @@ function iconFor(item: WorkItem): SessionAgentActivityPresentation['iconName'] {
 }
 
 /**
- * The kind a row says first in its subtitle ("Session · Claude", "Workflow run · 7 of 12"): the list
+ * The kind a row says first in its subtitle ("Workflow run · 7 of 12"; a Session with no Agent mark): the list
  * groups by state, so the kind is no longer a section title. Background runs and in-session agents
  * draw through their roster row, whose presenter already leads with their kind.
  */
 function readFacts(item: WorkItem): readonly string[] {
     // An untitled run is named by its kind already: the subtitle never repeats its title.
-    return item.kind === 'session' || item.kind === 'workflow_run'
+    // A Session that already leads with its Agent's mark is not said again as "Session", so its machine survives.
+    return (item.kind === 'session' && item.agentId === null) || item.kind === 'workflow_run'
         ? [describeWorkKind(item.kind), ...item.facts].filter((fact) => fact !== item.title) : item.facts;
 }
 

@@ -69,6 +69,26 @@ export type ActionOperationSelectors = Readonly<{
 const EMPTY_OPERATIONS: readonly ActionOperationProjection[] = Object.freeze([]);
 const EMPTY_INBOX_OPERATIONS: readonly InboxActionOperationEntry[] = Object.freeze([]);
 
+export type TerminalActionOperationQuery = Readonly<{
+    serverId: string | null;
+    accountId: string | null;
+    machineId: string | null;
+    terminalId: string | null;
+}>;
+
+/** Custody may live at the Source; match the PTY's actual execution target. */
+export function selectTerminalActionOperationState(state: ActionOperationStoreSnapshot, query: TerminalActionOperationQuery): ActionOperationSnapshotV1['state'] | null {
+    if (!query.serverId || !query.accountId || !query.machineId || !query.terminalId) return null;
+    for (const { snapshot } of state.operationsByKey.values()) {
+        const output = snapshot.domainRef;
+        if ((output?.kind === 'projectCommand' || output?.kind === 'machineEnvironment')
+            && snapshot.scope.accountId === query.accountId
+            && areServerProfileIdentifiersEquivalent(output.serverId, query.serverId)
+            && output.machineId === query.machineId && output.terminalId === query.terminalId) return snapshot.state;
+    }
+    return null;
+}
+
 function hasSameItems<T>(current: readonly T[], next: readonly T[]): boolean {
     return current.length === next.length && current.every((item, index) => item === next[index]);
 }

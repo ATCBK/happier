@@ -16,14 +16,16 @@ import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import { describeSessionLineage, useSessionLineage } from './sessionLineage';
-import { SessionWorkNotifications } from './SessionWorkNotifications';
+import { SessionFollowHeaderChip } from '@/components/sessions/follow/SessionFollowHeaderChip';
+import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 
 /**
  * The peek of a Session the lead leads (lab `session-D`): the Session itself — its header, real
  * transcript and composer — beside the lead. The header names the Session and who it reports to;
  * replies go to the peeked Session, and the line under the composer says so, because the pane sits
- * next to the lead's own composer. "Notify me when this needs me" lives here, once, for the Session
- * being looked at, rather than under every Work row.
+ * next to the lead's own composer. "Notify me when this finishes / needs me" is the Session's own
+ * Follow editor, opened from the header bell beside Open session (the same control the Session
+ * header's Follow chip opens), never a second set of switches under the composer.
  */
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -53,21 +55,15 @@ export const SessionPeekDetailsView = React.memo(
     const styles = stylesheet;
     const banner = React.useMemo(
       () => (
-        <View>
-          <Text
-            testID="session-peek-replies-banner"
-            numberOfLines={1}
-            style={styles.banner}
-          >
-            {t('sessionWork.peek.repliesGoHere')}
-          </Text>
-          <SessionWorkNotifications
-            sessionId={props.sessionId}
-            serverId={props.serverId}
-          />
-        </View>
+        <Text
+          testID="session-peek-replies-banner"
+          numberOfLines={1}
+          style={styles.banner}
+        >
+          {t('sessionWork.peek.repliesGoHere')}
+        </Text>
       ),
-      [props.serverId, props.sessionId, styles.banner],
+      [styles.banner],
     );
     return (
       <View style={styles.root}>
@@ -100,6 +96,9 @@ const SessionPeekHeader = React.memo(function SessionPeekHeader(
   const lineage = useSessionLineage(props.sessionId, props.serverId);
   const lineageDescription = describeSessionLineage(lineage);
   const router = useRouter();
+  const followAnchorRef = React.useRef<View>(null);
+  const follow = useAccountSessionFollowEditorHost({ serverId: props.serverId, sessionId: props.sessionId, anchorRef: followAnchorRef });
+  const archived = session?.archivedAt != null;
   const meta = React.useMemo(
     () =>
       lineageDescription
@@ -129,16 +128,31 @@ const SessionPeekHeader = React.memo(function SessionPeekHeader(
         agentId ? <ExecutionRunAgentMark agentId={agentId} size={28} /> : undefined
       }
       meta={meta}
-      actions={!props.openControl ? undefined : (
-        <IconButton
-          testID="session-peek-open"
-          // Not ⤢: the pane's own chrome uses that to widen the pane. This leaves for the session.
-          iconName="arrow-square-out"
-          variant="plain"
-          accessibilityLabel={t('inbox.work.groups.openSession')}
-          tooltip={t('inbox.work.groups.openSession')}
-          onPress={openSession}
-        />
+      actions={(
+        <>
+          {follow.enabled && props.serverId ? (
+            <SessionFollowHeaderChip
+              sessionId={props.sessionId}
+              serverId={props.serverId}
+              compact
+              anchorRef={followAnchorRef}
+              open={follow.open}
+              onPress={() => follow.openEditor({ address: { serverId: props.serverId!, sessionId: props.sessionId }, archived })}
+            />
+          ) : null}
+          {follow.editor}
+          {props.openControl ? (
+            <IconButton
+              testID="session-peek-open"
+              // Not ⤢: the pane's own chrome uses that to widen the pane. This leaves for the session.
+              iconName="arrow-square-out"
+              variant="plain"
+              accessibilityLabel={t('inbox.work.groups.openSession')}
+              tooltip={t('inbox.work.groups.openSession')}
+              onPress={openSession}
+            />
+          ) : null}
+        </>
       )}
     />
   );

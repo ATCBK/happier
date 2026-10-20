@@ -151,7 +151,7 @@ describe('WorkItemRow', () => {
         expect(JSON.stringify(head?.children)).not.toContain('child A');
     });
 
-    it('says what kind of work each row is first in its subtitle, since the list groups by state', async () => {
+    it('says what kind of work a row is first in its subtitle when no Agent mark already says it', async () => {
         const { presentWorkItem } = await import('./WorkItemRow');
         const session = needsYouSession();
         const run: WorkItem = {
@@ -163,7 +163,9 @@ describe('WorkItemRow', () => {
             open: { kind: 'workflow_run', runId: 'review' },
         };
 
-        expect(presentWorkItem(session).facts).toEqual(['sessionWork.kinds.session', 'Claude']);
+        // A Session led by an Agent mark is told by that mark: the kind word would only push its machine out.
+        expect(presentWorkItem(session).facts).toEqual(['Claude']);
+        expect(presentWorkItem({ ...session, agentId: null }).facts).toEqual(['sessionWork.kinds.session', 'Claude']);
         expect(presentWorkItem(run).facts).toEqual(['sessionWork.kinds.workflowRun', '7 of 12']);
     });
 

@@ -3,6 +3,7 @@ import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   happierPageTextMetrics,
+  joinHappierFacts,
 } from '@happier-dev/plugin-ui/presentation';
 
 import {
@@ -18,8 +19,10 @@ import { Typography } from '@/constants/Typography';
 import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { actionOperationAddress } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
-import { useServerScopedMachine } from '@/sync/store/hooks';
+import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
+import { useServerScopedMachine, useWorkspaceRefs } from '@/sync/store/hooks';
 import { t } from '@/text';
+import { inferProjectTitleFromPath } from '@/utils/path/browseSegments';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 
 import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
@@ -61,6 +64,20 @@ export const ProjectCommandOutputPage = React.memo(
       attachment?.machineId ??
       null;
     const presentation = presentProjectRun(operation ?? null, machineName, '');
+    const workspaceRefs = useWorkspaceRefs();
+    const projectName = React.useMemo(() => {
+      if (attachment?.kind !== 'projectCommand') return null;
+      const resolved = resolveWorkspaceRefById(
+        workspaceRefs,
+        attachment.workspaceRefId,
+        attachment.serverId,
+      );
+      return resolved.kind === 'resolved'
+        ? resolved.ref.label ?? inferProjectTitleFromPath(resolved.ref.rootPath)
+        : null;
+    }, [attachment, workspaceRefs]);
+    // The machine is the status line's to name (lab OUTPUTp: status carries the worker, subtitle the project).
+    const subtitle = joinHappierFacts(t('projects.pages.scripts'), projectName);
     const stop = useActionOperationStopControl(operation);
     const [outputHeight, setOutputHeight] = React.useState<number | null>(null);
     const { setChrome } = props;
@@ -69,19 +86,18 @@ export const ProjectCommandOutputPage = React.memo(
       setChrome?.({
         kind: 'card',
         title: props.name,
+        subtitle,
+        subtitleLines: 1,
         testID: 'project-command-output-page',
         phonePresentation: 'fullscreen',
         scrollHost: 'body',
         bodyScroll: 'none',
       });
       return () => setChrome?.(null);
-    }, [props.name, setChrome]);
+    }, [props.name, setChrome, subtitle]);
 
     const stopping = stop.pending || stop.stopRequested;
     const status = stopping ? t('projects.scripts.run.stopping') : presentation.text;
-    // A live run names its machine in its own words ("Running on hz-build-1"); a settled one adds it quietly.
-    const ranOn = !presentation.live && !stopping && machineName
-      ? t('projects.scripts.agentOn', { machine: machineName }) : null;
     const statusColor =
       presentation.tone === 'danger'
         ? theme.colors.status.error
@@ -116,9 +132,6 @@ export const ProjectCommandOutputPage = React.memo(
             numberOfLines={2}
           >
             {status}
-            {ranOn ? (
-              <Text style={{ color: theme.colors.text.secondary }}>{` · ${ranOn}`}</Text>
-            ) : null}
           </Text>
           {presentation.live && presentation.startedAt ? (
             <RunClock startedAt={presentation.startedAt} />
@@ -142,6 +155,7 @@ export const ProjectCommandOutputPage = React.memo(
                 operation={operation}
                 title={props.name}
                 height={outputHeight}
+                presentation="page"
                 onOpenDetail={() =>
                   openActionOperationDetail({
                     serverId: props.serverId,
@@ -160,7 +174,6 @@ export const ProjectCommandOutputPage = React.memo(
         {canStop ? (
           <View style={styles.footer}>
             <RoundButton
-              display="secondary"
               testID="project-command-output-page.stop"
               title={
                 stopping

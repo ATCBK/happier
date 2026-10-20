@@ -50,7 +50,6 @@ export function SessionDiscussionSourceLinksProvider(
   return (
     <AnchoredLinks
       sessionId={props.sessionId}
-      serverId={props.serverId}
       binding={binding}
     >
       {props.children}
@@ -61,14 +60,14 @@ export function SessionDiscussionSourceLinksProvider(
 function AnchoredLinks(
   props: Readonly<{
     sessionId: string;
-    serverId: string;
     binding: NonNullable<
       ReturnType<typeof useServerCredentialAccountScopeBinding>['binding']
     >;
     children: React.ReactNode;
   }>,
 ) {
-  const { binding, sessionId, serverId } = props;
+  const { binding, sessionId } = props;
+  const serverId = binding.scope.serverId;
   const address = React.useMemo(() => ({ serverId }), [serverId]);
   const client = React.useMemo(
     () =>
