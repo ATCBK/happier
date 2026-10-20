@@ -9,6 +9,7 @@ import { CustomProviderTemplateV1Schema } from './customTemplateV1.js';
 import { createAccountProviderActionExecuteV1, type AccountProviderDeclarationV1 } from './accountProviderActionV1.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalogV1 } from './connectionRowsV1.js';
 import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
+import { getProviderExperimentalConfirmationCatalogSourceKeyV1, parseProviderSettingsV1Narrow } from '../settings/v1.js';
 
 // An in-memory Account-row transport boundary; all domain operations and output admission are real.
 function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1) {
@@ -41,6 +42,39 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
 }
 
 describe('shared Provider Account Action producer', () => {
+  it('records recipient consent for an opaque Team source without a saved connection or private source target', async () => {
+    const row = accountRow();
+    const result = await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+      action: 'confirmExperimental', connectionId: 'connected-source:opaque', catalogSourceKey: 'a'.repeat(43),
+      expectedConnectionRevision: 0, agentTargetKey: 'agent:acme.worker/agent', modelId: null,
+      compatibilityFingerprint: 'compatibility:v1:worker',
+    }), {});
+    expect(result).toMatchObject({ ok: true, result: { status: 'success' } });
+    expect(row.catalog.connections).toEqual([]);
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([expect.objectContaining({
+      connectionId: 'connected-source:opaque', catalogSourceKey: 'a'.repeat(43),
+      agentTargetKey: 'agent:acme.worker/agent', compatibilityFingerprint: 'compatibility:v1:worker',
+    })]);
+  });
+  it('retains Team source consent when the recipient also owns the saved source connection', async () => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_own_team_source',
+      source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+      role: 'named', displayName: 'DeepSeek', displayNameMode: 'custom', revision: 3, createdAt: 1, updatedAt: 1 });
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection] });
+    const input = { action: 'confirmExperimental', connectionId: connection.id,
+      catalogSourceKey: getProviderExperimentalConfirmationCatalogSourceKeyV1({ connectionId: connection.id }),
+      expectedConnectionRevision: 0, agentTargetKey: 'agent:acme.worker/agent', modelId: 'model-a',
+      compatibilityFingerprint: 'compatibility:v1:worker' };
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', input), {}))
+      .toMatchObject({ ok: true, result: { status: 'success' } });
+    expect(row.catalog.connections).toEqual([connection]);
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([expect.objectContaining({
+      connectionId: connection.id, catalogSourceKey: input.catalogSourceKey,
+      compatibilityFingerprint: input.compatibilityFingerprint,
+    })]);
+    expect(parseProviderSettingsV1Narrow(row.catalog).settings.experimentalBindingConfirmations)
+      .toEqual(row.catalog.experimentalBindingConfirmations);
+  });
   it.each(['account', 'group'] as const)('confirms an exact Connected Account source without creating a connection: %s', async kind => {
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const connectedAccountTarget = kind === 'account'

@@ -384,7 +384,8 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
         case 'providers.models.experimental.confirm': {
           const input = request.input;
           if (input.connectedAccountTarget || input.catalogSourceKey) {
-            if (input.expectedConnectionRevision !== 0 || settings.connections.some(connection => connection.id === input.connectionId)) {
+            if (input.expectedConnectionRevision !== 0 || input.connectedAccountTarget
+              && settings.connections.some(connection => connection.id === input.connectionId)) {
               refuse('provider_connection_changed', input.connectionId);
             }
           } else requireRevision(find(input.connectionId), input.expectedConnectionRevision);

@@ -260,7 +260,7 @@ export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV
   value.experimentalBindingConfirmations.forEach((confirmation, index) => {
     if (!confirmation.connectedAccountTarget && !confirmation.catalogSourceKey) {
       assertConnectionRef(confirmation.connectionId, ['experimentalBindingConfirmations', index, 'connectionId']);
-    } else if (connectionIds.has(confirmation.connectionId)) {
+    } else if (confirmation.connectedAccountTarget && connectionIds.has(confirmation.connectionId)) {
       ctx.addIssue({ code: 'custom', path: ['experimentalBindingConfirmations', index, 'connectionId'], message: 'Source confirmation cannot reference a saved connection' });
     }
     const key = `${getProviderExperimentalConfirmationSourceKeyV1(confirmation)}\0${confirmation.agentTargetKey}\0${confirmation.modelId ?? ''}\0${confirmation.compatibilityFingerprint}`;
@@ -502,7 +502,8 @@ export function parseProviderSettingsV1Narrow(value: unknown): ProviderSettingsR
   const experimentalBindingConfirmations = uniqueFirst(
     parseArray('experimentalBindingConfirmations', ProviderExperimentalBindingConfirmationV1Schema, PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations)
       .filter((entry, index) => {
-        if (entry.connectedAccountTarget || entry.catalogSourceKey ? !connectionIds.has(entry.connectionId) : connectionIds.has(entry.connectionId)) return true;
+        if (entry.connectedAccountTarget ? !connectionIds.has(entry.connectionId)
+          : entry.catalogSourceKey !== undefined || connectionIds.has(entry.connectionId)) return true;
         diagnostics.push({ path: `experimentalBindingConfirmations[${index}]`, reason: 'invalid_reference' });
         return false;
       }),
