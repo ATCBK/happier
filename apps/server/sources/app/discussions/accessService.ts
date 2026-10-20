@@ -263,10 +263,16 @@ export async function inviteDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (!runtime?.keyReadiness) return discussionFailure("discussion_content_unavailable");
     const where = { discussionId_sessionId: { discussionId: input.discussionId, sessionId: request.participant.sessionId } };
     const existing = await tx.discussionParticipant.findUnique({ where, select: { answerPolicy: true, removedAt: true } });
-    if (existing?.removedAt) return discussionFailure("discussion_subject_ineligible");
-    const answerPolicy = requestedAnswerPolicy ?? existing?.answerPolicy ?? "when_addressed";
-    const changed = existing?.answerPolicy !== answerPolicy;
-    if (existing && changed && requestedAnswerPolicy !== undefined) {
+    const readmitting = existing?.removedAt != null;
+    // An explicit, currently authorized Session invitation may readmit its
+    // retained model binding without changing ownership or launch identity.
+    // Like a new independent binding, it never inherits retired watch policy.
+    const answerPolicy = requestedAnswerPolicy ?? (readmitting ? undefined : existing?.answerPolicy) ?? "when_addressed";
+    const changed = readmitting || existing?.answerPolicy !== answerPolicy;
+    if (readmitting) {
+        await tx.discussionParticipant.update({ where, data: { removedAt: null, answerPolicy } });
+        await markDiscussionReadersChangedInTx({ tx, discussionId: input.discussionId, accessChanged: true });
+    } else if (existing && changed && requestedAnswerPolicy !== undefined) {
         const updated = await setDiscussionParticipantPolicyInTx(tx, { ...input, request: { participant: request.participant, answerPolicy: requestedAnswerPolicy } });
         if (!updated.ok) return updated;
     } else if (!existing) {
