@@ -20,7 +20,8 @@
       "tools/codemirror",
       "tools/xterm",
       "tools/tiptap",
-      "tools/mermaid"
+      "tools/mermaid",
+      "tools/pdfjs"
     ]
   },
   "scripts": {
@@ -55,6 +56,7 @@
     "vitest": "../stack/bin/hstack-exec --script=vitest:local",
     "vitest:local": "vitest",
     "verify:mermaid-webview-bundle": "node ./tools/mermaid/buildMermaidWebViewBundle.mjs --check",
+    "verify:pdfjs-webview-bundle": "node ./tools/pdfjs/buildPdfjsWebViewBundle.mjs --check",
     "build:browser-iroh-assets": "node ./tools/iroh/buildBrowserIrohAssets.mjs --output-dir dist",
     "verify:browser-iroh-assets": "node ./tools/iroh/buildBrowserIrohAssets.mjs --check --output-dir dist",
     "proof:browser-iroh-shared-endpoint": "node ./tools/iroh/runBrowserIrohSharedEndpointProof.mjs",
@@ -203,7 +205,7 @@
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^1.8.0",
     "@peoplesgrocers/seti-ui-file-icons": "1.11.3",
-    "@pierre/diffs": "1.1.0-beta.13",
+    "@pierre/diffs": "1.5.2",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dismissable-layer": "^1.1.11",
     "@radix-ui/react-focus-scope": "1.1.7",
@@ -291,6 +293,7 @@
     "mermaid": "^11.12.1",
     "monaco-editor": "^0.55.1",
     "patch-package": "^8.0.0",
+    "pdfjs-dist": "6.4.299",
     "phosphor-react-native": "3.0.6",
     "posthog-react-native": "^4.16.2",
     "qrcode": "^1.5.4",
