@@ -122,7 +122,7 @@ vi.mock('socket.io-client', async () => {
 const modal = vi.hoisted(() => ({ alert: vi.fn(), show: vi.fn(), update: vi.fn() }));
 const platform = vi.hoisted(() => ({ focus: vi.fn() }));
 const random = vi.hoisted(() => ({ next: 0 }));
-vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => `identity_${++random.next}` }));
+vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => `00000000-0000-4000-8000-${(++random.next).toString(16).padStart(12, '0')}` }));
 
 await loadSyncSingletonForTests();
 

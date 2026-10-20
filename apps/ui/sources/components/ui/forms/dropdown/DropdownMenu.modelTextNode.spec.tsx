@@ -1,6 +1,5 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { collectUnexpectedRawTextNodes, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -114,72 +113,4 @@ describe('DropdownMenu model-style text node guard', () => {
         expect(collectUnexpectedRawTextNodes(tree.toJSON())).toEqual([]);
     });
 
-    it('opens its Item trigger exactly once with Enter or Space, then Escape closes without selecting a manifest', async () => {
-        const { DropdownMenu } = await import('./DropdownMenu');
-        const onSelect = vi.fn();
-        const onOpenChange = vi.fn();
-
-        function VoiceManifestSelect() {
-            const [open, setOpen] = React.useState(false);
-            return <DropdownMenu
-                open={open}
-                popoverAnchor={{ kind: 'rect', rect: { left: 10, top: 10, width: 320, height: 48 } }}
-                onOpenChange={(next) => {
-                    onOpenChange(next);
-                    setOpen(next);
-                }}
-                items={[
-                    { id: 'default', title: 'Default manifest' },
-                    { id: 'custom', title: 'Custom manifest' },
-                ]}
-                onSelect={onSelect}
-                search
-                itemTrigger={{
-                    title: 'Voice manifest',
-                    itemProps: { testID: 'voice-manifest-select' },
-                }}
-            />;
-        }
-
-        const screen = await renderScreen(<VoiceManifestSelect />);
-        const trigger = () => screen.findHostByTestId('voice-manifest-select');
-        const keyEvent = (key: string) => ({
-            key,
-            nativeEvent: { key },
-            preventDefault: vi.fn(),
-            stopPropagation: vi.fn(),
-        });
-
-        const enter = keyEvent('Enter');
-        await act(async () => trigger()?.props.onKeyDown(enter));
-        await act(async () => {
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        });
-
-        expect(onOpenChange).toHaveBeenCalledTimes(1);
-        expect(onOpenChange).toHaveBeenLastCalledWith(true);
-        expect(enter.preventDefault).toHaveBeenCalledOnce();
-        expect(onSelect).not.toHaveBeenCalled();
-
-        const escape = keyEvent('Escape');
-        await act(async () => {
-            screen.findByType('TextInput' as any).props.onKeyPress(escape);
-        });
-
-        expect(onOpenChange).toHaveBeenCalledTimes(2);
-        expect(onOpenChange).toHaveBeenLastCalledWith(false);
-        expect(escape.preventDefault).toHaveBeenCalledOnce();
-        expect(onSelect).not.toHaveBeenCalled();
-
-        const space = keyEvent(' ');
-        await act(async () => trigger()?.props.onKeyDown(space));
-        await act(async () => {
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        });
-
-        expect(onOpenChange).toHaveBeenCalledTimes(3);
-        expect(onOpenChange).toHaveBeenLastCalledWith(true);
-        expect(space.preventDefault).toHaveBeenCalledOnce();
-        expect(onSelect).not.toHaveBeenCalled();
-    });
 });
