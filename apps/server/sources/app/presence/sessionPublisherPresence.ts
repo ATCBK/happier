@@ -34,7 +34,6 @@ import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeat
 import type { InTxOptions, ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { AsyncLock } from "@/utils/runtime/lock";
 import {
-    clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
     type PendingActivationTarget,
 } from "@/app/session/pending/pendingActivationAuthorization";
@@ -435,7 +434,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 publisherGeneration,
                 publisherGenerationLastActiveAt: committedFence,
                 runtimeMachineTarget: runtimeMachineTarget ?? getActivePrismaRuntime().DbNull,
-                ...clearPendingActivationAuthorizationForPublisherActivityData(),
             },
         });
         if (updated.count !== 1) throw new RegistrationContentionError();
@@ -541,7 +539,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                         active: true,
                         lastActiveAt: committedFence,
                         publisherGenerationLastActiveAt: committedFence,
-                        ...clearPendingActivationAuthorizationForPublisherActivityData(),
                     },
                 });
                 if (updated.count !== 1) return { status: "superseded" };

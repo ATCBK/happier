@@ -155,21 +155,14 @@ function nextRequestedAt(params: Readonly<{
     ));
 }
 
-export function clearPendingActivationAuthorizationForPublisherActivityData() {
-    return clearAuthorizationData();
-}
-
 export function mapPendingActivationAuthorization(row: object): PendingActivationAuthorizationV1 | undefined {
     const value = row as Record<string, unknown>;
     const requestId = value.pendingActivationRequestId;
     const requestedAt = value.pendingActivationRequestedAt;
-    const lastActiveAt = value.lastActiveAt;
     const status = value.pendingActivationStatus;
     if (
         typeof requestId !== 'string'
         || !(requestedAt instanceof Date)
-        || !(lastActiveAt instanceof Date)
-        || requestedAt.getTime() <= lastActiveAt.getTime()
     ) return undefined;
     const target = createStoredReadSchema(ManagedWakeTargetV1Schema).safeParse(value.pendingActivationManagedTarget);
     const managedWakeTargetV1 = target.success && target.data.origin.kind === 'session-input'
@@ -297,8 +290,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
 export async function readPendingActivationTargetInTx(tx: Tx, sessionId: string): Promise<PendingActivationTarget | undefined> {
     const session = await tx.session.findUnique({ where: { id: sessionId }, select: { ...AUTHORIZATION_SELECT, archivedAt: true } });
     if (!session || session.archivedAt !== null || session.pendingActivationStatus !== 'waiting'
-        || !session.pendingActivationRequestId || !session.pendingActivationRequestedAt
-        || session.pendingActivationRequestedAt <= session.lastActiveAt) return undefined;
+        || !session.pendingActivationRequestId || !session.pendingActivationRequestedAt) return undefined;
     const row = await tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
         sessionId, localId: session.pendingActivationRequestId }, targetExecutionRunId: null },
         select: { status: true, messageRole: true, deliveryState: true, providerAction: true,
@@ -366,7 +358,6 @@ export async function markPendingActivationAuthorizationFailedInTx(params: Reado
             pendingActivationRequestId: params.requestId,
             pendingActivationRequestedAt: params.requestedAt,
             pendingActivationStatus: 'waiting',
-            lastActiveAt: { lt: params.requestedAt },
         },
         data: {
             pendingActivationStatus: 'failed',

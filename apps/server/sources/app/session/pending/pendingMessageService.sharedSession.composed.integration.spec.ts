@@ -111,8 +111,8 @@ const updatePendingRequestedAction = (params: WithoutAuthentication<Parameters<t
     updatePendingRequestedActionWithAuthentication(withPresentUserAuthentication(params));
 
 describe("pendingMessageService (shared sessions)", () => {
-    it('persists privacy-safe activation reasons through the actual failure route and exact CAS', async () => {
-        const { owner, session, controller, guest } = await createManagedPendingFixture();
+    it('retains activation through publisher presence and settles a definite runtime refusal through the exact failure route', async () => {
+        const { owner, session, homeId, controller, guest, managed } = await createManagedPendingFixture();
         const localId = `diagnostic-${randomUUID()}`;
         await expect(enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: controller.id,
             targetMachineId: guest.id, sessionId: session.id, localId,
@@ -120,6 +120,21 @@ describe("pendingMessageService (shared sessions)", () => {
             .resolves.toMatchObject({ status: 'accepted' });
         const waiting = await db.session.findUniqueOrThrow({ where: { id: session.id } });
         const authorization = mapPendingActivationAuthorization(waiting)!;
+        await db.managedMachine.update({ where: { id: managed.id }, data: {
+            observation: { observedAt: Date.now(), availability: 'present', power: 'running' },
+        } });
+        const presence = createSessionPublisherPresence();
+        const socket = {};
+        const binding = { accountId: owner.id, machineId: guest.id, sessionId: session.id };
+        expect(await presence.registerPublisher({ socket, binding,
+            completeActivitySnapshot: { state: 'unknown', activeCount: 0 } })).toMatchObject({ status: 'registered' });
+        expect(await presence.touchPublisher({ socket })).toMatchObject({ status: 'touched' });
+        const active = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        expect(active.lastActiveAt.getTime()).toBeGreaterThan(authorization.requestedAt);
+        expect(mapPendingActivationAuthorization(active)).toEqual(authorization);
+        expect(await readManagedWakeTargets({ actorAccountId: owner.id, request: { homeId,
+            controller: { machineId: controller.id, installationId: controller.installationId! } } }))
+            .toMatchObject({ targets: [{ managedId: managed.id, origin: { pendingRequestId: localId } }] });
         const details = { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' };
         const body = { requestId: localId, requestedAt: authorization.requestedAt, failureCode: 'runtime_start_failed' };
         await withAuthenticatedTestApp(sessionPendingRoutes, async app => {
@@ -142,6 +157,26 @@ describe("pendingMessageService (shared sessions)", () => {
                 .toMatchObject({ pendingActivationAuthorization: { status: 'failed', failureCode: 'runtime_start_failed' },
                     pendingActivationFailureDetails: details });
         });
+    });
+
+    it('clears retained activation only when the exact pending input is claimed by its current publisher', async () => {
+        const { owner, session, controller, guest } = await createManagedPendingFixture();
+        const localId = `activation-consumed-${randomUUID()}`;
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: controller.id,
+            targetMachineId: guest.id, sessionId: session.id, localId, content: { t: 'encrypted', c: 'protected-input' },
+            requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ status: 'accepted' });
+        const presence = createSessionPublisherPresence();
+        const binding = { accountId: owner.id, machineId: guest.id, sessionId: session.id };
+        const registered = await presence.registerPublisher({ socket: {}, binding,
+            completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
+        if (registered.status !== 'registered') throw new Error('Expected current publisher');
+        expect(mapPendingActivationAuthorization(await db.session.findUniqueOrThrow({ where: { id: session.id } })))
+            .toMatchObject({ status: 'waiting', requestId: localId });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id,
+            publisherAuthority: { ...binding, committedFence: registered.committedFence } }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id } }))
+            .toMatchObject({ pendingActivationRequestId: null, pendingActivationStatus: null });
     });
     let harness: LightSqliteHarness;
     const providerAuthorityBySessionId = new Map<
@@ -6614,6 +6649,10 @@ describe("pendingMessageService (shared sessions)", () => {
         await withAuthenticatedTestApp(registerManagedMachineRoutes, async app => {
             const send = (signed = true, actor = owner.id) => app.inject({ method: 'POST', url: failurePath,
                 headers: { 'x-test-user-id': actor, ...(signed ? { [MANAGED_POLICY_PROOF_HEADER]: proof } : {}) }, payload: failureBody });
+            expect((await send()).json()).toEqual({ ok: true, didFail: false });
+            await db.managedMachine.update({ where: { id: managed.id }, data: {
+                observation: { observedAt: Date.now(), availability: 'present', power: 'running' },
+            } });
             expect((await send()).json()).toEqual({ ok: true, didFail: true });
             expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingActivationStatus: 'failed' });
             // Same-action retry preserves custody and arms a new timestamp, making the old signed failure stale.

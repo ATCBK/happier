@@ -328,7 +328,7 @@ export async function assertManagedWakeOriginCurrentInTx(tx: Tx, input: Readonly
         if (!session || session.archivedAt !== null || origin.session.homeId !== row.homeId
             || session.pendingActivationStatus !== 'waiting' || session.pendingActivationRequestId !== origin.pendingRequestId
             || session.pendingActivationRequestedAt?.getTime() !== origin.requestedAt
-            || !session.pendingActivationRequestedAt || session.pendingActivationRequestedAt <= session.lastActiveAt
+            || !session.pendingActivationRequestedAt
             || !retained.success || !sameManagedInput({ homeId: retained.data.homeId, managedId: retained.data.managedId,
                 enrolledMachineId: retained.data.enrolledMachineId, origin: retained.data.origin },
                 { homeId: target.homeId, managedId: target.managedId,
@@ -401,7 +401,7 @@ export async function readPendingManagedWakeTargetInTx(tx: Tx, sessionId: string
         || stored.data.origin.session.homeId !== stored.data.homeId
         || stored.data.origin.pendingRequestId !== session.pendingActivationRequestId
         || stored.data.origin.requestedAt !== session.pendingActivationRequestedAt?.getTime()
-        || !session.pendingActivationRequestedAt || session.pendingActivationRequestedAt <= session.lastActiveAt) return undefined;
+        || !session.pendingActivationRequestedAt) return undefined;
     const row = await tx.managedMachine.findUnique({ where: { id: stored.data.managedId } });
     if (!row) return undefined;
     const current = await resolveManagedWakeTargetInTx(tx, { actorAccountId: session.accountId,

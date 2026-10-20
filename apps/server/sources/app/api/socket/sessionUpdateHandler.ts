@@ -1770,7 +1770,6 @@ export function sessionUpdateHandler(
                         ? projectSessionTranscriptPublicationPendingProjection({
                             ...presenceResult.pendingState,
                             changedByAccountId: userId,
-                            pendingActivationAuthorization: null,
                         }, session, accountId)
                         : null;
                     if (realtimeProjection.kind === "publish") {

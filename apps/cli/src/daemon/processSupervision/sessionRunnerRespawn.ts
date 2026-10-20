@@ -161,6 +161,19 @@ export function isSessionRunnerColdResumeSupported(input: Readonly<{
   );
 }
 
+/** Home evidence must belong to this runner occurrence before it can end startup recovery. */
+export function isCurrentDefiniteSessionStartupFailure(
+  issue: SessionRuntimeIssueV1 | null | undefined,
+  processStartTimeMs: number | undefined,
+): issue is SessionRuntimeIssueV1 {
+  return issue?.scope === 'primary_session' && issue.status === 'failed'
+    && issue.source === 'dependency_failure'
+    && issue.code !== 'preparation_pending'
+    && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
+    && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
+    && issue.occurredAt >= processStartTimeMs;
+}
+
 export function createSessionRunnerRespawnManager(params: Readonly<{
   enabled: boolean;
   maxRestarts: number | null;
@@ -404,12 +417,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const processStartTimeMs = trackedSession.processStartTimeMs;
         // Home retains the host's typed failure. An older occurrence's issue must not
         // veto a fresh explicit Resume or a later runner's ordinary crash recovery.
-        if (issue?.scope === 'primary_session' && issue.status === 'failed'
-          && issue.source === 'dependency_failure'
-          && issue.code !== 'preparation_pending'
-          && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
-          && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
-          && issue.occurredAt >= processStartTimeMs) {
+        if (isCurrentDefiniteSessionStartupFailure(issue, processStartTimeMs)) {
           endRespawnCycle(sessionId);
           params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (startup dependency: ${issue.code})`);
           params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'startup_dependency_failure', detail: issue.code });
