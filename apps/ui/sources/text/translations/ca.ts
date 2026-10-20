@@ -15622,6 +15622,10 @@ settingsSession: {
         fallback: "S'està utilitzant l'alternativa del plugin",
     },
     pluginRuntime: {
+        actionFailed: "Aquesta acció ha fallat. Comprova’n el resultat abans de tornar-ho a provar.",
+        actionUnavailable: "Aquesta acció no està disponible. Comprova el connector i la connexió amb la màquina.",
+        actionStale: "Aquesta acció ja no és vigent. Torna-la a obrir per continuar.",
+        actionOpenFailed: "Aquesta acció no s’ha pogut completar. Comprova’n el resultat abans de tornar-ho a provar.",
         collectionConflict: "El format de dades d’aquest connector entra en conflicte amb la col·lecció desada. Obre’n la configuració per reparar-lo o actualitzar-lo.",
         resourceAdmissionUnavailable: "Aquest connector no ha pogut oferir les seves dades. Obre’n la configuració per revisar-lo i reparar-lo.",
         hostAccessMismatch: "Aquest connector ha sol·licitat un accés que no ha declarat. Revisa’n els accessos a la configuració.",

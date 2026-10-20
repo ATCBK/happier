@@ -13643,6 +13643,10 @@ settingsSession: {
         fallback: '正在使用外掛備援',
     },
   pluginRuntime: {
+      actionFailed: "操作失敗。重試前請先檢查結果。",
+      actionUnavailable: "此操作無法使用。請檢查外掛和機器連線。",
+      actionStale: "此操作已失效。請重新開啟以繼續。",
+      actionOpenFailed: "無法完成此操作。重試前請先檢查結果。",
       collectionConflict: "此外掛的資料格式與已儲存的集合衝突。請開啟外掛設定以修復或更新。",
       resourceAdmissionUnavailable: "此外掛無法提供資料。請開啟外掛設定進行檢查和修復。",
       hostAccessMismatch: "此外掛要求了未宣告的存取權限。請在外掛設定中檢查其存取權限。",

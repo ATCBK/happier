@@ -17282,6 +17282,10 @@ settingsSession: {
     fallback: "正在使用插件回退",
   },
     pluginRuntime: {
+        actionFailed: "操作失败。重试前请先检查结果。",
+        actionUnavailable: "此操作不可用。请检查插件和机器连接。",
+        actionStale: "此操作已失效。请重新打开以继续。",
+        actionOpenFailed: "无法完成此操作。重试前请先检查结果。",
         collectionConflict: "此插件的数据格式与已保存的集合冲突。请打开插件设置以修复或更新。",
         resourceAdmissionUnavailable: "此插件无法提供数据。请打开插件设置进行检查和修复。",
         hostAccessMismatch: "此插件请求了未声明的访问权限。请在插件设置中检查其访问权限。",

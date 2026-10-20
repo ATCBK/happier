@@ -21579,6 +21579,10 @@ const enPluginReactNative = {
 };
 
 const enPluginRuntime = {
+  actionFailed: "This action failed. Check its result before trying again.",
+  actionUnavailable: "This action is unavailable. Check the plugin and machine connection.",
+  actionStale: "This action is no longer current. Open it again to continue.",
+  actionOpenFailed: "This action could not finish. Check its result before trying again.",
   collectionConflict: "This plugin’s data format conflicts with the stored collection. Open plugin settings to repair or update it.",
   resourceAdmissionUnavailable: "This plugin could not make its data available. Open plugin settings to inspect and repair it.",
   hostAccessMismatch: "This plugin requested access that it has not declared. Review its access in plugin settings.",

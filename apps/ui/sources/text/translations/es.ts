@@ -17683,6 +17683,10 @@ settingsSession: {
     fallback: "Usando la alternativa del plugin",
   },
     pluginRuntime: {
+        actionFailed: "Esta acción ha fallado. Comprueba el resultado antes de volver a intentarlo.",
+        actionUnavailable: "Esta acción no está disponible. Comprueba el plugin y la conexión con la máquina.",
+        actionStale: "Esta acción ya no está vigente. Ábrela de nuevo para continuar.",
+        actionOpenFailed: "Esta acción no pudo finalizar. Comprueba el resultado antes de volver a intentarlo.",
         collectionConflict: "El formato de datos de este plugin entra en conflicto con la colección guardada. Abre sus ajustes para repararlo o actualizarlo.",
         resourceAdmissionUnavailable: "Este plugin no pudo ofrecer sus datos. Abre sus ajustes para revisarlo y repararlo.",
         hostAccessMismatch: "Este plugin solicitó un acceso que no ha declarado. Revisa sus permisos en los ajustes del plugin.",

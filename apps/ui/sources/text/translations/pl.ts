@@ -16705,6 +16705,10 @@ settingsSession: {
     fallback: "Używanie fallbacku wtyczki",
   },
     pluginRuntime: {
+        actionFailed: "Ta czynność nie powiodła się. Sprawdź wynik przed ponowną próbą.",
+        actionUnavailable: "Ta czynność jest niedostępna. Sprawdź wtyczkę i połączenie z maszyną.",
+        actionStale: "Ta czynność jest już nieaktualna. Otwórz ją ponownie, aby kontynuować.",
+        actionOpenFailed: "Nie udało się dokończyć tej czynności. Sprawdź wynik przed ponowną próbą.",
         collectionConflict: "Format danych tej wtyczki jest sprzeczny z zapisaną kolekcją. Otwórz ustawienia wtyczki, aby ją naprawić lub zaktualizować.",
         resourceAdmissionUnavailable: "Ta wtyczka nie mogła udostępnić danych. Otwórz jej ustawienia, aby ją sprawdzić i naprawić.",
         hostAccessMismatch: "Ta wtyczka zażądała dostępu, którego nie zadeklarowała. Sprawdź jej dostęp w ustawieniach wtyczki.",
