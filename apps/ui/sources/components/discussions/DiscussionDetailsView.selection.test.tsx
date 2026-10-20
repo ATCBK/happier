@@ -100,6 +100,7 @@ const draftState = vi.hoisted(() => ({
   conflict: null as null | { fields: readonly unknown[] },
   setComposer: vi.fn(),
   setTitle: vi.fn(),
+  setPassage: vi.fn(),
   captureSubmittedCurrentness: vi.fn(() => ({
     scope: { serverId: 'server-a', accountId: 'viewer' },
     address: { kind: 'newDiscussion' },
@@ -683,6 +684,27 @@ describe('DiscussionDetailsView selection', () => {
       screen.findByTestId('discussion-draft-passage-quote.text')?.props
         .children,
     ).toBe(draftState.passage.quote);
+  });
+
+  it('shows the passage a thread is being re-attached to above its composer and lets the person drop it', async () => {
+    draftState.passage = captureDocPassageV1({
+      ref: { kind: 'doc', artifactId: 'runbook', serverId: 'server-a' },
+      revision: { headerVersion: 2, bodyVersion: 5 },
+      source: 'A reworded passage.',
+      range: { start: 0, end: 19 },
+    });
+    draftState.setPassage.mockClear();
+    const screen = await renderScreen(
+      <DiscussionDetailsView
+        target={{ kind: 'discussion', address: { serverId: 'server-a' }, discussionId: 'discussion-a' }}
+        active
+      />,
+    );
+    expect(
+      screen.findByTestId('discussion-draft-passage-quote.text')?.props.children,
+    ).toBe(draftState.passage.quote);
+    await press(screen, 'discussion-draft-passage-remove');
+    expect(draftState.setPassage).toHaveBeenCalledWith(null);
   });
 
   it('quotes a passage once where its thread starts, not again on each reply about it', async () => {

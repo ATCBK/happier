@@ -52,7 +52,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function mountPassages(width: number) {
+async function mountPassages(width: number, attach?: NonNullable<Parameters<typeof ArtifactPassageSelection>[0]['margin']>['attach']) {
   const onFocus = vi.fn();
   const onOpen = vi.fn();
   const onOpenThreadList = vi.fn();
@@ -62,7 +62,7 @@ async function mountPassages(width: number) {
         { id: 'paragraph', location: { state: 'exact', range: { start: 0, end: markdown.length } } },
         { id: 'quote', location: { state: 'exact', range: { start: 9, end: 26 } } },
       ],
-      focusedId: null, onFocus, onOpen, onOpenThreadList, renderCard: () => null,
+      focusedId: null, onFocus, onOpen, onOpenThreadList, renderCard: () => null, attach,
     }} />, { createNodeMock: () => body });
   await act(async () => {
     screen.findAllByType('View').find(node => typeof node.props.onLayout === 'function')!.props.onLayout({
@@ -117,5 +117,27 @@ describe('web passage click routing', () => {
     expect(onFocus).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
     expect(onOpenThreadList).not.toHaveBeenCalled();
+  });
+});
+
+describe('web passage re-attachment', () => {
+  it('hands the selection, captured at the current revision, to the thread being re-attached instead of starting a comment', async () => {
+    const complete = vi.fn();
+    const { screen } = await mountPassages(1000, { discussionId: 'thread-1', complete });
+    const selected = document.createRange();
+    selected.setStart(body.firstChild!, 9);
+    selected.setEnd(body.firstChild!, 26);
+    document.getSelection()!.addRange(selected);
+    await act(async () => { document.dispatchEvent(new Event('selectionchange')); });
+    const action = screen.findAllHostsByTestId('artifact:passage-comment')[0]!;
+    expect(screen.getTextContent()).toContain('Attach here');
+    await act(async () => { action.props.onPress(); });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete.mock.calls[0]![0]).toMatchObject({
+      ref: { kind: 'doc', artifactId: 'runbook', serverId: 'home' },
+      revision: { headerVersion: 1, bodyVersion: 1 },
+      range: { start: 9, end: 26 },
+      quote: markdown.slice(9, 26),
+    });
   });
 });

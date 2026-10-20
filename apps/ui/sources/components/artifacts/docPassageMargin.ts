@@ -37,7 +37,10 @@ export type DocPassageMarginThread<
   M extends DocPassageMarginMessage = DocPassageMarginMessage,
 > = Readonly<{
   discussionId: string;
+  /** The comment basis the thread is placed by: its latest, which a re-attachment moves past the first. */
   passage: DocPassageRefV1;
+  /** The passage the thread was started on; the same as `passage` until it is re-attached. */
+  original: DocPassageRefV1;
   location: DocPassageMarginLocation;
   root: M;
   /** Everything after the passage root, oldest first. */
@@ -99,11 +102,25 @@ export function buildDocPassageMargin<M extends DocPassageMarginMessage>(
     const root = ordered.find(
       (message) => message.replyTarget?.kind === 'doc_passage',
     );
-    const passage = root ? readDiscussionContentPassage(root.content) : null;
-    if (!root || !passage) {
+    const original = root ? readDiscussionContentPassage(root.content) : null;
+    if (!root || !original) {
       unreadable += 1;
       continue;
     }
+    // Re-attaching is a later comment with its own passage basis (`doc.comment.reply` without a parent);
+    // the thread is placed by the latest readable one and keeps the first as what it was started on.
+    const passage =
+      [...ordered]
+        .reverse()
+        .filter(
+          (message) =>
+            message.replyTarget?.kind === 'doc_passage' &&
+            message.content !== null &&
+            'kind' in message.content &&
+            message.content.kind === 'doc_passage_comment',
+        )
+        .map((message) => readDiscussionContentPassage(message.content))
+        .find((value) => value !== null) ?? original;
     const replies = ordered.filter((message) => message !== root);
     const proposals = ordered.filter(
       (message) =>
@@ -164,6 +181,7 @@ export function buildDocPassageMargin<M extends DocPassageMarginMessage>(
     threads.push({
       discussionId: thread.discussionId,
       passage,
+      original,
       location,
       root,
       replies,

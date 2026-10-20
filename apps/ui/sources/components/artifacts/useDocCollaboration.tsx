@@ -15,6 +15,7 @@ import { readArtifactCodeLanguage } from './artifactBrowserModel';
 import type { ArtifactPassageMargin } from './ArtifactPassageSelection';
 import { ArtifactPassageThreadCard } from './ArtifactPassageThreadCard';
 import type { AdmittedDocRead } from './ArtifactEditProposal';
+import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionOpenedSummaryV1 } from '@happier-dev/protocol/discussions/actions';
 import { buildDocPassageMargin, readDocPassageThreadQuote } from './docPassageMargin';
 import { showArtifactHistorySheet } from './ArtifactHistorySheet';
@@ -91,6 +92,8 @@ export function useDocCollaboration(
     marginShown.current = shown;
   }, []);
   const [focusedId, setFocusedId] = React.useState<string | null>(null);
+  // The thread waiting for the text it now belongs to; the Doc's selection hands it the next passage.
+  const [attachingId, setAttachingId] = React.useState<string | null>(null);
   const artifactId = prose?.id ?? null;
 
   React.useEffect(() => {
@@ -186,6 +189,25 @@ export function useDocCollaboration(
     [artifactId, router, scope],
   );
 
+  const attach = React.useMemo(
+    () =>
+      attachingId && client && artifactId
+        ? {
+            discussionId: attachingId,
+            // The captured passage is the thread's next comment basis: its own draft carries it, and the
+            // person writes the comment that posts it (`doc.comment.reply` into this thread).
+            complete: (passage: DocPassageRefV1) => {
+              rememberDocReturn(artifactId);
+              setAttachingId(null);
+              router.push(
+                client.beginPassageReattach({ discussionId: attachingId, passage, returnArtifactId: artifactId }) as Href,
+              );
+            },
+          }
+        : null,
+    [artifactId, attachingId, client, router],
+  );
+
   const threads = model?.threads;
   const passages = React.useMemo(
     () =>
@@ -205,6 +227,9 @@ export function useDocCollaboration(
         <ArtifactPassageThreadCard
           thread={thread}
           focused={focusedId === id}
+          attaching={attachingId === id}
+          onReattach={() => { setFocusedId(id); setAttachingId(id); }}
+          onCancelReattach={() => setAttachingId(null)}
           client={client}
           docRead={docRead}
           mountThread={read.mountThread}
@@ -215,7 +240,7 @@ export function useDocCollaboration(
         />
       );
     },
-    [client, docRead, focusedId, open, openHistory, read.mountThread, scope, threads],
+    [attachingId, client, docRead, focusedId, open, openHistory, read.mountThread, scope, threads],
   );
 
   const accepted = React.useMemo(() => {
@@ -269,8 +294,9 @@ export function useDocCollaboration(
       onOpen: open,
       renderCard,
       reportShown,
+      attach,
     }),
-    [focusedId, open, passages, renderCard, reportShown],
+    [attach, focusedId, open, passages, renderCard, reportShown],
   );
   if (!prose || !scope) return null;
   return {

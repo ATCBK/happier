@@ -124,6 +124,25 @@ describe('Doc collaboration data through the real Actions and Discussion reposit
         expect(href).not.toContain('Private');
         await restored.unmount();
     });
+    it('re-attaches an existing thread by seeding its own draft with the fresh passage and opening it, leaving other drafts alone', async () => {
+        const serverId = await homes.addHome({ name: 'Reattach Home', serverUrl: 'https://doc-passage-reattach.test', accountId: 'alice', currentAccount: true });
+        const scope = { serverId, accountId: 'alice' };
+        const client = createArtifactActionsClient(scope);
+        const passage = captureDocPassageV1({ ref: { kind: 'doc', serverId, artifactId: 'notes' },
+            revision: { headerVersion: 1, bodyVersion: 4 }, source: 'A reworded sentence.', range: { start: 0, end: 20 } });
+        writeDiscussionSessionDraft({ scope, address: { kind: 'discussion', discussionId: 'other-thread' }, patch: { text: 'Keep this' } });
+        const href = client.beginPassageReattach({ discussionId: 'thread-1', passage, returnArtifactId: 'notes' });
+        expect(href).toBe(buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId }, discussionId: 'thread-1' },
+            returnArtifactId: 'notes' }));
+        const reattached = await renderHook(() => useDiscussionDraft({ scope, address: { kind: 'discussion', discussionId: 'thread-1' } }));
+        expect(reattached.getCurrent().passage).toEqual(passage);
+        expect(reattached.getCurrent().text).toBe('');
+        const other = await renderHook(() => useDiscussionDraft({ scope, address: { kind: 'discussion', discussionId: 'other-thread' } }));
+        expect(other.getCurrent().passage).toBeNull();
+        expect(other.getCurrent().text).toBe('Keep this');
+        await reattached.unmount();
+        await other.unmount();
+    });
     it('refuses initial participants at the Doc-comment delegation before writing and preserves participant-free comments', async () => {
         const serverId = await homes.addHome({ name: 'Saved Doc', serverUrl: 'https://doc-comment-audience.test', accountId: 'alice', currentAccount: true });
         const scope = { serverId, accountId: 'alice' };

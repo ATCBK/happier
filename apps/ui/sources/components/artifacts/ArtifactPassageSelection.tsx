@@ -6,6 +6,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
 
 import {
@@ -48,6 +49,11 @@ export type ArtifactPassageMargin = Readonly<{
   /** An ambiguous native block opens the existing complete thread list, never its first thread. */
   onOpenThreadList?: () => void;
   renderCard: (id: string) => React.ReactNode;
+  /**
+   * A changed thread waiting for the text it belongs to now: the next captured selection is handed to
+   * it (the same capture a new comment uses) instead of starting a new comment.
+   */
+  attach?: Readonly<{ discussionId: string; complete: (passage: DocPassageRefV1) => void }> | null;
   /** Whether the threads sit beside the passages (wide) or open on their own (narrow). */
   reportShown?: (shown: boolean) => void;
 }>;
@@ -162,8 +168,9 @@ function NativePassageSelection(
   basis.current = { artifactId, markdown, revision, client, scope };
   const mounted = React.useRef(false);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const attaching = margin?.attach != null;
   const selectionActions = React.useMemo<readonly MarkdownSelectionAction[] | undefined>(() => !client || !scope ? undefined : [{
-    label: t('artifacts.browser.passage.comment'),
+    label: t(attaching ? 'artifacts.browser.passage.attachHere' : 'artifacts.browser.passage.comment'),
     onPress: (block, selection) => {
       const publish = (input: Readonly<{ renderedText: string; start: number; end: number }>): boolean => {
         const current = basis.current;
@@ -177,14 +184,16 @@ function NativePassageSelection(
         if (!range) return false;
         const passage = captureDocPassageV1({ ref: { kind: 'doc', artifactId, serverId: scope.serverId }, revision, source: markdown,
           range });
-        router.push(client.beginPassageComment(passage) as Href);
+        const attach = marginRef.current?.attach;
+        if (attach) attach.complete(passage);
+        else router.push(client.beginPassageComment(passage) as Href);
         return true;
       };
       if (selection && selection.renderedText.slice(selection.start, selection.end) === selection.text && publish(selection)) return;
       props.onRequestNativeSelection?.({ markdown: block.renderMarkdown ?? block.markdown,
         complete: (input) => input.renderedText.slice(input.start, input.end) === input.text && publish(input) });
     },
-  }], [artifactId, client, markdown, props.onRequestNativeSelection, revision, router, scope]);
+  }], [artifactId, attaching, client, markdown, props.onRequestNativeSelection, revision, router, scope]);
   return (
     <MarkdownView
       testID="artifact:body"
@@ -401,7 +410,9 @@ function WebPassageSelection(
     });
     document.getSelection()?.removeAllRanges();
     setSelected(null);
-    router.push(client.beginPassageComment(passage) as Href);
+    const attach = marginRef.current?.attach;
+    if (attach) attach.complete(passage);
+    else router.push(client.beginPassageComment(passage) as Href);
   }, [
     client,
     props.artifactId,
@@ -441,6 +452,9 @@ function WebPassageSelection(
   );
 
   const placed = margin?.passages ?? [];
+  const affordanceLabel = t(
+    margin?.attach ? 'artifacts.browser.passage.attachHere' : 'artifacts.browser.passage.comment',
+  );
   return (
     <View
       style={wide ? styles.row : null}
@@ -495,7 +509,7 @@ function WebPassageSelection(
               <Pressable
                 testID="artifact:passage-comment"
                 accessibilityRole="button"
-                accessibilityLabel={t('artifacts.browser.passage.comment')}
+                accessibilityLabel={affordanceLabel}
                 // Pressing must not clear the selection before the passage is captured.
                 onPressIn={(event) =>
                   (
@@ -516,7 +530,7 @@ function WebPassageSelection(
                   color={theme.colors.text.secondary}
                 />
                 <Text variant="label" emphasis="medium">
-                  {t('artifacts.browser.passage.comment')}
+                  {affordanceLabel}
                 </Text>
               </Pressable>
             </FloatingOverlay>

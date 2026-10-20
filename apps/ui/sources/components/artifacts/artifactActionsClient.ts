@@ -100,6 +100,16 @@ export function createArtifactActionsClient(scope: ServerAccountScope,
             return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId }, draftId } });
         },
         /**
+         * Re-attach an existing passage thread to a fresh basis: the thread's own draft carries the passage
+         * captured at the current revision, so the person's next comment is posted into that same thread
+         * through `doc.comment.reply`. Nothing is sent and the old comments are not touched.
+         */
+        beginPassageReattach: (input: Readonly<{ discussionId: string; passage: DocPassageRefV1; returnArtifactId?: string }>) => {
+            writeDiscussionSessionDraft({ scope, address: { kind: 'discussion', discussionId: input.discussionId }, patch: { passage: input.passage } });
+            return buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: scope.serverId }, discussionId: input.discussionId },
+                ...(input.returnArtifactId ? { returnArtifactId: input.returnArtifactId } : {}) });
+        },
+        /**
          * Prepare (never send) a reply to a suggested edit in its own thread: the thread's draft gets the
          * addressed request unless it already holds the person's words, and the thread opens replying to it.
          */

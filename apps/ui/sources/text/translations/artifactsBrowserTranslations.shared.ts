@@ -148,6 +148,10 @@ export type ArtifactsBrowserTranslations = Readonly<{
         replied: (params: Readonly<{ name: string; time: string }>) => string;
         changedReason: (params: Readonly<{ n: number }>) => string;
         openRevision: (params: Readonly<{ n: number }>) => string;
+        reattach: string;
+        reattaching: string;
+        attachHere: string;
+        earlier: (params: Readonly<{ n: number; quote: string }>) => string;
         count: (params: Readonly<{ count: number }>) => string;
         countUnavailable: string;
         refineHint: string;
@@ -337,6 +341,10 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             replied: ({ name, time }) => `${name} replied · ${time}`,
             changedReason: ({ n }) => `This passage changed after the comment. The quote is from version ${n}.`,
             openRevision: ({ n }) => `Open version ${n}`,
+            reattach: 'Attach to new text',
+            reattaching: 'Select the text it belongs to now.',
+            attachHere: 'Attach here',
+            earlier: ({ n, quote }) => `Earlier on version ${n}: “${quote}”`,
             count: ({ count }) => `${count} ${count === 1 ? 'conversation' : 'conversations'}`,
             countUnavailable: 'Comment count unavailable',
             refineHint: 'Select the words to comment on',

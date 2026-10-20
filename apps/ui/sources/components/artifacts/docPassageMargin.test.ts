@@ -207,6 +207,27 @@ describe('buildDocPassageMargin', () => {
     expect(thread.proposal?.id).toBe(accepted.id);
   });
 
+  it('re-attaches a thread through a later comment basis and keeps the original passage', () => {
+    const original = passage(source1, 'A replay shows two rows.');
+    const source2 = 'Check the dashboard. A replay now shows one row. Escalate to on-call.';
+    const reattached = passage(source2, 'A replay now shows one row.', r2);
+    const root = comment('d-replay', original);
+    const reply = { ...comment('d-replay', reattached, 'Moved to the reworded sentence.'), seq: 2 };
+    const plain: DocPassageMarginMessage = { ...reply, id: 'plain', seq: 3, replyTarget: { kind: 'message', messageId: root.id },
+      content: { v: 1, parts: [{ t: 'text', text: 'Thanks.' }] } };
+    const detached = buildDocPassageMargin({ source: source2, revision: r2,
+      threads: [{ discussionId: 'd-replay', messages: [root, plain] }] }).threads[0]!;
+    expect(detached.location.state).toBe('detached');
+    expect(detached.original).toEqual(original);
+    const attached = buildDocPassageMargin({ source: source2, revision: r2,
+      threads: [{ discussionId: 'd-replay', messages: [root, reply, plain] }] }).threads[0]!;
+    expect(attached.location).toEqual({ state: 'exact', range: reattached.range });
+    expect(attached.passage).toEqual(reattached);
+    expect(attached.original).toEqual(original);
+    expect(attached.root.id).toBe(root.id);
+    expect(readDocPassageThreadQuote(attached)).toBe('A replay now shows one row.');
+  });
+
   it('drops a thread whose root carries no readable passage', () => {
     const margin = buildDocPassageMargin({
       source: source1,

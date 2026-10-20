@@ -31,6 +31,8 @@ export function ArtifactPassageThreadCard(
   props: Readonly<{
     thread: DocPassageMarginThread<DiscussionOpenedMessageV1>;
     focused: boolean;
+    /** This thread is being re-attached: the Doc is waiting for the text it now belongs to. */
+    attaching: boolean;
     client: ArtifactActionsClient;
     docRead: AdmittedDocRead;
     mountThread: (discussionId: string) => () => void;
@@ -38,6 +40,8 @@ export function ArtifactPassageThreadCard(
     onFocus: () => void;
     onOpen: () => void;
     onOpenHistory: (compareFromBodyVersion: number) => void;
+    onReattach: () => void;
+    onCancelReattach: () => void;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
@@ -72,6 +76,8 @@ export function ArtifactPassageThreadCard(
       .reverse()
       .find((message) => message !== thread.proposal) ?? null;
   const detached = thread.location.state === 'detached';
+  // A thread re-attached to new text keeps what it was first written on, visible beside its new quote.
+  const reattached = thread.passage !== thread.original;
   // Who suggested the edit, named as the thread names them: an agent by its Session, a person by name.
   const producer = thread.proposal?.producerV1 ?? null;
   const producerAddresses = React.useMemo(
@@ -149,6 +155,14 @@ export function ArtifactPassageThreadCard(
           />
         </Pressable>
       </View>
+      {reattached ? (
+        <Text testID={`${testID}.earlier`} variant="meta" numberOfLines={1} style={styles.earlier}>
+          {t('artifacts.browser.passage.earlier', {
+            n: thread.original.revision.bodyVersion,
+            quote: thread.original.quote,
+          })}
+        </Text>
+      ) : null}
       <Pressable onPress={props.onFocus} accessible={false}>
       <HappierThreadMessage
         startsGroup
@@ -224,17 +238,42 @@ export function ArtifactPassageThreadCard(
             })}
           </Text>
           </View>
-          <RoundButton
-            style={styles.noticeAction}
-            testID={`${testID}.compare`}
-            size="small"
-            display="inverted"
-            title={t('artifacts.browser.passage.openRevision', {
-              n: thread.passage.revision.bodyVersion,
-            })}
-            textStyle={{ color: theme.colors.text.primary }}
-            onPress={() => props.onOpenHistory(thread.passage.revision.bodyVersion)}
-          />
+          {props.attaching ? (
+            <>
+              <Text testID={`${testID}.reattaching`} variant="meta" accessibilityLiveRegion="polite" style={styles.noticeText}>
+                {t('artifacts.browser.passage.reattaching')}
+              </Text>
+              <View style={styles.noticeActions}>
+                <RoundButton
+                  testID={`${testID}.reattach-cancel`}
+                  size="small"
+                  display="inverted"
+                  title={t('common.cancel')}
+                  textStyle={{ color: theme.colors.text.primary }}
+                  onPress={props.onCancelReattach}
+                />
+              </View>
+            </>
+          ) : (
+            <View style={styles.noticeActions}>
+              <RoundButton
+                testID={`${testID}.compare`}
+                size="small"
+                display="inverted"
+                title={t('artifacts.browser.passage.openRevision', {
+                  n: thread.passage.revision.bodyVersion,
+                })}
+                textStyle={{ color: theme.colors.text.primary }}
+                onPress={() => props.onOpenHistory(thread.passage.revision.bodyVersion)}
+              />
+              <RoundButton
+                testID={`${testID}.reattach`}
+                size="small"
+                title={t('artifacts.browser.passage.reattach')}
+                onPress={props.onReattach}
+              />
+            </View>
+          )}
         </View>
       ) : null}
       {thread.proposal && proposalContent ? (
@@ -287,7 +326,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   replyText: { flex: 1, minWidth: 0, color: theme.colors.text.secondary },
   noticeLine: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
-  noticeAction: { alignSelf: 'flex-end' },
+  noticeActions: { flexDirection: 'row', alignSelf: 'flex-end', gap: theme.space.s8 },
+  earlier: { color: theme.colors.text.tertiary },
   notice: {
     gap: theme.space.s8,
     paddingVertical: theme.space.s8,

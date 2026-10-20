@@ -156,6 +156,8 @@ const styles = StyleSheet.create((theme) => ({
     newNotice: { paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s8, ...Typography.variant('meta') },
     newBody: { flex: 1, minHeight: 0, justifyContent: 'center' },
     draftPassage: { width: '100%', alignSelf: 'center', paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s8 },
+    draftPassageRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    draftPassageQuote: { flex: 1, minWidth: 0 },
 }));
 const VIEWABILITY = Object.freeze({ itemVisiblePercentThreshold: 1 });
 const NO_VIEWERS: readonly SessionHumanPresenceViewer[] = Object.freeze([]);
@@ -577,6 +579,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
 }>) {
     const router = useRouter();
     const device = useDeviceType();
+    const { theme } = useUnistyles();
     const { repository, snapshot } = props;
     const thread = snapshot.threads[props.target.discussionId];
     const discussion = thread?.summary ?? null;
@@ -1281,6 +1284,15 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     : t('session.collaboration.discussion.home.approvalPending')}
                 action={{ testID: 'session-discussion-waiting-approval-review', label: t('approvals.review'), onPress: reviewWaiting }}
             /></View> : null}
+            {/* A thread re-attached from its Doc: the next comment is posted on this passage (lab K1-S's passage head). */}
+            {draft.passage && discussion.archivedAt === null && discussion.capabilities.postMessages ? <View style={[styles.draftPassage, styles.draftPassageRow, threadColumn]}>
+                <View style={styles.draftPassageQuote}><ArtifactPassageQuote testID="discussion-draft-passage-quote" passage={sourceRefused ? null : draft.passage} /></View>
+                <IconButton testID="discussion-draft-passage-remove" size={28} variant="plain"
+                    icon={<Icon name="x" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
+                    accessibilityLabel={t('common.cancel')} tooltip={t('common.cancel')}
+                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                    onPress={() => draft.setPassage(null)} />
+            </View> : null}
             {discussion.archivedAt !== null
                 ? <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
