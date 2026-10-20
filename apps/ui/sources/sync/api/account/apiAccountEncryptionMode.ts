@@ -237,6 +237,11 @@ async function readAccountEncryptionCurrentness(
     });
     let response = await readCurrentness();
     if (!response.ok) {
+        if (response.status === 408 || response.status === 429 || response.status >= 500) {
+            throw new HappyError('Account encryption currentness is temporarily unavailable', true, {
+                status: response.status, kind: 'server', code: 'account-encryption-currentness-unavailable',
+            });
+        }
         if (response.status === 400) {
             const recovery = AccountEncryptionCurrentnessErrorResponseSchema.safeParse(
                 await response.json().catch(() => null),

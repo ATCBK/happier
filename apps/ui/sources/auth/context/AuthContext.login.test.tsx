@@ -12,6 +12,7 @@ import { AuthProvider, getCurrentAuth } from './AuthContext';
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const secureStore = vi.hoisted(() => new Map<string, string>());
+const secureStoreRead = vi.hoisted(() => ({ beforeRead: null as ((key: string) => Promise<void>) | null }));
 const syncSwitchServerSpy = vi.hoisted(() =>
     vi.fn((credentials: { token: string; secret: string } | null) => {
         if (!credentials) return Promise.resolve();
@@ -38,7 +39,10 @@ let activeServerListener: ((snapshot: {
     connectionDescriptorRevision?: number;
 }) => void) | null = null;
 vi.mock('expo-secure-store', () => ({
-    getItemAsync: async (key: string) => secureStore.get(key) ?? null,
+    getItemAsync: async (key: string) => {
+        await secureStoreRead.beforeRead?.(key);
+        return secureStore.get(key) ?? null;
+    },
     setItemAsync: async (key: string, value: string) => {
         secureStore.set(key, value);
     },
@@ -129,6 +133,7 @@ describe('AuthContext.login', () => {
         vi.useFakeTimers();
         vi.clearAllMocks();
         secureStore.clear();
+        secureStoreRead.beforeRead = null;
         activeServerListener = null;
         activeServerSnapshotState.serverId = '';
         activeServerSnapshotState.serverUrl = '';
@@ -142,8 +147,135 @@ describe('AuthContext.login', () => {
     });
 
     afterEach(() => {
+        secureStoreRead.beforeRead = null;
         vi.useRealTimers();
         vi.unstubAllGlobals();
+    });
+
+    it.each([
+        { accountId: 'account-a', replacesAccount: false },
+        { accountId: 'account-new', replacesAccount: true },
+    ])('retires only the replaced Home archive operations (account=$accountId)', async ({ accountId, replacesAccount }) => {
+        const homeA = { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', serverIdentityId: 'srv_archive_home_a' };
+        const homeB = { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', serverIdentityId: 'srv_archive_home_b' };
+        serverProfilesState.profiles = [homeA, homeB];
+        activeServerSnapshotState.serverId = homeB.serverIdentityId;
+        activeServerSnapshotState.serverUrl = homeB.serverUrl;
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previousState = storage.getState();
+        const previousCredentials = { token: buildTokenWithSub('account-a') };
+        const focusedCredentials = { token: buildTokenWithSub('account-b') };
+        await TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId }, previousCredentials);
+        await TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId }, focusedCredentials);
+        const archivesA = { session: { serverId: homeA.serverIdentityId, sessionId: 'session' } };
+        const archivesB = { session: { serverId: homeB.serverIdentityId, sessionId: 'session' } };
+        storage.setState({ sessionArchiveOperations: { [homeA.serverIdentityId]: archivesA, [homeB.serverIdentityId]: archivesB } });
+        const screen = await renderScreen(React.createElement(AuthProvider, {
+            initialCredentials: focusedCredentials,
+            children: React.createElement(React.Fragment, null),
+        }));
+        try {
+            await act(async () => {
+                await getCurrentAuth()!.loginWithCredentials({ token: buildTokenWithSub(accountId).replace(/sig$/, 'refreshed') }, {
+                    target: { serverUrl: homeA.serverUrl, serverId: homeA.serverIdentityId },
+                });
+            });
+            expect(storage.getState().sessionArchiveOperations[homeA.serverIdentityId]).toBe(replacesAccount ? undefined : archivesA);
+            expect(storage.getState().sessionArchiveOperations[homeB.serverIdentityId]).toBe(archivesB);
+            expect(getCurrentAuth()?.credentials).toEqual(focusedCredentials);
+        } finally {
+            await screen.unmount();
+            storage.setState(previousState, true);
+        }
+    });
+
+    it.each(['focused-home', 'all-credentials'] as const)('retires archive operations only for the Homes forgotten by %s logout', async (scope) => {
+        const homeA = { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', serverIdentityId: 'srv_archive_home_a' };
+        const homeB = { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', serverIdentityId: 'srv_archive_home_b' };
+        serverProfilesState.profiles = [homeA, homeB];
+        activeServerSnapshotState.serverId = homeA.serverIdentityId;
+        activeServerSnapshotState.serverUrl = homeA.serverUrl;
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previousState = storage.getState();
+        const homeCredentials = { token: buildTokenWithSub('account-a') };
+        await TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId }, homeCredentials);
+        await TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId }, { token: buildTokenWithSub('account-b') });
+        const archivesB = { session: { serverId: homeB.serverIdentityId, sessionId: 'session' } };
+        storage.setState({ sessionArchiveOperations: {
+            [homeA.serverIdentityId]: { session: { serverId: homeA.serverIdentityId, sessionId: 'session' } },
+            [homeB.serverIdentityId]: archivesB,
+        } });
+        const screen = await renderScreen(React.createElement(AuthProvider, {
+            initialCredentials: homeCredentials,
+            children: React.createElement(React.Fragment, null),
+        }));
+        try {
+            await act(async () => { await getCurrentAuth()!.logout({ scope }); });
+            expect(storage.getState().sessionArchiveOperations[homeA.serverIdentityId]).toBeUndefined();
+            expect(storage.getState().sessionArchiveOperations[homeB.serverIdentityId]).toBe(scope === 'all-credentials' ? undefined : archivesB);
+        } finally {
+            await screen.unmount();
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('keeps login persistence and archive retirement on the initiating Home when focus changes during a credential read', async () => {
+        const homeA = { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', serverIdentityId: 'srv_archive_home_a' };
+        const homeB = { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', serverIdentityId: 'srv_archive_home_b' };
+        serverProfilesState.profiles = [homeA, homeB];
+        activeServerSnapshotState.serverId = homeA.serverIdentityId;
+        activeServerSnapshotState.serverUrl = homeA.serverUrl;
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previousState = storage.getState();
+        const homeACredentials = { token: buildTokenWithSub('account-a') };
+        const homeBCredentials = { token: buildTokenWithSub('account-b') };
+        const newCredentials = { token: buildTokenWithSub('account-new') };
+        await TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId }, homeACredentials);
+        await TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId }, homeBCredentials);
+        const credentialKey = [...secureStore.keys()].find((key) => secureStore.get(key) === JSON.stringify(homeACredentials));
+        if (!credentialKey) throw new Error('Expected a persisted Home A credential');
+        const archivesB = { session: { serverId: homeB.serverIdentityId, sessionId: 'session' } };
+        storage.setState({ sessionArchiveOperations: {
+            [homeA.serverIdentityId]: { session: { serverId: homeA.serverIdentityId, sessionId: 'session' } },
+            [homeB.serverIdentityId]: archivesB,
+        } });
+        const screen = await renderScreen(React.createElement(AuthProvider, {
+            initialCredentials: homeACredentials,
+            children: React.createElement(React.Fragment, null),
+        }));
+        let releaseRead!: () => void;
+        const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+        const readStarted = vi.fn();
+        secureStoreRead.beforeRead = async (key) => {
+            if (key !== credentialKey || readStarted.mock.calls.length > 0) return;
+            readStarted();
+            await readGate;
+        };
+        try {
+            await act(async () => {
+                const login = getCurrentAuth()!.loginWithCredentials(newCredentials);
+                await vi.waitFor(() => expect(readStarted).toHaveBeenCalledOnce());
+                activeServerSnapshotState.serverId = homeB.serverIdentityId;
+                activeServerSnapshotState.serverUrl = homeB.serverUrl;
+                switchConnectionToActiveServerSpy.mockResolvedValue(homeBCredentials);
+                activeServerListener?.({ ...activeServerSnapshotState });
+                releaseRead();
+                await login;
+            });
+            expect(await TokenStorage.getCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId })).toEqual(newCredentials);
+            expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId })).toEqual(homeBCredentials);
+            expect(storage.getState().sessionArchiveOperations[homeA.serverIdentityId]).toBeUndefined();
+            expect(storage.getState().sessionArchiveOperations[homeB.serverIdentityId]).toBe(archivesB);
+            expect(getCurrentAuth()?.credentials).toEqual(homeBCredentials);
+        } finally {
+            releaseRead();
+            secureStoreRead.beforeRead = null;
+            await screen.unmount();
+            storage.setState(previousState, true);
+        }
     });
 
     it('keeps the session authenticated while a login-triggered server refresh is still rebinding credentials', async () => {

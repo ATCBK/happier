@@ -33,6 +33,16 @@ function installNetworkBoundary(respond: (input: RequestInfo | URL, init?: Reque
 }
 
 describe('apiAccountEncryptionMode', () => {
+  it.each([{ status: 503, canTryAgain: true }, { status: 400, canTryAgain: false }])(
+    'preserves currentness HTTP $status retryability through its error consumer', async ({ status, canTryAgain }) => {
+      const { isExplicitlyRetryableError, shouldRetryError } = await import('@/sync/runtime/connectivity/transientConnectivityErrors');
+      const error = await accountEncryptionMode.fetchAccountEncryptionCurrentness(credentials, {
+        request: async () => Response.json({ error: 'unavailable' }, { status }),
+      }).then(() => null, (error: unknown) => error);
+      expect(error).toMatchObject({ status, canTryAgain });
+      expect(shouldRetryError(error)).toBe(canTryAgain);
+      expect(isExplicitlyRetryableError(error)).toBe(canTryAgain);
+    });
   it.each([401, 403])('preserves mode-endpoint authorization denial as a typed HTTP %s error', async (status) => {
     const { fetchAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
     await expect(fetchAccountEncryptionMode(credentials, {
