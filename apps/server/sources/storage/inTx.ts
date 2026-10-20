@@ -2,8 +2,8 @@ import { readDatabaseTransactionConfigFromEnv, resolveTransactionRetryDelayMs, t
 import { recordDatabaseTransactionRetry } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { delay } from "@/utils/runtime/delay";
 import { db } from "@/storage/db";
-import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime, resolvePrismaConnectionLimitFromEnv, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
-import { AsyncLock, isLockAdmissionDeadlineExceededError, LockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
+import { getDbProviderFromEnv, getPooledTransactionAdmission, isPrismaErrorCode, prismaRuntime, withSqliteReadSnapshot, type TransactionClient } from "@/storage/prisma";
+import { isLockAdmissionDeadlineExceededError, LockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
@@ -11,21 +11,6 @@ import { flushAccountChangesInTx } from '@/app/changes/markAccountChanged';
 
 export type Tx = TransactionClient;
 const transactionResultSymbol = Symbol('transaction-result');
-let pooledTransactionAdmission: { connectionLimit: number; lock: AsyncLock } | undefined;
-
-function getPooledTransactionAdmission(): AsyncLock | undefined {
-    const connectionLimit = resolvePrismaConnectionLimitFromEnv(process.env);
-    // Keep one slot in the existing pool available for Machine validation,
-    // presence and RPC discovery. Do not invent a pool size for implicit or
-    // single-connection configurations. Both write and read snapshots can hold
-    // connections, so they share this admission owner.
-    if (connectionLimit === null || connectionLimit <= 1) return undefined;
-    if (pooledTransactionAdmission?.connectionLimit !== connectionLimit) {
-        pooledTransactionAdmission = { connectionLimit, lock: new AsyncLock(connectionLimit - 1) };
-    }
-    return pooledTransactionAdmission.lock;
-}
-
 /** Explicit projection of values that are allocated by terminal publication. */
 export interface TransactionResult<T> {
     readonly [transactionResultSymbol]: true;

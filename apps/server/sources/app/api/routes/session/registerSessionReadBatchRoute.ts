@@ -14,7 +14,7 @@ import { projectSessionTurnWaitingCompatibility } from '@/app/clientCompatibilit
 import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
-import { resolvePrismaConnectionLimitFromEnv } from '@/storage/prisma';
+import { getPrismaConnectionLimit } from '@/storage/prisma';
 import { readSessionDetail } from './registerSessionListingRoutes';
 import { readSessionMessagePage } from './registerSessionMessageRoutes';
 import { readSessionTurns } from './registerSessionTurnMutationRoute';
@@ -67,7 +67,7 @@ export function registerSessionReadBatchRoute(app: Fastify) {
         // Each component awaits its own DB work before the next one starts.
         // Without an explicit pool budget, read sequentially rather than
         // multiplying the request into an unknown number of acquisitions.
-        const concurrency = resolvePrismaConnectionLimitFromEnv(process.env) ?? 1;
+        const concurrency = getPrismaConnectionLimit() ?? 1;
         const results = new Array<SessionReadBatchResultV1>(request.body.sessionIds.length);
         let nextIndex = 0;
         await Promise.all(Array.from({ length: Math.min(concurrency, results.length) }, async () => {

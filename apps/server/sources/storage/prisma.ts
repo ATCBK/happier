@@ -18,7 +18,7 @@ export type PrismaClientType = PrismaClientInstance;
 
 export * from "./enums.generated";
 
-import { getDbProviderFromEnv, type DbProvider } from '@/config/databaseProvider';
+import type { DbProvider } from '@/config/databaseProvider';
 export { parseDbProvider, getDbProviderFromEnv, requireDbProviderFromEnv, type DbProvider } from '@/config/databaseProvider';
 
 const requireFromHere = createRequire(import.meta.url);
@@ -156,6 +156,10 @@ let _db: ReturnType<typeof withSharedQaSchemaDiagnostics> | null = null;
 let _pglite: PGlite | null = null;
 let _pgliteServer: PGLiteSocketServer | null = null;
 let _provider: DbProvider | null = null;
+let _connectionPool: {
+    connectionLimit: number | null;
+    transactionAdmission: AsyncLock | undefined;
+} | null = null;
 let _releasePgliteDirLock: (() => Promise<void>) | null = null;
 let _initDbPgliteInFlight: Promise<void> | null = null;
 let sqliteReadSnapshot: {
@@ -199,6 +203,7 @@ export function initDbPostgres(): void {
     }
     _db = withSharedQaSchemaDiagnostics(createDefaultPrismaClient());
     activePrismaRuntime = defaultPrismaRuntime;
+    initializeConnectionPool("postgres");
 }
 
 async function importGeneratedClient(provider: "mysql" | "sqlite"): Promise<any> {
@@ -233,6 +238,7 @@ async function initDbFromGeneratedClient(provider: "mysql" | "sqlite"): Promise<
     const generated = await createGeneratedPrismaClient(provider);
     _db = withSharedQaSchemaDiagnostics(generated.client);
     activePrismaRuntime = generated.prisma;
+    initializeConnectionPool(provider);
 }
 
 async function createGeneratedPrismaClient(
@@ -437,6 +443,7 @@ export async function initDbPglite(): Promise<void> {
             _provider = "pglite";
             _db = withSharedQaSchemaDiagnostics(prismaClient);
             activePrismaRuntime = defaultPrismaRuntime;
+            initializeConnectionPool("pglite");
             _releasePgliteDirLock = releaseLock;
         } catch (e) {
             if (server) {
@@ -598,11 +605,27 @@ function readDatabaseUrlSearchParam(env: NodeJS.ProcessEnv, key: string): string
     }
 }
 
-/** The effective explicit Prisma pool budget; absence does not imply a guessed pool size. */
-export function resolvePrismaConnectionLimitFromEnv(env: NodeJS.ProcessEnv): number | null {
-    const configured = getDbProviderFromEnv(env, 'postgres') === 'postgres'
-        ? { ...env, DATABASE_URL: applyConfiguredDatabaseConnectionLimit(env.DATABASE_URL ?? '', env) } : env;
-    return parsePositiveInteger(readDatabaseUrlSearchParam(configured, 'connection_limit'));
+function initializeConnectionPool(provider: DbProvider): void {
+    // The URL already includes the provider's effective connection-limit
+    // override. Parse it once for the same lifetime as the native pool.
+    const connectionLimit = parsePositiveInteger(readDatabaseUrlSearchParam(process.env, "connection_limit"));
+    _connectionPool = {
+        connectionLimit,
+        // Keep one explicit PostgreSQL pool slot for Machine validation,
+        // presence and RPC discovery. Unknown or single-slot pools stay
+        // unbounded here; read and write transactions share this admission.
+        transactionAdmission: provider === "postgres" && connectionLimit !== null && connectionLimit > 1
+            ? new AsyncLock(connectionLimit - 1) : undefined,
+    };
+}
+
+/** The initialized pool's explicit budget; absence never implies a guessed size. */
+export function getPrismaConnectionLimit(): number | null {
+    return _connectionPool?.connectionLimit ?? null;
+}
+
+export function getPooledTransactionAdmission(): AsyncLock | undefined {
+    return _connectionPool?.transactionAdmission;
 }
 
 export function resolveSqliteStartupDiagnosticsFromEnv(env: NodeJS.ProcessEnv): SqliteStartupDiagnostics {
@@ -651,6 +674,7 @@ export async function shutdownDbClient(): Promise<void> {
     const client = _db;
     _db = null;
     _provider = null;
+    _connectionPool = null;
     activePrismaRuntime = null;
     if (client) {
         await client.$disconnect();
@@ -664,6 +688,7 @@ export async function shutdownDbPglite(): Promise<void> {
     const client = _db;
     _db = null;
     _provider = null;
+    _connectionPool = null;
     activePrismaRuntime = null;
     if (client) {
         await client.$disconnect();

@@ -4,7 +4,7 @@ import { PrismaClientKnownRequestError, PrismaClientUnknownRequestError } from "
 import { applyEnvValues, restoreEnv, snapshotEnv } from "@/testkit/env";
 import { installDbModuleMock, inTxPostgresControlStatementMock } from "../app/api/testkit/dbMocks";
 import { withWebLatencyTrace } from "@/utils/webLatencyTrace";
-import { prismaRuntime } from "@/storage/prisma";
+import { initDbPostgres, prismaRuntime, shutdownDbClient } from "@/storage/prisma";
 import type { Tx } from "./inTx";
 
 // PostgreSQL command execution is the database boundary, including LOCAL settings.
@@ -32,8 +32,8 @@ vi.mock("@/app/monitoring/metrics/sessionWriteMetrics", () => ({
 // either. Paying the file's first transform inside a case's 20 s test budget
 // is what made the first case time out under host load and leave its still
 // running `inTx` to land an extra `$transaction` call in the next case. The
-// module reads the environment per call (`inTx.ts:115-116`), so one load here,
-// during collection, serves every case.
+// module reads retry settings per call, while Prisma owns the initialized
+// pool's lifetime, so one load here during collection serves every case.
 const inTxModule = await import("./inTx");
 const { inTx, afterTx, transactionResult } = inTxModule;
 
@@ -48,6 +48,50 @@ describe("inTx", () => {
         delayMock.mockClear();
         logMock.mockClear();
         recordDatabaseTransactionRetry.mockClear();
+    });
+
+    it("keeps transaction admission within the initialized pool budget until database reinitialization", async () => {
+        applyEnvValues({
+            HAPPIER_DB_PROVIDER: "postgres",
+            DATABASE_URL: "postgresql://test:test@localhost:5432/test?connection_limit=3",
+            HAPPIER_DB_CONNECTION_LIMIT: "2",
+            HAPPY_DB_CONNECTION_LIMIT: undefined,
+        });
+        initDbPostgres();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let entered!: () => void;
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        const holder = inTx(async () => { entered(); await held; });
+        try {
+            await ready;
+            // The native pool still has two slots. A later environment edit
+            // must not let transactions consume its reserved discovery slot.
+            process.env.HAPPIER_DB_CONNECTION_LIMIT = "5";
+            await expect(inTx(async () => "unexpected admission", { maxWaitMs: 20 }))
+                .rejects.toBeInstanceOf(inTxModule.TransactionAcquisitionUnavailableError);
+        } finally {
+            release();
+            await holder;
+            await shutdownDbClient();
+        }
+
+        process.env.HAPPIER_DB_CONNECTION_LIMIT = "3";
+        initDbPostgres();
+        let releaseReinitialized!: () => void;
+        const heldReinitialized = new Promise<void>(resolve => { releaseReinitialized = resolve; });
+        let reinitializedEntries = 0;
+        const readers = [0, 1].map(() => inTx(async () => {
+            reinitializedEntries++;
+            await heldReinitialized;
+        }));
+        try {
+            await vi.waitFor(() => expect(reinitializedEntries).toBe(2));
+        } finally {
+            releaseReinitialized();
+            await Promise.all(readers);
+            await shutdownDbClient();
+        }
     });
 
     it("resolves an explicit transaction result once before commit and exposes it after commit", async () => {

@@ -4,6 +4,7 @@ import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions
 import { inTxPostgresControlStatementMock } from '@/app/api/testkit/dbMocks';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { registerSessionReadBatchRoute } from './registerSessionReadBatchRoute';
+import { initDbPostgres, shutdownDbClient } from '@/storage/prisma';
 import type { Tx } from '@/storage/inTx';
 
 const pool = vi.hoisted(() => ({ limit: 1, active: 0, peak: 0 }));
@@ -22,7 +23,7 @@ vi.mock('@/storage/db', async () => ({
 }));
 
 describe('Session batch database pool admission', () => {
-    afterEach(() => { vi.unstubAllEnvs(); });
+    afterEach(async () => { await shutdownDbClient(); vi.unstubAllEnvs(); });
 
     it.each([
         { limit: 2, urlLimit: 2, override: undefined },
@@ -32,6 +33,10 @@ describe('Session batch database pool admission', () => {
         vi.stubEnv('DATABASE_URL', `postgresql://fixture:fixture@localhost/fixture?connection_limit=${urlLimit}`);
         vi.stubEnv('HAPPIER_DB_CONNECTION_LIMIT', override ?? '');
         vi.stubEnv('HAPPY_DB_CONNECTION_LIMIT', '');
+        initDbPostgres();
+        // Configuration edits take effect at the next database initialization,
+        // not midway through serving batches from the existing pool.
+        vi.stubEnv('HAPPIER_DB_CONNECTION_LIMIT', '1');
         Object.assign(pool, { limit, active: 0, peak: 0 });
         const sessionIds = Array.from({ length: limit * 4 + 1 }, (_, index) => `missing-${index}`);
         await withAuthenticatedTestApp(registerSessionReadBatchRoute, async app => {
@@ -43,7 +48,7 @@ describe('Session batch database pool admission', () => {
             expect(results.map(result => result.sessionId)).toEqual(sessionIds);
             expect(results.map(result => result.detail?.status)).toEqual(sessionIds.map(() => 404));
             expect(pool.peak).toBeGreaterThan(0);
-            expect(pool.peak).toBeLessThan(limit);
+            expect(pool.peak).toBe(limit - 1);
             expect(pool.active).toBe(0);
         });
     });
