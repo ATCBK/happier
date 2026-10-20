@@ -1186,6 +1186,20 @@ describe('approval field presentation', () => {
       .toMatchObject({ path: 'machineId', reason: 'missing_required_context' });
   });
 
+  it.each(['sessions.external.link.ensure', 'sessions.external.transcript.page', 'sessions.external.transcript.readAfter'] as const)(
+    'reviews the canonical Agent identity after external-session ingress normalization: %s', actionId => {
+      for (const identity of [{ agentId: 'codex' }, { providerId: 'codex' }]) {
+        const actionArgs = getActionSpec(actionId).inputSchema.parse({
+          ...identity, machineId: 'machine', remoteSessionId: 'native-session', source: { kind: 'codexHome', home: 'user' },
+          ...(actionId === 'sessions.external.transcript.page' ? { direction: 'older' } : {}),
+          ...(actionId === 'sessions.external.transcript.readAfter' ? { cursor: 'native-cursor' } : {}),
+        });
+        const presentation = describeApprovalActionFields({ actionId, actionArgs });
+        expect(presentation.unrepresentable).toBeNull();
+        expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'agentId', value: 'codex' }));
+      }
+    });
+
   it('reads an encoded file in a visual by its size, never by its bytes', () => {
     const contentBase64 = Buffer.from('<main>Build health</main>'.repeat(60)).toString('base64');
     const item = { v: 1, title: 'Build health', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },

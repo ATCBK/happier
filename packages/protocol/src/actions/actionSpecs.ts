@@ -12940,7 +12940,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       title: 'Ensure external session link',
       fields: [
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'providerId', title: 'Provider id', widget: 'text', required: true },
+        { path: 'agentId', title: 'Agent id', widget: 'text', required: true },
         { path: 'remoteSessionId', title: 'Remote session id', widget: 'text', required: true },
         { path: 'source', title: 'External source', widget: 'textarea', required: true },
         { path: 'titleHint', title: 'Title hint', widget: 'text' },
@@ -13132,7 +13132,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       title: 'Page external session transcript',
       fields: [
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'providerId', title: 'Provider id', widget: 'text', required: true },
+        { path: 'agentId', title: 'Agent id', widget: 'text', required: true },
         { path: 'remoteSessionId', title: 'Remote session id', widget: 'text', required: true },
         { path: 'source', title: 'External source', widget: 'textarea', required: true },
         { path: 'direction', title: 'Direction', widget: 'select', required: true, options: [
@@ -13178,7 +13178,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       title: 'Read external session transcript after cursor',
       fields: [
         { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-        { path: 'providerId', title: 'Provider id', widget: 'text', required: true },
+        { path: 'agentId', title: 'Agent id', widget: 'text', required: true },
         { path: 'remoteSessionId', title: 'Remote session id', widget: 'text', required: true },
         { path: 'source', title: 'External source', widget: 'textarea', required: true },
         { path: 'cursor', title: 'Cursor', widget: 'text', required: true },
