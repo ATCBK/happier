@@ -93,12 +93,12 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
         runHappierText: async args => args[1] !== phase
           ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
           : { status: 1, stdout: JSON.stringify({ v: 1, ok: false, kind: `auth_${phase}`,
-            error: { code: 'ERR_BAD_REQUEST', category: 'http_error', status: 409, token: 'private-token', message: 'private-message' } }),
+            error: { code: 'ERR_BAD_REQUEST', category: 'http_error', status: 409, serverCode: 'database_transaction_conflict_exhausted', token: 'private-token', message: 'private-message' } }),
             stderr: 'private-stderr' } },
       approvePairingRequest: async () => {}, timeoutMs: 5_000,
     }).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: 'remote_command_failed',
-      message: `Remote Home enrollment failed during auth ${phase} (exit 1; code ERR_BAD_REQUEST; category http_error; HTTP 409).` });
+      message: `Remote Home enrollment failed during auth ${phase} (exit 1; code ERR_BAD_REQUEST; category http_error; HTTP 409; server code database_transaction_conflict_exhausted).` });
     expect(JSON.stringify(failure)).not.toMatch(/private-token|private-message|private-stderr/);
   });
 
@@ -172,12 +172,13 @@ describe('runRemoteHomeEnrollmentRecipe', () => {
         runHappierText: async args => args[1] === 'request'
           ? { status: 0, stdout: JSON.stringify(request), stderr: '' }
           : { status: 1, stdout: JSON.stringify({ v: 1, ok: false, kind: 'auth_wait',
-            error: { code: 'AUTH_FUTURE_POST_CLAIM_FAILURE', message: 'private-message' } }), stderr: '' } },
+            error: { code: 'AUTH_FUTURE_POST_CLAIM_FAILURE', serverCode: 'PRIVATE_TOKEN', message: 'private-message' } }), stderr: '' } },
       approvePairingRequest: async () => {}, timeoutMs: 5_000,
     }).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: 'remote_command_failed',
       message: 'Remote Home enrollment failed during auth wait (exit 1; code AUTH_FUTURE_POST_CLAIM_FAILURE).' });
     expect(String(failure)).not.toContain('private-message');
+    expect(String(failure)).not.toContain('PRIVATE_TOKEN');
   });
 
   it('requires a remote CLI update for released ordinary auth request stdout without disclosing it', async () => {

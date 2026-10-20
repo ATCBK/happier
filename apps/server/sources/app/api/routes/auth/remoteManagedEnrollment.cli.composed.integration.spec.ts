@@ -47,7 +47,7 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
         app.addHook('onRequest', async (request, reply) => {
             if ((registrationUnavailable || registrationUnavailableOnce) && request.method === 'POST' && request.url === '/v1/machines') {
                 registrationUnavailableOnce = false;
-                return reply.code(503).send({ error: 'unavailable' });
+                return reply.code(503).send({ error: 'database_transaction_conflict_exhausted', message: 'private-registration-response', token: 'private-registration-token' });
             }
             if (accountModeUnavailableOnce && successfulClaims === 2 && request.url === '/v1/account/encryption') {
                 accountModeUnavailableOnce = false;
@@ -211,6 +211,8 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
                 expect(requests).toContainEqual({ path: '/v1/auth/request/claim', status: 200 });
                 expect(requests).toContainEqual({ path: '/v1/machines', status: 503 });
                 expect(outcome.operation.error.error).toContain('code AUTH_WAIT_HOME_UNAVAILABLE; category http_error; HTTP 503');
+                expect(outcome.operation.error.error).toContain('server code database_transaction_conflict_exhausted');
+                expect(JSON.stringify(outcome)).not.toMatch(/private-registration-response|private-registration-token/);
                 expect(outcome.operation.error.error).not.toMatch(/diagnostic invalid|AUTH_WAIT_PROCESS_FAILED/);
             }
             if (admission === 'registration-transient' || admission === 'registration-transient-e2ee') {

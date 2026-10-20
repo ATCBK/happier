@@ -7,6 +7,7 @@ import { SystemTaskExecutionError } from '../runSystemTask.js';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 export type RemoteHomeEnrollmentPairingRequest = Readonly<{
   publicKey: string;
@@ -286,6 +287,8 @@ export async function runRemoteHomeEnrollmentRecipe(params: Readonly<{
         if (typeof diagnostic?.status === 'number' && Number.isInteger(diagnostic.status) && diagnostic.status >= 100 && diagnostic.status <= 599) {
           fields.push(`HTTP ${diagnostic.status}`);
         }
+        const serverCode = readUnexpectedActionErrorDiagnosticV1({ code: diagnostic?.serverCode }).errorCode;
+        if (serverCode !== null) fields.push(`server code ${serverCode}`);
         throw new SystemTaskExecutionError('remote_command_failed', `Remote Home enrollment failed during auth ${args[1]} (${fields.join('; ')}).`);
       }
       return response;

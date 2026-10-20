@@ -1,10 +1,12 @@
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type SafeAuthErrorDiagnostic = Readonly<{
   name: string;
   message: string;
   code?: string | number;
   status?: number;
+  serverCode?: string;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,10 +40,12 @@ export function projectSafeAuthError(error: unknown): SafeAuthErrorDiagnostic {
     : code !== undefined ? String(code) : 'Unknown error';
   const status = readSafeHttpStatus(errorRecord?.status)
     ?? readSafeHttpStatus(responseRecord?.status);
+  const serverCode = readUnexpectedActionErrorDiagnosticV1({ response: responseRecord }).errorCode;
   return {
     name: redactBugReportSensitiveText(name),
     message: redactBugReportSensitiveText(message),
     ...(code !== undefined ? { code } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(serverCode !== null ? { serverCode } : {}),
   };
 }

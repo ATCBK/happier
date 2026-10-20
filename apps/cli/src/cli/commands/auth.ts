@@ -94,6 +94,7 @@ export async function handleAuthCliCommand(context: CommandContext): Promise<voi
           : diagnostic.code ?? (phase === 'wait' ? 'AUTH_WAIT_FAILED' : 'AUTH_REQUEST_FAILED'),
         category: diagnostic.status !== undefined ? 'http_error' : 'auth_error',
         ...(diagnostic.status !== undefined ? { status: diagnostic.status } : {}),
+        ...(diagnostic.serverCode !== undefined ? { serverCode: diagnostic.serverCode } : {}),
       } });
       process.exit(exitCode);
     }

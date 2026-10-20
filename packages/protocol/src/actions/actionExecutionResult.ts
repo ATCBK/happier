@@ -121,6 +121,7 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
         'SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_IOERR', 'SQLITE_FULL', 'SQLITE_CONSTRAINT', 'SQLITE_ERROR',
         'SQLITE_CANTOPEN', 'SQLITE_CORRUPT',
         'session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required',
+        'database_transaction_conflict_exhausted', 'database_connection_unavailable',
       ].includes(code))) errorCode = code;
       // JSON-RPC reserves these protocol/server codes. Preserve only that
       // bounded vocabulary, never native application data or message text.
@@ -128,6 +129,13 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
         && ([-32700, -32600, -32601, -32602, -32603].includes(code)
           || (code >= -32099 && code <= -32000))) errorCode = String(code);
       const response = 'response' in error ? error.response : undefined;
+      // Only the Home's known availability vocabulary may cross from an HTTP
+      // body. An arbitrary server error/code can itself contain private data.
+      const data = response && typeof response === 'object' && 'data' in response ? response.data : undefined;
+      if (errorCode === null && data && typeof data === 'object') {
+        const serverCode = 'error' in data ? data.error : 'code' in data ? data.code : undefined;
+        if (serverCode === 'database_transaction_conflict_exhausted' || serverCode === 'database_connection_unavailable') errorCode = serverCode;
+      }
       const status = response && typeof response === 'object' && 'status' in response ? response.status
         : 'status' in error ? error.status : undefined;
       if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) httpStatus = status;
