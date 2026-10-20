@@ -1789,15 +1789,24 @@ describe('managed acquisition durable custody', () => {
             cancellation: 'supported', domainRef: { kind: 'managedMachine', id: retained.id },
         } });
     });
-    it('projects actual guest setup progress through the same operation and retained SystemTask on failure', async () => {
+    it.each(['exception', 'timeout', 'signal', 'failed', 'truncated', 'configured'] as const)('projects guest setup progress and safe native completion cause (%s)', async failure => {
         const nativeHomeId = 'srv_managed_progress';
         const nativeInput = { ...input, selection: { ...input.selection, homeId: nativeHomeId } };
         const nativeCalls: string[] = [];
-        const native = nativeFixture({ privateNative: true, onNativeRole: (role) => {
+        const native = nativeFixture({ privateNative: true,
+            nativeRoleResults: { exec: failure === 'configured' ? { kind: 'process-configured' } : {
+                termination: { requestedBy: { kind: failure === 'timeout' ? 'timeout' : 'none' },
+                    observed: failure === 'signal' ? { kind: 'signal', signal: 'PRIVATE_SIGNAL' }
+                        : failure === 'failed' ? { kind: 'failed', diagnostic: { code: 'PRIVATE_NATIVE_CODE', severity: 'error', message: 'PRIVATE_NATIVE_MESSAGE' } }
+                        : { kind: 'exit', exitCode: 143 } },
+                stdoutBase64: Buffer.from('PRIVATE_NATIVE_STDOUT').toString('base64'),
+                stderrBase64: Buffer.from('PRIVATE_NATIVE_STDERR').toString('base64'),
+                stdoutTruncated: failure === 'truncated', stderrTruncated: false,
+            } }, onNativeRole: (role) => {
             nativeCalls.push(role);
             // The guest process boundary is unavailable after the real
             // installer task emits its first observed setup step.
-            if (role === 'exec') throw new Error('Guest process unavailable');
+            if (role === 'exec' && failure === 'exception') throw new Error('Guest process unavailable');
         } });
         const retained = ManagedMachineV1Schema.parse({ ...machine, homeId: nativeHomeId, allocation: 'bound', resource: {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
@@ -1826,10 +1835,18 @@ describe('managed acquisition durable custody', () => {
         if (result.kind !== 'found' || result.operation.domainRef?.kind !== 'managedMachine'
             || !result.operation.domainRef.bootstrapTask) throw new Error('Setup task was not retained by the managed operation');
         const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
-        expect(await getLiveSystemTasksRunnerAdapter().poll({ taskId: result.operation.domainRef.bootstrapTask.id, cursor: 0 })).toMatchObject({
+        const task = await getLiveSystemTasksRunnerAdapter().poll({ taskId: result.operation.domainRef.bootstrapTask.id, cursor: 0 });
+        expect(task).toMatchObject({
             events: expect.arrayContaining([expect.objectContaining({ type: 'progress', stepId: 'ssh.installCli' })]),
             result: { ok: false },
         });
+        if (failure !== 'exception') {
+            const fact = failure === 'configured' ? 'process configured without completion'
+                : failure === 'timeout' ? 'requested timeout' : failure === 'truncated' ? 'stdout truncated true' : `observed ${failure}`;
+            expect(result.operation.error).toMatchObject({ errorCode: 'provider_unavailable', error: expect.stringContaining(fact) });
+            expect(task).toMatchObject({ result: { error: { code: 'provider_unavailable', message: expect.stringContaining(fact) } } });
+            expect(JSON.stringify({ result, task })).not.toMatch(/PRIVATE_NATIVE_|PRIVATE_SIGNAL/);
+        }
         expect(nativeCalls).toEqual(['bootstrap', 'exec']);
         expect(retained).toMatchObject({ allocation: 'bound', resource: { value: {} } });
     });

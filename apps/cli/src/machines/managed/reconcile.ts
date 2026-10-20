@@ -1,5 +1,7 @@
 import { generateKeyPair, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { SystemTaskExecutionError } from '@happier-dev/cli-common/systemTasks/nativeRemoteSshBootstrap';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import tweetnacl from 'tweetnacl';
 import { SharedSavedSecretCreateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -524,12 +526,26 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
                 ...(request.processConfig ? { processConfig: request.processConfig } : {}),
             }, request));
             if ('kind' in result) {
-                if (!request.processConfig) throw new ManagedMachineControllerError('provider_unavailable');
+                if (!request.processConfig) throw new SystemTaskExecutionError('provider_unavailable',
+                    'Native guest command failed (process configured without completion).');
                 return { status: 0, stdout: '', stderr: '' };
             }
             if (request.processConfig) throw new ManagedMachineControllerError('native_boot_unconfirmed');
             if (result.termination.requestedBy.kind !== 'none' || result.termination.observed.kind !== 'exit'
-                || result.stdoutTruncated || result.stderrTruncated) throw new ManagedMachineControllerError('provider_unavailable');
+                || result.stdoutTruncated || result.stderrTruncated) {
+                // The strict native result owns these enum/boolean/integer facts.
+                // Never decode rejected output or copy native diagnostic text.
+                const { requestedBy, observed } = result.termination;
+                const facts = [`requested ${requestedBy.kind}`, `observed ${observed.kind}`,
+                    ...(observed.kind === 'exit' ? [`exit ${observed.exitCode}`] : []),
+                    `stdout truncated ${result.stdoutTruncated}`, `stderr truncated ${result.stderrTruncated}`];
+                if (requestedBy.kind === 'dispose' && requestedBy.reason) facts.push(`dispose reason ${requestedBy.reason}`);
+                if (observed.kind === 'failed') {
+                    const code = readUnexpectedActionErrorDiagnosticV1({ code: observed.diagnostic.code }).errorCode;
+                    if (code !== null) facts.push(`code ${code}`);
+                }
+                throw new SystemTaskExecutionError('provider_unavailable', `Native guest command failed (${facts.join('; ')}).`);
+            }
             return { status: result.termination.observed.exitCode, stdout: Buffer.from(result.stdoutBase64, 'base64').toString('utf8'), stderr: Buffer.from(result.stderrBase64, 'base64').toString('utf8') };
         },
         putFile: async (request) => {
