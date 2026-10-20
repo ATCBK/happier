@@ -521,6 +521,7 @@ export const RPC_METHODS = {
   SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS: 'scm.hostingRepository.describePublishTargets',
   SCM_HOSTING_REPOSITORY_PUBLISH: 'scm.hostingRepository.publish',
   SCM_DIFF_SUMMARY_GENERATE: 'scm.diffSummary.generate',
+  SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST: 'scm.diffSummary.draftPullRequest',
   SCM_DIFF_SUMMARY_CAPTURE: 'scm.diffSummary.capture',
   SCM_DIFF_SUMMARY_RESULT_READ: 'scm.diffSummary.result.read',
   SCM_DIFF_SUMMARY_RESULT_EDIT: 'scm.diffSummary.result.edit',

@@ -793,6 +793,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'scm.diffSummary.result.clear',
     'scm.diffSummary.capture',
     'scm.diffSummary.generate',
+    'scm.diffSummary.draftPullRequest',
     'scm.diffSummary.result.read',
     'scm.diffSummary.result.edit',
     'scm.diffSummary.result.undo',

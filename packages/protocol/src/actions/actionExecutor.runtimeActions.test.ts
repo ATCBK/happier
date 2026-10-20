@@ -43,6 +43,14 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (runtime-unification actions)', () => {
+  it('routes PR description drafting through the SCM Action family', async () => {
+    const input = { cwd: '/repo', source: { kind: 'workingTree' } };
+    const scmActionExecute = vi.fn(async () => ({ success: true, runId: 'draft-run' }));
+    const executor = createActionExecutor(createDeps({ scmActionExecute }));
+    expect(await executor.execute('scm.diffSummary.draftPullRequest', input,
+      { surface: 'cli', defaultSessionId: 'session' })).toMatchObject({ ok: true, result: { success: true, runId: 'draft-run' } });
+    expect(scmActionExecute).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'scm.diffSummary.draftPullRequest', input }));
+  });
   it('retains an exchange occurrence revision instead of preparing a fresh grant on replay', async () => {
     let currentRevision = 'session-message-row-revision:v1:0';
     const prepare = vi.fn(async () => currentRevision);

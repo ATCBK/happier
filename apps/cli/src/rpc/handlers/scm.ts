@@ -163,7 +163,7 @@ export function registerScmHandlers(
     };
     registerActionSpecRpcHandlers({
         rpcHandlerManager: scmRpcHandlerManager,
-        actionIds: ['scm.diffSummary.capture', 'scm.diffSummary.generate',
+        actionIds: ['scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest',
             'scm.diffSummary.result.list', 'scm.diffSummary.result.clear',
             'scm.diffSummary.result.read', 'scm.diffSummary.result.edit',
             'scm.diffSummary.result.undo', 'scm.diffSummary.result.delete',
