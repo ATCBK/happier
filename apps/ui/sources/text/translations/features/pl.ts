@@ -9603,6 +9603,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: 'Nie wybrano zdarzeń',
         followersSessions: ({ count }: { count: number }) => count === 1 ? '1 sesja' : `${count} sesje`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'obserwuje ją' : 'obserwuje ją'}`,
+        followingRules: ({ count }: { count: number }) => count === 1 ? '1 reguła' : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) ? `${count} reguły` : `${count} reguł`,
+        follows: ({ facts }: { facts: string }) => `Obserwuje: ${facts}`,
         justYouBody: ({ home }) => `Udostępnij ją osobom w ${home}. Mogą ją śledzić, rozmawiać o niej tutaj i przejąć pracę, gdy Cię nie ma.`,
         share: 'Udostępnij',
         justYouNote: 'Albo utwórz link publiczny, który każdy może zobaczyć.',

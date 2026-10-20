@@ -76,6 +76,8 @@ export const en = {
     followersEffectiveOff: 'No events selected',
     followersSessions: ({ count }: { count: number }) => count === 1 ? '1 session' : `${count} sessions`,
     followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'follows it' : 'follow it'}`,
+    followingRules: ({ count }: { count: number }) => count === 1 ? '1 rule' : `${count} rules`,
+    follows: ({ facts }: { facts: string }) => `Follows ${facts}`,
     justYouBody: ({ home }: { home: string }) => `Share it with people on ${home}. They can follow along, talk it through here, and take over while you’re away.`,
     share: 'Share',
     justYouNote: 'Or create a public link anyone can view.',

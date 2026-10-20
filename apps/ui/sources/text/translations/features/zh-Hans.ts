@@ -9573,6 +9573,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: '未选择任何事件',
         followersSessions: ({ count }: { count: number }) => `${count} 个会话`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? '在关注' : '在关注'}`,
+        followingRules: ({ count }: { count: number }) => `${count} 条规则`,
+        follows: ({ facts }: { facts: string }) => `关注 ${facts}`,
         justYouBody: ({ home }) => `与 ${home} 上的人共享。他们可以关注进展、在这里讨论,并在你离开时接手。`,
         share: '共享',
         justYouNote: '或创建任何人都能查看的公开链接。',

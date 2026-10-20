@@ -9590,6 +9590,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: 'Aucun événement sélectionné',
         followersSessions: ({ count }: { count: number }) => count === 1 ? '1 session' : `${count} sessions`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'la suit' : 'la suivent'}`,
+        followingRules: ({ count }: { count: number }) => count === 1 ? '1 règle' : `${count} règles`,
+        follows: ({ facts }: { facts: string }) => `Suit ${facts}`,
         justYouBody: ({ home }) => `Partage-la avec des personnes de ${home}. Elles pourront la suivre, en discuter ici et prendre le relais en ton absence.`,
         share: 'Partager',
         justYouNote: 'Ou crée un lien public que tout le monde peut voir.',

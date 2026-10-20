@@ -9578,6 +9578,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: 'イベント未選択',
         followersSessions: ({ count }: { count: number }) => `${count} セッション`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'がフォロー中' : 'がフォロー中'}`,
+        followingRules: ({ count }: { count: number }) => `${count} 件のルール`,
+        follows: ({ facts }: { facts: string }) => `フォロー中: ${facts}`,
         justYouBody: ({ home }) => `${home}のメンバーと共有しましょう。見守ったり、ここで話し合ったり、あなたが不在の間に引き継いだりできます。`,
         share: '共有',
         justYouNote: '誰でも閲覧できる公開リンクを作成することもできます。',

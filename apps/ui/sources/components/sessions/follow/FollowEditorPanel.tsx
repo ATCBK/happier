@@ -37,6 +37,9 @@ export function FollowEditorPanel(
       anchorRef={props.anchorRef}
       placement="bottom"
       maxWidthCap={FOLLOW_PANEL_WIDTH_PX}
+      // The window bounds the panel, not a side pane it opens from: a pane-sized panel cramps the four
+      // levels into ellipses ("Everyt… | Impor…"); like the filter panel, it floats over the transcript.
+      boundaryRef={null}
       autoFocusOnOpen
       // Clear of the window's edges, so the panel reads as floating even when it fills the room.
       edgePadding={FOLLOW_PANEL_EDGE_PADDING}

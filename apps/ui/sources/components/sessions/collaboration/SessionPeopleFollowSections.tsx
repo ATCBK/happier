@@ -17,10 +17,12 @@ import { useIsTablet } from '@/utils/platform/responsive';
 import { useAccountSessionFollowController } from '@/components/sessions/follow/useAccountSessionFollowController';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 import { useSessionFollowers } from '@/components/sessions/follow/useSessionFollowers';
+import { useSessionFollowing } from '@/components/sessions/follow/useSessionFollowing';
 import { describeSessionFollowLevel } from '@/components/sessions/follow/sessionFollowLevelCopy';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { PaneSectionHeader } from '@/components/ui/lists/PaneSectionHeader';
 import { Item } from '@/components/ui/lists/Item';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -143,7 +145,8 @@ export function projectSessionFollowerCensus(projection: Readonly<{
  *
  * Followers: your own level (the Follow editor's one controller), the sessions that follow it from
  * the authoritative reverse read (`useSessionFollowers`), and how many other people do — never who,
- * and never their levels. The pane header says it in one line ("3 people · 2 sessions follow it").
+ * and never their levels. The pane header says both in one line (lab P1-CP: "Follows 2 rules · 1 session",
+ * then "3 people · 2 sessions follow it"), from the same Following census the list below renders.
  */
 export const SessionPeopleFollowSections = React.memo(function SessionPeopleFollowSections(props: Readonly<{
     target: SessionAddress;
@@ -155,20 +158,36 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
     const followers = useSessionFollowers(props.target, followEditor.enabled);
     const census = React.useMemo(() => projectSessionFollowerCensus(followers.projection), [followers.projection]);
     const { sessions, peopleCount, otherPeople } = census;
+    const followingEnabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: props.target.serverId });
+    const following = useSessionFollowing(props.target, followingEnabled);
     const machineId = props.session ? (readSessionOwnerMetadataView(props.session)?.machineId ?? null) : null;
     // Following reads this session's own relations by its identity: it stays whole while the session's snapshot loads.
     const destination = React.useMemo(() => ({ id: props.target.sessionId }), [props.target.sessionId]);
 
+    const followingProjection = following.projection;
     const headerLine = React.useMemo(() => {
+        // What it follows: its rules, then the Sessions it follows by name (other source kinds stay in the list).
+        const ruleCount = followingProjection?.rules.length ?? 0;
+        const followedSessions = followingProjection?.sources.filter((source) => 'sourceSessionId' in source).length ?? 0;
+        const follows = joinHappierFacts(
+            ruleCount > 0 ? t('session.collaboration.pane.followingRules', { count: ruleCount }) : null,
+            followedSessions > 0 ? t('session.collaboration.pane.followersSessions', { count: followedSessions }) : null,
+        );
         const sessionCount = sessions?.length ?? 0;
         const people = peopleCount ?? 0;
-        if (!sessions || sessionCount + people === 0) return null;
-        const facts = joinHappierFacts(
-            people > 0 ? t('session.collaboration.pane.followersPeople', { count: people }) : null,
-            sessionCount > 0 ? t('session.collaboration.pane.followersSessions', { count: sessionCount }) : null,
-        );
-        return { segments: [t('session.collaboration.pane.followedBy', { facts, count: sessionCount + people })] };
-    }, [peopleCount, sessions]);
+        const followedBy = sessions && sessionCount + people > 0
+            ? t('session.collaboration.pane.followedBy', {
+                facts: joinHappierFacts(
+                    people > 0 ? t('session.collaboration.pane.followersPeople', { count: people }) : null,
+                    sessionCount > 0 ? t('session.collaboration.pane.followersSessions', { count: sessionCount }) : null,
+                ),
+                count: sessionCount + people,
+            })
+            : null;
+        const segments = [follows ? t('session.collaboration.pane.follows', { facts: follows }) : null, followedBy]
+            .filter((segment): segment is string => segment !== null);
+        return segments.length > 0 ? { segments } : null;
+    }, [followingProjection, peopleCount, sessions]);
     usePaneHeaderSlotContent(React.useMemo(() => ({ line: headerLine }), [headerLine]));
 
     return (
@@ -191,7 +210,7 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
             {followEditor.editor}
             <View ref={props.followingAnchorRef} tabIndex={-1} collapsable={false} testID="session-people-following">
                 <SessionFollowSourcesEditor destination={destination} serverId={props.target.serverId}
-                    destinationMachineId={machineId} />
+                    destinationMachineId={machineId} following={following} />
             </View>
         </>
     );

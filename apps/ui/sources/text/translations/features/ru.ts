@@ -9614,6 +9614,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: 'События не выбраны',
         followersSessions: ({ count }: { count: number }) => count === 1 ? '1 сессия' : `${count} сесс.`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'следит за ней' : 'следят за ней'}`,
+        followingRules: ({ count }: { count: number }) => (count % 10 === 1 && count % 100 !== 11) ? `${count} правило` : (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)) ? `${count} правила` : `${count} правил`,
+        follows: ({ facts }: { facts: string }) => `Следит за: ${facts}`,
         justYouBody: ({ home }) => `Поделитесь ею с людьми в ${home}. Они смогут следить за ней, обсуждать её здесь и продолжить, пока вас нет.`,
         share: 'Поделиться',
         justYouNote: 'Или создайте публичную ссылку, которую может открыть любой.',

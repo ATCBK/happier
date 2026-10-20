@@ -9573,6 +9573,8 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         followersEffectiveOff: '未選取任何事件',
         followersSessions: ({ count }: { count: number }) => `${count} 個工作階段`,
         followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? '在關注' : '在關注'}`,
+        followingRules: ({ count }: { count: number }) => `${count} 條規則`,
+        follows: ({ facts }: { facts: string }) => `關注 ${facts}`,
         justYouBody: ({ home }) => `與 ${home} 上的人分享。他們可以關注進度、在這裡討論,並在你離開時接手。`,
         share: '分享',
         justYouNote: '或建立任何人都能檢視的公開連結。',
