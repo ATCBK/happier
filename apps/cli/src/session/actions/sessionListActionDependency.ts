@@ -54,7 +54,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
       return unsupportedSessionListQueryArmsResult(['underSessionId']);
     }
     if (
-      input.context.serverId !== undefined
+      input.context.serverId != null
       && !await isServerProfileHomeIdentity(params.serverId, input.context.serverId)
     ) {
       return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };

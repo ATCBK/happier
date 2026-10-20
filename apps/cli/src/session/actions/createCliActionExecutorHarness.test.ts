@@ -104,6 +104,7 @@ describe('createCliActionExecutorHarness', () => {
     const client = new Client({ name: 'agent', version: '1' });
     registerHappierMcpBuiltInTools(server, { sessionId: 'pdf-agent', surface: 'agent', deps: {
       ...bridge, changeTitle: async () => { throw new Error('Unexpected title change'); },
+      resolveActionOptions: args => bridge.resolveActionOptions(args, 'pdf-agent'),
     } });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     let pending: ReturnType<typeof client.callTool> | undefined;
@@ -120,7 +121,7 @@ describe('createCliActionExecutorHarness', () => {
       }));
       // A different process writes the durable decision: do not use the local
       // harness update wrapper, which would hide a broken Account wake binding.
-      request = ApprovalRequestV2Schema.parse({ ...request, status: 'rejected', updatedAtMs: 2,
+      request = ApprovalRequestV2Schema.parse({ ...ApprovalRequestV2Schema.parse(request), status: 'rejected', updatedAtMs: 2,
         decision: { kind: 'reject', decidedAtMs: 2 } });
       for (const socket of wire.sockets) {
         if (wake === 'update') socket.update({ t: 'account-change' });

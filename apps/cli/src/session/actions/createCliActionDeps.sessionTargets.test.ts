@@ -13,6 +13,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { getSessionStatus } from '@/session/services/getSessionStatus';
@@ -117,7 +118,9 @@ describe('CLI Session target composition', () => {
     const secret = requester?.secret;
     const encryption = secret ? { type: 'legacy' as const, secret } : null;
     const credentials = { token: 'token', encryption };
-    const mode = secret ? 'e2ee' as const : 'plain' as const;
+    const material = secret ? { mode: 'e2ee' as const, ctx: { encryptionKey: secret, encryptionVariant: 'legacy' as const } }
+      : { mode: 'plain' as const, ctx: null };
+    const mode = material.mode;
     const ownerMetadata = { v: 1 as const, workspace: { path: '/repo', host: 'host', machineId: 'machine-selected' } };
     const session = createSessionRecordFixture({ id: sessionId, encryptionMode: mode, metadataLayoutVersion: 1,
       share: null, dataEncryptionKey: null, metadata: secret
@@ -144,7 +147,7 @@ describe('CLI Session target composition', () => {
       throw new Error(`Unexpected Home read: ${url}`);
     });
     const deps = createCliActionDeps({ token: 'token', credentials,
-      sessionId, mode, ctx: secret ? { encryptionKey: secret, encryptionVariant: 'legacy' } : null, serverId: 'srv_target_home', serverIdentityId: 'srv_target_home',
+      sessionId, ...material, serverId: 'srv_target_home', serverIdentityId: 'srv_target_home',
       serverHttpBaseUrl: home,
       ...(requester ? { externalActionMachineRequestPrivateKey: requester.privateKey,
         externalActionMachineInstallationId: requester.installationId } : {}),
@@ -241,10 +244,11 @@ describe('CLI Session target composition', () => {
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
       expect(String(url)).toBe(`${home}/v2/sessions/query`);
       expect(body).toMatchObject({ underSessionId: sessionId, includeInactive: true, scope: 'all_accessible' });
-      if (body.storage === 'archived') return { status: 200, data: SessionListQueryResponseV1Schema.parse({
+      const query = SessionListQueryV1Schema.parse(body);
+      if (query.storage === 'archived') return { status: 200, data: SessionListQueryResponseV1Schema.parse({
         sessions: [archivedChild], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
       }) };
-      const next = body.cursor === cursor;
+      const next = query.cursor === cursor;
       return { status: 200, data: SessionListQueryResponseV1Schema.parse({ sessions: [next ? grandchild : child],
         nextCursor: next ? null : cursor, hasNext: !next, attentionNextCursor: null, attentionHasNext: false }) };
     });
@@ -289,8 +293,9 @@ describe('CLI Session target composition', () => {
       vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
         expect(String(url)).toBe(`${home}/v2/sessions/query`);
         expect(body).toMatchObject({ underSessionId: sessionId, includeInactive: true, scope: 'all_accessible' });
-        const attention = body.attentionCursor === attentionCursor;
-        const next = body.cursor === cursor;
+        const query = SessionListQueryV1Schema.parse(body);
+        const attention = query.attentionCursor === attentionCursor;
+        const next = query.cursor === cursor;
         return { status: 200, data: SessionListQueryResponseV1Schema.parse({
           sessions: [rows[attention ? 2 : next ? 1 : 0]],
           nextCursor: attention || next && coverage !== 'repeated_cursor' ? null : cursor,

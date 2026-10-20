@@ -124,4 +124,17 @@ describe('session.list Action dependency for a current-Session principal', () =>
     expect(fetchSessionsPage).not.toHaveBeenCalled();
     expect(fetchSessionsQueryPage).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, null])('uses the admitted Home when the optional context Home is %s', async serverId => {
+    fetchSessionById.mockResolvedValue(createSessionRecordFixture({
+      id: 'runner-session', encryptionMode: 'plain', metadata: '{}', active: true, activeAt: 1,
+    }));
+    const { createRestrictedCurrentSessionListActionDependency } = await import('./sessionListActionDependency');
+    const sessionList = createRestrictedCurrentSessionListActionDependency({
+      credentials, sessionId: 'runner-session', serverId: 'home-a',
+      serverHttpBaseUrl: 'https://home-a.example.test', material: { mode: 'plain' },
+    });
+    await expect(sessionList({ context: { ...currentSessionContext, serverId }, query: allAccessibleQuery }))
+      .resolves.toMatchObject({ sessions: [{ id: 'runner-session' }], queryVersion: 1 });
+  });
 });

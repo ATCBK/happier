@@ -2849,6 +2849,7 @@ describe('createCliActionExecutor', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
+      details: { issues: [{ code: 'unrecognized_keys', path: [] }] },
     });
     expect(spawnMachineSession).not.toHaveBeenCalled();
   });

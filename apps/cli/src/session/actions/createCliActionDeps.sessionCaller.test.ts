@@ -78,14 +78,14 @@ function callerSessionFixture(callerDirectory = '/caller/repo', currentStarterDe
       }
       return { status: 404, data: {} };
     });
-      const params: Parameters<typeof createCliActionDeps>[0] = {
+      const params = {
         token: credentials.token, credentials,
         sessionId: 'cli-global', mode: 'plain', ctx: null,
         rawSession: { path: '/wrong/repo', machineId: 'wrong-machine', workDepth: 0 },
         getCurrentSessionBackendTarget: () => ({ kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }),
         readRoleSources: createRoleSourceReaderV1({}),
         actionsSettingsProvider: createActionSettingsProvider({ scopeKey }),
-      };
+      } satisfies Parameters<typeof createCliActionDeps>[0];
       return { sessionId, params, metadata, settings, get, cleanup: () => {
         get.mockRestore(); resetActiveAccountSettingsSnapshotForTests();
       } };
@@ -147,7 +147,7 @@ describe('daemon Account Action Session caller context', () => {
     } });
     const readSession = fixture.get.getMockImplementation()!;
     const verifyRead = (path: string, options?: Parameters<typeof axios.get>[1]) => {
-        const headers = AxiosHeaders.from(options?.headers);
+        const headers = AxiosHeaders.from(Object.fromEntries(Object.entries(options?.headers ?? {}).filter(([, value]) => value !== undefined)));
         const target = decodeExternalActionResolvedTargetV1(String(headers.get(EXTERNAL_ACTION_RESOLVED_TARGET_HEADER) ?? ''));
         expect(headers.get(EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER)).toBe(authorization.token);
         expect(headers.get(EXTERNAL_ACTION_EFFECT_ACTION_HEADER)).toBe('session.open');
@@ -204,7 +204,7 @@ describe('daemon Account Action Session caller context', () => {
       },
     }));
     try {
-      const deps = createCliActionDeps({ ...fixture.params, serverId: configuration.activeServerId,
+      const deps = createCliActionDeps({ ...fixture.params, serverId: configuration.activeServerId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
         serverIdentityId: 'resume-home', externalActionMachineRequestPrivateKey: keys.secretKey,
         externalActionMachineInstallationId: 'resume-installed' });
       const result = await deps.sessionOpen?.({ sessionId: fixture.sessionId, serverId: configuration.activeServerId,
@@ -225,7 +225,7 @@ describe('daemon Account Action Session caller context', () => {
         runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, claudeSessionId: 'provider-session-one' }),
     });
     const issued: unknown[] = [];
-    const deps = createCliActionDeps({ ...fixture.params, serverId: configuration.activeServerId,
+    const deps = createCliActionDeps({ ...fixture.params, serverId: configuration.activeServerId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
       machineActionDirectTargetTransport: { machineId: 'caller-machine', invoke: async (method, request) => {
         issued.push({ method, request });
         return { type: 'success', sessionId: outcome === 'wrong_session' ? 'different-session' : fixture.sessionId };
@@ -329,7 +329,7 @@ describe('daemon Account Action Session caller context', () => {
     const caller = { kind: 'session', sessionId: fixture.sessionId, starterDepth: 0, turnDepth: 1 } as const;
     const witness = { inputId: 'input-one', turnId: 'turn-one', userMessageSeq: 1, userMessageSeqs: [1],
       callerPermissionMode: 'default' as const, agentStartCaller: caller };
-    const input = { mode: 'wait', type: 'decision', questions: [{ id: 'branch', type: 'text', prompt: 'Which branch?' }] };
+    const input = SessionNeedsYouRaiseInputV1Schema.parse({ mode: 'wait', type: 'decision', questions: [{ id: 'branch', type: 'text', prompt: 'Which branch?' }] });
     try {
       for (const mode of ['live', 'missing', 'expired', 'wrong_session'] as const) {
         let reads = 0;

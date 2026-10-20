@@ -20,6 +20,7 @@ import { compileActionCliCommands } from '@/cli/actions/compiledCommands';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
 import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 afterEach(() => { vi.restoreAllMocks(); process.exitCode = undefined; });
 
@@ -86,6 +87,7 @@ describe('actions root command', () => {
     const goalControlFailure = SessionGoalControlFailureV1Schema.parse({ phase: 'native_effect' });
     // Session RPC is the system boundary; Action dispatch and both CLI adapters stay real.
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       sessionGoalGet: async () => ({ ok: false, errorCode: 'codex_goal_thread_unavailable',
         error: 'codex_goal_thread_unavailable', goalControlFailure }),
       isActionApprovalRequired: () => false,
@@ -125,6 +127,7 @@ describe('actions root command', () => {
       return true;
     });
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       // The supported `code` failure spelling reaches the nested CLI normalizer
       // through a real Action success; native response data is a boundary.
       sessionGoalGet: async () => ({ ok: false, code: 'native_goal_refused', goalControlFailure: facet }),

@@ -15,6 +15,7 @@ import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/co
 import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountOrganizationV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { z } from 'zod/mini';
 
 const { callMachineRpc, callExactMachineRpc, fetchSessionById, patchSessionMetadataEnvelopeTuple } = vi.hoisted(() => ({
   callMachineRpc: vi.fn(),
@@ -71,7 +72,8 @@ describe('createCliActionDeps memory bindings', () => {
     const post = vi.spyOn(axios, 'post').mockImplementation(async (url, wire) => {
       expect(String(url)).toBe(`${serverHttpBaseUrl}/v1/artifacts/${artifactId}`);
       expect(wire).toMatchObject({ expectedHeaderVersion: 2, expectedBodyVersion: 2 });
-      stored = { ...stored, header: wire.header, body: wire.body, headerVersion: 3, bodyVersion: 3 };
+      const update = z.looseObject({ header: z.string(), body: z.string() }).parse(wire);
+      stored = { ...stored, header: update.header, body: update.body, headerVersion: 3, bodyVersion: 3 };
       return { status: 200, data: { success: true, headerVersion: 3, bodyVersion: 3 } };
     });
     const { executor } = createCliActionExecutorHarness({ token, credentials, sessionId: 'cli-global',

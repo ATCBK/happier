@@ -1,15 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod/mini';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, type AccountSettings } from '@happier-dev/protocol';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 /** One installed App-target widget with a contributed input type, as the daemon projects it. */
 export function createCounterWidgetFixture() {
     const pluginId = 'example.widgets';
     const inputType = { pluginId, localId: 'count-kind' };
-    const occurrenceId = `${pluginId}:66`;
+    const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
     const type = { id: inputType.localId, title: 'Count', semantic: 'count-kind',
         valueSchema: { type: 'string' as const, enum: ['files', 'folders'] }, options: { resource: 'count-kinds' } };
     const binding = normalizePluginUiInlineSurfaceBindingV1({ pluginId, surfaceId: 'counter', rendererId: 'counter', role: 'widget', target: { kind: 'app' } });
@@ -28,7 +29,7 @@ export function createCounterWidgetFixture() {
         inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId, identity: inputType,
             manifestPath: '/plugins/widgets/plugin.json', definition: type }],
         resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
-            definition: { id: 'count-kinds', source: 'dynamic', kind: 'config', scope: 'global', contentType: 'application/json' } }],
+            definition: { kindVersion: 1, id: 'count-kinds', source: 'dynamic', type: 'config', scope: 'global', contentType: 'application/json' } }],
     });
     const readUiResource = async () => ({ resource: { pluginId, localId: 'count-kinds' }, kind: 'config' as const,
         contentType: 'application/json', digest: `sha256:${'a'.repeat(64)}`,
@@ -38,12 +39,13 @@ export function createCounterWidgetFixture() {
 }
 
 /** The Home features and Account facts every CLI Action composition reads before an Artifact write. */
-export function registerAccountHomeHttp(app: FastifyInstance, input: Readonly<{ accountId: string; serverId: string }>) {
+export function registerAccountHomeHttp(app: FastifyInstance, input: Readonly<{ accountId: string; serverId: string;
+    settings?: Pick<AccountSettings, 'actionsSettingsV1'> }>) {
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
     app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v1/account/profile', async () => ({ id: input.accountId }));
-    app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+    app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: input.settings ?? {} }, version: 1 }));
     return FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, board: { enabled: true } } },
         capabilities: { serverIdentity: { serverIdentityId: input.serverId } } });
 }
