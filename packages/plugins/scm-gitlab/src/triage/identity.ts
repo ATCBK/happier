@@ -105,8 +105,7 @@ export function buildGitlabEntryIdentity(input: GitlabIdentityInput): GitlabIden
     kind: 'built',
     identity: {
       kindId: input.kindId,
-      collisionScope:
-        `gitlab:${encodeGitlabConfiguredOriginScope(input.origin)}:${projectId}`,
+      collisionScope: buildGitlabProjectCollisionScope(input.origin, String(projectId)),
       entryId,
     },
     locator: {
@@ -120,6 +119,11 @@ export function buildGitlabEntryIdentity(input: GitlabIdentityInput): GitlabIden
       webUrl: absoluteWebUrl,
     },
   };
+}
+
+/** Project selection and entry identity share this exact immutable project namespace. */
+export function buildGitlabProjectCollisionScope(origin: GitlabConfiguredOrigin, projectId: string): string {
+  return `gitlab:${encodeGitlabConfiguredOriginScope(origin)}:${projectId}`;
 }
 
 /**

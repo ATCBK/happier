@@ -10,7 +10,6 @@
  */
 
 import {
-  isTriageSourceConnectedAccountInstanceV1,
   type TriageConfiguredSourceConnectedAccountInstanceV1,
   type TriageConfiguredSourceInstanceV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -36,19 +35,22 @@ export type GitlabConfiguredInvocationResult =
   | Readonly<{ kind: 'authorized'; resolved: GitlabConfiguredInvocation }>
   | Readonly<{ kind: 'failed'; failure: GitlabFailure }>;
 
+type GitlabInstanceAuthority = Pick<TriageConfiguredSourceInstanceV1, 'binding' | 'localInstanceKey' | 'configuration'>;
+type GitlabConnectedInstanceAuthority = Pick<TriageConfiguredSourceConnectedAccountInstanceV1, 'binding' | 'localInstanceKey' | 'configuration'>;
+
 export type GitlabConfiguredInstanceResolution =
   | Readonly<{
     kind: 'resolved';
     origin: GitlabConfiguredOrigin;
-    instance: TriageConfiguredSourceConnectedAccountInstanceV1;
+    instance: GitlabConnectedInstanceAuthority;
   }>
   | Readonly<{ kind: 'failed'; failure: GitlabFailure }>;
 
 /** Pure configured-instance admission, shared by pre-credential token checks and authorization. */
 export function resolveGitlabConfiguredInstance(
-  instance: TriageConfiguredSourceInstanceV1,
+  instance: GitlabInstanceAuthority,
 ): GitlabConfiguredInstanceResolution {
-  if (!isTriageSourceConnectedAccountInstanceV1(instance)) {
+  if (!('account' in instance.binding)) {
     return {
       kind: 'failed',
       failure: {
@@ -83,7 +85,7 @@ export function resolveGitlabConfiguredInstance(
   const admission = admitGitlabV1Deployment(instance.localInstanceKey);
   return admission.kind === 'rejected'
     ? { kind: 'failed', failure: admission.failure }
-    : { kind: 'resolved', origin: admission.origin, instance };
+    : { kind: 'resolved', origin: admission.origin, instance: { ...instance, binding: instance.binding } };
 }
 
 function isSameAccount(
@@ -101,7 +103,7 @@ function isSameAccount(
  * neither can distinguish two GitLab deployments mounted below the same host.
  */
 async function confirmGitlabConfiguredBaseIsCurrent(input: Readonly<{
-  instance: TriageConfiguredSourceConnectedAccountInstanceV1;
+  instance: GitlabConnectedInstanceAuthority;
   origin: GitlabConfiguredOrigin;
   connectedAccounts: GitlabConnectedAccounts;
   signal: AbortSignal;
@@ -153,7 +155,7 @@ async function confirmGitlabConfiguredBaseIsCurrent(input: Readonly<{
 }
 
 export async function authorizeGitlabConfiguredInstance(input: Readonly<{
-  instance: TriageConfiguredSourceInstanceV1;
+  instance: GitlabInstanceAuthority;
   connectedAccounts: GitlabConnectedAccounts;
   signal: AbortSignal;
 }>): Promise<GitlabConfiguredInvocationResult> {

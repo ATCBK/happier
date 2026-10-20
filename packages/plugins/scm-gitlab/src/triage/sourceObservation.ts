@@ -85,6 +85,7 @@ function projectSnapshot(
     // copies are shortened; the routing copy is omitted instead, because shortening it
     // would address another project.
     scopeLabel: scopeLabel.text,
+    scopeUnitId: entry.scopeUnitId,
     ...(scopeDisplayName.text === '' ? {} : { scopeDisplayName: scopeDisplayName.text }),
     ...(authorLabel === null ? {} : { authorLabel }),
     ...(designation.text === '' ? {} : { designation: designation.text }),

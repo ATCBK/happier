@@ -303,6 +303,7 @@ export function decodeGitlabRow(input: GitlabRowDecodeInput): GitlabRowDecodeRes
   return {
     kind: 'mapped',
     entry: {
+      scopeUnitId: String(row.project_id),
       identity,
       locator,
       snapshot: {

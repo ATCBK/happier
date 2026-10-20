@@ -23,6 +23,7 @@ import { GITHUB_PLUGIN_ID } from '../../observations/githubProviderContracts.js'
 import { GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1 } from '../contribution.js';
 import { GITHUB_CHANGED_FILES_PAGE_SIZE_V1 } from '../detail/routes.js';
 import { buildGithubRepositoryKey, parseGithubRoutingToken } from '../locator.js';
+import { readGithubRepositoryIdFromCollisionScope } from '../identity.js';
 
 import type {
   GithubTriageEntryLocalRefV1,
@@ -233,7 +234,10 @@ function toTriagePresentObservation(
     kind: 'present' as const,
     localRef: toTriageLocalRef(observation.localRef),
     locator: toTriageLocator(observation.locator),
-    snapshot: toTriageSnapshot(snapshot, observation.locator, observation.localRef.entryId),
+    snapshot: {
+      ...toTriageSnapshot(snapshot, observation.locator, observation.localRef.entryId),
+      scopeUnitId: readGithubRepositoryIdFromCollisionScope(observation.localRef.collisionScope) ?? undefined,
+    },
     viewer: toTriageViewerFacts(observation.viewer),
     ...(isEmittableInstant(snapshot.sourceUpdatedAtMs)
       ? { sourceUpdatedAtMs: snapshot.sourceUpdatedAtMs }

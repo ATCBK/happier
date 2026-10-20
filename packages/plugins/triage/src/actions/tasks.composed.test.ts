@@ -40,10 +40,11 @@ async function withExternalTaskSource(
         readRequests: readonly string[];
         setWriteResult: (result: TriageTaskWriteResultV1 | null) => void;
     }>) => Promise<void>,
-    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean }> = {},
+    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean; scopeSelection?: boolean }> = {},
 ) {
     const descriptor = TriageSourceDescriptorV1Schema.parse({
         ...fixture.descriptor,
+        ...(options.scopeSelection ? { scopeUnit: { singularLabel: 'Team', pluralLabel: 'teams' } } : {}),
         kinds: [fixture.descriptor.kinds[0], {
             id: 'issue', workflowSubject: 'issue', displayName: 'Issue', task: true,
             taskCapabilities: {
@@ -69,8 +70,12 @@ async function withExternalTaskSource(
                 inputSchema: protocol.operations.scan.declaration.input.schema,
                 resultSchema: protocol.operations.scan.declaration.resultSchema,
                 run: async (input) => {
-                    const observedTask = input.instance.instance.sourceInstanceId === instanceId ? task
+                    const selectedTask = input.instance.instance.sourceInstanceId === instanceId ? task
                         : { ...task, localRef: { ...task.localRef, entryId: 'task-2' } };
+                    const observedTask = options.scopeSelection ? { ...selectedTask, snapshot: {
+                        ...selectedTask.snapshot,
+                        scopeUnitId: input.instance.instance.sourceInstanceId === instanceId ? 'team-a' : 'team-b',
+                    } } : selectedTask;
                     if (options.firstInstanceKeepsPaging && input.instance.instance.sourceInstanceId === instanceId) {
                         return { kind: 'page', observations: [observedTask], evidence: { kind: 'partial', reason: 'pageLimit' },
                             continuation: { v: 1, token: input.page.kind === 'initial' ? 'after-task' : `${input.page.continuation.token}/next` } };
@@ -85,6 +90,19 @@ async function withExternalTaskSource(
                 inputSchema: protocol.operations.get.declaration.input.schema,
                 resultSchema: protocol.operations.get.declaration.resultSchema,
                 run: async () => { readRequests.push('get'); return task; } },
+            ...(options.scopeSelection ? {
+                listScopeUnits: { title: 'List teams', surfaces: protocol.operations.listScopeUnits.declaration.surfaces,
+                    dangerLevel: protocol.operations.listScopeUnits.declaration.dangerLevel,
+                    inputSchema: protocol.operations.listScopeUnits.declaration.input.schema,
+                    resultSchema: protocol.operations.listScopeUnits.declaration.resultSchema,
+                    run: async (input) => {
+                        readRequests.push(`scope:${input.mode}`);
+                        if (input.mode !== 'configured') throw new Error('The aggregate must never discover provider units');
+                        return { kind: 'page' as const, status: 'complete' as const,
+                            selection: { kind: 'selected' as const, unitIds: ['team-a', 'team-b'] },
+                            units: [{ id: 'team-a', label: 'Platform' }, { id: 'team-b', label: 'Mobile' }] };
+                    } },
+            } : {}),
             ...(!options.readOnly ? {
                 create: { title: 'Create', surfaces: protocol.operations.create.declaration.surfaces,
                     dangerLevel: protocol.operations.create.declaration.dangerLevel,
@@ -129,6 +147,7 @@ async function withExternalTaskSource(
                 listInstances: protocol.operations.listInstances.bind('discover'),
                 scan: protocol.operations.scan.bind('scan'),
                 get: protocol.operations.get.bind('get'),
+                ...(options.scopeSelection ? { listScopeUnits: protocol.operations.listScopeUnits.bind('listScopeUnits') } : {}),
                 ...(!options.readOnly ? {
                     create: protocol.operations.create.bind('create'),
                     edit: protocol.operations.edit.bind('edit'),
@@ -204,6 +223,26 @@ async function withExternalTaskSource(
 }
 
 describe('Tasks through a separately authored source and registered aggregate Actions', () => {
+    it('projects configured scope choices before scanning and applies the same unit filter through agent admission', async () => {
+        await withExternalTaskSource(async ({ aggregate, readRequests }) => {
+            const input = { v: 1, sources: { kind: 'allConfigured' }, limit: 0, order: 'newest' };
+            const cold = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', input, { surface: 'agent' }));
+            expect(cold.window.rows).toEqual([]);
+            expect(cold.configuredSources[0]?.scope).toMatchObject({
+                unit: { singularLabel: 'Team', pluralLabel: 'teams' },
+                projection: { selection: { kind: 'selected', unitIds: ['team-a', 'team-b'] },
+                    units: [{ id: 'team-a', label: 'Platform' }, { id: 'team-b', label: 'Mobile' }] },
+            });
+            expect(readRequests).toEqual(['scope:configured', 'scope:configured']);
+            const filtered = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                ...input, limit: 10, filters: { ...TRIAGE_LIST_NO_FILTERS_V1,
+                    scopes: [{ source, sourceInstanceId: instanceId, unitId: 'team-a' }] },
+            }, { surface: 'agent' }));
+            expect(filtered.window.rows.map((row) => row.entryRef.entryId)).toEqual(['task-1']);
+            expect(filtered.window.lanes).toHaveLength(2);
+        }, { scopeSelection: true, secondInstance: true, initialTaskPage: true });
+    });
+
     it('applies an agent instance filter after scanning both separately admitted source instances', async () => {
         await withExternalTaskSource(async ({ aggregate }) => {
             const result = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {

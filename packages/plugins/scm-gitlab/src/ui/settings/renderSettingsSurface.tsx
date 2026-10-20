@@ -15,6 +15,7 @@
  */
 
 import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources/ui';
+import { decodeGitlabConfiguration, encodeGitlabConfiguration } from '../../triage/configuration.js';
 
 import {
   GITLAB_PLUGIN_ID,
@@ -30,4 +31,13 @@ export const renderSurface = createTriageSourceSettingsSurface({
   connectedAccountServiceLocalId: GITLAB_CONNECTED_ACCOUNT_ID,
   connectedAccountPurpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE,
   sourceDisplayName: GITLAB_TRIAGE_SOURCE_DESCRIPTOR_V1.displayName,
+  scopeSelection: {
+    unitLabel: 'projects',
+    listScopeUnitsLocalActionId: GITLAB_TRIAGE_ACTION_IDS.listScopeUnits,
+    readSelection: (draft) => decodeGitlabConfiguration(draft.configuration)?.selection ?? null,
+    writeSelection: (draft, selection, units) => {
+      const configuration = encodeGitlabConfiguration({ v: 1, selection, units });
+      return configuration === null ? null : { ...draft, configuration };
+    },
+  },
 });

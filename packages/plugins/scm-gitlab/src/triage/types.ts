@@ -166,6 +166,7 @@ export type GitlabViewerFacts = Readonly<{
 }>;
 
 export type GitlabMappedEntry = Readonly<{
+  scopeUnitId: string;
   identity: GitlabEntryIdentity;
   locator: GitlabEntryLocator;
   snapshot: GitlabEntrySnapshot;

@@ -24,6 +24,8 @@ import type {
   TriageSourceScanEvidenceV1,
   TriageSourceScanObservationV1,
 } from '@happier-dev/triage-protocol/v1';
+import { scanTriageSelectedScopeUnitsV1 } from '@happier-dev/triage-sources/runtime';
+import { decodeGitlabConfiguration } from './configuration.js';
 
 import {
   authorizeGitlabConfiguredInstance,
@@ -81,6 +83,22 @@ function projectScanEvidence(
 
 export async function scanGitlabTriageSource(
   input: GitlabScanOperationInput,
+): Promise<TriageScanResultV1> {
+  const configuration = decodeGitlabConfiguration(input.scan.instance.configuration);
+  if (configuration === null) {
+    return { kind: 'failed', failure: { class: 'unsupportedContract', code: 'unsupported-configuration' } };
+  }
+  return scanTriageSelectedScopeUnitsV1({
+    instance: input.scan.instance,
+    selection: configuration.selection,
+    page: input.scan.page,
+    scan: (projectId, page) => scanGitlabScope({ ...input, scan: { ...input.scan, page } }, projectId),
+  });
+}
+
+async function scanGitlabScope(
+  input: GitlabScanOperationInput,
+  projectId: string | null,
 ): Promise<TriageScanResultV1> {
   const configured = resolveGitlabConfiguredInstance(input.scan.instance);
   if (configured.kind === 'failed') {
@@ -148,7 +166,10 @@ export async function scanGitlabTriageSource(
   const unavailableLanes: GitlabUnavailableLane[] = [];
   for (const kindId of GITLAB_TRIAGE_KIND_IDS) {
     const lanes = buildGitlabScanLanes({ kindId, viewerUserId });
-    requests.push(...lanes.requests);
+    requests.push(...lanes.requests.map((request) => projectId === null ? request : {
+      ...request,
+      path: `/projects/${projectId}${request.path}`,
+    }));
     unavailableLanes.push(...lanes.unavailable);
   }
 

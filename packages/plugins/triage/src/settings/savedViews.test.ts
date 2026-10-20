@@ -146,6 +146,9 @@ describe('mutateTriageSavedViews', () => {
         const selected = filters({ sources: [
             { source: SOURCE, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
             { source: SOURCE, sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+        ], scopes: [
+            { source: SOURCE, sourceInstanceId: '11111111-1111-4111-8111-111111111111', unitId: 'team-a' },
+            { source: SOURCE, sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
         ] });
         const result = await create(fixture, deps, 'Two accounts', { filters: selected });
         expect(result.status).toBe('applied');

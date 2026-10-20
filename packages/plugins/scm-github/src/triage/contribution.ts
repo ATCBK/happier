@@ -25,6 +25,7 @@ export const GITHUB_TRIAGE_ACTION_IDS_V1 = Object.freeze({
   edit: 'github/issue/edit',
   transition: 'github/issue/transition',
   listInstances: 'triage/list-github-instances',
+  listScopeUnits: 'triage/list-github-scope-units',
   scan: 'triage/scan-github',
   get: 'triage/get-github-entry',
   readPullRequestStatus: 'triage/read-github-pull-request-status',
@@ -141,6 +142,7 @@ export const GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1: TriageSourceDescriptorV1 =
   // name another plugin's page.
   settingsPageId: GITHUB_TRIAGE_SETTINGS_PAGE_ID_V1,
   displayName: 'GitHub',
+  scopeUnit: { singularLabel: 'Repository', pluralLabel: 'Repositories' },
   kinds: Object.freeze([
     Object.freeze({
       id: 'pull-request',
