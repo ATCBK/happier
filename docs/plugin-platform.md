@@ -2,6 +2,22 @@
 
 Bundled and installed plugins contribute through the same manifest, registration and projection contracts. The host owns installation, admission, currentness, invocation and cleanup; a plugin owns its integration's declarations and executable leaves. The SDK exposes that boundary without becoming another runtime or persistence owner.
 
+Files & Editor's development hunk actions, review-unit table, selection Ask and
+Track caret remain host-private. The public `HappierDiffViewer` stays a read-only
+presentation; it gains no review actions, editor controls or contribution family.
+The host caret consumes the existing cursor-motion seam without extending the
+public Agent cursor into a text-caret API.
+
+The unreleased Files & Editor SCM extension adds an optional `blameFile` read
+leaf to the existing SCM-backend family. Capability projection owns `readBlame`;
+an absent leaf remains unsupported. Results describe working-tree line ranges
+and a deduplicated commit table, with null commit references for uncommitted
+lines. The host routes the typed operation without selecting a Git-specific
+path. Session/turn attribution is a client derivation over the current Session's
+evidence, not a backend author claim. An expected raw-byte file hash lets a
+backend refuse stale line coordinates before returning attribution. This source
+contract still requires the program's generated SDK and loaded-runtime checks.
+
 In 0.3 development source, merged CLI contribution reads reuse the existing
 immutable built-in registry for bundled declarations. Installed-plugin discovery
 still runs on each merged read; it cannot overwrite that built-in snapshot or
@@ -34,6 +50,15 @@ admitted display inventory, readiness, selection, confirmation eligibility,
 native setup and commit authority. Unsupported presentation hosts show an
 explicit unavailable state; they do not construct an alternate choice list.
 The external-author reference mounts the public component without host imports.
+
+The unreleased 0.3 shell uses Plugin UI's resize primitive for both host panes and collection
+rails. Public `ListDetailLayout` and `Collection` expose controlled rail widths and an optional
+`resizeKey`; the presentation host supplies device-local sizing with plugin-namespaced keys.
+Installed plugins consume the host-provided runtime and share the same geometry and accessible
+handle. Plugins do not import app pane internals or create their own persistence record. App pages
+also inherit their host's main-column visibility; their declared page identity supplies the hide/show
+wording. See [Collection presentation](collection-presentation.md) and
+[App shell panes](app-shell-panes.md) for the canonical owners.
 
 ## Declaration, activation and projection
 
@@ -1179,8 +1204,7 @@ they select existing native setup through configuration. Cua's native setup path
 is Account configuration with reconnect-on-change, not a rotating credential:
 the captured configuration revision prevents it from redirecting retained
 resources. BYOC's separately selected cloud and Cua references must identify the
-same existing native setup; Fleet instead uses its configured gateway and a
-resource-specific private token.
+same existing native setup.
 
 In 0.3 development, Connected Account authorization-code modes declare their
 own `callbackUrl`. Manifest admission rejects a code-flow descriptor without
@@ -1309,6 +1333,21 @@ and explicit incompleteness. Accounting observation times come from the
 response's witnessed coverage sources, never the client read clock. The
 advanced Plugin UI Resource client's optional `onProgress` callback is a
 package construction seam; the public Host API and bridge wire stay unchanged.
+
+### File viewers and media (0.3 development)
+
+Plugins open workspace files through `workspace.tabs.open` with its `file` arm,
+using the same host navigation owner as transcript links, the tree and Search.
+`file.target` addresses either `{ kind: 'session', sessionId, serverId? }` or
+`{ kind: 'project', workspaceRefId, serverId, machineId?, rootPath? }`.
+`file.path` is workspace-relative; `anchor` uses `WorkspaceAnchorV1` and
+`anchorSource` selects file or diff coordinates. Optional `view` selects
+`view`, `changes` or `edit`, and `blame` requests the blame view. The outer
+Action `mode` still controls preview, kept-tab or split placement. Plugins must
+declare the Action in their manifest capabilities; this does not grant file
+access or make paths outside the workspace openable. `workspace.files.link.get`
+returns the same canonical link without opening a tab. The `href` arm remains
+available for other destinations; no plugin-specific file opener is added.
 
 For collection-based plugin pages, the public Plugin UI `Collection` composes one headless model, item anatomy and detail renderer across presentations and containers. `Step`, controlled `Tabs` (including host-rendered strips) and `HappierDisclosure` belong to that public UI/presentation boundary, rather than feature-local replacements. See [Collection presentation](collection-presentation.md) and the [public author composition](../apps/docs/content/docs/plugins/ui/react-native.mdx).
 
@@ -3181,6 +3220,37 @@ environment selection already applied by native command semantics, including
 its configuration path; executable names are not activation evidence. These
 are development-source contracts, not released availability or proof of a
 completed final-launch journey.
+
+### File viewers and media (0.3 development)
+
+File viewers use the existing `contributes.openableContentViewers` family. The
+host's `resolveFileViewerKind` supplies both built-in body selection and plugin
+openable-content metadata: SVG is `image/svg+xml` with image content class; PDF,
+audio and video keep their specific MIME with binary content class. Markdown is
+`text/markdown`; code remains `text/plain`. A Markdown viewer that previously
+matched `text/plain` should match `text/markdown` or a Markdown extension instead.
+The existing plugin read budgets are unchanged, and the built-in viewer remains
+available in the chooser.
+
+Same-realm plugin surfaces use the host's Media stage through public
+`StoredImage`. When the private presentation host supplies its optional
+`mediaStage` port, pressing a loaded image opens that URI in the same stage used
+by the app. `expandable={false}` keeps the author-supplied `onPress` behavior;
+hosts without the port retain that behavior as well. Image admission and reads
+still belong to the existing Session-image owner. The plugin API's loaded data
+URI is forwarded directly, without another transfer or a new URI custodian.
+Hosted-web realms receive no stage port. The viewport, gesture runtime and PDF
+implementation are host-owned and are not exported to plugin bundles.
+
+Markdown's optional `images` resolver follows the same presentation binding.
+Absent a resolver, images retain the existing alt-text-only policy. Workspace
+image paths resolve through the host's workspace-reference owner, while remote
+image loading requires the person's explicit document-level consent; plugin
+Actions cannot grant that privacy choice.
+
+These are unreleased development-source contracts. Generated declarations and
+API reports must be refreshed by their owning integration lane before package
+publication; source availability does not attest a loaded-platform pass.
 
 ### Capture viewing and Session images (0.3 development)
 

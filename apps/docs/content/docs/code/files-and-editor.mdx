@@ -16,6 +16,27 @@ the repository, or open the file it just mentioned, without leaving the session.
   still load file data through the machine-level workspace APIs.
 </Callout>
 
+## Replace in files and blame (0.3 development)
+
+The unreleased Files & Editor work brings replacement review into **Text in
+files** and line attribution into the File page. These surfaces are under
+integration and are not part of the current stable release.
+
+Replacement reviews a proposed change per file and per match before writing.
+Files with unsaved editor drafts are skipped. If a file changes after preview,
+replacement leaves it alone and reports that result. Undo restores replaced
+regions only while the file still matches the successful replacement. Literal
+replacement keeps dollar signs literal; regex replacement uses JavaScript
+capture syntax. Both operate within individual lines and preserve existing
+line endings. Binary files and text that is not valid UTF-8 are skipped.
+
+Blame combines commit authorship with evidence from the Session whose File page
+is open. Committed lines name their commit author. Uncommitted lines name a
+Session turn only when its recorded edit still matches the displayed line;
+otherwise they remain **Uncommitted**. Team-session attribution uses the same
+requester identity and visibility rules as the transcript. A project page
+without Session context shows repository attribution only.
+
 ## Where it appears
 
 ## Desktop layout: sidebar + details pane
@@ -47,17 +68,22 @@ Important behaviors:
 - Scroll position is preserved when you return to a tab.
 - If you start editing a file, Happier keeps that editor state instead of reloading it on every tab switch.
 - Pinned tabs stay open until you explicitly close them.
-- On smaller layouts, the details surface can switch into an overlay/focused mode instead of permanently shrinking the main session area.
+- On smaller layouts, the details surface can switch into an overlay instead of permanently shrinking the main session area.
 
-### Focus / fullscreen mode
+### Give the editor more room (0.3 development)
 
-The details pane includes a focus mode so you can temporarily hide the left session area and give more room to the current review/editor context.
+In unreleased 0.3 development, **Hide session** in the session header hides the
+main column while keeping its draft, scroll position and open content. The
+restore chip beside the editor shows the session's identity and current state;
+use it to show the session again. Projects, Workflows and app pages offer the
+same control with their own name when another column is open. The left
+navigation column stays independent. Phone layouts keep their existing page
+navigation.
 
-This is useful when:
-
-- reviewing a large diff
-- editing a file side-by-side with the Git sidebar
-- working on a smaller laptop or browser window
+Session and Project pages can also use **Session first** or **Editor first**.
+Editor first puts the file browser and editor before the session, while keeping
+the columns' current content. This device-local preference is part of the 0.3
+development layout work and is not available in the current stable release.
 
 On phone-sized layouts the same surfaces live in the
 [mobile Cockpit](/apps/app), which gives Files and Git their own tabs.
@@ -290,7 +316,30 @@ Happier now treats image previews as a first-class workflow:
 - SVG files can also be previewed instead of being treated as opaque binaries
 - true binary files stay safe and do not try to render through the text diff pipeline
 
-In development source, tapping an image preview in Files or Review opens the shared image preview modal. This does not yet add pinch-to-zoom or PDF rendering; PDFs still use the binary-file placeholder and download action.
+In unreleased 0.3 development source, image and SVG previews use a shared Media
+stage. It keeps the gallery from the surface you opened, supports zoom and pan,
+and returns to the thumbnail when dismissed. Use the arrow keys to move between
+items, `0` to fit, `1` for actual size and Esc to close. Background selection is
+manual: Checkerboard, Light or Dark, remembered on this device for the file kind.
+
+PDFs use the same PDF implementation in the file view and Artifacts, with page
+navigation, zoom and the shared Find controls. Password-protected PDFs need an
+external app where you can enter the password. Native previews can be degraded
+when a document needs fonts or image decoders that are not embedded; Download
+and the platform's open/share options remain available.
+
+Audio opens with playback and seeking controls. Video downloads before playback
+and reports transfer progress; codec support still depends on the device.
+Opaque binaries show their kind and size with Download and Open as text options.
+Artifact previews share the file-preview budget, including the browser's 50 MB
+whole-file buffering budget.
+
+Markdown file previews and workspace README cards render standalone workspace
+images relative to the Markdown file. Remote images stay unloaded until you
+choose Load for that document; Happier remembers that choice on this device.
+Inline images retain their alt text. Opening a rendered image uses the document's
+image gallery in the Media stage. A large text file can be read in slices rather
+than requiring a full-file preview.
 
 If a file has no textual diff (for example an image or binary blob), Happier avoids crashing the diff renderer and falls back to the correct preview/placeholder path instead.
 
@@ -307,6 +356,163 @@ This matters when you:
 - compare two files while editing one of them
 - jump between Review and an editor tab
 - switch sessions and come back later
+
+### The 0.3 editing workflow
+
+<Callout type="info">
+  The editor workflow below is being integrated for **unreleased Happier 0.3**.
+  It describes the development target, including conflict resolution, draft
+  recovery and phone controls; it does not promise those controls in a released
+  stable or preview client. Development builds may contain only part of this
+  workflow while integration and live validation are in progress.
+</Callout>
+
+Open a text file and choose **Edit**. You can also start from **Changes** at the
+change you want to edit. The editor keeps your place so you can move between
+reading and editing without finding the same line again.
+
+Make your edits, then choose **Save**. Saving leaves the editor open; **Done**
+returns to reading. The header shows whether you are editing, have unsaved
+changes, are saving, or have just saved. Saving your own edit uses the ordinary
+file write and does not ask for a second confirmation by default. An explicit
+approval preference can instead leave the save waiting for approval.
+
+In the desktop app, use <kbd>⌘</kbd>+<kbd>S</kbd> on macOS or
+<kbd>Ctrl</kbd>+<kbd>S</kbd> on Windows and Linux. In a web browser, use
+<kbd>Alt</kbd>+<kbd>S</kbd> (<kbd>⌥</kbd>+<kbd>S</kbd> on macOS), so the browser
+keeps its own Save shortcut. The header displays the shortcut for your client.
+If several editor groups are open, the shortcut saves the focused group’s active
+file. Autosave remains an opt-in preference.
+
+#### Drafts and closing a tab
+
+An unsaved edit pins its preview tab, so opening another file keeps the draft
+open. Switching tabs or looking at View or Changes also keeps it. Drafts are
+stored on the device where you are editing and can reopen after a reload; they
+are not already saved to the Machine or copied to your other devices.
+
+Closing a dirty tab offers **Save**, **Discard**, or **Keep editing**. If Save
+fails or is still waiting, the draft stays open. A device-storage failure is
+shown explicitly; keep the page open and save or copy the text before leaving
+when the draft cannot be stored locally.
+
+#### When the agent changes the same file
+
+A save checks the version of the file you started from. If the file changes on
+disk while your draft differs, the conflict line offers **Compare**, **Use mine**
+and **Use theirs**. When Happier knows which agent wrote it, the last choice
+names that agent.
+
+Compare shows the disk version against your draft, with a choice for each
+conflicting place. You can keep your text in one place and use the disk text in
+another, then return to editing and save the merged draft. After restoring a
+draft from a reload, Compare may ask about every place because the original
+file text is no longer held on that device.
+
+**Use mine** saves your draft against the disk version you were shown; another
+change can still refuse that write. **Use theirs** replaces the buffer with the
+disk version and keeps your displaced draft for Undo. Both choices offer a
+dismissible **Undo** notice. It remains until you dismiss it or take the next
+edit, save, comparison or review action; the notice has no countdown. Undo that
+writes back to disk checks the version again too.
+
+#### Editing while the Machine is offline
+
+You can start or continue editing when Happier already holds the complete file
+text, even if its Machine becomes unreachable. A restored draft can also reopen
+without a fresh disk read. If neither the text nor a draft is on this device,
+connect to the Machine first to load it.
+
+While offline, your edits stay on this device and Save can try the Machine
+again. The status line offers the existing reachability retry. When the Machine
+returns, choose **Save**; reconnecting alone does not save your draft. If the
+disk file changed meanwhile, the same conflict choices appear. Creating,
+renaming or deleting a file still needs the Machine.
+
+#### Large files, encodings and line endings
+
+There is no separate editing-size cap in the 0.3 editor. The entire valid UTF-8
+file must be loaded before it can become an editable buffer. A partial preview,
+binary file or text that cannot be decoded losslessly stays unsaveable through
+the text editor. Existing read and transfer limits still apply; use download
+when the file cannot be loaded completely.
+
+Large saves use file transfer with the same version check as smaller saves.
+UTF-8 byte-order marks are preserved. Files using LF or CRLF keep that style;
+mixed line endings are saved using the file’s dominant style, with a note before
+you save.
+
+#### Markdown, phone editing and change markers
+
+Markdown uses **Raw** and **Rich** modes on the same draft. Switching flushes
+the current editor first. Raw mode includes Find; if rich editing is unavailable
+for the document, use Raw without losing the text.
+
+On a phone, the editing accessory bar provides indentation, punctuation,
+cursor movement, Undo/Redo, Find and a pinned Save control. **Done** dismisses
+the software keyboard. On a phone-sized web viewport, the accessory bar appears
+at the page’s lower edge.
+
+The change gutter marks added, modified and deleted text from the selected
+Changes scope. Open a marker to inspect removed lines and use the available
+review actions. Next/previous change navigation moves between markers while
+you edit. Discarding a marked change in a dirty buffer changes the draft, which
+you can undo before saving; if you edited that same region, Happier refuses a
+revert that no longer matches rather than guessing where it belongs.
+
+### Review, Ask and Track (0.3 development)
+
+<Callout type="info">
+  These controls are under integration in unreleased 0.3 source. Their live
+  desktop and phone journeys are still being validated.
+</Callout>
+
+The File page Changes model uses **This turn**, **This session** and
+**Uncommitted** scopes. A file opened from a Session defaults to that Session;
+a turn-card link keeps its turn, and a Project file defaults to Uncommitted.
+Switching scope changes the comparison you read, not repository state.
+
+**Keep** records that you reviewed a change. It does not stage or rewrite a
+file, and an offline Machine does not block it. Marks follow unchanged content
+through unrelated edits and line shifts. **Discard** reverts the selected
+change only while the file still matches; a changed file is refused for another
+review. Its Undo notice stays until dismissed or replaced by the next review
+action. Review keys move by change with J/K and by file with Shift+J/K;
+the editor keeps its own Undo while you type.
+
+**Ask** prepares context in an editable composer draft; it does not send the
+message. File and diff selections use saved-line anchors with a selected-text
+snapshot. Terminal and transcript selections use an editable fenced quote.
+See [Review comments](/code/review-comments) for how those anchors travel with
+your message.
+
+**Track** is off by default on each device. Its controller follows the current
+Session's file writes in a preview tab without replacing a dirty editor. Your
+scroll, selection, typing or tab activation pauses following immediately;
+Resume returns to the agent's current edit region. The region comes from the
+agent's tool call, so it shows the edit location rather than individual keystrokes.
+
+### Code navigation and outline
+
+<Callout type="info">
+  Code navigation below describes **unreleased Happier 0.3 development source**.
+  These controls are not promised in released stable or preview clients.
+</Callout>
+
+Go to definition searches for declarations with the selected name, preferring
+the current file and then nearby files. References lists **Text matches** of
+that name across searchable workspace files. These are navigation candidates:
+two unrelated symbols can share a name, and a declaration can be missed when
+its syntax is not recognized. A partial search does not establish that all
+references were found. Connect to the file's Machine to search its saved files.
+
+In the active file, `@` search lists an approximate outline from syntax
+highlighting, including Markdown headings. Choose an entry to jump to its line.
+The outline does not resolve types or imports.
+
+This delivery uses text search and syntax highlighting. Semantic hover,
+compiler diagnostics, a Problems panel and language-server Install or Restart
+controls are not included.
 
 ### Find in files, diffs and review
 
@@ -435,3 +641,4 @@ On desktop, opening a workspace file link opens the right sidebar/details pane. 
 - [Git](/code/git) — staging, committing and branches.
 - [Markdown and diagrams](/apps/markdown) — the rich editor for Markdown files.
 - [Attachments and image previews](/apps/attachments)
+- [Keyboard shortcuts](/apps/keyboard-shortcuts) — command availability, platform bindings and rebinding.

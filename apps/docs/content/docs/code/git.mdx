@@ -39,6 +39,16 @@ The **Git** tab is the repository status surface for the current session.
 - Inspect and manage Happier-created stashes
 - Browse commit history and open historical commit diffs
 
+## Line attribution (0.3 development)
+
+The unreleased Files & Editor integration adds blame for the working-tree file.
+Committed lines identify their commit author; lines changed since the commit
+remain uncommitted. When the file is opened inside a Session, verified edit
+evidence can additionally identify the turn that wrote an uncommitted line.
+Manual edits and unavailable or incomplete evidence remain **Uncommitted**.
+An untracked file has no commit history. Backends without blame support omit
+the control. See [Files and the editor](/code/files-and-editor) for its scope.
+
 ## Repository setup
 
 ### Initialize Git from Happier

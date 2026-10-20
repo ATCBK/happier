@@ -40,6 +40,11 @@ graph TB
     Agents --> API
 ```
 
+Workspace replacement in 0.3 development calls the same
+`commitGuardedFileReplace` owner as editor saves: the replace handler authorizes
+each rooted path and supplies raw bytes plus the reviewed SHA-256 expectation;
+it does not own another filesystem writer.
+
 ## Explicit session creation targets (0.3 development)
 
 Session creation and spawn-nonce recovery use the exact-machine RPC transport.
@@ -3104,7 +3109,9 @@ each as met, not met or unavailable.
 
 Owner totals sum each attributed member once; they are not cgroup/Job accounting totals.
 CPU is the cumulative-time delta as a percentage of the whole machine and is absent
-until a valid interval exists. Memory retains its OS kind: Linux resident bytes,
+until a valid interval exists. Execution Run reads use the same counter-rate owner
+as Processes, including its 120-second observation horizon; on-demand reads impose
+no periodic cadence. Memory retains its OS kind: Linux resident bytes,
 macOS footprint where available (otherwise resident, explicitly named), and Windows
 private bytes. Unreadable values are unknown, not zero; shared pages may count in more
 than one process's memory figure.
@@ -3206,6 +3213,11 @@ reads fresh ownership and drains notifications received during that read. With n
 viewer, a notification only marks discovery dirty for the next watch. Native
 census/vitals helpers use their separate sampling execution boundary and do not
 generate workload-launch notifications.
+Successful targeted observations remove exited or replaced generations immediately;
+unreadable observations keep the retained identity uncertain, with unavailable
+resources rather than recycled census figures. Restricted native census reads honor
+the requested fields and omit unrelated command, environment, path and inferred
+Job discovery; explicit verified Job observations retain their existing boundary.
 Ports use the existing local-services watch; no census-triggered socket scan is added.
 `daemon.processes.watch` parks through the shared `parkWatch` boundary. Hiding or closing
 the surface releases demand; return reads current evidence. At the last unsubscribe,
@@ -4648,6 +4660,10 @@ forward or invented. Minute network history expresses the actual-span average in
 one minute's byte units, so timer jitter and late reads do not inflate the chart's
 per-second rate. A missing minute still leaves a history gap.
 
+Linux container CPU uses one effective capacity: the smaller of logical cores and
+the cgroup quota, preserving fractional cores. Live total/user/system percentages,
+published host facts and minute history consume that same capacity.
+
 Memory composition belongs to the reader's memory observation. Linux derives
 it from every existing `/proc/meminfo` read, and Windows includes it in the
 existing native memory call without an extra process or API read. While an RPC
@@ -4752,7 +4768,11 @@ Alert-episode rows use this same stream, not another store. Missing minutes rema
 gaps. The 1-hour projection
 combines the live ring with restored minutes, while 24-hour and 7-day projections
 use 5-minute and 30-minute buckets with means and maxima and explicit null
-buckets. Today's received/sent byte totals use observed minute deltas since UTC
+buckets. Network buckets carry observed duration separately for received and sent
+bytes; rates divide by that coverage, so partial or interrupted buckets do not
+turn unmeasured time into idle traffic. Live history points carry their own rate
+duration; persisted minute records retain their existing one-minute units.
+Today's received/sent byte totals use observed minute deltas since UTC
 midnight. [`isSustainedV1`](../packages/protocol/src/machines/vitals/isSustainedV1.ts)
 evaluates consecutive minute records; a missing or stale minute breaks both a
 firing streak and a predicate-defined recovery streak.
@@ -4763,8 +4783,9 @@ The pure
 [`alert evaluator`](../packages/protocol/src/machines/vitals/evaluateMachineVitalsAlertsV1.ts)
 uses that shared sustained-condition check for memory and CPU: every minute must
 be observed, CPU uses the minute mean rather than its maximum, and recovery needs
-the same covered duration as firing. Disk conditions use the current volume's
-free-now bytes, with independent episodes per volume. Missing pressure, CPU or
+the same covered duration as firing. Disk conditions consume the shared attention
+classifier: zero free-now bytes or exhausted inodes mean full, regardless of the
+chosen nearly-full threshold, with independent episodes per volume. Missing pressure, CPU or
 volume observations never prove recovery. Windows' observed low-memory signal
 and exhausted commit feed the shared effective rule level; a negative binary
 low-memory signal permits rule recovery without inventing a native pressure

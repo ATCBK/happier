@@ -41,6 +41,30 @@ accessibility, and Lane 09 evidence.
 | Plugin declarations and execution | `contributes.searchProviders` in the contribution catalog + the existing Action dispatcher (`executeAction | openSurface`) |
 | Feature admission | `packages/protocol/src/features/catalog.ts` via `useMemorySearchProvider`; see `feature-gating.md` |
 
+## Workspace replacement (0.3 development)
+
+Replacement extends the Text in files source. The Machine previews and applies
+through `daemon.workspaceFiles.replace.preview.v1` and
+`daemon.workspaceFiles.replace.apply.v1`; clients do not loop over individual
+file reads and writes. `machines/workspaceFilesReplace.ts` owns the pure byte
+transformation for both operations. Literal replacement keeps dollar signs
+literal; regex replacement follows JavaScript capture and replacement patterns.
+Matching and replacement stay within one line.
+
+Preview hashes cover raw bytes, including a UTF-8 BOM. Apply receives only
+reviewed files and their excluded match positions. Files whose hashes changed
+are reported individually without a write. Invalid UTF-8, UTF-16 and binary
+content are skipped; the transformation preserves a UTF-8 BOM and existing
+line endings. Every successful write uses the editor's guarded atomic writer.
+Returned inverse edits support hash-guarded Undo without server-held pre-images.
+
+The Universal Search composition owns draft exclusion, selection and preview
+freshness. It must retire a preview whenever query, options or replacement
+change, and apply only loaded, selected matches. Surface composition and loaded
+runtime acceptance are separate from these Machine contracts. Regex candidate
+discovery and partial-file paging remain under plan amendment review; these
+paragraphs do not claim that either unfinished path is released.
+
 ## Data flow
 
 1. An entry point (shortcut, sidebar Search destination, native action,
@@ -450,6 +474,28 @@ never a URL or persisted tab resource. The Find viewer consumer is a separate
 surface owner (`FileViewerFindSurface` or the editor's native Find adapter).
 It consumes the seed after mounting and selects the addressed match; seed
 transport alone does not prove the composed loaded Search-to-Find journey.
+
+## Code navigation and document symbols (0.3 development source)
+
+Code navigation reuses workspace content search. Go to definition searches
+language-specific declaration forms for the selected name and ranks candidates
+from the current file before nearby paths. References are word-boundary text
+matches, labelled as text matches rather than semantic references. Both use the
+same workspace root, exclusions, cancellation and coverage reporting as Text in
+files. A textual occurrence can refer to a different symbol with the same name;
+a declaration that the syntax patterns do not recognize can be missed.
+
+The active file's `@` search uses an approximate outline extracted from syntax
+highlighting scopes, including Markdown headings. It is not a workspace symbol
+index or a compiler answer. Choosing an entry goes through the existing file
+opener with its line anchor. The outline remains client-side; name lookup uses
+the Machine's searchable saved files.
+
+This is the Files & Editor fallback in unreleased 0.3 source.
+There is no language-server host, bundled server, or `languageServers` plugin
+family in this delivery. Semantic hover, diagnostics, Problems and server
+restart are outside this branch. Source integration and the composed UI checks
+remain distinct from released availability.
 
 ## Search, Find and external History (0.3 development)
 
