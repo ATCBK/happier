@@ -57,7 +57,7 @@ export async function listCodeBuddyCandidates(request: AgentExternalSessionsList
     const progress: ExternalSessionContentSearchPageProgress = prior?.file === file && prior.progress ? { ...prior.progress } : { complete: false, itemCount: 0, match: null };
     const continuation = () => encode({ v: 1, root: resolved.root, query, target, after, partial, file, progress });
     const info = await stat(file);
-    let candidate: AgentExternalSessionCandidate = { remoteSessionId: basename(file, '.jsonl'), updatedAtMs: info.mtimeMs, linkData: { sessionFile: file } };
+    let candidate: AgentExternalSessionCandidate = { remoteSessionId: basename(file, '.jsonl'), updatedAtMs: Math.max(0, Math.trunc(info.mtimeMs)), linkData: { sessionFile: file } };
     try {
       if (target === 'content') {
         control.checkWork();
