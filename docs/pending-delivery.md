@@ -620,7 +620,24 @@ unsubscribes the retirement listener.
 Idle and active consumers share the same wake handling. The existing backoff for
 unavailable adapters does not periodically materialize the queue. Reconnect does
 not bypass settings convergence, admission, or the Pending row's blocked state;
-an explicitly blocked message still requires its existing Retry action.
+an explicitly blocked message still requires person recovery. A confirmed
+`provider_rejected_before_acceptance` ends that delivery attempt, not custody of
+the original input. Its Pending row remains visible with the rejection reason:
+the person can remove it, or deliberately send it again through the existing
+Send now/Steer now controls. The shared `session.pending.action.set` Action can
+also rearm that same original; it clears the previous provider action and block.
+Resuming the Session alone does none of these things.
+
+`delivery_outcome_uncertain` means an effect may already exist. Its visible
+recovery is Dismiss, Mark handled after confirming it was handled, or an explicit
+duplicate-risk Send as new through the Actions described above. It cannot be
+blindly retried, edited, or removed as though nothing was sent. These ordinary
+blocked predecessors retain FIFO for later `enqueue` input, including addressed
+Discussion asks; addressing grants neither a queue-priority override nor proof
+of native acceptance. Later rows remain Queued, with the predecessor defer
+reason, while the earlier blocked row owns its explanation and repair controls.
+The per-row Retry Send control is for a failed local outbox operation, not a
+second recovery owner for uncertain server custody.
 
 ## Current Queue V2 activation ownership
 
