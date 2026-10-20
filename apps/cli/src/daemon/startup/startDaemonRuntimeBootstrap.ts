@@ -657,6 +657,7 @@ export async function startDaemonConnectedServiceRuntime(
 
     const activation = await activateConnectedServiceQuotaAutomationAfterProviderAccountUsageHydration({
       enabled: true,
+      isCurrent: () => !params.isDaemonQuiescing?.(),
       quotaFetchers,
       awaitReadiness: async () => {
         const settingsReady = params.accountSettingsSnapshot
