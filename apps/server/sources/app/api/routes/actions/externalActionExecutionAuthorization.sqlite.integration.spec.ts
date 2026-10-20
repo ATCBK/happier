@@ -2714,6 +2714,67 @@ describe("external Action execution authorization", () => {
         } finally { await app.close(); }
     });
 
+    it.each(['discussion.post', 'discussion.reply'] as const)('admits only the signed %s participant-policy companion read', async actionId => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        vi.stubEnv('HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED', '1');
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, false, registerDiscussionRoutes);
+        try {
+            const foreignAccount = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
+            const discussions: string[] = [];
+            for (const account of [fixture.account, foreignAccount]) {
+                const created = await createDiscussion({ actorAccountId: account.id,
+                    authentication: createPresentUserSessionAccessAuthentication(), request: {
+                        creationLocalId: crypto.randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Policy companion' } },
+                        firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                            parts: [{ t: 'text', text: 'Current participant policy' }] } }, mentionedAccountIds: [] },
+                    } });
+                if (!created.ok) throw new Error(created.error);
+                discussions.push(created.value.discussion.id);
+            }
+            const discussionId = discussions[0]!;
+            const path = `/v1/discussions/${discussionId}/participants`;
+            const root = await mint(app, fixture, actionId, { ...fixture.envelope, requestId: crypto.randomUUID(),
+                input: { discussionId, localId: crypto.randomUUID(), replyTarget: { kind: 'message', messageId: 'question' },
+                    content: { v: 1, parts: [{ t: 'text', text: 'Addressed reply' }] } } });
+            const headers = (method: string, requestPath: string, body?: unknown) => machineHeaders({
+                authorizationToken: root.token, effectActionId: actionId, method, path: requestPath, body,
+                privateKey: fixture.keyPair.secretKey });
+            const verify = (method: string, requestPath: string, body?: unknown, routeInput?: unknown,
+                effectActionId: string = actionId, machineSignature?: string) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: root.token, effectActionId, encodedTarget: encodeExternalActionResolvedTargetV1(root.binding.target),
+                method, path: requestPath, body, routeInput,
+                machineSignature: machineSignature ?? signExternalActionMachineRequestV1({ authorizationToken: root.token,
+                    effectActionId, target: root.binding.target, installationId: fixture.machine.installationId!,
+                    requestId: root.binding.requestId, method, path: requestPath, body, privateKey: fixture.keyPair.secretKey }),
+            });
+            expect(await verify('GET', path, undefined, { discussionId })).not.toBeNull();
+            const admitted = await app.inject({ method: 'GET', url: path, headers: headers('GET', path) });
+            expect([admitted.statusCode, admitted.json()]).toMatchObject([200, { discussionId, participants: [] }]);
+            // The installed host signs decrypted operands, not a new grant. A
+            // different Account's Discussion remains private at the real route.
+            const privatePath = `/v1/discussions/${discussions[1]!}/participants`;
+            expect((await app.inject({ method: 'GET', url: privatePath,
+                headers: headers('GET', privatePath) })).statusCode).toBe(404);
+            for (const [method, requestPath, body, routeInput] of [
+                ['GET', path, undefined, { discussionId: 'other' }],
+                ['GET', '/v1/discussions/other/participants', undefined, { discussionId }],
+                ['GET', `${path}?includeMessages=true`, undefined, { discussionId }],
+                ['GET', path, {}, { discussionId }],
+                ['POST', path, {}, { discussionId }],
+                ['POST', `${path}/invite`, { participant: { kind: 'account', accountId: foreignAccount.id } },
+                    { discussionId, participant: { kind: 'account', accountId: foreignAccount.id } }],
+            ] as const) expect(await verify(method, requestPath, body, routeInput), `${method} ${requestPath}`).toBeNull();
+            expect(await verify('GET', path, undefined, { discussionId }, 'discussion.participants.list')).toBeNull();
+            expect(await verify('GET', path, undefined, { discussionId }, actionId, '')).toBeNull();
+            const unsignedHeaders = headers('GET', path);
+            delete unsignedHeaders[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER];
+            expect((await app.inject({ method: 'GET', url: path, headers: unsignedHeaders })).statusCode).toBe(401);
+            const queryPath = `${path}?includeMessages=true`;
+            expect((await app.inject({ method: 'GET', url: queryPath, headers: headers('GET', queryPath) })).statusCode).toBe(401);
+            expect((await db.discussionMessage.count({ where: { discussionId } }))).toBe(1);
+        } finally { await app.close(); vi.unstubAllEnvs(); }
+    });
+
     it('admits declaration-owned SessionTarget preparation reads only under the original signed root', async () => {
         const fixture = await createFixture({ qualifiedPat: false });
         const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(),

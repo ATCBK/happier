@@ -137,7 +137,11 @@ export function createDiscussionActionDeps(options: Readonly<{
     }
 
     const root = SignedRootActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
-    const effectActionId = actionId === 'discussion.participants.list' && root.success && getActionSpec(root.data).sessionTarget
+    // Roster reads prepare the original operation, including the current
+    // answer-policy check before an addressed post/reply. Home admits their
+    // exact route under that root; they never become a second signed effect.
+    const effectActionId = actionId === 'discussion.participants.list' && root.success
+      && (getActionSpec(root.data).sessionTarget || root.data === 'discussion.post' || root.data === 'discussion.reply')
       ? root.data : actionId;
     const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
       context, effectActionId, method, path, ...(body === undefined ? {} : { body }),

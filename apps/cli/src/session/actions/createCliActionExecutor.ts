@@ -403,6 +403,9 @@ export function createCliActionExecutor(
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return { kind: 'settled' as const,
         result: actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable') };
+      // The daemon binds drafts before signing, but an unchanged signed reply
+      // must still refuse if its current participant policy now requires a draft.
+      // Already-bound drafts carry discussionReplyReturn and skip this recheck.
       const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
         serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
       if ('failure' in bound) return { kind: 'settled' as const, result: bound.failure };
@@ -414,6 +417,7 @@ export function createCliActionExecutor(
       if (denied) return denied;
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
+      // Retain the same current-policy recheck as prepare; never rewrite signed operands.
       const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
         serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction });
       if ('failure' in bound) return bound.failure;
