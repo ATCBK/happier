@@ -1,0 +1,114 @@
+# Slack Channels
+
+Unreleased 0.3 development scaffold for Channels c0.73 F1. The package currently
+has a loadable manifest and activation entrypoint; the Slack provider roles are
+not registered yet. Test-first implementation is blocked on the checkout's
+dependency-refresh admission. This is not an available Slack integration.
+
+## Prepare a Slack app
+
+Create an app in the workspace that will own the connection. This manifest uses
+message events for joined channels, private channels, direct messages and group
+direct messages. It deliberately does not also subscribe to `app_mention`:
+mentions are recognizable in the message text, and subscribing to both streams
+can produce two events for one message. App manifest and subscription contracts:
+[Slack Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+[message events](https://docs.slack.dev/reference/events/message/), and
+[app manifests](https://docs.slack.dev/reference/app-manifest/), retrieved
+2026-10-20.
+
+```yaml
+display_information:
+  name: Happier Channels
+features:
+  bot_user:
+    display_name: Happier
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - users:read
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+settings:
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+```
+
+Install the app to that workspace and invite the bot to the conversations it
+should observe. Generate an app-level token with `connections:write`. The
+intended Connected Account holds both the non-rotating bot token (`xoxb-`) and
+app-level token (`xapp-`) as secrets; Channel setup receives only the account
+reference. Rotating-token refresh and organization-wide multi-workspace
+installation are outside this first vertical. See
+[app tokens](https://docs.slack.dev/authentication/tokens/),
+[connections:write](https://docs.slack.dev/reference/scopes/connections.write/),
+and [Socket Mode setup](https://docs.slack.dev/apis/events-api/using-socket-mode/),
+retrieved 2026-10-20.
+
+## Implementation contract
+
+The provider consumes the existing Channels contribution, Connected Accounts,
+background services and HTTP/WebSocket services. Channels remains the owner of
+pairing, bindings, Session admission, deduplication, text splitting and delivery
+custody. No Slack checkpoint, binding store or HTTP listener is introduced.
+
+Socket Mode obtains a rotating URL with `apps.connections.open`; the app token
+must correspond to the bot's app. `auth.test` supplies the workspace/bot IDs,
+`bots.info` supplies its `app_id`, and the socket's authenticated
+`hello.connection_info.app_id` supplies the comparison. Event acknowledgements
+follow successful core admission; reconnects cannot promise replay of missed
+events. Native `event_id` supplies occurrence identity to the core census.
+Sources: [auth.test](https://docs.slack.dev/reference/methods/auth.test/),
+[bots.info](https://docs.slack.dev/reference/methods/bots.info/),
+[apps.connections.open](https://docs.slack.dev/reference/methods/apps.connections.open/),
+[Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/), and
+[Events API](https://docs.slack.dev/apis/events-api/), retrieved 2026-10-20.
+
+Endpoint IDs are scoped to the authenticated workspace. `is_im` conversations
+are direct; channels and multi-person conversations are shared. A thread uses
+its root `thread_ts` below the parent channel. Principals use immutable Slack
+user IDs in that workspace, never display-name equality. Exact-ID
+`users.info` is an authenticated resolver; unverified or foreign-workspace
+identities must use core pairing. Sources:
+[conversations.info](https://docs.slack.dev/reference/methods/conversations.info/),
+[conversation objects](https://docs.slack.dev/reference/objects/conversation-object/),
+[users.info](https://docs.slack.dev/reference/methods/users.info/), and
+[message events](https://docs.slack.dev/reference/events/message/), retrieved
+2026-10-20.
+
+The planned output representation is plain text with Slack automatic parsing
+disabled and explicit mention delimiters neutralized. Core splits using the
+declared 40,000-character native ceiling, rather than treating Slack's 4,000
+character recommendation as a hard limit. `chat.postMessage.thread_ts` preserves
+thread replies. Both unfurl flags implement link-preview suppression. HTTP 429
+`Retry-After` enters core custody; an uncertain send response must not trigger
+blind resend. Sources:
+[chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/),
+[formatting and mention parsing](https://docs.slack.dev/messaging/formatting-message-text/),
+[rate limits](https://docs.slack.dev/apis/web-api/rate-limits/), and
+[message truncation](https://docs.slack.dev/changelog/2018-truncating-really-long-messages/),
+retrieved 2026-10-20.
+
+## Acceptance still required
+
+Run the provider tests, composed core journeys, F7 conformance and package
+typecheck/build after dependency admission is restored. The orchestrator owns
+bundled projection publication and loaded development-stack QA (`RELOAD NEEDED`).
+A real Slack workspace must additionally verify app/bot correspondence,
+message scopes, mention notification suppression, Unicode text boundaries,
+thread replies, reconnect gaps, rate limits and credential repair before
+release. No live workspace or real Slack send was used for this scaffold.
