@@ -4,8 +4,10 @@ import {
     type PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
 import {
+    type PluginAccountActionContext,
     isPluginActionApprovalRequestCreated,
     type ActionHandler,
+    type PluginAccountActionHandler,
 } from '@happier-dev/plugin-sdk/actions';
 import {
     projectTriagePrepareReviewWorkspaceInputV1,
@@ -715,11 +717,11 @@ export function createTriageStartEntrySessionActionHandler(): ActionHandler<
     };
 }
 
-export function createTriageUnlinkEntryFromSessionActionHandler(): ActionHandler<
+export function createTriageUnlinkEntryFromSessionActionHandler(): PluginAccountActionHandler<
     TriageUnlinkEntryFromSessionActionInputV1,
     TriageUnlinkEntryFromSessionActionResultV1
 > {
-    return async (input, context: PluginInvocationContext) => {
+    return async (input, context: PluginAccountActionContext) => {
         const result = await createTriageSourceSessionRelations(context,
             bindCorpusCollections(requireTriageAccountStorage(context))).write({ ...input, linked: false });
         return { v: 1, status: result.status === 'linked' ? 'failed' : result.status };

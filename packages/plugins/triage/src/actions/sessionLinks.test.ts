@@ -1,9 +1,10 @@
-import type { JsonValue, PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { JsonValue, PluginApi, PluginAccountApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import { describe, expect, it } from 'vitest';
 
 import { activate } from '../activate.js';
+import { activate as activateAccount } from '../accountRuntime.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
 import {
     CORPUS_SESSION_LINKS_COLLECTION_ID,
@@ -47,9 +48,10 @@ function registeredLinkHandler(localId = TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOC
             },
         },
         composerAttachments: { register: () => {} },
-    } as unknown as PluginApi;
+    } as unknown as PluginApi & PluginAccountApi;
 
     activate(api);
+    activateAccount(api);
     const handler = handlers.get(localId);
     if (handler === undefined) {
         throw new Error(

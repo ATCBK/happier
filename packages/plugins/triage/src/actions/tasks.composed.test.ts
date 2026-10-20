@@ -7,17 +7,19 @@ import {
     TriageSourceDescriptorV1Schema,
     TriageSourcesContributionProtocolV1,
     TriageTaskWriteResultV1Schema,
+    TriageConfiguredSourceInstanceV1Schema,
     type TriageTaskWriteResultV1,
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
-import { activate } from '../activate.js';
-import { PLUGIN_MANIFEST, TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
+import { PLUGIN_MANIFEST, TRIAGE_PLUGIN, TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import { CORPUS_SESSION_LINKS_INDEX_ID, CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
 import { TriageListEntriesResultV1Schema } from './listEntriesProtocol.js';
 import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1 } from './sessionLinksProtocol.js';
 import { TRIAGE_LIST_NO_FILTERS_V1 } from '../projection/listWindow.js';
+import { INTERNAL_TASK_DRAFT_V1, INTERNAL_TASK_SOURCE_V1 } from '../internalTasks/source.js';
+import { administerConfiguredSourceInstance } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 
 const fixture = createTriageSourceV1Fixture();
 const configured = fixture.configuredInstance;
@@ -41,8 +43,14 @@ async function withExternalTaskSource(
         readRequests: readonly string[];
         setWriteResult: (result: TriageTaskWriteResultV1 | null) => void;
     }>) => Promise<void>,
-    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean; scopeSelection?: boolean; completedScan?: boolean; completedScanSupport?: boolean; unboundedCompleted?: boolean }> = {},
+    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean; scopeSelection?: boolean; completedScan?: boolean; completedScanSupport?: boolean; unboundedCompleted?: boolean; machineUnavailable?: boolean; accountSource?: boolean }> = {},
 ) {
+    const configured = options.accountSource ? TriageConfiguredSourceInstanceV1Schema.parse({
+        ...fixture.configuredInstance, binding: { purpose: fixture.descriptor.purpose, source: 'accountData' },
+    }) : fixture.configuredInstance;
+    const execution = options.accountSource ? { execution: {
+        target: 'account', account: { artifactId: 'example-account-source', exportName: 'activate' },
+    } as const } : {};
     const descriptor = TriageSourceDescriptorV1Schema.parse({
         ...fixture.descriptor,
         ...(options.scopeSelection ? { scopeUnit: { singularLabel: 'Team', pluralLabel: 'teams' } } : {}),
@@ -64,12 +72,14 @@ async function withExternalTaskSource(
     const definition = definePlugin({
         id: source.pluginId, version: '0.0.0',
         actions: {
-            discover: { title: 'Discover', surfaces: protocol.operations.listInstances.declaration.surfaces,
+            discover: { ...execution, title: 'Discover', surfaces: protocol.operations.listInstances.declaration.surfaces,
                 dangerLevel: protocol.operations.listInstances.declaration.dangerLevel,
                 inputSchema: protocol.operations.listInstances.declaration.input.schema,
                 resultSchema: protocol.operations.listInstances.declaration.resultSchema,
-                run: async () => fixture.listInstancesResult },
-            scan: { title: 'Scan', surfaces: protocol.operations.scan.declaration.surfaces,
+                run: async () => options.accountSource && fixture.listInstancesResult.kind === 'complete'
+                    ? { ...fixture.listInstancesResult, candidates: fixture.listInstancesResult.candidates.map(candidate => ({ ...candidate, binding: configured.binding })) }
+                    : fixture.listInstancesResult },
+            scan: { ...execution, title: 'Scan', surfaces: protocol.operations.scan.declaration.surfaces,
                 dangerLevel: protocol.operations.scan.declaration.dangerLevel,
                 inputSchema: protocol.operations.scan.declaration.input.schema,
                 resultSchema: protocol.operations.scan.declaration.resultSchema,
@@ -96,13 +106,13 @@ async function withExternalTaskSource(
                         continuation: { v: 1, token: 'after-pr' },
                     } : { kind: 'complete', observations: [observedTask], evidence: { kind: 'walkFinished' } };
                 } },
-            get: { title: 'Get', surfaces: protocol.operations.get.declaration.surfaces,
+            get: { ...execution, title: 'Get', surfaces: protocol.operations.get.declaration.surfaces,
                 dangerLevel: protocol.operations.get.declaration.dangerLevel,
                 inputSchema: protocol.operations.get.declaration.input.schema,
                 resultSchema: protocol.operations.get.declaration.resultSchema,
                 run: async () => { readRequests.push('get'); return task; } },
             ...(options.scopeSelection ? {
-                scopes: { title: 'List teams', surfaces: protocol.operations.listScopeUnits.declaration.surfaces,
+                scopes: { ...execution, title: 'List teams', surfaces: protocol.operations.listScopeUnits.declaration.surfaces,
                     dangerLevel: protocol.operations.listScopeUnits.declaration.dangerLevel,
                     inputSchema: protocol.operations.listScopeUnits.declaration.input.schema,
                     resultSchema: protocol.operations.listScopeUnits.declaration.resultSchema,
@@ -115,7 +125,7 @@ async function withExternalTaskSource(
                     } },
             } : {}),
             ...(!options.readOnly ? {
-                create: { title: 'Create', surfaces: protocol.operations.create.declaration.surfaces,
+                create: { ...execution, title: 'Create', surfaces: protocol.operations.create.declaration.surfaces,
                     dangerLevel: protocol.operations.create.declaration.dangerLevel,
                     inputSchema: protocol.operations.create.declaration.input.schema,
                     resultSchema: protocol.operations.create.declaration.resultSchema,
@@ -126,7 +136,7 @@ async function withExternalTaskSource(
                         task = { ...task, snapshot: { ...task.snapshot, title: input.fields.title } };
                         return { kind: 'applied', observation: task };
                     } },
-                edit: { title: 'Edit', surfaces: protocol.operations.edit.declaration.surfaces,
+                edit: { ...execution, title: 'Edit', surfaces: protocol.operations.edit.declaration.surfaces,
                     dangerLevel: protocol.operations.edit.declaration.dangerLevel,
                     inputSchema: protocol.operations.edit.declaration.input.schema,
                     resultSchema: protocol.operations.edit.declaration.resultSchema,
@@ -137,7 +147,7 @@ async function withExternalTaskSource(
                         task = { ...task, snapshot: { ...task.snapshot, title: input.fields.title ?? task.snapshot.title } };
                         return { kind: 'applied', observation: task };
                     } },
-                transition: { title: 'Transition', surfaces: protocol.operations.transition.declaration.surfaces,
+                transition: { ...execution, title: 'Transition', surfaces: protocol.operations.transition.declaration.surfaces,
                     dangerLevel: protocol.operations.transition.declaration.dangerLevel,
                     inputSchema: protocol.operations.transition.declaration.input.schema,
                     resultSchema: protocol.operations.transition.declaration.resultSchema,
@@ -170,7 +180,9 @@ async function withExternalTaskSource(
             surfaces: { detail: { renderer: 'detail' } },
         }) } } },
     });
-    const contributor = await createPluginTestkit({ manifest: definition.manifest, module: definition });
+    const contributor = await createPluginTestkit({ manifest: definition.manifest, module: definition,
+        ...(options.machineUnavailable || options.accountSource ? { resolveCurrentPluginMaterializationRef: () => null } : {}),
+    });
     const corpus = createTestkitCorpusCollections();
     corpus.control.sourceInstances.seed(toCorpusStoredValue({
         instanceTag: 'a'.repeat(43), sourceQualifiedId: `${source.pluginId}/${source.localId}`,
@@ -178,6 +190,11 @@ async function withExternalTaskSource(
         configuredAtMs: 1, configured,
         ...(options.retired ? { retiredReason: 'userRemoved' as const } : {}),
     }));
+    if (options.machineUnavailable) await administerConfiguredSourceInstance({
+        collections: corpus.collections, source: INTERNAL_TASK_SOURCE_V1, declaredPurpose: 'tasks',
+        request: { kind: 'create', draft: INTERNAL_TASK_DRAFT_V1 }, nowMs: 2,
+        mintSourceInstanceId: () => secondInstanceId,
+    });
     if (options.secondInstance) {
         corpus.control.sourceInstances.seed(toCorpusStoredValue({
             instanceTag: 'b'.repeat(43), sourceQualifiedId: `${source.pluginId}/${source.localId}`,
@@ -215,8 +232,14 @@ async function withExternalTaskSource(
     }) } as unknown as PluginServices['targetedContributions'];
     try {
         aggregate = await createPluginTestkit({
-            manifest: PLUGIN_MANIFEST, module: { activate }, targetedContributionContributors: [contributor],
-            services: { storage },
+            manifest: PLUGIN_MANIFEST, module: TRIAGE_PLUGIN, targetedContributionContributors: [contributor],
+            services: { storage, ...(options.machineUnavailable ? { actions: { execute: async (id: string) => {
+                if (id !== 'tasks.internal.list') throw new Error(`Unexpected host Action ${id}`);
+                return { status: 'ok', scope: { serverId: 'home', accountId: 'account' },
+                    todos: [{ id: 'personal', title: 'My Account task', state: 'unstarted', done: false, createdAt: 1, updatedAt: 1 }],
+                    undoneOrder: ['personal'], completedOrder: [] };
+            } } as unknown as PluginServices['actions'] } : {}) },
+            ...(options.machineUnavailable || options.accountSource ? { resolveCurrentPluginMaterializationRef: () => null } : {}),
         });
         // Structural fixtures issue the actual opaque operation handles. Their
         // descriptor semantics are supplied at the invocation boundary, where
@@ -236,6 +259,20 @@ async function withExternalTaskSource(
 }
 
 describe('Tasks through a separately authored source and registered aggregate Actions', () => {
+    it('retains personal Account rows and reports Machine-required per external source without executing it', async () => {
+        await withExternalTaskSource(async ({ aggregate, readRequests, writes }) => {
+            const result = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
+            }, { surface: 'agent' }));
+            expect(result.window.rows.map(row => row.entryRef.entryId)).toEqual(['personal']);
+            expect(result.window.lanes.find(lane => lane.sourceInstanceId === instanceId)).toMatchObject({
+                health: { kind: 'unavailable', error: { code: 'plugin_action_machine_required' } },
+            });
+            expect(result.window.lanes.find(lane => lane.sourceInstanceId === secondInstanceId)).toMatchObject({ health: { kind: 'walkFinished' } });
+            expect(readRequests).toEqual([]);
+            expect(writes).toEqual([]);
+        }, { machineUnavailable: true, initialTaskPage: true });
+    });
     it('sends the agent task lens completion boundary only to declared task kinds through admitted scan wiring', async () => {
         await withExternalTaskSource(async ({ aggregate }) => {
             const input = { v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 100 } };
@@ -330,7 +367,8 @@ describe('Tasks through a separately authored source and registered aggregate Ac
         }, { secondInstance: true, initialTaskPage: true, firstInstanceKeepsPaging });
     });
 
-    it.each(['agent', 'mcp', 'cli'] as const)('creates, edits and uses a native transition through real source role handles from %s', async (surface) => {
+    it.each([['agent', 'daemon'], ['mcp', 'daemon'], ['cli', 'daemon'], ['agent', 'account']] as const)(
+        'creates, edits and uses a native transition through real source role handles from %s via %s', async (surface, placement) => {
         await withExternalTaskSource(async ({ aggregate, writes }) => {
             const created = TriageTaskWriteResultV1Schema.parse(await aggregate.invokeAction('tasks/create-v1', {
                 v: 1, source, sourceInstanceId: instanceId, kindId: 'issue', fields: { title: 'Created task' },
@@ -349,8 +387,16 @@ describe('Tasks through a separately authored source and registered aggregate Ac
                 snapshot: { state: { nativeLabel: 'newly-available-native-transition', stage: 'started' } },
             } });
             expect(writes.map((write) => write.role)).toEqual(['create', 'edit', 'transition']);
-            expect(writes[0]?.input).toEqual({ v: 1, instance: configured, kindId: 'issue', fields: { title: 'Created task' } });
-        });
+            expect(writes[0]?.input).toEqual({ v: 1, instance: placement === 'account'
+                ? { ...configured, binding: { purpose: fixture.descriptor.purpose, source: 'accountData' } } : configured,
+                kindId: 'issue', fields: { title: 'Created task' } });
+            if (placement === 'account') {
+                const listed = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                    v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
+                }, { surface }));
+                expect(listed.window.rows).toMatchObject([{ entryRef, observation: { outcome: { kind: 'present', snapshot: { title: 'Edited task' } } } }]);
+            }
+        }, { accountSource: placement === 'account' });
     });
 
     it('preserves uncertain writes without issuing a second create or a confirming aggregate read', async () => {

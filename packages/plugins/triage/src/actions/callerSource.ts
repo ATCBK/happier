@@ -5,6 +5,10 @@ import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
 import type { TriageAdmittedSourceV1 } from './listEntries.js';
 
+type TriageCallerContext = Pick<PluginInvocationContext, 'caller' | 'surface' | 'signal'> & Readonly<{
+    services: Pick<PluginInvocationContext['services'], 'targetedContributions'>;
+}>;
+
 /**
  * The one owner of "who is calling a caller-bound Triage Action".
  *
@@ -32,12 +36,12 @@ export type TriageCallerSourceResolutionV1 =
 
 const INVALID_CALLER: TriageCallerSourceResolutionV1 = Object.freeze({ kind: 'invalidCaller' });
 
-export function isTriageHostActionCaller(context: PluginInvocationContext): boolean {
+export function isTriageHostActionCaller(context: TriageCallerContext): boolean {
     return context.caller === undefined
         && (context.surface === 'agent' || context.surface === 'mcp' || context.surface === 'cli' || context.surface === 'api');
 }
 
-export function isTriageAccountCaller(context: PluginInvocationContext): boolean {
+export function isTriageAccountCaller(context: TriageCallerContext): boolean {
     return isTriageSelfCaller(context) || isTriageHostActionCaller(context);
 }
 
@@ -51,7 +55,7 @@ function sameSource(left: PluginContributionIdentity, right: PluginContributionI
 }
 
 function callerSourcesFrom(
-    context: PluginInvocationContext,
+    context: TriageCallerContext,
     admitted: readonly TriageAdmittedSourceV1[],
     requestedSource?: PluginContributionIdentity,
 ): readonly TriageCallerSourceV1[] | null {
@@ -76,7 +80,7 @@ function callerSourcesFrom(
  * view, holding an invalidation watch for the length of the read.
  */
 export async function resolveTriageCallerSources(
-    context: PluginInvocationContext,
+    context: TriageCallerContext,
     options?: PluginCancellationOptions,
     requestedSource?: PluginContributionIdentity,
 ): Promise<TriageCallerSourcesResolutionV1> {
@@ -97,7 +101,7 @@ export async function resolveTriageCallerSources(
 }
 
 export async function resolveTriageCallerSource(
-    context: PluginInvocationContext,
+    context: TriageCallerContext,
     options?: PluginCancellationOptions,
     requestedSource?: PluginContributionIdentity,
 ): Promise<TriageCallerSourceResolutionV1> {
@@ -118,7 +122,7 @@ export async function resolveTriageCallerSource(
  * withholds the account binding and configuration token from its summaries;
  * this keeps the exact-instance read from becoming the way around that.
  */
-export function isTriageSelfCaller(context: PluginInvocationContext): boolean {
+export function isTriageSelfCaller(context: TriageCallerContext): boolean {
     const caller = context.caller;
     return caller?.kind === 'plugin' && caller.pluginId === TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1;
 }

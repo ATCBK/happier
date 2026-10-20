@@ -1,4 +1,4 @@
-import type { JsonValue, PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { JsonValue, PluginApi, PluginAccountApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginTargetedContributionSelectionV1 } from '@happier-dev/plugin-sdk/contributions';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
@@ -7,6 +7,7 @@ import { TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, projectTriagePrepareReviewW
 import { describe, expect, it } from 'vitest';
 
 import { activate } from '../activate.js';
+import { activate as activateAccount } from '../accountRuntime.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
 import {
     CORPUS_SESSION_LINKS_COLLECTION_ID,
@@ -85,9 +86,10 @@ function registeredHandler(localId: string): ActionHandler<JsonValue, JsonValue>
             },
         },
         composerAttachments: { register: () => {} },
-    } as unknown as PluginApi;
+    } as unknown as PluginApi & PluginAccountApi;
 
     activate(api);
+    activateAccount(api);
     const handler = handlers.get(localId);
     if (handler === undefined) {
         throw new Error(`activation registers no handler for "${localId}"`);
@@ -404,7 +406,9 @@ describe('the Session-start Action a mounted header can actually press', () => {
         ]) {
             const action = declaredAction(localId);
             expect(action.surfaces, localId).toEqual(['ui', 'agent', 'mcp', 'cli']);
-            expect(action.execution, localId).toEqual({ target: 'daemon' });
+            expect(action.execution.target, localId).toBe(
+                localId === TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 ? 'account' : 'daemon',
+            );
             // It writes durable Account state and reaches the generic Session
             // creator, so it is never `safe`.
             expect(action.dangerLevel, localId).toBe('writesLocal');

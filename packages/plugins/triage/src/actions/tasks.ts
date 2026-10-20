@@ -1,5 +1,4 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
 import { TriageTaskWriteResultV1Schema, type TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
@@ -24,7 +23,7 @@ type TaskWriteRequest =
 
 /** Thin transport: the configured-instance and admitted source owners grant authority;
  * the source's named Action owns authorization, provider writes and settlement. */
-async function writeTask(request: TaskWriteRequest, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+async function writeTask(request: TaskWriteRequest, context: PluginAccountActionContext): Promise<TriageTaskWriteResultV1> {
     if (!isTriageAccountCaller(context)) {
         return { kind: 'failed', failure: { class: 'permission', code: 'invalidCaller' } };
     }
@@ -110,12 +109,12 @@ async function writeTask(request: TaskWriteRequest, context: PluginInvocationCon
     }
 }
 
-export function createTriageCreateTaskActionHandler(): ActionHandler<TriageCreateTaskActionInputV1, TriageTaskWriteResultV1> {
+export function createTriageCreateTaskActionHandler(): PluginAccountActionHandler<TriageCreateTaskActionInputV1, TriageTaskWriteResultV1> {
     return async (input, context) => await writeTask({ role: 'create', input }, context);
 }
-export function createTriageEditTaskActionHandler(): ActionHandler<TriageEditTaskActionInputV1, TriageTaskWriteResultV1> {
+export function createTriageEditTaskActionHandler(): PluginAccountActionHandler<TriageEditTaskActionInputV1, TriageTaskWriteResultV1> {
     return async (input, context) => await writeTask({ role: 'edit', input }, context);
 }
-export function createTriageTransitionTaskActionHandler(): ActionHandler<TriageTransitionTaskActionInputV1, TriageTaskWriteResultV1> {
+export function createTriageTransitionTaskActionHandler(): PluginAccountActionHandler<TriageTransitionTaskActionInputV1, TriageTaskWriteResultV1> {
     return async (input, context) => await writeTask({ role: 'transition', input }, context);
 }

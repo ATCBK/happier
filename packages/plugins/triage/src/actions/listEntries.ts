@@ -1,6 +1,7 @@
-import type { PluginCancellationOptions, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { LoggerService, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
 import type {
-    ActionHandler,
+    PluginAccountActionContext,
+    PluginAccountActionHandler,
     AdmittedTargetedOperationExecutionHandle,
 } from '@happier-dev/plugin-sdk/actions';
 import {
@@ -109,7 +110,7 @@ export type TriageListEntriesDepsV1 = Readonly<{
         options?: PluginCancellationOptions,
     ) => Promise<TriageListScopeUnitsResultV1>;
     nowMs: () => number;
-    logger?: Pick<PluginInvocationContext['services']['logger'], 'warn'>;
+    logger?: Pick<LoggerService, 'warn'>;
     signal?: AbortSignal;
     /** Tasks is a lens over this same scan/window owner. */
     taskOnly?: boolean;
@@ -491,11 +492,11 @@ export async function listTriageEntries(
  * invocation context the host supplies and adds no dispatch, cache or registry
  * of its own.
  */
-export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?: boolean }>): ActionHandler<
+export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?: boolean }>): PluginAccountActionHandler<
     TriageListEntriesInputV1,
     TriageListEntriesResultV1
 > {
-    return async (input, context: PluginInvocationContext) => await listTriageEntries(input, {
+    return async (input, context: PluginAccountActionContext) => await listTriageEntries(input, {
         sourceInstances: bindCorpusCollections(requireTriageAccountStorage(context)).sourceInstances,
         readAdmittedSources: async (options) => {
             const observation = context.services.targetedContributions.observeForSelf(
@@ -515,7 +516,6 @@ export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?
             .executeAdmittedTargetedOperation(operation, scopeInput, options ?? {}),
         nowMs: () => Date.now(),
         taskOnly: lens?.taskOnly,
-        logger: context.services.logger,
         signal: context.signal,
     });
 }

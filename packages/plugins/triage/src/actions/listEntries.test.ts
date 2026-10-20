@@ -1,4 +1,5 @@
-import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import {
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
@@ -88,12 +89,10 @@ describe('the aggregate list Action handler', () => {
         let disposedObservations = 0;
         const dispatched: unknown[] = [];
         let scanFailure: unknown;
-        const warn = vi.fn();
 
         const context = {
             signal: new AbortController().signal,
             services: {
-                logger: { warn },
                 storage: {
                     account: {
                         collection: (definition: PluginAccountCollectionDefinition) => (
@@ -134,7 +133,7 @@ describe('the aggregate list Action handler', () => {
                     },
                 },
             },
-        } as unknown as PluginInvocationContext;
+        } as unknown as PluginAccountActionContext;
 
         const result = await createTriageListEntriesActionHandler()({
             v: 1,
@@ -191,10 +190,7 @@ describe('the aggregate list Action handler', () => {
         if (state.kind !== 'window' || !state.failure) throw new Error('Expected named source failure');
         expect(state.failure.sources[0]).toMatchObject({ code: 'plugin_action_caller_unavailable', retryable: false });
         expect(readTriageListFailureNotice(state.failure).description).not.toContain('plugin_action_caller_unavailable');
-        expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-            sourceInstanceId: INSTANCE_ID, code: 'plugin_action_caller_unavailable', retryable: false,
-        }));
-        expect(JSON.stringify([snapshot, warn.mock.calls])).not.toContain('private provider');
+        expect(JSON.stringify(snapshot)).not.toContain('private provider');
         // A later transport refusal must not keep diagnosing the earlier source scan.
         listReadFailure = new PluginError({ code: 'transport_unavailable', retryable: true });
         await store.refresh('manual');

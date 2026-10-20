@@ -294,7 +294,8 @@ function finiteOpaqueJsonWitness(fragment: PluginJsonSchema): PluginJsonSchema {
     if (fragment.type === 'string' && fragment.maxLength === undefined
         && fragment['x-happier-max-utf8-bytes'] === undefined
         && fragment.enum === undefined && fragment.const === undefined) {
-        return { ...fragment, const: 'fixture-occurrence' };
+        return { ...fragment, const: fragment.pattern === '^sha256:[a-f0-9]{64}$'
+            ? `sha256:${'a'.repeat(64)}` : 'fixture-occurrence' };
     }
     return {
         ...fragment,
@@ -403,7 +404,8 @@ describe('aggregate Action value shapes', () => {
         const value = buildMaximalSchemaValue(wider, 'wideStartInput');
 
         expect(encodedJsonBytes(value)).toBeGreaterThan(1_024 * 1_024);
-        expect(TriageStartEntrySessionInputV1Schema.safeParse(value).success).toBe(true);
+        const admitted = TriageStartEntrySessionInputV1Schema.safeParse(value);
+        expect(admitted.success, admitted.success ? undefined : JSON.stringify(admitted.error)).toBe(true);
     });
 
     /** `PLAN.md` §0a A9 retains one page size independently of source count. */

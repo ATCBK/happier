@@ -1,5 +1,4 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
 import { fitActionResultSequenceV1 } from '@happier-dev/triage-sources/projection/actionResultSequence';
 
@@ -105,11 +104,11 @@ function fitFixPullRequestsActionResult(result: TriageReadFixPullRequestsResultV
     }).result;
 }
 
-export function createTriageReadFixPullRequestsActionHandler(): ActionHandler<
+export function createTriageReadFixPullRequestsActionHandler(): PluginAccountActionHandler<
     TriageReadFixPullRequestsInputV1,
     TriageReadFixPullRequestsResultV1
 > {
-    return async (input, context: PluginInvocationContext) => {
+    return async (input, context: PluginAccountActionContext) => {
         throwIfAborted(context.signal);
         const options = context.signal === undefined ? {} : { signal: context.signal };
         const collections = bindCorpusCollections(requireTriageAccountStorage(context));
@@ -161,11 +160,11 @@ export function createTriageReadFixPullRequestsActionHandler(): ActionHandler<
     };
 }
 
-export function createTriageSetFixPullRequestActionHandler(): ActionHandler<
+export function createTriageSetFixPullRequestActionHandler(): PluginAccountActionHandler<
     TriageSetFixPullRequestInputV1,
     TriageSetFixPullRequestResultV1
 > {
-    return async (input, context: PluginInvocationContext) => {
+    return async (input, context: PluginAccountActionContext) => {
         throwIfAborted(context.signal);
         const deps = {
             collections: bindCorpusCollections(requireTriageAccountStorage(context)),

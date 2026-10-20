@@ -1,5 +1,4 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
@@ -22,18 +21,18 @@ import type {
  * tag on the way out.
  */
 
-export function createTriageLinkEntryToSessionActionHandler(): ActionHandler<
+export function createTriageLinkEntryToSessionActionHandler(): PluginAccountActionHandler<
     TriageLinkEntryToSessionInputV1,
     TriageLinkEntryToSessionActionResultV1
 > {
-    return async (input, context: PluginInvocationContext) => {
+    return async (input, context: PluginAccountActionContext) => {
         const collections = bindCorpusCollections(requireTriageAccountStorage(context));
         const result = await createTriageSourceSessionRelations(context, collections).write({ ...input, linked: true });
         return { v: 1, status: result.status === 'linked' ? 'linked' : 'failed' };
     };
 }
 
-export function createTriageReadSourceSessionLinksActionHandler(): ActionHandler<
+export function createTriageReadSourceSessionLinksActionHandler(): PluginAccountActionHandler<
     TriageReadSourceSessionLinksInputV1, TriageReadSourceSessionLinksResultV1
 > {
     return async (input, context) => {

@@ -1,4 +1,5 @@
-import type { PluginInvocationCaller, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import {
     PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
     type PluginAccountCollectionDefinition,
@@ -102,16 +103,16 @@ function caller(pluginId: string): PluginInvocationCaller {
         kind: 'plugin',
         pluginId,
         contribution: { id: 'triage', qualifiedId: `${pluginId}/triage` },
-        materialization: { pluginId, machineId: 'machine-1', materializationId: 'materialization-1' },
-    } as unknown as PluginInvocationCaller;
+        occurrenceId: `test-account:${pluginId}`,
+        sourceCustody: { kind: 'account_release', pluginId, version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+    };
 }
 
 function createContext(input: Readonly<{
     collections: CorpusCollectionsV1;
     callerPluginId?: string;
-    hostSurface?: PluginInvocationContext['surface'];
-    sessionSummary?: Readonly<{ title?: string; updatedAtMs?: number }> | null;
-}>): PluginInvocationContext {
+    hostSurface?: PluginAccountActionContext['surface'];
+}>): PluginAccountActionContext {
     return {
         signal: new AbortController().signal,
         surface: input.hostSurface ?? 'plugin',
@@ -139,13 +140,8 @@ function createContext(input: Readonly<{
                     ),
                 },
             },
-            sessions: {
-                get: async () => (input.sessionSummary === undefined || input.sessionSummary === null
-                    ? null
-                    : { summary: async () => input.sessionSummary }),
-            },
         },
-    } as unknown as PluginInvocationContext;
+    } as unknown as PluginAccountActionContext;
 }
 
 function detailInput(sourceInstanceId: string) {
@@ -245,7 +241,7 @@ describe('the entry detail read', () => {
         expect(result.linkedSessions).toEqual([]);
     });
 
-    it('composes a value the published strict detail boundary admits', async () => {
+    it('retains links without Session summaries through the published strict detail boundary', async () => {
         const { collections } = await seedTwoConnections();
         await linkEntryToSession({
             collections,
@@ -260,7 +256,6 @@ describe('the entry detail read', () => {
                 detailInput(INSTANCE_A),
                 createContext({
                     collections,
-                    sessionSummary: { title: 'Replace the duplicated normalizer', updatedAtMs: 3_000 },
                 }),
             ),
         );
@@ -269,8 +264,6 @@ describe('the entry detail read', () => {
         if (result.kind !== 'read') return;
         expect(result.linkedSessions).toEqual([{
             sessionId: SESSION_ID,
-            displayTitle: 'Replace the duplicated normalizer',
-            updatedAtMs: 3_000,
         }]);
         // The whole point of the read: what it returns has to satisfy the exact
         // schema the mounted source detail is admitted through.
@@ -287,31 +280,6 @@ describe('the entry detail read', () => {
             linkedSessions: result.linkedSessions,
             linkedSessionsHasMore: result.linkedSessionsNextCursor !== undefined,
         })).not.toThrow();
-    });
-
-    it('keeps a link whose session the host cannot answer for', async () => {
-        const { collections } = await seedTwoConnections();
-        await linkEntryToSession({
-            collections,
-            entryRef: ENTRY_REF,
-            display: { locator: { v: 1, displayPath: 'example/repository#17' }, scopeLabel: 'example/repository' },
-            sessionId: SESSION_ID,
-            nowMs: 2_000,
-        });
-
-        const result = TriageReadEntryDetailResultV1Schema.parse(
-            await createTriageReadEntryDetailActionHandler()(
-                detailInput(INSTANCE_A),
-                createContext({ collections, sessionSummary: null }),
-            ),
-        );
-
-        expect(result.kind).toBe('read');
-        if (result.kind !== 'read') return;
-        // A tombstoned or unavailable Session loses its two presentation fields
-        // and nothing else; dropping the row would say the entry was never
-        // linked to anything.
-        expect(result.linkedSessions).toEqual([{ sessionId: SESSION_ID }]);
     });
 
     it('refuses a retired connection instead of opening it', async () => {

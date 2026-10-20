@@ -1,5 +1,5 @@
-import type { PluginCancellationOptions, PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginCancellationOptions } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     type TriageEntryRefV1,
     type TriageLinkedSessionProjectionV1,
@@ -156,11 +156,11 @@ export async function readTriageEntryDetail(
     });
 }
 
-export function createTriageReadEntryDetailActionHandler(): ActionHandler<
+export function createTriageReadEntryDetailActionHandler(): PluginAccountActionHandler<
     TriageReadEntryDetailInputV1,
     TriageReadEntryDetailResultV1
 > {
-    return async (input, context: PluginInvocationContext) => {
+    return async (input, context: PluginAccountActionContext) => {
         if (!isTriageAccountCaller(context)) return INVALID_CALLER;
         if (isTriageHostActionCaller(context)) {
             const resolution = await resolveTriageCallerSource(context, { signal: context.signal }, input.entryRef.source);
@@ -176,10 +176,9 @@ export function createTriageReadEntryDetailActionHandler(): ActionHandler<
             sourceInstances,
             sessionLinks,
             readSourceLinks: createTriageSourceSessionRelations(context, { sourceInstances, sessionLinks }).read,
-            readSessionSummary: async (sessionId, options) => {
-                const handle = await context.services.sessions.get(sessionId, options);
-                return handle === null ? null : await handle.summary(options);
-            },
+            // Portable Account execution has no Session service. These optional
+            // display facts stay absent while authoritative links remain present.
+            readSessionSummary: async () => null,
             ...(context.signal ? { signal: context.signal } : {}),
         });
     };
