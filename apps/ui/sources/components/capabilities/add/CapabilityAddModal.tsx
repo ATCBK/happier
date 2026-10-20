@@ -9,7 +9,7 @@ import {
   type CollectionDetailRenderContext,
 } from '@happier-dev/plugin-ui/components';
 
-import { HappierCollectionRestingRowsContext, HappierPressable, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
+import { HappierCollectionNavigationBackClosesDetailContext, HappierCollectionRestingRowsContext, HappierPressable, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -229,10 +229,24 @@ export function CapabilityAddModalBody<Item>(
   });
 
   // One level in (Registries): the header shows a back link in the same frame, at the same size.
+  // On a phone an open detail is the page, and its way back is the same link in the header ("‹ Add a skill").
+  const detailBackInHeader = onPhone && openKey !== null && registries === null;
   React.useEffect(() => {
     if (setChrome === undefined) return;
     setChrome({
       ...capabilityAddChrome(config),
+      ...(detailBackInHeader
+        ? {
+            title: null,
+            leading: (
+              <CapabilityAddBackLink
+                label={config.title}
+                onPress={() => setOpenKey(null)}
+                testID={`${config.testID}:back`}
+              />
+            ),
+          }
+        : {}),
       ...(registries === null || config.sources === undefined
         ? {}
         : {
@@ -247,7 +261,7 @@ export function CapabilityAddModalBody<Item>(
             ),
           }),
     });
-  }, [config.sources, config.testID, config.title, registries, setChrome]);
+  }, [config.sources, config.testID, config.title, detailBackInHeader, registries, setChrome]);
 
   const groups = React.useMemo(() => {
     const declared = catalog.groups;
@@ -386,6 +400,7 @@ export function CapabilityAddModalBody<Item>(
     <CoreCollectionScope>
       {/* The dialog's list keeps one rhythm: the same ruled rows and insets at rest, beside the details and loading. */}
       <HappierCollectionRestingRowsContext.Provider value={onPhone ? 'ruled-page' : 'ruled'}>
+        <HappierCollectionNavigationBackClosesDetailContext.Provider value={detailBackInHeader}>
         <View style={styles.fill}>
           <Collection<Item>
             model={model}
@@ -413,6 +428,7 @@ export function CapabilityAddModalBody<Item>(
             detailTestID={`${config.testID}:detail`}
           />
         </View>
+        </HappierCollectionNavigationBackClosesDetailContext.Provider>
       </HappierCollectionRestingRowsContext.Provider>
       {catalog.footer === undefined || openKey !== null ? null : (
         <View style={[styles.listFooter, edge]} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
@@ -464,6 +480,9 @@ function CatalogModes(props: Readonly<{
       activeTabId={props.activeKey}
       onSelectTab={props.onSelect}
       segmentSizing="content"
+      // The tabs sit beside the registry select and the search field: one label size across the band.
+      labelSize="field"
+      compact
       iconPlacement="leading"
       role="tablist"
       accessibilityLabel={t('capabilities.add.modesLabel')}
@@ -503,14 +522,22 @@ function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.React
  * `stacked` defaults to the device class that decides that presentation.
  */
 export function CapabilityAddFooter(
-  props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean; testID?: string }>,
+  props: Readonly<{
+    start: React.ReactNode;
+    children: React.ReactNode;
+    stacked?: boolean;
+    /** Placed in a `DetailsPaneFooter`, which already draws the page's edge, hairline and padding. */
+    inPageFooter?: boolean;
+    testID?: string;
+  }>,
 ): React.ReactElement {
   const narrow = useAddDialogNarrow();
-  const edge = useAddDialogEdge();
+  const dialogEdge = useAddDialogEdge();
+  const edge = props.inPageFooter ? null : dialogEdge;
   const stacked = props.stacked ?? narrow;
   if (stacked) {
     return (
-      <View testID={props.testID} style={[styles.footer, styles.footerStacked, edge]}>
+      <View testID={props.testID} style={[props.inPageFooter ? styles.footerInPage : styles.footer, styles.footerStacked, edge]}>
         {props.start === null || props.start === undefined ? null : props.start}
         <View style={styles.footerActionsStacked}>
           {React.Children.toArray(props.children).map((child, index) => (
@@ -521,7 +548,7 @@ export function CapabilityAddFooter(
     );
   }
   return (
-    <View testID={props.testID} style={[styles.footer, edge]}>
+    <View testID={props.testID} style={[props.inPageFooter ? styles.footerInPage : styles.footer, edge]}>
       <View style={styles.footerStart}>{props.start}</View>
       {props.children}
     </View>
@@ -543,6 +570,7 @@ function CapabilityAddDetail<Item>(
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const footer = props.config.detailFooter(props.item);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -612,6 +640,7 @@ function CapabilityAddDetail<Item>(
   const footerRow = (
     <CapabilityAddFooter
       stacked={props.pushed}
+      inPageFooter={props.pushed}
       start={
         error === null ? (
           (afterAdd?.start ?? footer.provenance ?? null)
@@ -646,7 +675,7 @@ function CapabilityAddDetail<Item>(
           />
         </View>
       )}
-      <ScrollView style={styles.fill} contentContainerStyle={[styles.detailBody, props.pushed ? styles.detailBodyPushed : null]}>
+      <ScrollView style={styles.fill} contentContainerStyle={[styles.detailBody, edge, props.pushed ? styles.detailBodyPushed : null]}>
         {/* The details are a detail page: sections read their description above the rows, in the body's own inset. */}
         <ListPresentationProvider value="page" pageInsets="contained">
           {props.config.renderDetail(props.item, {
@@ -685,14 +714,14 @@ const styles = StyleSheet.create((theme) => ({
     right: theme.space.s12,
     zIndex: 1,
   },
+  // The details stand on the dialog's one content edge (`useAddDialogEdge`), which the body adds.
   detailBody: {
-    paddingHorizontal: theme.space.s32,
     // The details' header carries its own top space; the title row then sits level with the close button.
     paddingTop: theme.space.s8,
     paddingBottom: theme.space.s24,
     gap: theme.space.s24,
   },
-  detailBodyPushed: { paddingHorizontal: theme.space.s20, paddingTop: theme.space.s8 },
+  detailBodyPushed: { paddingTop: theme.space.s8 },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -701,6 +730,7 @@ const styles = StyleSheet.create((theme) => ({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },
+  footerInPage: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
   footerStart: { flex: 1, minWidth: 0 },
   footerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
   footerStacked: { flexDirection: 'column', alignItems: 'stretch', gap: theme.space.s12 },
