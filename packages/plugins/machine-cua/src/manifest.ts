@@ -123,8 +123,7 @@ function roles(id: CuaLocalProvisionerId) {
 }
 const sandbox = roles('local-sandbox');
 const space = roles('local-space');
-const byoc = remoteRoles('byoc');
-const fleet = remoteRoles('fleet');
+const byoc = remoteRoles();
 function provisioner(id: CuaLocalProvisionerId): MachineProvisionerAuthorDefinitionV1 {
     const prefix = id === 'local-space' ? 'space' : 'sandbox';
     return { title: 'Cua', icon: 'desktop',
@@ -145,16 +144,14 @@ export const CUA_PLUGIN = definePlugin({
     // The provider's own mark beside its name in Machines: Cua's mark from github.com/trycua/cua img/logo_black.svg (MIT, Copyright (c) 2025 Cua AI, Inc.), monochrome.
     brand: { iconResourceId: 'brand-icon', monochrome: true },
     resources: { 'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' } },
-    description: 'Exact Cua local, BYOC and Fleet resources with private native bootstrap IO.',
+    description: 'Exact Cua local and BYOC resources with private native bootstrap IO.',
     engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
     hostAccess: { required: [{ id: processAccess, capability: 'process', reason: 'Operate only the reviewed native Cua resource.',
         scope: { executables: [{ kind: 'managedDependency', id: dependencyId }] } },
         { id: 'cloud-account', capability: 'connectedAccounts', reason: 'Use only the captured native cloud setup.',
             scope: { serviceRefs: ['cloud-native'], operations: ['use'], materializationKinds: ['environment'] } },
-        { id: 'cua-account', capability: 'connectedAccounts', reason: 'Use only the captured Cua login or Fleet gateway.',
-            scope: { serviceRefs: ['cua-account'], operations: ['use'], materializationKinds: ['environment', 'httpHeaders'] } },
-        { id: 'cua-fleet-api', capability: 'network', reason: 'Operate the exact Fleet claim and its private guest transport without renewal.',
-            scope: { targets: [{ kind: 'connectedAccountOrigin', service: 'cua-account' }], methods: ['GET', 'POST', 'DELETE'] } },
+        { id: 'cua-account', capability: 'connectedAccounts', reason: 'Use only the captured Cua login.',
+            scope: { serviceRefs: ['cua-account'], operations: ['use'], materializationKinds: ['environment'] } },
     ], optional: [] },
     connectedAccountDescriptors: remoteAccounts,
     managedDependencies: { [dependencyId]: { id: dependencyId, title: 'Cua', executable: 'cua',
@@ -162,14 +159,11 @@ export const CUA_PLUGIN = definePlugin({
         sources: [{ kind: 'system', executableNames: ['cua'], versionArguments: ['--version'] }] } },
     ui: { translations: CUA_UI_TRANSLATION_BUNDLES },
     machineProvisioners: { 'local-sandbox': provisioner('local-sandbox'), 'local-space': provisioner('local-space'),
-        byoc: remoteProvisioner('byoc'), fleet: remoteProvisioner('fleet') },
+        byoc: remoteProvisioner() },
     actions: {
         'byoc-check': byoc.check, 'byoc-options': byoc.options, 'byoc-acquire': byoc.acquire,
         'byoc-reconcile': byoc.reconcile, 'byoc-bootstrap': byoc.bootstrap, 'byoc-inspect': byoc.inspect,
         'byoc-power': byoc.power, 'byoc-destroy': byoc.destroy, 'byoc-exec': byoc.exec, 'byoc-put-file': byoc.putFile,
-        'fleet-check': fleet.check, 'fleet-options': fleet.options, 'fleet-acquire': fleet.acquire,
-        'fleet-reconcile': fleet.reconcile, 'fleet-bootstrap': fleet.bootstrap, 'fleet-inspect': fleet.inspect,
-        'fleet-destroy': fleet.destroy, 'fleet-exec': fleet.exec, 'fleet-put-file': fleet.putFile,
         'sandbox-reconcile': sandbox.reconcile, 'space-reconcile': space.reconcile,
         'sandbox-check': sandbox.check, 'sandbox-options': sandbox.options, 'sandbox-acquire': sandbox.acquire,
         'sandbox-bootstrap': sandbox.bootstrap, 'sandbox-inspect': sandbox.inspect, 'sandbox-power': sandbox.power,

@@ -6,8 +6,7 @@ import { CuaLocalOptionsQueryV1Schema, type CuaLocalLaunchV1, type CuaLocalOptio
 // Immutable read contract: trycua/cua@2bce4442c107fc34c45b374b29a35d09f630fd83,
 // cua-cli/src/lib.rs RuntimeCmd::Doctor / ImagesCmd::Ls, catalog.rs row(),
 // cua-vmm/src/auto.rs DoctorReport, and libs/images/sandbox-images.json.
-// `image ls` is a different, authenticated Fleet read and must not replace
-// `images ls`. No setup/start/download or cloud command is part of these reads.
+// No setup/start/download or cloud command is part of these reads.
 const vendorSource = 'https://raw.githubusercontent.com/trycua/cua/2bce4442c107fc34c45b374b29a35d09f630fd83';
 const arch = z.enum(['amd64', 'arm64']);
 const digest = z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u));
@@ -107,7 +106,7 @@ export function createCuaNativeFacts(native: CuaNativeClient) {
     async function readDoctor(signal?: AbortSignal): Promise<CuaNativeFact<CuaNativeDoctorFacts>> {
         // CLI open() otherwise follows CUA_DAEMON/native daemon discovery and
         // its token. Embedded doctor uses the selected controller in process;
-        // unlike sandbox commands it opens without Fleet session credentials.
+        // unlike sandbox commands it opens without a Cua login.
         const result = await native.json(['--embedded', 'runtime', 'doctor'], signal);
         return result.kind === 'success' ? projectDoctor(result.value) : unknown(result.reason);
     }

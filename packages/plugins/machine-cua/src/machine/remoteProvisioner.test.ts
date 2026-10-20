@@ -1,61 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { CUA_PLUGIN } from '../manifest.js';
-import { ByocProvisionerSchemas, FleetProvisionerSchemas, FleetReconciliationSchemas } from './remoteProvisionerSchemas.js';
+import { ByocProvisionerSchemas } from './remoteProvisionerSchemas.js';
 import * as stored from './remoteProvisionerSchemas.js';
 
 describe('Cua remote provisioner public author contract', () => {
-    it.each([
-        { id: 'byoc', paths: ['cloud'] },
-        { id: 'fleet', paths: ['namespace', 'nativeLease.durationSeconds'] },
-    ])('declares the native query fields for a fresh $id configuration', ({ id, paths }) => {
-        const options = CUA_PLUGIN.manifest.contributes.actions?.find(action => action.id === `${id}-options`);
+    it('declares the native query fields for a fresh BYOC configuration', () => {
+        const options = CUA_PLUGIN.manifest.contributes.actions?.find(action => action.id === 'byoc-options');
         expect(options?.inputHints?.fields.filter(field => field.required).map(field => field.path))
-            .toEqual(expect.arrayContaining(paths));
-    });
-    it('binds Fleet Ends to the reviewed native lease input', () => {
-        const descriptor = CUA_PLUGIN.manifest.contributes.machineProvisioners?.find(provisioner => provisioner.id === 'fleet');
-        expect(descriptor?.nativeDurationInput).toEqual({ path: 'nativeLease.durationSeconds', unit: 'seconds' });
+            .toEqual(expect.arrayContaining(['cloud']));
     });
     it('keeps native resource ingress strict and preserves the admitted resource in canonical acquire output', () => {
         const byoc = { cloud: 'aws', nativeResourceId: 'i-owned', sandboxId: 'aws:owned', ownedAttachmentIds: [] };
-        const fleet = { namespace: 'pool', claimId: 'happier-owned' };
-        for (const [schemas, resource] of [[ByocProvisionerSchemas, byoc], [FleetProvisionerSchemas, fleet]] as const) {
-            expect(schemas.resourceInput.safeParse({ resource: { ...resource, token: 'private' } }).success).toBe(false);
-            expect(schemas.acquireResult.parse({ kind: 'bound', resource: { contributionRef: { pluginId: CUA_PLUGIN.manifest.id,
-                localId: resource === byoc ? 'byoc' : 'fleet' }, schemaVersion: 1, value: resource } })).toMatchObject({ resource: { value: resource } });
-        }
+        expect(ByocProvisionerSchemas.resourceInput.safeParse({ resource: { ...byoc, token: 'private' } }).success).toBe(false);
+        expect(ByocProvisionerSchemas.acquireResult.parse({ kind: 'bound', resource: { contributionRef: { pluginId: CUA_PLUGIN.manifest.id,
+            localId: 'byoc' }, schemaVersion: 1, value: byoc } })).toMatchObject({ resource: { value: byoc } });
     });
 
     it('reopens stored additions through the SDK reader without weakening native ingress', async () => {
         const byoc = { cloud: 'aws', nativeResourceId: 'i-owned', sandboxId: 'aws:owned', ownedAttachmentIds: [] };
-        const fleet = { namespace: 'pool', claimId: 'happier-owned' };
         const byocReaders = await stored.prepareCuaByocStoredSchemas();
-        const fleetReaders = await stored.prepareCuaFleetStoredSchemas();
         expect(byocReaders.resourceStored.parse({ ...byoc, future: { token: 'private' } })).toEqual(byoc);
-        expect(fleetReaders.resourceStored.parse({ ...fleet, future: { token: 'private' } })).toEqual(fleet);
-        expect(fleetReaders.launchStored.parse({ namespace: 'pool', runtimeId: 'kubevirt', imageId: 'image', sizeId: 'pool',
-            nativeLease: { durationSeconds: 3600, future: true }, future: true })).toEqual({ namespace: 'pool', runtimeId: 'kubevirt',
-                imageId: 'image', sizeId: 'pool', nativeLease: { durationSeconds: 3600 } });
-        expect(fleetReaders.resourceStored.safeParse({ ...fleet, namespace: '../pool' }).success).toBe(false);
         expect(byocReaders.resourceStored.safeParse({ ...byoc, cloud: 'other' }).success).toBe(false);
-    });
-
-    it('retains the exact pending Fleet claim in the canonical acquire and stored recovery contracts', async () => {
-        const claim = { namespace: 'pool', claimId: 'happier-owned' };
-        const pending = { kind: 'pending', nativeOperationRef: { contributionRef: { pluginId: CUA_PLUGIN.manifest.id,
-            localId: 'fleet' }, schemaVersion: 1, value: claim } };
-        expect(FleetProvisionerSchemas.acquireResult.safeParse(pending).success).toBe(true);
-        expect(FleetProvisionerSchemas.acquireResult.parse(pending)).toEqual(pending);
-        expect(FleetReconciliationSchemas.input.parse({ nativeOperation: claim })).toEqual({ nativeOperation: claim });
-        expect(FleetReconciliationSchemas.input.safeParse({ nativeOperation: { ...claim, token: 'private' } }).success).toBe(false);
-        expect(FleetReconciliationSchemas.result.parse({ kind: 'bound', resource: { ...pending.nativeOperationRef,
-            value: { ...claim, sandboxId: 'native-guest' },
-        } })).toMatchObject({ resource: { value: { ...claim, sandboxId: 'native-guest' } } });
-        expect(FleetProvisionerSchemas.acquireResult.safeParse({ ...pending, nativeOperationRef: {
-            ...pending.nativeOperationRef, value: { ...claim, token: 'private' },
-        } }).success).toBe(false);
-        const readers = await stored.prepareCuaFleetStoredSchemas();
-        expect(readers.nativeOperationStored.parse({ ...claim, future: { token: 'private' } })).toEqual(claim);
-        expect(readers.nativeOperationStored.safeParse({ ...claim, namespace: '../pool' }).success).toBe(false);
     });
 });
