@@ -25,17 +25,17 @@ import { testkitEntryRef } from './corpus/testkit/observations.test-support.js';
 import { createTriageSetEntryPinnedActionHandler, listTriagePinnedEntries } from './actions/userMarks.js';
 
 describe('Triage plugin manifest', () => {
-  it('places Account task reads and writes in the same portable Account artifact', () => {
-    const accountActions = [
+  it('keeps task reads and writes on the currently loaded daemon checkpoint', () => {
+    const dataActions = [
       'tasks/list-v1', 'tasks/create-v1', 'tasks/edit-v1', 'tasks/transition-v1',
       TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1, 'entries/read-detail-v1',
       'internal/tasks/configure-v1', 'internal/tasks/list-instances-v1',
       'internal/tasks/scan-v1', 'internal/tasks/get-v1', 'internal/tasks/create-v1',
       'internal/tasks/edit-v1', 'internal/tasks/transition-v1',
     ];
-    for (const id of accountActions) {
+    for (const id of dataActions) {
       expect(PLUGIN_MANIFEST.contributes.actions.find(action => action.id === id), id).toMatchObject({
-        execution: { target: 'account', account: { artifactId: 'triage-account-runtime', exportName: 'activate' } },
+        execution: { target: 'daemon' },
       });
     }
   });
@@ -276,16 +276,16 @@ describe('Triage plugin manifest', () => {
     expect(PLUGIN_MANIFEST.entrypoints.daemon).toBe('./.happier-plugin/daemon.js');
   });
 
-  it('offers one existing safe list read to Voice through its canonical Account Action', () => {
+  it('offers one existing safe list read to Voice through its canonical daemon Action', () => {
     const action = PLUGIN_MANIFEST.contributes.actions.find(
       (candidate) => candidate.id === TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
     );
 
-    // Voice shares the same portable bounded read and source admission owner.
+    // Voice shares the same bounded read and source admission owner.
     expect(action).toMatchObject({
       id: TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
       surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
-      execution: { target: 'account' },
+      execution: { target: 'daemon' },
     });
   });
 

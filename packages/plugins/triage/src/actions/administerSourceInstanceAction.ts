@@ -1,5 +1,5 @@
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
 import type { PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type {
     TriageSourceAdministrationActionInputV1,
     TriageSourceAdministrationActionResultV1,
@@ -56,8 +56,8 @@ function requestFrom(
 
 export function createTriageAdministerSourceInstanceActionHandler(
     options: TriageAdministerSourceInstanceActionOptionsV1,
-): PluginAccountActionHandler<TriageSourceAdministrationActionInputV1, TriageSourceAdministrationActionResultV1> {
-    return async (input, context: PluginAccountActionContext) => {
+): TriageDataActionHandler<TriageSourceAdministrationActionInputV1, TriageSourceAdministrationActionResultV1> {
+    return async (input, context: TriageDataActionContext) => {
         const cancellation: PluginCancellationOptions | undefined = context.signal
             ? { signal: context.signal }
             : undefined;

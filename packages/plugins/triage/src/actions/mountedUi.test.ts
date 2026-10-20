@@ -29,6 +29,9 @@ import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-suppo
 import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../settings/actions.js';
 import { TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1 } from '../settings/savedViews.js';
 
+/** The New task draft's first line (lab `tasks-create`). */
+const DRAFT_PURPOSE = 'Where does it belong? It\u2019s created there and stays there.';
+
 function registeredDraftAction() {
   const declaration = PLUGIN_MANIFEST.contributes.actions.find((action) => action.id === 'tasks/open-create-v1');
   if (declaration?.execution.target !== 'client') throw new Error('Missing Tasks draft Action');
@@ -126,16 +129,16 @@ it.each([
         });
       }); };
       await mountPage();
-      expect(document.body.textContent).toContain('Where?');
-      await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+      expect(document.body.textContent).toContain('Where does it belong?');
+      await expect(page!.getByText(DRAFT_PURPOSE)).resolves.toEqual({ content: DRAFT_PURPOSE });
       // Context snapshots may reconstruct equal JSON after the form has taken custody.
       await act(async () => { await pageMount!.update({ ...page!.context, launchInput: { ...launch } }); });
-      await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+      await expect(page!.getByText(DRAFT_PURPOSE)).resolves.toEqual({ content: DRAFT_PURPOSE });
       // A host can replace its physical surface while settling the execution
       // origin. The same navigation must keep its unsubmitted draft available.
       await page!.dispose();
       await mountPage();
-      await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+      await expect(page!.getByText(DRAFT_PURPOSE)).resolves.toEqual({ content: DRAFT_PURPOSE });
     } finally { if (page !== undefined) await page.dispose(); }
     received.discard();
     expect(readTriageTaskDraftLaunch(pageScope, launch)).toEqual({ status: 'unavailable' });
@@ -191,7 +194,7 @@ it('shows an unavailable draft instead of an empty form when its client lifetime
   });
   try {
     await expect(page.getByText('This task draft is no longer available. Open it again from the message or action.')).resolves.toBeDefined();
-    await expect(page.getByText('Where?')).rejects.toBeDefined();
+    await expect(page.getByText(DRAFT_PURPOSE)).rejects.toBeDefined();
   } finally { await page.dispose(); }
 });
 

@@ -1,14 +1,6 @@
-import {
-    selectCurrentTargetedContribution,
-    type JsonValue,
-    type PluginInvocationContext,
-} from '@happier-dev/plugin-sdk';
-import {
-    type PluginAccountActionContext,
-    isPluginActionApprovalRequestCreated,
-    type ActionHandler,
-    type PluginAccountActionHandler,
-} from '@happier-dev/plugin-sdk/actions';
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
+import { selectCurrentTargetedContribution, type JsonValue, type PluginInvocationContext, } from '@happier-dev/plugin-sdk';
+import { isPluginActionApprovalRequestCreated, type ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     projectTriagePrepareReviewWorkspaceInputV1,
     type TriagePrepareReviewWorkspaceInputV1,
@@ -344,6 +336,7 @@ async function readCurrentPrepareReviewWorkspace(
         service: context.services.targetedContributions,
         point: TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1,
         selection: selected.selection,
+        operationRole: 'prepareReviewWorkspace',
         ...(context.signal === undefined ? {} : { signal: context.signal }),
     });
     if (current.kind !== 'selected') return undefined;
@@ -717,11 +710,11 @@ export function createTriageStartEntrySessionActionHandler(): ActionHandler<
     };
 }
 
-export function createTriageUnlinkEntryFromSessionActionHandler(): PluginAccountActionHandler<
+export function createTriageUnlinkEntryFromSessionActionHandler(): TriageDataActionHandler<
     TriageUnlinkEntryFromSessionActionInputV1,
     TriageUnlinkEntryFromSessionActionResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => {
+    return async (input, context: TriageDataActionContext) => {
         const result = await createTriageSourceSessionRelations(context,
             bindCorpusCollections(requireTriageAccountStorage(context))).write({ ...input, linked: false });
         return { v: 1, status: result.status === 'linked' ? 'failed' : result.status };

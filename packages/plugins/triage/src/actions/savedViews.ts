@@ -1,5 +1,6 @@
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
 
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
+
 
 import { parseCorpusSmartPolicy } from '../corpus/query/smartPolicy.js';
 import { mintTriageOpaqueIdV1 } from '../opaqueId.js';
@@ -123,11 +124,11 @@ export async function administerTriageSavedView(
     };
 }
 
-export function createTriageReadSavedViewsActionHandler(): PluginAccountActionHandler<
+export function createTriageReadSavedViewsActionHandler(): TriageDataActionHandler<
     TriageReadSavedViewsInputV1,
     TriageReadSavedViewsResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await readTriageSavedViewsForSurface(input, {
+    return async (input, context: TriageDataActionContext) => await readTriageSavedViewsForSurface(input, {
         catalog: createTriageAccountKvCatalogStore(
             requireTriageAccountStorage(context).kv,
             TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1,
@@ -137,11 +138,11 @@ export function createTriageReadSavedViewsActionHandler(): PluginAccountActionHa
     });
 }
 
-export function createTriageAdministerSavedViewActionHandler(): PluginAccountActionHandler<
+export function createTriageAdministerSavedViewActionHandler(): TriageDataActionHandler<
     TriageAdministerSavedViewInputV1,
     TriageAdministerSavedViewResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await administerTriageSavedView(input, {
+    return async (input, context: TriageDataActionContext) => await administerTriageSavedView(input, {
         catalog: createTriageAccountKvCatalogStore(
             requireTriageAccountStorage(context).kv,
             TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1,

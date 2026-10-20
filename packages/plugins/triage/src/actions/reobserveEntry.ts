@@ -1,7 +1,5 @@
-import type {
-  PluginCancellationOptions,
-} from '@happier-dev/plugin-sdk';
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
+import type { PluginCancellationOptions, } from '@happier-dev/plugin-sdk';
 import {
   raceWithTimeout,
   throwIfAborted,
@@ -141,11 +139,11 @@ export async function reobserveTriageEntry(
   return settled.value;
 }
 
-export function createTriageReobserveEntryActionHandler(): PluginAccountActionHandler<
+export function createTriageReobserveEntryActionHandler(): TriageDataActionHandler<
   TriageReobserveEntryActionInputV1,
   TriageReobserveEntryActionResultV1
 > {
-  return async (input, context: PluginAccountActionContext) => {
+  return async (input, context: TriageDataActionContext) => {
     if (!isTriageAccountCaller(context)) return { kind: 'invalidCaller' };
     const { sourceInstances } = bindCorpusCollections(requireTriageAccountStorage(context));
     const result = await reobserveTriageEntry(input, {

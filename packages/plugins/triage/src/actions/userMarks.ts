@@ -1,4 +1,5 @@
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
+
 
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
@@ -76,22 +77,22 @@ export async function listTriagePinnedEntries(
     };
 }
 
-export function createTriageSetEntryPinnedActionHandler(): PluginAccountActionHandler<
+export function createTriageSetEntryPinnedActionHandler(): TriageDataActionHandler<
     TriageSetEntryPinnedInputV1,
     TriageSetEntryPinnedResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await setTriageEntryPinned(input, {
+    return async (input, context: TriageDataActionContext) => await setTriageEntryPinned(input, {
         collections: bindCorpusCollections(requireTriageAccountStorage(context)),
         nowMs: () => Date.now(),
         signal: context.signal,
     });
 }
 
-export function createTriageListPinnedEntriesActionHandler(): PluginAccountActionHandler<
+export function createTriageListPinnedEntriesActionHandler(): TriageDataActionHandler<
     TriageListPinnedEntriesInputV1,
     TriageListPinnedEntriesResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await listTriagePinnedEntries(input, {
+    return async (input, context: TriageDataActionContext) => await listTriagePinnedEntries(input, {
         collections: bindCorpusCollections(requireTriageAccountStorage(context)),
         nowMs: () => Date.now(),
         signal: context.signal,

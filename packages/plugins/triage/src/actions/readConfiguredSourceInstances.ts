@@ -1,5 +1,5 @@
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
 import type { PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import { fitActionResultSequenceV1 } from '@happier-dev/triage-sources/projection/actionResultSequence';
 import {
@@ -111,11 +111,11 @@ export async function readTriageConfiguredSourceInstances(
     return fitTriageConfiguredSourceInstancesResult(owned);
 }
 
-export function createTriageReadConfiguredSourceInstancesActionHandler(): PluginAccountActionHandler<
+export function createTriageReadConfiguredSourceInstancesActionHandler(): TriageDataActionHandler<
     TriageReadConfiguredSourceInstancesInputV1,
     TriageReadConfiguredSourceInstancesResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => {
+    return async (input, context: TriageDataActionContext) => {
         const cancellation: PluginCancellationOptions | undefined = context.signal
             ? { signal: context.signal }
             : undefined;

@@ -1,4 +1,5 @@
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
+
 
 import { mintTriageOpaqueIdV1 } from '../opaqueId.js';
 import {
@@ -152,11 +153,11 @@ export async function administerTriageAction(
     };
 }
 
-export function createTriageReadActionsActionHandler(): PluginAccountActionHandler<
+export function createTriageReadActionsActionHandler(): TriageDataActionHandler<
     TriageReadActionsInputV1,
     TriageReadActionsResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await readTriageActionsForSurface(input, {
+    return async (input, context: TriageDataActionContext) => await readTriageActionsForSurface(input, {
         catalog: createTriageAccountKvCatalogStore(
             requireTriageAccountStorage(context).kv,
             TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1,
@@ -165,11 +166,11 @@ export function createTriageReadActionsActionHandler(): PluginAccountActionHandl
     });
 }
 
-export function createTriageAdministerActionActionHandler(): PluginAccountActionHandler<
+export function createTriageAdministerActionActionHandler(): TriageDataActionHandler<
     TriageAdministerActionInputV1,
     TriageAdministerActionResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await administerTriageAction(input, {
+    return async (input, context: TriageDataActionContext) => await administerTriageAction(input, {
         catalog: createTriageAccountKvCatalogStore(
             requireTriageAccountStorage(context).kv,
             TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1,

@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { activate } from '../activate.js';
 import { activate as activateAccount } from '../accountRuntime.js';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../accountExecution.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
 import {
     CORPUS_SESSION_LINKS_COLLECTION_ID,
@@ -407,7 +408,7 @@ describe('the Session-start Action a mounted header can actually press', () => {
             const action = declaredAction(localId);
             expect(action.surfaces, localId).toEqual(['ui', 'agent', 'mcp', 'cli']);
             expect(action.execution.target, localId).toBe(
-                localId === TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 ? 'account' : 'daemon',
+                localId === TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 ? TRIAGE_DATA_ACTION_EXECUTION_V1.target : 'daemon',
             );
             // It writes durable Account state and reaches the generic Session
             // creator, so it is never `safe`.
@@ -1188,7 +1189,7 @@ describe('the Session-start wire', () => {
         ).toBe(true);
     });
 
-    it.each([false, true])('prepares native input through the registered Action with exact carrier comparison (mismatch: %s)', async (mismatch) => {
+    it.each([false, true])('prepares native input from the exact operation source with exact carrier comparison (mismatch: %s)', async (mismatch) => {
         const { collections } = createTestkitCorpusCollections();
         const invoker = createTestkitActionInvoker({ spawn: [spawnSuccess()] });
         const base = createTriageSelectedPrStartApprovalInput();
@@ -1200,7 +1201,13 @@ describe('the Session-start wire', () => {
             purpose: instance.binding.purpose, source: 'native' as const, service: instance.binding.account.service,
         } } };
         const selected = base.prepareReviewWorkspaceSelection.selection;
-        const operation = { role: 'prepareReviewWorkspace' };
+        // The host boundary supplies the public handle identity for this exact
+        // Machine role, independently of the mixed contributor's Account owner.
+        const operation = { typeProjection: undefined, identity: {
+            target: { pluginId: selected.target.pluginId }, point: selected.point,
+            contributor: { ...selected.contributor, occurrenceId: 'source-1' },
+            role: 'prepareReviewWorkspace',
+        } };
         let prepared = false;
         const context = createContext(collections, invoker);
         const handler = registeredHandler(TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1);
@@ -1213,7 +1220,9 @@ describe('the Session-start wire', () => {
         }), { ...context, services: { ...context.services,
             targetedContributions: { observeForSelf: () => ({
                 readCurrent: async () => ({ occurrenceId: 'target-1', sourceCustody: selected.target.sourceCustody,
-                    contributions: [{ contributor: { ...selected.contributor, occurrenceId: 'source-1' },
+                    contributions: [{ contributor: { ...selected.contributor, occurrenceId: 'account-source-1',
+                        sourceCustody: { kind: 'account_release', pluginId: selected.contributor.pluginId,
+                            version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` } },
                         descriptor: testkitReadOnlySourceSnapshot().contributions[0]!.descriptor,
                         protocol: selected.point.protocol, operations: { prepareReviewWorkspace: operation } }] }),
                 dispose: () => {},

@@ -498,13 +498,14 @@ describe('the Session tab, round 2', () => {
 });
 
 describe('the mounted Session cockpit', () => {
-    it('reads source-owned Account links while no Machine is ready', async () => {
+    it('defers source relation Actions while their declared daemon execution is not ready', async () => {
         const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
         const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID },
             null, true, null, undefined, true, undefined, async () => ({ kind: 'complete', links: [{
                 entryRef: linkRow().entryRef, sessionId: SESSION_ID, linkedAtMs: 10, displayPath: 'My linked Account task',
             }] }), undefined, true);
-        await expect(fixture.getByText('My linked Account task')).resolves.toBeDefined();
+        await expect(fixture.queryByText('My linked Account task')).resolves.toBeUndefined();
+        expect(actionCalls.filter(call => call.action === 'sessions/read-source-links-v1')).toEqual([]);
         expect(harness.gets).toHaveLength(0);
     });
 

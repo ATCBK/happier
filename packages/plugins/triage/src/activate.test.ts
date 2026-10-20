@@ -1,5 +1,6 @@
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
-import type { PluginServices } from '@happier-dev/plugin-sdk';
+import type { PluginServices, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import type { StorageService } from '@happier-dev/plugin-sdk/storage';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
@@ -8,7 +9,8 @@ import {
   TriageEntryRefV1Schema,
   TriageSetFixPullRequestResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { TriageDataActionContext } from './actions/dataContext.js';
 
 import { TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1, TriageListEntriesResultV1Schema } from './actions/listEntriesProtocol.js';
 import {
@@ -26,6 +28,7 @@ import {
 } from './actions/savedViewsProtocol.js';
 import { TRIAGE_ENTRY_ATTACHMENT_LOCAL_ID_V1 } from './composer/attachmentValue.js';
 import { PLUGIN_MANIFEST, TRIAGE_PLUGIN } from './manifest.js';
+import { activate } from './activate.js';
 import { CORPUS_USER_MARKS_COLLECTION } from './corpus/collections/definitions.js';
 import {
   CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
@@ -76,6 +79,19 @@ async function withRegisteredPlugin(run: (fixture: Readonly<{
 }
 
 describe('Triage activation', () => {
+  it('accepts daemon and portable invocation capabilities through the same data handler context', () => {
+    expectTypeOf<PluginInvocationContext>().toMatchTypeOf<TriageDataActionContext>();
+    expectTypeOf<PluginAccountActionContext>().toMatchTypeOf<TriageDataActionContext>();
+  });
+  it('registers personal source configuration through the currently loaded root activation', async () => {
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
+    try {
+      expect(plugin.registration('actions', 'internal/tasks/configure-v1')).toBeDefined();
+      expect(plugin.registrations().filter(entry => entry.family === 'actions').map(entry => entry.localId).sort())
+        .toEqual(PLUGIN_MANIFEST.contributes.actions.filter(action => action.execution.target !== 'client').map(action => action.id).sort());
+    } finally { await plugin.dispose(); }
+  });
+
   it.each(['agent', 'mcp', 'cli'] as const)('keeps built-ins and explicit opt-outs identical on registered %s Actions and direct UI reads', async (surface) => {
     await withRegisteredPlugin(async ({ plugin, kv }) => {
       kv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, { v: 1, actions: [] });

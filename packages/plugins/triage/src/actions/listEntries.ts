@@ -1,9 +1,6 @@
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
 import type { LoggerService, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import type {
-    PluginAccountActionContext,
-    PluginAccountActionHandler,
-    AdmittedTargetedOperationExecutionHandle,
-} from '@happier-dev/plugin-sdk/actions';
+import type { AdmittedTargetedOperationExecutionHandle } from '@happier-dev/plugin-sdk/actions';
 import {
     admitTriageSourceDescriptorV1,
     TriageListScopeUnitsResultV1Schema,
@@ -492,11 +489,11 @@ export async function listTriageEntries(
  * invocation context the host supplies and adds no dispatch, cache or registry
  * of its own.
  */
-export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?: boolean }>): PluginAccountActionHandler<
+export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?: boolean }>): TriageDataActionHandler<
     TriageListEntriesInputV1,
     TriageListEntriesResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => await listTriageEntries(input, {
+    return async (input, context: TriageDataActionContext) => await listTriageEntries(input, {
         sourceInstances: bindCorpusCollections(requireTriageAccountStorage(context)).sourceInstances,
         readAdmittedSources: async (options) => {
             const observation = context.services.targetedContributions.observeForSelf(

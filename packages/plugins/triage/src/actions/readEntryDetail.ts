@@ -1,5 +1,5 @@
+import type { TriageDataActionContext, TriageDataActionHandler } from './dataContext.js';
 import type { PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import type { PluginAccountActionContext, PluginAccountActionHandler } from '@happier-dev/plugin-sdk/actions';
 import {
     type TriageEntryRefV1,
     type TriageLinkedSessionProjectionV1,
@@ -156,11 +156,11 @@ export async function readTriageEntryDetail(
     });
 }
 
-export function createTriageReadEntryDetailActionHandler(): PluginAccountActionHandler<
+export function createTriageReadEntryDetailActionHandler(): TriageDataActionHandler<
     TriageReadEntryDetailInputV1,
     TriageReadEntryDetailResultV1
 > {
-    return async (input, context: PluginAccountActionContext) => {
+    return async (input, context: TriageDataActionContext) => {
         if (!isTriageAccountCaller(context)) return INVALID_CALLER;
         if (isTriageHostActionCaller(context)) {
             const resolution = await resolveTriageCallerSource(context, { signal: context.signal }, input.entryRef.source);

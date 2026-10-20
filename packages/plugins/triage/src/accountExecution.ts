@@ -1,5 +1,6 @@
-/** One portable activation artifact for the plugin's Account-owned Actions. */
-export const TRIAGE_ACCOUNT_ACTION_EXECUTION_V1 = {
-  target: 'account',
-  account: { artifactId: 'triage-account-runtime', exportName: 'activate' },
-} as const;
+type TriageDataExecutionDeclaration =
+  | Readonly<{ target: 'daemon' }>
+  | Readonly<{ target: 'account'; account: Readonly<{ artifactId: string; exportName: string }> }>;
+
+/** The authored data Action placement, shared by registration and mounted readiness. */
+export const TRIAGE_DATA_ACTION_EXECUTION_V1 = { target: 'daemon' } as const satisfies TriageDataExecutionDeclaration;

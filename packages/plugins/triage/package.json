@@ -35,7 +35,6 @@
     "./happier-plugin-ui/triage-search-action-native": "./src/actions/searchEntries.ts",
     "./happier-plugin-ui/triage-mounted-ui-action-native": "./src/actions/mountedUi.ts",
     "./happier-plugin-ui/triage-configured-action-native": "./src/actions/configuredActionRun.ts",
-    "./happier-plugin-ui/triage-account-runtime": "./src/accountRuntime.ts",
     "./happier-plugin-ui/triage-collection-migrations": "./src/collectionMigrationArtifact.ts"
   },
   "files": [

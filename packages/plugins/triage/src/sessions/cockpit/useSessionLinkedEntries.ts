@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import {
     usePluginCollectionQuery,
     usePluginUiDataClientOrNull,
@@ -196,9 +197,9 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     const host = usePluginHostApi();
     const owner = usePluginUiEphemeralSharedScope();
     const sourceReadAvailable = hasTriageSourceSessionRelationsV1(targetedContributions);
-    // The relation aggregate is Account-owned; nested source roles admit their
+    // The relation aggregate follows its declaration; nested source roles admit their
     // own placement and retain per-source unavailable coverage.
-    const readiness = usePluginHostReadiness(false);
+    const readiness = usePluginHostReadiness(Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
     const [sourceRead, setSourceRead] = React.useState<Readonly<{
         owner: PluginUiEphemeralSharedScope | null; sessionId: string;
         status: 'absent' | 'loading' | 'ready' | 'partial' | 'failed'; links: readonly TriageSourceSessionLinkV1[];
