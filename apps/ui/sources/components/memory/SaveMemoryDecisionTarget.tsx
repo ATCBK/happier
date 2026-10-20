@@ -26,7 +26,11 @@ const noop = () => undefined;
  */
 export const memoryDecisionSheetRowStyle = { paddingHorizontal: 0 } as const;
 
-/** Up to this many places read as one segmented row (lab K2-Sd); more become a menu. */
+/**
+ * Up to this many places read as one segmented row (lab K2-Sd); more become a menu. A single place is still
+ * shown: for a Session it is an alternative to the Session's own default, and for a Discussion it is the
+ * held "Only me" row the sheet already showed while loading.
+ */
 const MAX_SEGMENTS = 3;
 
 export function memoryDecisionTargetId(target: MemoryScopeTargetV1): string {
@@ -129,7 +133,7 @@ function TargetChoice(
   );
   return (
     <View testID="save-memory-decision.target" style={styles.target}>
-      {targets.length >= 2 && targets.length <= MAX_SEGMENTS ? (
+      {targets.length >= 1 && targets.length <= MAX_SEGMENTS ? (
         <SegmentedChoiceItem<string>
           title={t('memoryContext.memory.sheetSaveTo')}
           subtitle={overrideNote}

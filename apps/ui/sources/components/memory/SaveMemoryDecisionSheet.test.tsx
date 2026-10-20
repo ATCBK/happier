@@ -194,6 +194,37 @@ describe('Session-owned Save-to default', () => {
     } finally { await screen.unmount(); await f.home.dispose(); }
   });
 
+  it('still offers the one eligible place when it differs from the Session default, and saves there', async () => {
+    const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+    // No writable Project can be listed, so Only me is the catalog's sole option while the Session's own place is the default.
+    f.makeProjectCatalogUnavailable();
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { t } = await import('@/text');
+    await act(async () => { storage.getState().applySessions([f.session]); });
+    const source: CoordinationMessageRefV1 = { kind: 'session',
+      session: { serverId: f.serverId, sessionId: f.session.id }, messageId: 'committed-source' };
+    const onSaved = vi.fn();
+    const screen = await renderScreen(<SaveMemoryDecisionForm
+      seed={seedMemoryDecisionFromMessage(source, 'Retry cap stays at 5\nBackoff ran out too early.')}
+      onClose={vi.fn()} onSaved={onSaved} />);
+    try {
+      const onlyMe = 'save-memory-decision.target:account';
+      await vi.waitFor(() => expect(screen.findByTestId(onlyMe)).toBeTruthy());
+      expect(screen.findByTestId(onlyMe)!.props['aria-checked']).toBe(false);
+      await act(async () => { screen.findByTestId(onlyMe)!.props.onPress(); });
+      expect(screen.findByTestId(onlyMe)!.props['aria-checked']).toBe(true);
+      expect(screen.getTextContent()).toContain(t('memoryContext.memory.sheetSaveToBackToSession'));
+      await act(async () => { screen.findByTestId('save-memory-decision.target.default')!.props.onPress(); });
+      expect(screen.findByTestId(onlyMe)!.props['aria-checked']).toBe(false);
+      await act(async () => { screen.findByTestId(onlyMe)!.props.onPress(); });
+      await save(screen);
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      // The person's own memory received it; the Session's Project was not written.
+      expect(f.home.boundary.list()).toHaveLength(1);
+      expect(f.readSource().attachments).toEqual([]);
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
+
   it.each(['writable', 'unavailable', 'readonly', 'explicit'] as const)(
     'never substitutes a same-label Project for the qualified Session Project (%s)', async access => {
       const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
