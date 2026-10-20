@@ -40,19 +40,25 @@ async function waitForIdle(params: Readonly<{
         if (!await params.isCurrent()) throw new ManagedMachineControllerError('intent_changed');
         const activity = await params.bridge.read(params.machine, params.signal);
         if (activity.kind === 'refused') throw new ManagedMachineControllerError(activity.code);
-        params.onActivity(activity.kind);
+        // An idle observation starts a reversible confirmation probe, not
+        // shutdown. Keep the selected unused window in the waiting phase.
+        params.onActivity(activity.kind === 'idle' ? 'waiting' : activity.kind);
         let remaining: number | undefined;
         if (activity.kind === 'idle') {
             params.onDrain(true);
             const fresh = await params.bridge.confirmIdle(params.machine, params.signal);
             if (fresh.kind === 'refused') throw new ManagedMachineControllerError(fresh.code);
-            params.onActivity(fresh.kind);
             if (fresh.kind === 'idle') {
                 // Both timestamps belong to the actual guest clock. A read
                 // followed by a short committed probe must not mix that clock
                 // with this controller's Date.now or hold drain for the wait.
                 remaining = remainingIdleDuration(fresh, params.duration);
-                if (remaining === 0) return fresh;
+                if (remaining === 0) {
+                    params.onActivity('idle');
+                    return fresh;
+                }
+            } else {
+                params.onActivity(fresh.kind);
             }
             await params.bridge.reopen(params.machine);
             params.onDrain(false);
