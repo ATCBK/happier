@@ -495,10 +495,13 @@ describe('SessionCollaborationSurface', () => {
             </AppPaneProvider>,
         );
         await vi.waitFor(() => expect(screen.findByTestId('session-discussion-activity-list')).not.toBeNull());
-        await vi.waitFor(() => expect(screen.findByTestId('session-collaboration-invite-action'), JSON.stringify({
+        await vi.waitFor(() => expect(screen.findByTestId('session-conversations-empty'), JSON.stringify({
             text: screen.getTextContent(), requests: network.requests.map(({ path, accountId }) => ({ path, accountId })),
         })).not.toBeNull());
         expect(screen.findByTestId('session-presence-section')).not.toBeNull();
+        // One message per state (UI-15): the foot card says it isn't shared and opens Share; no second
+        // sharing pitch in the conversations or under the presence line.
+        expect(screen.findByTestId('session-collaboration-invite')).toBeNull();
         await vi.waitFor(() => expect(screen.findByTestId('session-responsibility-row')).not.toBeNull());
         // User ruling 2026-09-29: who has access and Responsible are ONE block at the pane's foot;
         // the top holds only the present line and the conversations.

@@ -46,18 +46,6 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
 const SKELETON_ROWS = [0, 1, 2] as const;
 
-/**
- * The host's own invitation for an empty list, when it knows more than the list does (a Session
- * shared with nobody yet invites sharing before conversation).
- */
-export type DiscussionsEmptyInvite = Readonly<{
-    testID: string;
-    title: string;
-    reason: string;
-    action: Readonly<{ label: string; onPress: () => void }>;
-    note?: string;
-}>;
-
 const styles = StyleSheet.create((theme) => ({
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2 },
     root: { flex: 1, minHeight: 0, minWidth: 0 },
@@ -162,7 +150,6 @@ export function DiscussionsList(props: Readonly<{
     address: Readonly<{ serverId: string }>;
     scope: ServerAccountScope;
     anchor?: Readonly<{ kind: 'session'; sessionId: string }>;
-    emptyInvite?: DiscussionsEmptyInvite;
     presentation?: DiscussionsListPresentation;
     surface?: 'plane' | 'page';
     /**
@@ -188,7 +175,7 @@ export function DiscussionsList(props: Readonly<{
         title={t('session.collaboration.discussion.unavailable')}
         reason={unavailableReason ?? t('session.collaboration.discussion.bindingUnavailable')}
     /></DiscussionsListPaneState>;
-    return <DiscussionsListReady address={props.address} scope={props.scope} anchor={props.anchor} accountLifetime={binding} emptyInvite={props.emptyInvite} presentation={props.presentation ?? 'pane'} surface={props.surface ?? 'plane'} footer={props.footer ?? null} />;
+    return <DiscussionsListReady address={props.address} scope={props.scope} anchor={props.anchor} accountLifetime={binding} presentation={props.presentation ?? 'pane'} surface={props.surface ?? 'plane'} footer={props.footer ?? null} />;
 }
 
 /** A whole-list state in the pane: the state, and the host's footer still in reach below it. */
@@ -211,7 +198,6 @@ function DiscussionsListReady(props: Readonly<{
     scope: ServerAccountScope;
     anchor?: Readonly<{ kind: 'session'; sessionId: string }>;
     accountLifetime: ServerCredentialAccountScopeBinding;
-    emptyInvite?: DiscussionsEmptyInvite;
     presentation: DiscussionsListPresentation;
     surface: 'plane' | 'page';
     footer: React.ReactElement | null;
@@ -249,7 +235,6 @@ function DiscussionsListReady(props: Readonly<{
     const active = React.useMemo(() => ({ ...collection.lists.active, items: selectDiscussionSummariesForAnchor(collection.lists.active.items, props.anchor) }), [props.anchor, collection.lists.active]);
     const archived = React.useMemo(() => ({ ...collection.lists.archived, items: selectDiscussionSummariesForAnchor(collection.lists.archived.items, props.anchor) }), [props.anchor, collection.lists.archived]);
     const viewerAccountId = props.scope.accountId;
-    const emptyInvite = props.emptyInvite;
     // What needs the viewer (approval, a private draft, a mention) leads the column's Needs you group.
     const activeRows = useDiscussionListRows(props.scope, active.items);
     const attention = React.useMemo(() => new Map(activeRows.map(row => [row.id, row.attentionReason] as const)), [activeRows]);
@@ -398,21 +383,6 @@ function DiscussionsListReady(props: Readonly<{
                         </View>
                     );
                 }
-                if (emptyInvite) {
-                    return (
-                        <View style={styles.invite}>
-                            <SurfaceStateCard
-                                testID={emptyInvite.testID}
-                                kind="empty"
-                                iconName="users"
-                                title={emptyInvite.title}
-                                reason={emptyInvite.reason}
-                                action={emptyInvite.action}
-                                note={emptyInvite.note}
-                            />
-                        </View>
-                    );
-                }
                 return (
                     <View style={styles.invite}>
                         <SurfaceStateCard
@@ -471,7 +441,7 @@ function DiscussionsListReady(props: Readonly<{
             case 'archived_load_more':
                 return <Pressable testID="session-discussion-archived-load-more" style={styles.more} accessibilityRole="button" onPress={() => void loadMoreList('archived')}><Text style={styles.moreText}>{t('session.collaboration.discussion.loadMore')}</Text></Pressable>;
         }
-    }, [active.errorCode, active.items.length, active.status, activeCount, activeDiscussionKey, archived.errorCode, attention, archived.status, archivedExpanded, column, emptyInvite, loadMoreList, openDiscussion, openNewDiscussion, props.surface, refreshList, retryActive, theme.colors.text.tertiary, toggleArchived, viewerAccountId]);
+    }, [active.errorCode, active.items.length, active.status, activeCount, activeDiscussionKey, archived.errorCode, attention, archived.status, archivedExpanded, column, loadMoreList, openDiscussion, openNewDiscussion, props.surface, refreshList, retryActive, theme.colors.text.tertiary, toggleArchived, viewerAccountId]);
 
     // Nothing retained and nothing readable: the whole list is one pane state.
     if (!column && active.items.length === 0 && active.status === 'locked') {

@@ -75,9 +75,9 @@ export function SessionPresenceSection(target: SessionAddress) {
             : presence.status === 'unavailable' && !hasViewers ? t('session.collaboration.pane.presenceUnavailable')
                 : formatSessionPresenceHere(viewers);
     const subtitle = retained ? t('session.collaboration.stale')
+        // Alone, the title says it; who could join is the access card's to say (one message per state).
         : live && hasViewers ? formatSessionPresenceTyping(viewers) ?? t('session.collaboration.viewingNow')
-            : live ? t('session.collaboration.pane.justYouHint')
-                : null;
+            : null;
     const names = formatSessionPresenceViewerNames(viewers, { stale: !live });
     // Membership and reachability are the meaningful transitions. A typing
     // renewal keeps this key, so the one live-region owner coalesces it away.

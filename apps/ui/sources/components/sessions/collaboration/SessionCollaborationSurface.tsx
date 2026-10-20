@@ -376,14 +376,8 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
     const publicLinkOn = publicLink.publicShare !== null;
     const card = projectSessionCollaborationAccessCard({ model: props.access?.model ?? null, publicLinkOn });
     const canCreateLink = publicLink.enabled && publicLink.canManage;
-    // "Just you": a Session its manager has not shared yet invites sharing where the conversations would be.
-    const emptyInvite = React.useMemo(() => card.notShared ? {
-        testID: 'session-collaboration-invite',
-        title: t('session.collaboration.pane.justYouTitle'),
-        reason: t('session.collaboration.pane.justYouBody', { home: props.homeName }),
-        action: { label: t('session.collaboration.pane.share'), onPress: props.openShare },
-        note: canCreateLink ? t('session.collaboration.pane.justYouNote') : undefined,
-    } : undefined, [canCreateLink, card.notShared, props.homeName, props.openShare]);
+    // One message per state: a Session shared with nobody says so once, on the access card at the foot,
+    // which opens Share. The conversations keep their own empty state and Following stays in reach.
     const showCard = props.namedAccess || publicLinkOn;
     const hidden = props.shareOpen;
     // Who hears about this session and what it follows (lab P1p): on every session, after its conversations.
@@ -409,7 +403,7 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
                     <SessionPresenceSection serverId={props.scope.serverId} sessionId={props.sessionId} />
                     <View style={styles.body}>
                         {props.namedAccess && props.conversationsEnabled ? (
-                            <SessionConversationsBody scope={props.scope} address={props.target} emptyInvite={emptyInvite} footer={followSections} />
+                            <SessionConversationsBody scope={props.scope} address={props.target} footer={followSections} />
                         ) : (
                             <ScrollView style={styles.body} testID="session-people-scroll">
                                 {!props.namedAccess ? (
