@@ -17,7 +17,8 @@ export function remoteRoles() {
     return {
         check: { ...defaults, title: `Check Cua ${id} access`, dangerLevel: 'safe' as const, inputSchema: schemas.checkInput, resultSchema: MachineProvisionerCheckResultV1Schema,
             async run(input: unknown, context: PluginInvocationContext) { try { return machineCheckPresentation(MachineProvisionerCheckResultV1Schema.parse(await run('check', input, context))); }
-                catch { return machineCheckPresentation({ available: false, code: 'cua_connection_unavailable' }); } } },
+                catch (error) { return machineCheckPresentation({ available: false,
+                    code: error instanceof Error && error.message === 'cua_native_outdated' ? 'cua_native_outdated' : 'cua_connection_unavailable' }); } } },
         options: { ...defaults, title: `Read Cua ${id} native choices`, dangerLevel: 'safe' as const,
             inputSchema: ByocOptionsQueryV1Schema, resultSchema: MachineProvisionerOptionsResultV1Schema,
             inputHints: { fields: [

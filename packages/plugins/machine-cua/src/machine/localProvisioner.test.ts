@@ -53,7 +53,7 @@ function harness(createReplyLost = false) {
     return { requests, run, provider: createCuaLocalProvisioner(createCuaNativeClient({ exec: { run }, executable: { kind: 'systemTool', id: 'cua' } }), 'local-sandbox', 10) };
 }
 
-async function activated(dependencyReady = true, nativeRun?: ExecService['run'], signal = new AbortController().signal) {
+async function activated(dependencyReady = true, nativeRun?: ExecService['run'], signal = new AbortController().signal, version = '0.5.0') {
     const h = harness();
     const actions = new Map<string, ActionHandler>();
     // Substitute only external host registration/services and native processes;
@@ -64,7 +64,7 @@ async function activated(dependencyReady = true, nativeRun?: ExecService['run'],
     await CUA_PLUGIN.activate(api);
     const context = { invokedAtMs: 10, signal, services: { exec: { run: nativeRun ?? h.run },
         managedServices: { dependencies: { status: async (): Promise<ManagedDependencyStatus> => dependencyReady ? ({
-            state: 'ready', id: 'cua-cli', version: '0.1.0', sourceId: 'system',
+            state: 'ready', id: 'cua-cli', version, sourceId: 'system',
             executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } },
         }) : ({ state: 'missing', id: 'cua-cli', supported: true }) } },
     } } as unknown as PluginInvocationContext;
@@ -222,7 +222,7 @@ describe('consumed Cua local provisioner roles', () => {
         const h = harness(true);
         expect(await h.provider.acquire(launch, managedId)).toMatchObject({ kind: 'pending', nativeOperationRef: { value: {
             resource: { sandboxId: `local:happier-${managedId}` }, imageId: launch.imageId } } });
-        expect(await h.provider.power(resource, 'stop')).toEqual({ kind: 'refused', code: 'cua_stop_unsupported' });
+        expect(await h.provider.power(resource, 'stop')).toEqual({ kind: 'refused', code: 'cua_unsupported_intent' });
         expect(h.requests.filter((request) => request.args?.includes('create'))).toHaveLength(1);
         expect(await h.provider.bootstrap(resource)).toEqual({ kind: 'native', transport: {
             contributionRef: { pluginId: 'happier.machine.cua', localId: 'local-sandbox' }, schemaVersion: 1,
@@ -255,6 +255,20 @@ describe('consumed Cua local provisioner roles', () => {
             .toEqual({ kind: 'confirmed' });
         expect(JSON.stringify(h.requests)).not.toContain('AP4K');
         await expect(h.action('sandbox-exec')({ resource: { ...resource, future: true }, argv: ['cat'] }, h.context)).rejects.toThrow();
+    });
+    it('qualifies the installed cua CLI against the oldest release that has every flag called, failing at check and before any native effect', async () => {
+        // 0.3.0 is the first release containing the pinned vendor commit (trycua/cua@2bce4442) all flags were read from.
+        const old = await activated(true, undefined, undefined, '0.2.9');
+        expect(await old.action('sandbox-check')({}, old.context)).toMatchObject({ available: false, code: 'cua_native_outdated',
+            status: { key: 'machineCua.presentation.cua_native_outdated' } });
+        expect(await old.action('sandbox-acquire')({ launch, managedId }, old.context)).toEqual({ kind: 'rejected', code: 'provider_unavailable' });
+        expect(old.requests).toEqual([]);
+        for (const version of ['0.3.0', '0.10.1']) {
+            const current = await activated(true, undefined, undefined, version);
+            expect(await current.action('sandbox-check')({}, current.context)).toMatchObject({ available: true });
+        }
+        const unreadable = await activated(true, undefined, undefined, 'unknown');
+        expect(await unreadable.action('space-check')({}, unreadable.context)).toMatchObject({ available: false, code: 'cua_native_outdated' });
     });
     it('rejects unavailable native setup before acquisition without inventing a recovery resource', async () => {
         const h = await activated(false);

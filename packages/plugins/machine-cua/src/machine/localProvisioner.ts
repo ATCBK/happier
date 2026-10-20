@@ -3,13 +3,14 @@ import type { MachineProvisionerAcquireResultV1, MachineProvisionerObservationV1
 import { createCuaLocalSandbox } from './localSandbox.js';
 import { createCuaLocalSpace } from './localSpace.js';
 import { createCuaNativeFacts } from './nativeFacts.js';
+import { CUA_UNSUPPORTED_INTENT, cuaPowerAfter } from './nativePower.js';
 import { CuaLocalNativeOperationV1Schema, localAcquireOperation, prepareCuaLocalStoredSchemas } from './localProvisionerSchemas.js';
 import { CuaLocalLaunchV1Schema, CuaLocalOptionsQueryV1Schema, CuaLocalNameSchema, parseCuaLocalResource,
     type CuaLocalResourceV1 } from './schemas.js';
 import type { CuaNativeClient } from './nativeClient.js';
 
 export const CUA_PLUGIN_ID = 'happier.machine.cua';
-export const CUA_DEPENDENCY_ID = 'cua-cli';
+export { CUA_DEPENDENCY_ID } from './nativeDependency.js';
 export type CuaLocalProvisionerId = 'local-sandbox' | 'local-space';
 const billing = { location: 'local', stoppedBilling: 'not-billed' } as const;
 
@@ -87,11 +88,11 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
         },
         async power(input: unknown, intent: MachineProvisionerNativeIntentV1): Promise<MachineProvisionerPowerResultV1> {
             const value = resource(input);
-            if (intent === 'stop') return { kind: 'refused', code: 'cua_stop_unsupported' };
-            if (intent !== 'start' && intent !== 'suspend' && intent !== 'resume') return { kind: 'refused', code: 'cua_unsupported_intent' };
+            // A local sandbox parks only by Suspend (its native verb keeps memory); there is no disk-only Stop.
+            if (intent !== 'start' && intent !== 'suspend' && intent !== 'resume') return { kind: 'refused', code: CUA_UNSUPPORTED_INTENT };
             const result = await leaf.power(value, intent, signal);
             return result.kind === 'observed' && result.existence === 'present'
-                && result.power === (intent === 'suspend' ? 'suspended' : 'running') ? { kind: 'confirmed' } : { kind: 'unknown' };
+                && result.power === cuaPowerAfter(intent, 'local') ? { kind: 'confirmed' } : { kind: 'unknown' };
         },
         async destroy(input: unknown): Promise<MachineProvisionerPowerResultV1> {
             const result = await leaf.destroy(resource(input), signal);

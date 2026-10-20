@@ -2,7 +2,9 @@ import type { CuaNativeClient } from './nativeClient.js';
 import { MachineProvisionerObservationV1Schema, MachineProvisionerOptionsResultV1Schema,
     type MachineProvisionerObservationV1, type MachineProvisionerOptionsResultV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import * as z from 'zod/mini';
-import { CuaLocalNameSchema } from './schemas.js';
+import { CuaLocalNameSchema, CuaNativeCloudSandboxSchema, CuaNativeDeleteSchema, CuaNativeImageRefSchema } from './schemas.js';
+import { removeCuaSpaceRegistration } from './nativeSpaces.js';
+import { cuaNativePowerVerb } from './nativePower.js';
 import { ByocLaunchV1Schema, ByocResourceV1Schema, NativeCloudProviderSchema, NativeCloudResourceSchema, type ByocResourceV1 } from './remoteSchemas.js';
 
 export function qualifyByocLaunch(input: unknown, provider: unknown) {
@@ -66,14 +68,6 @@ export function byocCleanupTarget(resource: unknown) {
 }
 
 const cloudStatusSchema = z.object({ providers: z.array(NativeCloudProviderSchema), resources: z.array(NativeCloudResourceSchema) });
-const sandboxInfoSchema = z.object({ id: z.string(), name: z.string(), location: z.string(),
-    state: z.string(), status: z.string(), image: z.nullable(z.string()), ephemeral: z.boolean(),
-    expires_at: z.nullable(z.iso.datetime({ offset: true })),
-    provider_details: z.object({ provider: z.enum(['aws', 'gcp', 'modal']), id: z.string().check(z.minLength(1)) }) });
-const deleteSchema = z.object({ deleted: z.string(), missing: z.boolean() });
-const imageCatalogEntrySchema = z.object({ ref: z.string().check(z.minLength(1)), published: z.boolean() });
-const registrySchema = z.object({ spaces: z.array(z.object({ id: z.string(), provider: z.string() })) });
-
 /** Remote operations on C53's single native boundary. No enrollment or policy. */
 export function createCuaByoc(native: CuaNativeClient) {
     async function status(cloud: ByocResourceV1['cloud'], signal?: AbortSignal) {
@@ -95,7 +89,7 @@ export function createCuaByoc(native: CuaNativeClient) {
     }
     async function exactSandbox(resource: ByocResourceV1, signal?: AbortSignal) {
         const result = await native.json(['--embedded', 'sandbox', 'info', resource.sandboxId], signal);
-        const parsed = result.kind === 'success' ? sandboxInfoSchema.safeParse(result.value) : undefined;
+        const parsed = result.kind === 'success' ? CuaNativeCloudSandboxSchema.safeParse(result.value) : undefined;
         if (!parsed?.success || parsed.data.id !== resource.sandboxId || parsed.data.location !== resource.cloud
             || `${resource.cloud}:${parsed.data.name}` !== resource.sandboxId || parsed.data.ephemeral
             || parsed.data.provider_details.provider !== resource.cloud
@@ -182,7 +176,7 @@ export function createCuaByoc(native: CuaNativeClient) {
                     // Catalog info owns that mapping; no local alias table or
                     // guessed family/prefix matching may qualify a different image.
                     const result = await native.json(['images', 'info', launch.nativeImageId], signal);
-                    const image = result.kind === 'success' ? imageCatalogEntrySchema.safeParse(result.value) : undefined;
+                    const image = result.kind === 'success' ? CuaNativeImageRefSchema.safeParse(result.value) : undefined;
                     if (image?.success && image.data.published && image.data.ref === observed.image) return decoded;
                 }
             }
@@ -217,7 +211,7 @@ export function createCuaByoc(native: CuaNativeClient) {
                 reason: before.existence === 'absent' ? 'native_resource_absent' as const : 'native_resource_unknown' as const };
             // The BYOC VM provider maps native suspend/resume to disk-retaining
             // stop/start. Modal never receives these VM-only operations.
-            const response = await native.effect(['--embedded', 'sandbox', intent === 'stop' ? 'suspend' : 'resume', resource.sandboxId], signal);
+            const response = await native.effect(['--embedded', 'sandbox', cuaNativePowerVerb(intent), resource.sandboxId], signal);
             return response.kind === 'success' ? { kind: 'observed' as const, ...await inspect(resource, signal) }
                 : { kind: 'unknown' as const, resource };
         },
@@ -230,24 +224,11 @@ export function createCuaByoc(native: CuaNativeClient) {
             if (!await exactLedger(resource, signal) || !await exactSandbox(resource, signal)) return { kind: 'incomplete' as const, resource,
                 native: 'unknown' as const, registry: 'unknown' as const, attachments: 'unknown' as const };
             const response = await native.json(['--embedded', 'sandbox', 'rm', resource.sandboxId, '--force'], signal);
-            const deleted = response.kind === 'success' ? deleteSchema.safeParse(response.value) : undefined;
+            const deleted = response.kind === 'success' ? CuaNativeDeleteSchema.safeParse(response.value) : undefined;
             // Awaited exact native delete proves the primary. Ledger disappearance
             // alone proves neither deletion nor cleanup of separate attachments.
             const primary = deleted?.success && deleted.data.deleted === resource.sandboxId ? 'absent' as const : 'unknown' as const;
-            let registry: 'removed' | 'present' | 'unknown' = resource.spaceId ? 'unknown' : 'removed';
-            if (resource.spaceId) {
-                async function readRegistry() {
-                    const response = await native.json(['--embedded', 'spaces', 'ls'], signal);
-                    const parsed = response.kind === 'success' ? registrySchema.safeParse(response.value) : undefined;
-                    if (!parsed?.success) return 'unknown' as const;
-                    return parsed.data.spaces.some(row => row.id === resource.spaceId) ? 'present' as const : 'removed' as const;
-                }
-                registry = await readRegistry();
-                if (registry === 'present') {
-                    await native.json(['--embedded', 'spaces', 'rm', resource.spaceId], signal);
-                    registry = await readRegistry();
-                }
-            }
+            const registry = resource.spaceId ? await removeCuaSpaceRegistration(native, resource.spaceId, signal) : 'removed' as const;
             const attachments = resource.ownedAttachmentIds.length === 0 ? 'absent' as const : 'unknown' as const;
             return { kind: primary === 'absent' && registry === 'removed' && attachments === 'absent' ? 'deleted' as const : 'incomplete' as const,
                 resource, native: primary, registry, attachments };

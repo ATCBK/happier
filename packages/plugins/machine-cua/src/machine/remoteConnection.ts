@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 import { createCuaNativeClient } from './nativeClient.js';
+import { resolveCuaExecutable } from './nativeDependency.js';
 
 export const CLOUD_PURPOSE = 'cloud-account';
 export const CUA_PURPOSE = 'cua-account';
@@ -47,8 +48,9 @@ export async function remoteNative(context: PluginInvocationContext) {
     const cloud = await context.services.connectedAccounts.materialize(CLOUD_PURPOSE, { kind: 'environment', keys: ['CUA_HOME'] }, { signal: context.signal });
     if (cloud.kind !== 'environment' || !cloud.env.CUA_HOME || cloud.env.CUA_HOME !== material.env.CUA_HOME
         || material.env.CUA_CREDENTIAL_STORE !== 'file') return unavailable();
-    const status = await context.services.managedServices.dependencies.status('cua-cli', { signal: context.signal });
-    if ((status.state !== 'ready' && status.state !== 'updateAvailable') || !status.executable) return unavailable();
-    return createCuaNativeClient({ exec: context.services.exec, executable: status.executable,
+    const executable = await resolveCuaExecutable(context).catch((error: unknown) => {
+        throw error instanceof Error && error.message === 'cua_native_outdated' ? error : new Error('cua_connection_unavailable');
+    });
+    return createCuaNativeClient({ exec: context.services.exec, executable,
         environment: { CUA_HOME: home(cloud.env.CUA_HOME), CUA_CREDENTIAL_STORE: 'file' } });
 }

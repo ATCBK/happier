@@ -1,10 +1,10 @@
 import type { CuaNativeClient } from './nativeClient.js';
-import * as z from 'zod/mini';
 import { createCuaLocalSandbox } from './localSandbox.js';
-import { CuaLocalLaunchV1Schema, parseCuaLocalResource, type CuaLocalResourceV1 } from './schemas.js';
+import type { CuaPowerIntent } from './nativePower.js';
+import { readCuaSpaceRegistry, removeCuaSpaceRegistration } from './nativeSpaces.js';
+import { CuaLocalLaunchV1Schema, CuaNativeSpaceRegistrySchema, CuaNativeSpaceSchema, parseCuaLocalResource, type CuaLocalResourceV1 } from './schemas.js';
 
 type SpaceResource = Extract<CuaLocalResourceV1, { kind: 'space' }>;
-type RegistryPresence = 'present' | 'absent' | 'unknown';
 export type CuaLocalSpaceCreate =
     | Readonly<{ kind: 'bound'; resource: SpaceResource }>
     | Readonly<{ kind: 'unknown'; recovery: SpaceResource }>
@@ -18,8 +18,6 @@ export type CuaLocalSpaceCleanup = Readonly<{
 // cua-cli/src/host.rs SpacesCmd/run_spaces_sdk/run_spaces. Spaces delete also
 // forgets imported addresses; this created-only leaf instead keeps exact native
 // sandbox deletion and registry removal separate. C50 owns destruction authority.
-const row = z.object({ id: z.string(), provider: z.string() });
-const registrySchema = z.object({ spaces: z.array(row) });
 
 function spaceResource(input: unknown): SpaceResource {
     const resource = parseCuaLocalResource(input);
@@ -31,16 +29,6 @@ function spaceResource(input: unknown): SpaceResource {
 
 export function createCuaLocalSpace(native: CuaNativeClient) {
     const sandbox = createCuaLocalSandbox(native);
-
-    async function registryPresence(resource: SpaceResource, signal?: AbortSignal): Promise<RegistryPresence> {
-        const result = await native.json(['--embedded', 'spaces', 'ls'], signal);
-        if (result.kind !== 'success') return 'unknown';
-        const parsed = registrySchema.safeParse(result.value);
-        if (!parsed.success) return 'unknown';
-        const selected = parsed.data.spaces.find((entry) => entry.id === resource.spaceId);
-        if (!selected) return 'absent';
-        return selected.provider === 'local' ? 'present' : 'unknown';
-    }
 
     return {
         async create(input: unknown, name: string, imageDiskBytes: number, signal?: AbortSignal): Promise<CuaLocalSpaceCreate> {
@@ -55,7 +43,7 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
                 if (created.kind === 'unavailable') return created;
                 if (created.kind !== 'bound') return { kind: 'unknown', recovery: resource };
                 const registered = await native.json(['--embedded', 'spaces', 'add', created.resource.sandboxId], signal);
-                const parsed = registered.kind === 'success' ? row.safeParse(registered.value) : undefined;
+                const parsed = registered.kind === 'success' ? CuaNativeSpaceSchema.safeParse(registered.value) : undefined;
                 return parsed?.success && parsed.data.id === resource.spaceId && parsed.data.provider === 'local'
                     ? { kind: 'bound', resource }
                     : { kind: 'unknown', recovery: resource };
@@ -72,7 +60,7 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
                 `--runtime=${launch.runtimeId}`, `--name=${name}`, `--cpus=${launch.size.cpu}`,
                 `--memory-mb=${memoryMiB}`, `--disk-gb=${diskGiB}`, '--', launch.imageId], signal);
             if (created.kind !== 'success') return { kind: 'unknown', recovery: resource };
-            const parsed = registrySchema.safeParse(created.value);
+            const parsed = CuaNativeSpaceRegistrySchema.safeParse(created.value);
             if (!parsed.success || parsed.data.spaces.length !== 1 || parsed.data.spaces[0].id !== resource.spaceId
                 || parsed.data.spaces[0].provider !== 'local') {
                 return { kind: 'unknown', recovery: resource };
@@ -87,10 +75,10 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
         async inspect(input: unknown, signal?: AbortSignal) {
             const resource = spaceResource(input);
             const inspected = await sandbox.inspect(resource, signal);
-            const registry = await registryPresence(resource, signal);
+            const registry = await readCuaSpaceRegistry(native, resource.spaceId, signal, 'local');
             return { ...inspected, resource, registry };
         },
-        async power(input: unknown, intent: 'start' | 'stop' | 'suspend' | 'resume', signal?: AbortSignal) {
+        async power(input: unknown, intent: CuaPowerIntent, signal?: AbortSignal) {
             const resource = spaceResource(input);
             // Native registry power_state is historical, not current power proof.
             return sandbox.power(resource, intent, signal);
@@ -99,14 +87,8 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
             const resource = spaceResource(input);
             const deleted = await sandbox.destroy(resource, signal);
             const existence = deleted.kind === 'deleted' ? 'absent' : 'unknown';
-            let registry = await registryPresence(resource, signal);
-            if (registry === 'present') {
-                // rm/remove forgets the entry and token, without touching compute.
-                // Even a successful acknowledgement is not registry absence proof.
-                await native.json(['--embedded', 'spaces', 'rm', resource.spaceId], signal);
-                registry = await registryPresence(resource, signal);
-            }
-            const disposition = registry === 'absent' ? 'removed' : registry;
+            // rm/remove forgets the entry and token, without touching compute.
+            const disposition = await removeCuaSpaceRegistration(native, resource.spaceId, signal, 'local');
             return { kind: existence === 'absent' && disposition === 'removed' ? 'deleted' : 'incomplete',
                 sandbox: existence, registry: disposition, resource };
         },

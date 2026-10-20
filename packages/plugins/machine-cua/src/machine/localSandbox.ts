@@ -1,4 +1,5 @@
 import type { CuaNativeClient } from './nativeClient.js';
+import { cuaNativePowerVerb, type CuaPowerIntent } from './nativePower.js';
 import { CuaLocalLaunchV1Schema, CuaLocalNameSchema, parseCuaLocalResource, CuaNativeSandboxSchema, CuaNativeDeleteSchema,
     type CuaLocalResourceV1 } from './schemas.js';
 
@@ -52,14 +53,14 @@ export function createCuaLocalSandbox(native: CuaNativeClient) {
             return { kind: 'bound' as const, resource };
         },
         inspect,
-        async power(input: unknown, intent: 'start' | 'stop' | 'suspend' | 'resume', signal?: AbortSignal) {
+        async power(input: unknown, intent: CuaPowerIntent, signal?: AbortSignal) {
             const resource = parseCuaLocalResource(input);
             // Sandbox CLI has suspend/resume but no disk-preserving Stop.
             if (intent === 'stop') return { kind: 'unsupported' as const, intent, resource };
             const before = await inspect(resource, signal);
             if (before.existence !== 'present') return { kind: 'unavailable' as const,
                 reason: before.existence === 'absent' ? 'native_resource_absent' as const : 'native_resource_unknown' as const, resource };
-            const response = await native.effect(['--embedded', 'sandbox', intent === 'start' ? 'resume' : intent, resource.sandboxId], signal);
+            const response = await native.effect(['--embedded', 'sandbox', cuaNativePowerVerb(intent), resource.sandboxId], signal);
             if (response.kind !== 'success') return { kind: 'unknown' as const, resource };
             return { kind: 'observed' as const, ...await inspect(resource, signal) };
         },

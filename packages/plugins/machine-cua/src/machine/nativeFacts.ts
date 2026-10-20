@@ -1,7 +1,7 @@
 import * as z from 'zod/mini';
 import type { MachineProvisionerCheckResultV1, MachineProvisionerOptionsResultV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import type { CuaNativeClient, CuaNativeOutcome } from './nativeClient.js';
-import { CuaLocalOptionsQueryV1Schema, type CuaLocalLaunchV1, type CuaLocalOptionsQueryV1 } from './schemas.js';
+import { CuaLocalOptionsQueryV1Schema, CuaNativeImageRefSchema, type CuaLocalLaunchV1, type CuaLocalOptionsQueryV1 } from './schemas.js';
 
 // Immutable read contract: trycua/cua@2bce4442c107fc34c45b374b29a35d09f630fd83,
 // cua-cli/src/lib.rs RuntimeCmd::Doctor / ImagesCmd::Ls, catalog.rs row(),
@@ -15,15 +15,15 @@ const doctorSchema = z.object({
     host: z.object({ os: z.enum(['macos', 'linux', 'windows']), arch: z.enum(['x86_64', 'aarch64']),
         kvm: z.boolean(), accel: z.object({ x86_64: z.enum(['kvm', 'hvf', 'whpx', 'tcg']), aarch64: z.enum(['kvm', 'hvf', 'whpx', 'tcg']) }) }),
     backends: z.array(z.object({ backend: z.string(), ready: z.boolean(), provisionable: z.boolean() })),
-    qemu: z.object({ version }), lume: z.object({ version }),
+    qemu: z.object({ version }),
     container: z.object({ reachable: z.boolean(), gvisor: z.boolean(), runtimes: z.array(z.string()) }),
 });
 // Qualified OCI references only: never disclose native endpoint URLs, userinfo,
 // query strings, commands or arbitrary diagnostic text as an image choice.
 const imageReference = z.string().check(z.regex(/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?(?:@sha256:[a-f0-9]{64})?$/u));
 const imageSchema = z.object({
-    ref: imageReference, os: z.enum(['linux', 'macos', 'windows']), arch: z.array(arch),
-    local: z.nullable(z.string()), published: z.boolean(), spacesd: z.boolean(),
+    ...CuaNativeImageRefSchema.shape, ref: imageReference, os: z.enum(['linux', 'macos', 'windows']), arch: z.array(arch),
+    local: z.nullable(z.string()), spacesd: z.boolean(),
     browser_tools: z.optional(z.boolean()), digest: z.optional(z.nullable(digest)), sizes: z.optional(z.unknown()),
 });
 const sizesSchema = z.object({ digest, platforms: z.array(z.object({ arch,
@@ -58,17 +58,13 @@ function projectDoctor(value: unknown): CuaNativeFact<CuaNativeDoctorFacts> {
     const report = parsed.data;
     const backend = (id: string) => report.backends.find((entry) => entry.backend === id);
     const qemu = backend('qemu');
-    const lume = backend('lume');
     const container = backend('container');
     const managed = backend('managed');
     const containerReady = container?.ready === true && report.container.reachable;
     const qemuVersion = runtimeVersion(report.qemu.version);
-    const lumeVersion = runtimeVersion(report.lume.version);
     return known({ host: report.host, runtimes: [
         { id: 'qemu', ready: qemu?.ready === true, provisionable: qemu?.provisionable === true,
             ...(qemuVersion ? { version: qemuVersion } : {}) },
-        { id: 'lume', ready: lume?.ready === true, provisionable: lume?.provisionable === true,
-            ...(lumeVersion ? { version: lumeVersion } : {}) },
         { id: 'runc', ready: containerReady, provisionable: false },
         { id: 'gvisor', ready: (containerReady && report.container.gvisor && report.container.runtimes.includes('runsc')) || managed?.ready === true,
             provisionable: container?.provisionable === true || managed?.provisionable === true },
@@ -83,7 +79,7 @@ function projectImages(value: unknown): CuaNativeFact<readonly CuaNativeImageFac
         if (!parsed.success || !parsed.data.published) continue;
         const image = parsed.data;
         const runtimeIds: CuaLocalLaunchV1['runtimeId'][] = image.local === 'container' ? ['runc', 'gvisor']
-            : image.local === 'qemu' || image.local === 'lume' ? [image.local] : [];
+            : image.local === 'qemu' ? ['qemu'] : [];
         if (runtimeIds.length === 0) continue;
         let disk: CuaNativeImageFacts['disk'] = unknown('not_reported');
         const sizes = sizesSchema.safeParse(image.sizes);
@@ -146,7 +142,7 @@ export function createCuaNativeFacts(native: CuaNativeClient) {
                     const disk = image.disk.kind === 'known' ? image.disk.value.find((value) => value.arch === nativeArch)?.bytes : undefined;
                     const size = selectors.size;
                     const sizing = !size || (size.memoryBytes % 1024 ** 2 === 0
-                        && (localId === 'local-space' && (runtimeId === 'qemu' || runtimeId === 'lume')
+                        && (localId === 'local-space' && runtimeId === 'qemu'
                             ? size.diskBytes % 1024 ** 3 === 0 && size.diskBytes / 1024 ** 3 <= 4_294_967_295
                             : size.diskBytes === disk));
                     const available = image.spacesd && image.os !== 'windows' && image.architectures.includes(nativeArch)

@@ -3,10 +3,10 @@ import { defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defi
     defineProtocolUnion, type ProtocolSchemaOutput } from '@happier-dev/plugin-sdk/protocol';
 
 const id = z.string().check(z.minLength(1));
-const runtimeIds = ['gvisor', 'runc', 'qemu', 'lume'] as const;
+// macOS VMs belong to the Lume plugin alone; Cua here owns container and QEMU sandboxes.
+const runtimeIds = ['gvisor', 'runc', 'qemu'] as const;
 export const CuaLocalRuntimeSchema = defineProtocolUnion([
-    defineProtocolLiteral(runtimeIds[0]), defineProtocolLiteral(runtimeIds[1]),
-    defineProtocolLiteral(runtimeIds[2]), defineProtocolLiteral(runtimeIds[3]),
+    defineProtocolLiteral(runtimeIds[0]), defineProtocolLiteral(runtimeIds[1]), defineProtocolLiteral(runtimeIds[2]),
 ]);
 const closed = { policy: 'closed' } as const;
 const nativeId = defineProtocolString({ minLength: 1 });
@@ -50,9 +50,19 @@ export function parseCuaLocalResource(input: unknown): CuaLocalResourceV1 {
 
 // Native read projections discard additions and all private endpoint/auth data.
 // They use the same native name/runtime vocabulary as portable declarations.
+// One decoder per `cua --json` shape serves both local and BYOC routes.
 const nativeLocalId = id.check(z.regex(localIdPattern));
-export const CuaNativeSandboxSchema = z.object({
-    id: nativeLocalId, name: id.check(z.regex(namePattern)), location: z.literal('local'), runtime: z.enum(runtimeIds),
-    kind: z.enum(['vm', 'container']), image: z.nullable(id), status: id, state: id, ephemeral: z.boolean(),
-});
-export const CuaNativeDeleteSchema = z.object({ deleted: nativeLocalId, missing: z.boolean() });
+const sandboxInfo = { image: z.nullable(id), status: id, state: id, ephemeral: z.boolean() };
+/** `sandbox info` on a local route: runtime-qualified, no provider fields. */
+export const CuaNativeSandboxSchema = z.object({ ...sandboxInfo, id: nativeLocalId, name: id.check(z.regex(namePattern)),
+    location: z.literal('local'), runtime: z.enum(runtimeIds), kind: z.enum(['vm', 'container']) });
+/** `sandbox info` on a BYOC route: the native provider record and expiry instead of a local runtime. */
+export const CuaNativeCloudSandboxSchema = z.object({ ...sandboxInfo, id: z.string(), name: z.string(), location: z.string(),
+    expires_at: z.nullable(z.iso.datetime({ offset: true })),
+    provider_details: z.object({ provider: z.enum(['aws', 'gcp', 'modal']), id: id }) });
+export const CuaNativeDeleteSchema = z.object({ deleted: z.string(), missing: z.boolean() });
+/** `spaces ls` / `spaces add` rows. */
+export const CuaNativeSpaceSchema = z.object({ id: z.string(), provider: z.string() });
+export const CuaNativeSpaceRegistrySchema = z.object({ spaces: z.array(CuaNativeSpaceSchema) });
+/** The catalog row fields every image read shares (`images ls` / `images info`). */
+export const CuaNativeImageRefSchema = z.object({ ref: id, published: z.boolean() });

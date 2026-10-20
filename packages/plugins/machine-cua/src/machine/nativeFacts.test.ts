@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import { createCuaNativeClient } from './nativeClient.js';
 import { createCuaNativeFacts } from './nativeFacts.js';
+import { CuaLocalLaunchV1Schema } from './schemas.js';
 
 // Native JSON shapes from trycua/cua@2bce4442c107fc34c45b374b29a35d09f630fd83:
 // cua-vmm/src/auto.rs DoctorReport and cua-cli/src/catalog.rs row().
@@ -57,7 +58,6 @@ describe('Cua native read facts', () => {
             host: { os: 'linux', arch: 'x86_64', kvm: true },
             runtimes: [
                 { id: 'qemu', ready: true, provisionable: false, version: '10.1.0' },
-                { id: 'lume', ready: false, provisionable: false },
                 { id: 'runc', ready: true }, { id: 'gvisor', ready: false },
             ],
         } });
@@ -81,7 +81,7 @@ describe('Cua native read facts', () => {
         }, [{ ...image, ref: 'ghcr.io/trycua/linux:24.04', local: 'container' }]);
         const facts = await h.facts.read();
         expect(facts.doctor).toMatchObject({ kind: 'known', value: { runtimes: [
-            { id: 'qemu', ready: false }, { id: 'lume', ready: false },
+            { id: 'qemu', ready: false },
             { id: 'runc', ready: false }, { id: 'gvisor', ready: true },
         ] } });
         expect(facts.capture).toEqual({ kind: 'unknown', reason: 'not_reported' });
@@ -121,6 +121,19 @@ describe('Cua native read facts', () => {
             { id: 'qemu:ghcr.io/trycua/arm:1', available: false }, { id: `qemu:${image.ref}`, available: true },
         ] });
         expect(JSON.stringify(facts)).not.toContain('private');
+    });
+
+    it('leaves macOS VMs to the Lume plugin: no Lume runtime or Lume-only image is offered', async () => {
+        // Native doctor still reports its Lume backend; Cua here neither projects nor offers it.
+        const h = harness({ ...doctor, backends: doctor.backends.map((entry) => ({ ...entry, ready: true })),
+            host: { os: 'macos', arch: 'aarch64', kvm: false, accel: { x86_64: 'tcg', aarch64: 'hvf' } } },
+            [{ ...image, ref: 'ghcr.io/trycua/macos:15', os: 'macos', arch: ['arm64'], local: 'lume' }, image]);
+        const facts = await h.facts.read();
+        expect(facts.doctor).toMatchObject({ kind: 'known', value: { runtimes: expect.not.arrayContaining([expect.objectContaining({ id: 'lume' })]) } });
+        expect(facts.images).toMatchObject({ kind: 'known', value: [{ imageId: image.ref }] });
+        expect(JSON.stringify(await h.facts.options())).not.toContain('macos:15');
+        expect(CuaLocalLaunchV1Schema.safeParse({ on: 'local', runtimeId: 'lume', imageId: 'ghcr.io/trycua/macos:15',
+            size: { cpu: 4, memoryBytes: 4 * 1024 ** 3, diskBytes: 40 * 1024 ** 3 } }).success).toBe(false);
     });
 
     it('keeps malformed or failed native reads unknown and honors cancellation without exposing native errors', async () => {

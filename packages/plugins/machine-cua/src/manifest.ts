@@ -10,19 +10,18 @@ import { CuaLocalLaunchV1Schema, CuaLocalOptionsQueryV1Schema, CuaLocalResourceV
     type CuaLocalLaunchV1, type CuaLocalResourceV1, type CuaLocalOptionsQueryV1 } from './machine/schemas.js';
 import type { CuaLocalProvisionerId } from './machine/localProvisioner.js';
 import { remoteAccounts, remoteProvisioner, remoteRoles } from './machine/remoteDeclarations.js';
+import { CUA_DEPENDENCY_ID as dependencyId, resolveCuaExecutable } from './machine/nativeDependency.js';
 
 const pluginId = 'happier.machine.cua';
-const dependencyId = 'cua-cli';
 const processAccess = 'cua-native-process';
 const defaults = { scopes: ['machine'], surfaces: ['cli', 'plugin'], hostAccess: [processAccess] } as const;
 
 async function provider(id: CuaLocalProvisionerId, context: PluginInvocationContext) {
-    const status = await context.services.managedServices.dependencies.status(dependencyId, { signal: context.signal });
-    if ((status.state !== 'ready' && status.state !== 'updateAvailable') || !status.executable) throw new Error('cua_native_unavailable');
+    const executable = await resolveCuaExecutable(context);
     const [{ createCuaNativeClient }, { createCuaLocalProvisioner }] = await Promise.all([
         import('./machine/nativeClient.js'), import('./machine/localProvisioner.js'),
     ]);
-    return createCuaLocalProvisioner(createCuaNativeClient({ exec: context.services.exec, executable: status.executable }),
+    return createCuaLocalProvisioner(createCuaNativeClient({ exec: context.services.exec, executable }),
         id, context.invokedAtMs, context.signal);
 }
 function bytes(encoded: string) {
@@ -45,7 +44,10 @@ function roles(id: CuaLocalProvisionerId) {
             async run(_input: Readonly<Record<string, never>>, context: PluginInvocationContext) {
                 const requirement = { kind: 'managedDependency' as const, id: { pluginId, localId: dependencyId } };
                 try { return machineCheckPresentation({ ...await (await provider(id, context)).check(), prerequisites: [{ requirement, status: 'available' as const }] }); }
-                catch { return machineCheckPresentation({ available: false, code: 'cua_native_unavailable', prerequisites: [{ requirement, status: 'unavailable' as const }] }); }
+                catch (error) {
+                    return machineCheckPresentation({ available: false, prerequisites: [{ requirement, status: 'unavailable' as const }],
+                        code: error instanceof Error && error.message === 'cua_native_outdated' ? 'cua_native_outdated' : 'cua_native_unavailable' });
+                }
             } },
         options: { ...defaults, title: 'Read Cua local image and runtime choices', dangerLevel: 'safe' as const,
             inputSchema: CuaLocalOptionsQueryV1Schema, resultSchema: MachineProvisionerOptionsResultV1Schema,

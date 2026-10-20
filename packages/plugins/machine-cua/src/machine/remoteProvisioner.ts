@@ -4,6 +4,7 @@ import { createCuaByoc } from './byoc.js';
 import { remoteNative } from './remoteConnection.js';
 import { ByocProvisionerSchemas, ByocReconciliationSchemas, byocReconciliationOperation } from './remoteProvisionerSchemas.js';
 import { ByocOptionsQueryV1Schema } from './remoteSchemas.js';
+import { CUA_UNSUPPORTED_INTENT, cuaPowerAfter } from './nativePower.js';
 import { CuaLocalNameSchema } from './schemas.js';
 
 const id = 'byoc';
@@ -68,10 +69,10 @@ export async function invokeCuaRemoteRole(role: CuaRemoteRole, input: unknown, c
     }
     if (role === 'power') {
         const request = schemas.powerInput.parse(input);
-        if (request.intent !== 'start' && request.intent !== 'stop') return { kind: 'refused', code: 'cua_unsupported_intent' };
+        if (request.intent !== 'start' && request.intent !== 'stop') return { kind: 'refused', code: CUA_UNSUPPORTED_INTENT };
         const result = await byoc.power(resource, request.intent, signal);
-        if (result.kind === 'unsupported') return { kind: 'refused', code: 'cua_unsupported_intent' };
-        return result.kind === 'observed' && result.existence === 'present' && result.power === (request.intent === 'start' ? 'running' : 'stopped')
+        if (result.kind === 'unsupported') return { kind: 'refused', code: CUA_UNSUPPORTED_INTENT };
+        return result.kind === 'observed' && result.existence === 'present' && result.power === cuaPowerAfter(request.intent, 'cloud')
             ? { kind: 'confirmed' } : { kind: 'unknown', code: 'cua_native_power_pending' };
     }
     const observed = await byoc.inspect(resource, signal);
