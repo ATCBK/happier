@@ -5,7 +5,7 @@ import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
-import { buildRetryLaterProbeResultFromResponse, readRetryLaterReason } from '@/sync/runtime/connectivity/retryLaterProbeResult';
+import { buildRetryLaterProbeResultFromResponse, readRetryLaterReason } from '@happier-dev/connection-supervisor';
 import { sanitizeEndpointErrorMessage } from '@/sync/runtime/connectivity/sanitizeEndpointErrorMessage';
 import {
     peekServerReachabilityScope,

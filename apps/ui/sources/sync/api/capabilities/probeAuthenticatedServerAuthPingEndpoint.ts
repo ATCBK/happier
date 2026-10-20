@@ -1,6 +1,5 @@
-import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
+import { buildRetryLaterProbeResultFromResponse, type ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 
-import { buildRetryLaterProbeResultFromResponse } from '@/sync/runtime/connectivity/retryLaterProbeResult';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 

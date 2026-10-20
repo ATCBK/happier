@@ -1166,6 +1166,88 @@ describe('createManagedConnectionSupervisor', () => {
     vi.useRealTimers();
   });
 
+  describe('server maintenance (retry_later with Retry-After)', () => {
+    async function runDisconnectThenProbes(probes: ReadonlyArray<ReadinessProbeResult>) {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const transports = [createTransportHarness(), createTransportHarness(), createTransportHarness()];
+      const remaining = [...transports];
+      const probeReadiness = vi.fn<() => Promise<ReadinessProbeResult>>();
+      for (const probe of probes) probeReadiness.mockResolvedValueOnce(probe);
+      probeReadiness.mockResolvedValue({ status: 'ready' });
+      const supervisor = createManagedConnectionSupervisor({
+        ...DEFAULT_MANAGED_CONNECTION_POLICY,
+        jitterRatio: 0,
+        createTransport: () => {
+          const next = remaining.shift();
+          if (!next) throw new Error('missing transport');
+          return next.transport;
+        },
+        probeReadiness,
+      });
+      await supervisor.start();
+      return { supervisor, transports, probeReadiness };
+    }
+
+    it('reconnects when the announced maintenance window ends, then restores the fast first retry', async () => {
+      const { supervisor, transports, probeReadiness } = await runDisconnectThenProbes([
+        { status: 'retry_later', retryAfterMs: 2_000, reason: 'server_restarting' },
+        { status: 'retry_later', retryAfterMs: 2_000, reason: 'server_restarting' },
+        { status: 'retry_later', retryAfterMs: 2_000, reason: 'server_restarting' },
+        { status: 'ready' },
+      ]);
+      try {
+        transports[0]!.emitDisconnect({ reason: 'transport close' });
+        await vi.advanceTimersByTimeAsync(DEFAULT_MANAGED_CONNECTION_POLICY.initialFastRetryDelayMs);
+        // Probe 1 hits maintenance. Every later attempt follows the announced window, not the 1s, 2s, 4s... ladder.
+        expect(probeReadiness).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(probeReadiness).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(probeReadiness).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(probeReadiness).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(probeReadiness).toHaveBeenCalledTimes(4);
+        expect(supervisor.getState().phase).toBe('online');
+
+        // The maintenance wait is not evidence of an unhealthy server: the next drop starts from the fast retry.
+        transports[1]!.emitDisconnect({ reason: 'transport close' });
+        await vi.advanceTimersByTimeAsync(DEFAULT_MANAGED_CONNECTION_POLICY.initialFastRetryDelayMs);
+        expect(probeReadiness).toHaveBeenCalledTimes(5);
+        expect(supervisor.getState().phase).toBe('online');
+      } finally {
+        await supervisor.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps escalating across reconnects when the failures were not announced maintenance', async () => {
+      const { supervisor, transports, probeReadiness } = await runDisconnectThenProbes([
+        { status: 'server_unreachable' },
+        { status: 'server_unreachable' },
+        { status: 'ready' },
+      ]);
+      try {
+        transports[0]!.emitDisconnect({ reason: 'transport close' });
+        await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(2_000);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(probeReadiness).toHaveBeenCalledTimes(3);
+        expect(supervisor.getState().phase).toBe('online');
+
+        // Unchanged contract: backoff history survives a reconnect unless the wait was server-announced.
+        transports[1]!.emitDisconnect({ reason: 'transport close' });
+        await vi.advanceTimersByTimeAsync(DEFAULT_MANAGED_CONNECTION_POLICY.initialFastRetryDelayMs);
+        expect(probeReadiness).toHaveBeenCalledTimes(3);
+        expect(supervisor.getState().nextRetryAt! - Date.now()).toBeGreaterThan(1_000);
+      } finally {
+        await supervisor.stop();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('cancels pending retries on intentional stop', async () => {
     vi.useFakeTimers();
     const harness = createTransportHarness();

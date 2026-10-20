@@ -1,4 +1,5 @@
 import {
+    buildRetryLaterProbeResultFromResponse,
     createManagedConnectionSupervisor,
     DEFAULT_MANAGED_CONNECTION_POLICY,
     type ManagedConnectionState,
@@ -16,7 +17,6 @@ import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 import { createNotAuthenticatedError } from './authErrors';
-import { buildRetryLaterProbeResultFromResponse } from './retryLaterProbeResult';
 import { recordFailedHomeReach } from './homeReachFailures';
 import { readServerReachabilityBackgroundRetryMs } from './serverReachabilityTuning';
 

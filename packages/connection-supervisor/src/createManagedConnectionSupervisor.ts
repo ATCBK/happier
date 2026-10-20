@@ -25,6 +25,13 @@ function classifyTransportError(
   };
 }
 
+function readAnnouncedRetryDelayMs(probe: ReadinessProbeResult | undefined): number | null {
+  if (probe?.status !== 'retry_later') return null;
+  const { retryAfterMs } = probe;
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs)) return null;
+  return Math.max(1, retryAfterMs);
+}
+
 function initialState(): ManagedConnectionState {
   return {
     phase: 'idle',
@@ -46,6 +53,8 @@ export function createManagedConnectionSupervisor(
   let isStarted = false;
   let isStopped = false;
   let reconnectAttempt = 0;
+  // Set while the server itself is telling us when to come back (maintenance); cleared by the next connect.
+  let waitingOnAnnouncedRetry = false;
   let generation = 0;
   let detachCurrentListeners: Array<() => void> = [];
   let startInFlight: Promise<void> | null = null;
@@ -107,14 +116,13 @@ export function createManagedConnectionSupervisor(
 
       if (probe.status !== 'ready') {
         const delayMs =
-          probe.status === 'retry_later' && typeof probe.retryAfterMs === 'number' && Number.isFinite(probe.retryAfterMs)
-            ? Math.max(1, probe.retryAfterMs)
-            : computeManagedConnectionBackoffMs({
-                attempt: initialProbeAttempt,
-                minMs: config.backoffMinMs,
-                maxMs: config.backoffMaxMs,
-                jitterRatio: config.jitterRatio,
-              });
+          readAnnouncedRetryDelayMs(probe)
+          ?? computeManagedConnectionBackoffMs({
+            attempt: initialProbeAttempt,
+            minMs: config.backoffMinMs,
+            maxMs: config.backoffMaxMs,
+            jitterRatio: config.jitterRatio,
+          });
         scheduleReconnect(initialProbeAttempt, delayMs, probe);
         return;
       }
@@ -136,7 +144,9 @@ export function createManagedConnectionSupervisor(
       // transport still ends up connected, ensure we don't reconnect again later from the stale timer.
       clearRetryTimer();
       const now = Date.now();
-      reconnectAttempt = params.attempt;
+      // A server-announced wait says nothing about the connection's health, so it must not leave backoff history behind.
+      reconnectAttempt = waitingOnAnnouncedRetry ? 0 : params.attempt;
+      waitingOnAnnouncedRetry = false;
       publish({
         phase: 'online',
         reason: params.initial ? 'initial_connect' : state.reason,
@@ -235,16 +245,15 @@ export function createManagedConnectionSupervisor(
 
     const nextAttempt = Math.max(1, state.attempt + 1);
     const delayMs =
-      probe.status === 'retry_later' && typeof probe.retryAfterMs === 'number' && Number.isFinite(probe.retryAfterMs)
-        ? Math.max(1, probe.retryAfterMs)
-        : nextAttempt <= maxFastRetries
-          ? Math.max(0, config.initialFastRetryDelayMs)
-          : computeManagedConnectionBackoffMs({
-              attempt: nextAttempt,
-              minMs: config.backoffMinMs,
-              maxMs: config.backoffMaxMs,
-              jitterRatio: config.jitterRatio,
-            });
+      readAnnouncedRetryDelayMs(probe)
+      ?? (nextAttempt <= maxFastRetries
+        ? Math.max(0, config.initialFastRetryDelayMs)
+        : computeManagedConnectionBackoffMs({
+          attempt: nextAttempt,
+          minMs: config.backoffMinMs,
+          maxMs: config.backoffMaxMs,
+          jitterRatio: config.jitterRatio,
+        }));
 
     scheduleReconnect(nextAttempt, delayMs, probe);
   }
@@ -286,14 +295,13 @@ export function createManagedConnectionSupervisor(
     if (probe.status !== 'ready') {
       const nextAttempt = attempt + 1;
       const delayMs =
-        probe.status === 'retry_later' && typeof probe.retryAfterMs === 'number' && Number.isFinite(probe.retryAfterMs)
-          ? Math.max(1, probe.retryAfterMs)
-          : computeManagedConnectionBackoffMs({
-              attempt: nextAttempt,
-              minMs: config.backoffMinMs,
-              maxMs: config.backoffMaxMs,
-              jitterRatio: config.jitterRatio,
-            });
+        readAnnouncedRetryDelayMs(probe)
+        ?? computeManagedConnectionBackoffMs({
+          attempt: nextAttempt,
+          minMs: config.backoffMinMs,
+          maxMs: config.backoffMaxMs,
+          jitterRatio: config.jitterRatio,
+        });
       scheduleReconnect(nextAttempt, delayMs, probe);
       return;
     }
@@ -306,6 +314,7 @@ export function createManagedConnectionSupervisor(
   function scheduleReconnect(attempt: number, delayMs: number, probe?: ReadinessProbeResult): void {
     if (isStopped) return;
     clearRetryTimer();
+    if (readAnnouncedRetryDelayMs(probe) !== null) waitingOnAnnouncedRetry = true;
     const now = Date.now();
     publish({
       phase: 'offline',

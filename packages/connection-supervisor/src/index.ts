@@ -3,6 +3,13 @@ export { createManagedEndpointSupervisor } from './createManagedEndpointSupervis
 export { computeManagedConnectionBackoffMs } from './reconnectBackoff.js';
 export { deriveManagedConnectionReason } from './managedConnectionEvents.js';
 export { DEFAULT_MANAGED_CONNECTION_POLICY } from './defaultManagedConnectionPolicy.js';
+export {
+  buildRetryLaterProbeResultFromResponse,
+  parseRetryAfterMs,
+  readRetryLaterHints,
+  readRetryLaterReason,
+} from './retryLaterProbeResult.js';
+export type { RetryLaterHeaderSource, RetryLaterHints } from './retryLaterProbeResult.js';
 export type {
   ManagedConnectionAuthFailureContext,
   ManagedConnectionContext,
