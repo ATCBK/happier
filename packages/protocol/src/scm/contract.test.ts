@@ -35,6 +35,19 @@ function readScmSchema<TValue = unknown>(name: string): ZodLikeSchema<TValue> {
 }
 
 describe('scm protocol contracts', () => {
+    it('validates closed blame requests and complete indexed range results', () => {
+        const request = readScmSchema('ScmBlameFileRequestSchema');
+        const response = readScmSchema('ScmBlameFileResponseSchema');
+        expect(request.safeParse({ cwd: '/repo', path: 'file', expectedHash: '1'.repeat(64) }).success).toBe(true);
+        expect(request.safeParse({ path: 'file', expectedHash: 'bad' }).success).toBe(false);
+        expect(request.safeParse({ path: 'file', arbitraryAuthority: true }).success).toBe(false);
+        const commit = { sha: '1'.repeat(40), shortSha: '1111111', authorName: 'Author', authoredAtMs: 1, summary: 'Subject' };
+        expect(response.safeParse({ success: true, commits: [commit], ranges: [{ startLine: 1, lineCount: 2, commitIndex: 0 }, { startLine: 3, lineCount: 1, commitIndex: null }] }).success).toBe(true);
+        expect(response.safeParse({ success: true, commits: [], ranges: [{ startLine: 1, lineCount: 1, commitIndex: 0 }] }).success).toBe(false);
+        expect(response.safeParse({ success: true }).success).toBe(false);
+        expect(response.safeParse({ success: false, errorCode: 'stale_file' }).success).toBe(true);
+    });
+
     it('preserves immutable hook diff endpoints and rejects a moving after endpoint', () => {
         const beforeTreeOid = '1'.repeat(40);
         const commit = '2'.repeat(40);

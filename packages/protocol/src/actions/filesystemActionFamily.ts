@@ -3,6 +3,12 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { TransferEndpointCandidateSchema } from '../machines/transfer/transferStream.js';
 import { WorkspaceSyncEntryExpectationV1Schema } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
+export const FILESYSTEM_WRITE_GUARD_ERROR_CODES = ['hash_mismatch', 'expected_file_missing', 'expected_file_absent'] as const;
+export type FilesystemWriteGuardErrorCode = typeof FILESYSTEM_WRITE_GUARD_ERROR_CODES[number];
+export function isFilesystemWriteGuardErrorCode(value: unknown): value is FilesystemWriteGuardErrorCode {
+  return typeof value === 'string' && (FILESYSTEM_WRITE_GUARD_ERROR_CODES as readonly string[]).includes(value);
+}
+
 export const FILESYSTEM_MUTATION_ACTION_IDS = [
   'daemon.filesystem.createDirectory',
   'daemon.filesystem.rename',
@@ -37,9 +43,14 @@ const FilesystemFailureSchema = lazyZodSchema(() => z.strictObject({
 
 export const FilesystemReadFileInputSchema = lazyZodSchema(() => z.strictObject({
   rootPath: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)),
-}));
+  offset: z.optional(z.number().check(z.int(), z.nonnegative())),
+  length: z.optional(z.number().check(z.int(), z.positive())),
+}).check(z.refine(input => input.offset === undefined || input.length !== undefined, {
+  message: 'A byte offset requires a read length', path: ['length'],
+})));
 export const FilesystemReadFileOutputSchema = lazyZodSchema(() => z.union([
-  z.strictObject({ success: z.literal(true), content: z.string() }),
+  z.strictObject({ success: z.literal(true), content: z.string(),
+    sizeBytes: z.optional(z.number().check(z.int(), z.nonnegative())), eof: z.optional(z.boolean()) }),
   FilesystemFailureSchema,
 ]));
 export const FilesystemWriteFileInputSchema = lazyZodSchema(() => z.strictObject({
@@ -164,6 +175,7 @@ export const FilesystemUploadInputSchema = lazyZodSchema(() => z.strictObject({
   source: z.strictObject({ sourceId: z.string().check(z.minLength(1)), sizeBytes: z.number().check(z.int(), z.nonnegative()),
     sha256: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/i))) }),
   overwrite: z.boolean(),
+  expectedHash: z.optional(z.nullable(z.string())),
 }));
 export const FilesystemDownloadInputSchema = lazyZodSchema(() => z.strictObject({
   rootPath: z.string().check(z.minLength(1)),

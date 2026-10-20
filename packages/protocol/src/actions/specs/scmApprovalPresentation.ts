@@ -5,6 +5,7 @@
  * Action title as its own body.
  */
 import { describeWorkspaceRelativePath } from './filesystemApprovalPresentation.js';
+import { ScmChangeDiscardRequestSchema } from '../../scm/index.js';
 
 const NAMED_FILE_LIMIT = 3;
 
@@ -25,6 +26,18 @@ export function describeScmChangeDiscardApprovalSummary(input: unknown): string 
   const paths = readDiscardPaths(input);
   const [first, second, third] = paths;
   if (!first) return null;
+  const parsed = ScmChangeDiscardRequestSchema.safeParse(input);
+  const entries = parsed.success ? parsed.data.entries : [];
+  if (entries.length && entries.every(entry => entry.kind === 'comparison')) {
+    return entries.map((entry, index) => {
+      if (entry.kind !== 'comparison') return '';
+      const count = Array.isArray(entry.changeKeys) ? entry.changeKeys.length : Array.isArray(entry.changeRefs) ? entry.changeRefs.length : null;
+      if (count !== null) return `Revert ${count} ${count === 1 ? 'change' : 'changes'} in ${paths[index]}.`;
+      const source = entry.against?.source;
+      return source?.kind === 'turnCheckpoint' && source.turnId
+        ? `Restore ${paths[index]} to before turn ${source.turnId}.` : `Restore ${paths[index]} to its comparison before state.`;
+    }).join('\n');
+  }
   const undone = 'This can’t be undone.';
   if (paths.length === 1) return `Discard your changes to ${first}.\n${undone}`;
   if (paths.length === 2) return `Discard your changes to ${first} and ${second}.\n${undone}`;

@@ -41,6 +41,7 @@ export function createScmCapabilities(input?: Partial<ScmCapabilities>): ScmCapa
     capabilityScope: input?.capabilityScope ?? 'local-backend',
     readStatus: input?.readStatus ?? false,
     readDiffFile: input?.readDiffFile ?? false,
+    readBlame: input?.readBlame ?? false,
     readDiffCommit: input?.readDiffCommit ?? false,
     readLog: input?.readLog ?? false,
     readHistoryEntries: input?.readHistoryEntries ?? false,
@@ -147,6 +148,7 @@ export function createScmCapabilitiesFromBackendCapabilities(
   return createScmCapabilities({
     readStatus: isCapabilityEnabled(input.read.status),
     readDiffFile: isCapabilityEnabled(input.read.diffFile),
+    readBlame: isCapabilityEnabled(input.read.blame),
     readDiffCommit: isCapabilityEnabled(input.read.diffCommit),
     readLog: isCapabilityEnabled(input.read.log),
     readHistoryEntries: isCapabilityEnabled(input.read.historyEntries),

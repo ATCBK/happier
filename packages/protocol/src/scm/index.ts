@@ -20,22 +20,27 @@ import {
 } from './operationError.js';
 import { ScmRequestBaseSchema } from './requestBase.js';
 import { ScmOperationOutcomeSchema } from './operationOutcome.js';
+import { ScmComparisonSourceSchema } from './comparison.js';
+import { FilesystemPreparedExportSchema } from '../actions/filesystemActionFamily.js';
 import { ScmCommitOidSchema, ScmCommitExpectedRefSchema, ScmCommitPublicationSchema, ScmCommitHookContentChangesSchema } from './commitPublication.js';
 import { ScmRepositoryOperationKindSchema } from './operationState.js';
 import { ScmRemotePolicyFields, validateScmRemoteLeaseAuthority } from './remotePolicy.js';
 export { admitScmRemotePolicy, type ScmRemotePolicy } from './remotePolicy.js';
 export * from './operationOutcome.js';
 export * from './entriesHistoryV1.js';
+export * from './fileAtRevision.js';
 export * from './commitPublication.js';
 export * from './branches.js';
 export * from './stash.js';
 export * from './pullRequests.js';
 export * from './diffSummary.js';
+export * from './comparisonOccurrences.js';
 export * from './diffSummaryResult.js';
 export * from './diffSummaryCommitPlan.js';
 export * from './repositoryProvisioning.js';
 export * from './repositoryClone.js';
 export * from './worktrees.js';
+export * from './fileChangesScope.js';
 import {
   ScmBranchSourceRefSchema,
   ScmRemoteManagementNameSchema,
@@ -253,6 +258,50 @@ export const ScmDiffFileResponseSchema = lazyZodSchema(() => z.object({
 }));
 export type ScmDiffFileResponse = z.infer<typeof ScmDiffFileResponseSchema>;
 
+/** A separate operation prevents an older reader from silently ignoring the alignment guard. */
+export const ScmBlameFileRequestSchema = lazyZodSchema(() => z.strictObject({
+  ...ScmRequestBaseSchema.shape,
+  path: z.string().check(z.minLength(1)),
+  expectedHash: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/))),
+}));
+export type ScmBlameFileRequest = z.infer<typeof ScmBlameFileRequestSchema>;
+
+export const ScmBlameRangeSchema = lazyZodSchema(() => z.strictObject({
+  startLine: z.number().check(z.int(), z.positive()),
+  lineCount: z.number().check(z.int(), z.positive()),
+  commitIndex: z.nullable(z.number().check(z.int(), z.nonnegative())),
+}));
+export type ScmBlameRange = z.infer<typeof ScmBlameRangeSchema>;
+
+export const ScmBlameCommitSchema = lazyZodSchema(() => z.strictObject({
+  sha: z.string().check(z.regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)),
+  shortSha: z.string().check(z.minLength(1)),
+  authorName: z.string(),
+  authorEmail: z.optional(z.string()),
+  authoredAtMs: z.number().check(z.int()),
+  summary: z.string(),
+}));
+export type ScmBlameCommit = z.infer<typeof ScmBlameCommitSchema>;
+
+export const ScmBlameFileResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
+  z.strictObject({ success: z.literal(true), ranges: z.array(ScmBlameRangeSchema), commits: z.array(ScmBlameCommitSchema) }),
+  z.strictObject({
+    success: z.literal(false),
+    error: z.optional(z.string()),
+    errorCode: z.optional(z.union([ScmOperationErrorCodeSchema, z.enum(['stale_file', 'untracked', 'unsupported_path'])])),
+  }),
+]).check(z.superRefine((response, context) => {
+  if (!response.success) return;
+  let nextLine = 1;
+  for (const [index, range] of response.ranges.entries()) {
+    if (range.startLine !== nextLine || (range.commitIndex !== null && range.commitIndex >= response.commits.length)) {
+      context.addIssue({ code: 'custom', path: ['ranges', index], message: 'Blame ranges must cover consecutive file lines and reference a known commit' });
+    }
+    nextLine = range.startLine + range.lineCount;
+  }
+})));
+export type ScmBlameFileResponse = z.infer<typeof ScmBlameFileResponseSchema>;
+
 export const ScmDiffCommitRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
   commit: z.string(),
   /** Explicit immutable tree comparison; commit is the recorded after tree in this mode. */
@@ -298,11 +347,36 @@ export const ScmChangeApplyResponseSchema = lazyZodSchema(() => z.object({
 }));
 export type ScmChangeApplyResponse = z.infer<typeof ScmChangeApplyResponseSchema>;
 
-export const ScmChangeDiscardEntrySchema = lazyZodSchema(() => z.object({
-  path: ScmSelectedMutationPathSchema,
-  kind: ScmEntryKindSchema,
-}));
+const discardHash = z.string().check(z.regex(/^[a-f0-9]{64}$/));
+const discardSelection = z.array(z.string().check(z.minLength(1))).check(z.minLength(1),
+  z.refine(values => new Set(values).size === values.length, 'Selections must be unique'));
+export const ScmChangeDiscardEntrySchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ path: ScmSelectedMutationPathSchema, kind: ScmEntryKindSchema }),
+  z.strictObject({
+    path: ScmSelectedMutationPathSchema, kind: z.literal('comparison'),
+    against: z.strictObject({ source: ScmComparisonSourceSchema,
+      comparisonId: z.optional(discardHash), sessionId: z.optional(z.string().check(z.minLength(1))) }),
+    changeKeys: z.optional(discardSelection), changeRefs: z.optional(discardSelection),
+    expectedHash: z.optional(discardHash), includeUndo: z.optional(z.boolean()),
+  }).check(z.refine(entry => !(entry.changeKeys && entry.changeRefs), 'Select keys or occurrence refs, never both'),
+    z.refine(entry => entry.against.source.kind === 'workingTree' || !!entry.against.comparisonId,
+      'Captured sources require their comparison identity'),
+    z.refine(entry => !entry.changeRefs || !!entry.against.comparisonId, 'Occurrence refs require a captured comparison')),
+]));
 export type ScmChangeDiscardEntry = z.infer<typeof ScmChangeDiscardEntrySchema>;
+export type ScmComparisonDiscardEntry = Extract<ScmChangeDiscardEntry, { kind: 'comparison' }>;
+
+export const ScmChangeDiscardResultEntrySchema = lazyZodSchema(() => z.strictObject({
+  path: ScmSelectedMutationPathSchema,
+  status: z.enum(['discarded', 'reverted', 'restored', 'deleted', 'recreated', 'kept_edited', 'refused']),
+  errorCode: z.optional(ScmOperationErrorCodeSchema), error: z.optional(z.string()),
+  hashBefore: z.nullable(discardHash), hashAfter: z.nullable(discardHash),
+  inverseEdits: z.optional(z.array(z.strictObject({ startUtf16: z.number().check(z.int(), z.minimum(0)),
+    deleteLength: z.number().check(z.int(), z.minimum(0)), insertText: z.string(), originalText: z.string() }))),
+  previous: z.optional(z.union([z.strictObject({ inlineBase64: z.string() }),
+    z.strictObject({ export: FilesystemPreparedExportSchema })])),
+}));
+export type ScmChangeDiscardResultEntry = z.infer<typeof ScmChangeDiscardResultEntrySchema>;
 
 export const ScmChangeDiscardRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
   entries: z.array(ScmChangeDiscardEntrySchema).check(z.minLength(1)),
@@ -311,6 +385,8 @@ export type ScmChangeDiscardRequest = z.infer<typeof ScmChangeDiscardRequestSche
 
 export const ScmChangeDiscardResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
+  entries: z.optional(z.array(ScmChangeDiscardResultEntrySchema)),
+  noteDelivery: z.optional(z.strictObject({ status: z.enum(['queued', 'failed']) })),
   outcome: z.optional(ScmOperationOutcomeSchema),
   stdout: z.optional(z.string()),
   stderr: z.optional(z.string()),
