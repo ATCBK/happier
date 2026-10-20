@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View, type ViewStyle } from 'react-native';
 import { Circle, ClipPath, Defs, Path, Pattern, Rect, Svg } from 'react-native-svg';
 
@@ -243,18 +243,29 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const nativeTarget = useHappierNativeMinimumInteractiveTargetSize();
   const reducedMotion = accessibility?.reducedMotion === true || (props.reducedMotion ?? accessibility?.reducedMotion ?? true);
   const liveOffset = useRef(new Animated.Value(0)).current;
+  const liveInk = useRef<View | null>(null);
   const priorLive = useRef({ sampleKey: props.liveMotion?.sampleKey, active: props.liveMotion?.active !== false });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const motion = props.liveMotion;
     const previous = priorLive.current;
     const active = motion?.active !== false;
     priorLive.current = { sampleKey: motion?.sampleKey, active };
-    liveOffset.stopAnimation();
-    liveOffset.setValue(0);
+    if (Platform.OS !== 'web') {
+      liveOffset.stopAnimation();
+      liveOffset.setValue(0);
+    }
     if (!motion || !active || !previous.active || reducedMotion || props.variant === 'bar'
       || previous.sampleKey === undefined || previous.sampleKey === motion.sampleKey) return;
+    if (Platform.OS === 'web') {
+      // RNW's View ref is the DOM element. Let the browser move the ink without
+      // the JS Animated driver committing React work on every frame.
+      const element = liveInk.current as (View & { animate?: Element['animate'] }) | null;
+      const animation = element?.animate?.([{ transform: `translateX(${motion.stepPx}px)` }, { transform: 'translateX(0px)' }],
+        { duration: motion.durationMs, easing: 'linear' });
+      return () => animation?.cancel();
+    }
     liveOffset.setValue(motion.stepPx);
-    const animation = Animated.timing(liveOffset, { toValue: 0, duration: motion.durationMs, easing: Easing.linear, useNativeDriver: false });
+    const animation = Animated.timing(liveOffset, { toValue: 0, duration: motion.durationMs, easing: Easing.linear, useNativeDriver: true });
     animation.start();
     return () => animation.stop();
   }, [liveOffset, props.liveMotion?.sampleKey, props.liveMotion?.active, props.liveMotion?.stepPx, props.liveMotion?.durationMs, props.variant, reducedMotion]);
@@ -514,7 +525,7 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       stroke={props.theme.colors.surface} strokeWidth={HAPPIER_DATA_METRICS.barSeamPx} />)}
   </Svg> : null;
   const ink = props.liveMotion ? <View style={{ width: plotWidth, height, overflow: 'hidden' }}>
-    <Animated.View testID={props.testID ? `${props.testID}-sliding-ink` : undefined} style={{ transform: [{ translateX: liveOffset }] }}>
+    <Animated.View ref={liveInk} testID={props.testID ? `${props.testID}-sliding-ink` : undefined} style={{ transform: [{ translateX: Platform.OS === 'web' ? 0 : liveOffset }] }}>
       {pathInk}{thresholdInk}
     </Animated.View>{liveEndpoints}
   </View> : <>{pathInk}{thresholdInk}</>;
