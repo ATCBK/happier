@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { applyMainHiddenLayoutOverride } from './applyMainHiddenLayoutOverride';
 
 describe('applyMainHiddenLayoutOverride', () => {
+    it('keeps editor-first side folding when main is hidden in a narrow leaf', () => {
+        const base = { main: 'overlay', kind: 'twoPane', right: 'overlay', details: 'docked' } as const;
+        expect(applyMainHiddenLayoutOverride({ arrangement: 'editor', mainHidden: true, rightOpen: true, detailsOpen: true, baseLayout: base })).toBe(base);
+    });
     it('returns the base layout when focus mode is inactive', () => {
         const base = { main: 'docked', kind: 'twoPane', right: 'docked', details: 'hidden' } as const;
         expect(applyMainHiddenLayoutOverride({

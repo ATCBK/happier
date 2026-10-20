@@ -1,12 +1,14 @@
-import type { ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
+import type { PaneArrangement, ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
 
 export function applyMainHiddenLayoutOverride(input: Readonly<{
     mainHidden: boolean;
+    arrangement?: PaneArrangement;
     rightOpen: boolean;
     detailsOpen: boolean;
     baseLayout: ResolvedPaneLayout;
 }>): ResolvedPaneLayout {
     if (!input.mainHidden) return input.baseLayout;
+    if (input.arrangement === 'editor') return input.baseLayout;
     if (!input.rightOpen && !input.detailsOpen) return input.baseLayout;
 
     // With main hidden, overlay presentations can leave blank space
