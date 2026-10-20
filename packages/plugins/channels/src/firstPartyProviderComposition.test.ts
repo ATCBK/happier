@@ -16,7 +16,7 @@ import {
   PLUGIN_MANIFEST as GITHUB_PLUGIN_MANIFEST,
 } from '@happier-dev/plugins-scm-github';
 import { definePlugin, type PluginServices } from '@happier-dev/plugin-sdk';
-import { ConversationProvidersContributionProtocolV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationProvidersContributionProtocolV1, type ConversationProviderSetupOutcomeV1 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { activate } from './activate.js';
@@ -161,8 +161,8 @@ describe('Channels first-party provider composition', () => {
       actions: {
         inspect: { title: 'Inspect', inputSchema: { type: 'object', properties: {}, additionalProperties: false },
           resultSchema: roles.operations.setup.declaration.resultSchema.jsonSchema,
-          surfaces: ['plugin', 'ui'], hostAccess: ['external-api'], run: async (_input, context) => {
-            const response = await context.services.http.request({ url: 'https://external.example.test/setup', method: 'GET' });
+          surfaces: ['plugin', 'ui'], hostAccess: ['external-api'], run: async (_input, context): Promise<ConversationProviderSetupOutcomeV1> => {
+            const response = await context.services.http.request({ url: 'https://external.example.test/setup', method: 'GET', redirect: 'error' }, { signal: context.signal });
             return response.status === 200 ? { v: 1, credentialRef: null, providerConnectionKey: 'external-mailbox', providerConfigVersion: 1,
               providerConfig: {}, integrationPrincipal: { id: 'external-bot' }, supportedTransports: ['socket'], recommendedTransport: 'socket',
               overlapSafety: 'safe', replayContinuity: 'none' } : { kind: 'requiresRemediation' };
@@ -172,7 +172,7 @@ describe('Channels first-party provider composition', () => {
           surfaces: ['plugin', 'ui'], dangerLevel: 'writesRemote', hostAccess: ['external-api'],
           confirmation: { title: 'Repair external setup?', body: 'Apply the external provider setup repair.', confirmLabel: 'Repair setup' },
           run: async (_input, context) => {
-            const response = await context.services.http.request({ url: 'https://external.example.test/repair', method: 'POST' });
+            const response = await context.services.http.request({ url: 'https://external.example.test/repair', method: 'POST', redirect: 'error' }, { signal: context.signal });
             return response.status === 200 ? { kind: 'remediated' } : { kind: 'outcomeUnknown' };
           } },
         test: { title: 'Test', inputSchema: roles.operations.connectionTest.declaration.input.schema.jsonSchema,
