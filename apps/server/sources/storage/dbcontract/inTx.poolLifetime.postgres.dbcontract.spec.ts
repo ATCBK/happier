@@ -25,7 +25,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         // topology, not a change to the server's pool configuration.
         url.searchParams.set("connection_limit", "1");
         process.env.DATABASE_URL = url.toString();
-        observer = await createDbMaintenanceClient("postgres", supplied);
+        // PID observations must use a session connection: a transaction-pool
+        // observer can reuse the inspected backend and see its own transaction.
+        observer = await createDbMaintenanceClient("postgres", process.env.HAPPIER_TEST_POSTGRES_DIRECT_DATABASE_URL ?? supplied);
         initDbPostgres();
         await Promise.all([db.$connect(), observer.$connect()]);
         connected = true;

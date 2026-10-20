@@ -10,7 +10,7 @@ import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/pub
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { InactiveAccountError } from "@/app/auth/accountStatus";
 import { isPrismaErrorCode, readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
-import { isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError } from '@/storage/inTx';
+import { isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError, isTransactionDeadlineExceededError } from '@/storage/inTx';
 import { logUnexpectedRequestError } from './logUnexpectedRequestError';
 
 function sendGlobalErrorResponse(
@@ -34,7 +34,8 @@ export function readDatabaseErrorCode(error: unknown): 'database_transaction_con
     if (isTransactionConflictExhaustedError(error)) {
         return error.code;
     }
-    if (isPrismaErrorCode(error, 'P2024') || isTransactionAcquisitionUnavailableError(error)) {
+    if (isPrismaErrorCode(error, 'P2024') || isTransactionAcquisitionUnavailableError(error)
+        || isTransactionDeadlineExceededError(error)) {
         return 'database_connection_unavailable';
     }
     return null;

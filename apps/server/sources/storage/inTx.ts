@@ -351,15 +351,19 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
     let ambiguousAttemptFailure: { error: unknown } | undefined;
     let transactionCallbackEntered = false;
     let transactionCallbackCompleted = false;
-    let wrapped = async (tx: Tx, timeoutMs: number, fence?: (tx: Tx) => Promise<void>) => {
+    let wrapped = async (tx: Tx, timeoutMs: number, acquisitionDeadlineAtMs: number, fence?: (tx: Tx) => Promise<void>) => {
         const attemptStartedAtMs = Date.now();
-        transactionCallbackEntered = true;
         if (
             options?.deadlineAtMs !== undefined
-            && Date.now() >= options.deadlineAtMs
+            && attemptStartedAtMs >= options.deadlineAtMs
         ) {
             throw new TransactionDeadlineExceededError(null, options?.transactionClass);
         }
+        // Prisma maxWait bounds its pool, but a proxy-queued BEGIN can enter
+        // later. Reject before admitting user work; callback rejection rolls
+        // the native transaction back through the existing acquisition path.
+        if (attemptStartedAtMs >= acquisitionDeadlineAtMs) throw new LockAdmissionDeadlineExceededError();
+        transactionCallbackEntered = true;
         if (provider === "postgres" && options?.readOnly) {
             await tx.$executeRaw`SET TRANSACTION READ ONLY`;
         }
@@ -414,6 +418,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                 const boundedTimeoutMs = remainingMs === null
                     ? configuredTimeoutMs
                     : Math.max(1, Math.min(configuredTimeoutMs, remainingMs - boundedMaxWaitMs));
+                const attemptAcquisitionDeadlineAtMs = Math.min(acquisitionDeadlineAtMs, Date.now() + boundedMaxWaitMs);
                 // Admission stability precedes domain reads; resource locks/CAS
                 // protect domain writes and Account publication flushes last.
                 // Keep Serializable opt-in for predicates not protected by those
@@ -430,7 +435,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                               timeout: boundedTimeoutMs,
                               maxWait: boundedMaxWaitMs,
                           };
-                return await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, fence), txOpts), options?.transactionClass);
+                return await timeWebLatencyPhase('db.transaction.attempt', () => db.$transaction(tx => wrapped(tx, boundedTimeoutMs, attemptAcquisitionDeadlineAtMs, fence), txOpts), options?.transactionClass);
             };
             const result = admission
                 ? await admission.inLock(attempt, { deadlineAtMs: acquisitionDeadlineAtMs })

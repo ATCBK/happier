@@ -10,9 +10,28 @@ import { z } from "zod/mini";
 import { applyEnvValues, snapshotEnv, restoreEnv } from "../testkit/env";
 import { enableErrorHandlers } from './enableErrorHandlers';
 import { InactiveAccountError } from '@/app/auth/accountStatus';
-import { TransactionAcquisitionUnavailableError } from '@/storage/inTx';
+import { TransactionAcquisitionUnavailableError, TransactionConflictExhaustedError, TransactionDeadlineExceededError } from '@/storage/inTx';
 
 describe('enableErrorHandlers', () => {
+    it.each([
+        { error: new TransactionAcquisitionUnavailableError(new Error('private database detail')), code: 'database_connection_unavailable' },
+        { error: new TransactionDeadlineExceededError(new Error('private database detail'), 'test-request'), code: 'database_connection_unavailable' },
+        { error: new TransactionConflictExhaustedError(new Error('private database detail')), code: 'database_transaction_conflict_exhausted' },
+    ])('maps terminal $error.name to a safe typed unavailable response', async ({ error, code }) => {
+        const app = Fastify({ logger: false });
+        app.setSerializerCompiler(serializerCompiler);
+        const typed = app.withTypeProvider<ZodTypeProvider>();
+        enableErrorHandlers(typed as Parameters<typeof enableErrorHandlers>[0]);
+        typed.get('/terminal-transaction-error', {
+            schema: { response: { 500: z.object({ error: z.literal('Internal Server Error') }) } },
+        }, async () => { throw error; });
+        try {
+            const response = await app.inject({ method: 'GET', url: '/terminal-transaction-error' });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: code, statusCode: 503 });
+            expect(response.body).not.toContain('private');
+        } finally { await app.close(); }
+    });
     it.each([
         { name: 'PrismaClientKnownRequestError', code: 'P2028', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2028',
             file: '/srv/happier/apps/server/sources/storage/inTx.ts' },

@@ -27,6 +27,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
         let attempts = 0;
         let expiredError: unknown;
         let evictedError: unknown;
+        let nativeTransaction: Tx | undefined;
         const publications: number[] = [];
         try {
             // Prisma6.19.2 ItxManager retains the last100 closed transactions.
@@ -38,29 +39,35 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                     const callback = args[0];
                     if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
                     return Reflect.apply(target, receiver, [async (tx: Tx) => {
-                        if (attempts === 0) {
-                            await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
-                            try { await tx.$queryRaw`SELECT 1::int AS value`; }
-                            catch (error) { expiredError = error; }
-                            for (let i = 0; i < 101; i += 1) {
-                                await Reflect.apply(target, receiver, [
-                                    async (other: Tx) => { await other.$queryRaw`SELECT 1::int AS value`; },
-                                    { timeout: config.timeoutMs, maxWait: config.maxWaitMs },
-                                ]);
-                            }
-                            // The native manager moves closed entries into its
-                            // diagnostic cache when their own timeout task fires.
-                            await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
-                            attempts += 1;
-                            try { return await callback(tx); }
-                            catch (error) { evictedError = error; throw error; }
-                        }
-                        attempts += 1;
+                        nativeTransaction = tx;
                         return await callback(tx);
                     }, ...args.slice(1)]);
                 },
             });
             const result = await inTx(async tx => {
+                attempts += 1;
+                if (attempts === 1) {
+                    // Admit the real owner callback before expiring its native
+                    // handle. Delaying entry would instead test acquisition expiry.
+                    const native = nativeTransaction;
+                    if (!native) throw new Error("Missing native transaction boundary");
+                    await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
+                    try { await native.$queryRaw`SELECT 1::int AS value`; }
+                    catch (error) { expiredError = error; }
+                    for (let i = 0; i < 101; i += 1) {
+                        await Reflect.apply(transaction, db, [
+                            async (other: Tx) => { await other.$queryRaw`SELECT 1::int AS value`; },
+                            { timeout: config.timeoutMs, maxWait: config.maxWaitMs },
+                        ]);
+                    }
+                    // Native closed entries move into the diagnostic cache when
+                    // their timeout tasks fire. Bypass only the SQL-budget proxy
+                    // to observe Prisma's own missing-handle error at the boundary.
+                    await new Promise(resolve => setTimeout(resolve, config.timeoutMs + 1));
+                    try { await native.$queryRaw`SELECT 1::int AS value`; }
+                    catch (error) { evictedError = error; throw error; }
+                    throw new Error("Expected Prisma to reject the evicted native handle");
+                }
                 const receipt = await tx.account.update({ where: { id: account.id },
                     data: { seq: { increment: 1 } }, select: { seq: true } });
                 afterTx(tx, () => { publications.push(attempts); });
