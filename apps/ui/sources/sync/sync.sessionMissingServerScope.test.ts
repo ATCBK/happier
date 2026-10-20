@@ -3,7 +3,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createSessionFixture } from '@/dev/testkit';
 import { Encryption } from '@/sync/encryption/encryption';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { ServerReachabilityWaitTimeoutError } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -17,6 +17,7 @@ vi.mock('socket.io-client', async importOriginal => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 import tweetnacl from 'tweetnacl';
+import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { IDBFactory } from 'fake-indexeddb';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
@@ -4198,7 +4199,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
     });
 
-    it.each(['plain', 'e2ee', 'runner', 'metadata_rejected', 'retired', 'stale', 'automatic', 'manager', 'self', 'shared_editor'] as const)(
+    it.each(['plain', 'e2ee', 'runner', 'metadata_rejected', 'retired', 'home_retired', 'stale', 'automatic', 'manager', 'self', 'shared_editor'] as const)(
         'persists explicit UI Stop through the real owner tuple before physical Stop (%s)', async scenario => {
         const bridge = await loadSyncSingletonForTests();
         onTestFinished(() => bridge.dispose());
@@ -4206,6 +4207,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const { sync } = await import('./sync');
         installAppliedAccountScope(sync, 'stop-owner');
         const scope = getActiveServerAccountScope()!;
+        const lifetime = captureActiveServerAccountScopeLifetime()!;
         const secret = new Uint8Array(32).fill(9);
         const encrypted = scenario === 'e2ee';
         const credentials = { token: buildTokenWithSub(scope.accountId),
@@ -4229,11 +4231,12 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             encryptionMode: encrypted ? 'e2ee' : 'plain' }]);
         storage.getState().applyMachines([{ ...createMachine('stop-machine'), encryptionMode: 'plain' }]);
         const effects: string[] = [];
-        let current = scenario !== 'stale';
+        if (scenario === 'stale') storage.getState().activateProfileScope({ ...scope, accountId: 'replacement-owner' });
         requestMock.mockImplementation(async (path: string) => {
             if (path === '/v1/account/encryption/currentness') return encrypted
-                ? Response.json({ mode: 'e2ee', version: 1, signingKeyFingerprint: null,
-                    contentKeyFingerprint: null, updatedAt: 1 }) : currentPlainAccountEncryptionCurrentnessResponse();
+                ? currentE2eeAccountEncryptionCurrentnessResponse(tweetnacl.box.keyPair.fromSecretKey(
+                    deriveAccountMachineKeyFromRecoverySecret(secret)).publicKey)
+                : currentPlainAccountEncryptionCurrentnessResponse();
             if (path !== `/v2/sessions/${sessionId}`) throw new Error(`Unexpected Stop read: ${path}`);
             return Response.json({ session: { id: sessionId, seq: 1, createdAt: 1, updatedAt: 2, active: true, activeAt: 1,
                 encryptionMode: encrypted ? 'e2ee' : 'plain', dataEncryptionKey: null,
@@ -4244,7 +4247,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
         emitSessionMetadataUpdateWithServerScopeMock.mockImplementation(async () => {
             effects.push('metadata');
-            if (scenario === 'retired') current = false;
+            if (scenario === 'retired') storage.getState().activateProfileScope({ ...scope, accountId: 'replacement-owner' });
+            if (scenario === 'home_retired') publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId: 'replacement-home' });
             if (scenario === 'metadata_rejected') throw new Error('Metadata refused');
             return { result: 'success', metadataLayoutVersion: 1, version: 3, agentStateVersion: 1 };
         });
@@ -4266,7 +4270,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const { sessionStopWithServerScope } = await import('./ops/sessions');
         const caller = { kind: 'session', sessionId: scenario === 'self' ? sessionId : 'managing-session',
             starterDepth: 0, turnDepth: 1 } as const;
-        const result = await sessionStopWithServerScope(sessionId, { serverId: scope.serverId, scope, isCurrent: () => current,
+        const result = await sessionStopWithServerScope(sessionId, { serverId: scope.serverId, scope, isCurrent: lifetime.isCurrent,
             ...(scenario === 'automatic' ? { actionContext: { surface: 'ui', authority: 'account_automation' } } : {}),
             ...(scenario === 'manager' || scenario === 'self' ? { actionContext: {
                 surface: 'agent', authority: 'account_automation', actionCaller: caller,
@@ -4278,7 +4282,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             expect(result).toMatchObject({ success: false, code: 'session_stop_control_unavailable' });
             return;
         }
-        if (scenario === 'metadata_rejected' || scenario === 'retired') {
+        if (scenario === 'metadata_rejected' || scenario === 'retired' || scenario === 'home_retired') {
             expect(effects, result.message).toEqual(['metadata']);
             expect(result.success).toBe(false);
             return;

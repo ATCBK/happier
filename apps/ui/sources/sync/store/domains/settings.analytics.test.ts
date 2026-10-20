@@ -122,7 +122,6 @@ describe('createSettingsDomain local settings analytics', () => {
             themePreference: 'dark',
             uiFontScale: 1.35,
             sidebarWidthPx: 220,
-            sidebarWidthBasisPx: 1_200,
             acknowledgedCliVersions: {
                 'machine-a': '1.2.3',
             },
