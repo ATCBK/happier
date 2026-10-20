@@ -3,6 +3,10 @@ import type {
   ScmDiffCommitResponse,
   ScmDiffFileRequest,
   ScmDiffFileResponse,
+  ScmBlameFileRequest,
+  ScmBlameFileResponse,
+  ScmBlameRange,
+  ScmBlameCommit,
   ScmLogEntry,
   ScmLogListRequest,
   ScmLogListResponse,
@@ -12,6 +16,7 @@ import type {
 } from '@happier-dev/plugin-sdk/scm';
 import { SCM_OPERATION_ERROR_CODES, ScmHistoryEntriesInputV1Schema, ScmHistoryEntriesResponseSchema } from '@happier-dev/plugin-sdk/scm';
 import { lstat, readFile, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
@@ -19,6 +24,135 @@ import { parseGitComparisonOutput } from '@happier-dev/plugin-sdk/scm';
 import type { ScmBackendContext } from '../types.js';
 import { normalizeCommitRef, normalizeRepoRootRelativePath, runScmCommand } from '../runtime.js';
 import { toRepoRootLiteralPathspec } from '../literalPathspec.js';
+import { ScmBlameFileRequestSchema, ScmBlameFileResponseSchema } from '@happier-dev/plugin-sdk/scm';
+
+/** Git's incremental grammar (git-blame 2.43+): filename closes each range;
+ * author metadata is emitted only on the first occurrence of each commit.
+ * The command service admits bytes; this reader never retains complete stdout.
+ */
+function createGitBlameReader() {
+    const decoder = new StringDecoder('utf8');
+    const commits: ScmBlameCommit[] = [];
+    const indices = new Map<string, number>();
+    const ranges: ScmBlameRange[] = [];
+    let pending = '';
+    let record: { sha: string; startLine: number; lineCount: number; authorName?: string; authorEmail?: string; authoredAtMs?: number; summary?: string } | null = null;
+    const line = (text: string) => {
+        if (!record) {
+            const header = /^([a-f0-9]{40}(?:[a-f0-9]{24})?) ([0-9]+) ([0-9]+) ([0-9]+)$/.exec(text);
+            if (!header) throw new Error('Invalid incremental blame header');
+            record = { sha: header[1], startLine: Number(header[3]), lineCount: Number(header[4]) };
+            return;
+        }
+        if (text.startsWith('author ')) record.authorName = text.slice(7);
+        else if (text.startsWith('author-mail ')) record.authorEmail = text.slice(12).replace(/^<|>$/g, '');
+        else if (text.startsWith('author-time ')) record.authoredAtMs = Number(text.slice(12)) * 1000;
+        else if (text.startsWith('summary ')) record.summary = text.slice(8);
+        else if (text.startsWith('filename ')) {
+            let commitIndex: number | null = null;
+            if (!/^0+$/.test(record.sha)) {
+                const known = indices.get(record.sha);
+                if (known !== undefined) commitIndex = known;
+                else {
+                    if (record.authorName === undefined || record.summary === undefined || record.authoredAtMs === undefined
+                        || !Number.isSafeInteger(record.authoredAtMs)) throw new Error('Incomplete incremental blame commit');
+                    commitIndex = commits.length;
+                    indices.set(record.sha, commitIndex);
+                    commits.push({ sha: record.sha, shortSha: record.sha.slice(0, 7), authorName: record.authorName,
+                        ...(record.authorEmail ? { authorEmail: record.authorEmail } : {}), authoredAtMs: record.authoredAtMs, summary: record.summary });
+                }
+            }
+            ranges.push({ startLine: record.startLine, lineCount: record.lineCount, commitIndex });
+            record = null;
+        }
+        // Other metadata (boundary, previous, committer, timezone) is extensible
+        // Git metadata and has no bearing on the author/range projection.
+    };
+    return {
+        consume(chunk: Uint8Array): 'continue' {
+            pending += decoder.write(Buffer.from(chunk));
+            let start = 0;
+            let end: number;
+            while ((end = pending.indexOf('\n', start)) >= 0) {
+                line(pending.slice(start, end));
+                start = end + 1;
+            }
+            pending = pending.slice(start);
+            return 'continue';
+        },
+        finish() {
+            if (decoder.end() !== '' || pending !== '' || record) throw new Error('Unterminated incremental blame record');
+            ranges.sort((a, b) => a.startLine - b.startLine);
+            const merged: ScmBlameRange[] = [];
+            for (const range of ranges) {
+                const previous = merged.at(-1);
+                if (previous && previous.commitIndex === range.commitIndex && previous.startLine + previous.lineCount === range.startLine) previous.lineCount += range.lineCount;
+                else merged.push({ ...range });
+            }
+            return ScmBlameFileResponseSchema.parse({ success: true, ranges: merged, commits });
+        },
+    };
+}
+
+export async function gitBlameFile(input: {
+    context: ScmBackendContext;
+    request: ScmBlameFileRequest;
+    signal?: AbortSignal;
+}): Promise<ScmBlameFileResponse> {
+    const parsed = ScmBlameFileRequestSchema.safeParse(input.request);
+    if (!parsed.success) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_REQUEST, error: 'Invalid blame request' };
+    const { context } = input;
+    const request = parsed.data;
+    const normalized = normalizeRepoRootRelativePath(request.path);
+    if (!normalized.ok) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_PATH, error: normalized.error };
+    const cwd = context.detection.rootPath ?? context.cwd;
+    const signal = input.signal ?? context.signal;
+    try {
+        const root = await realpath(cwd);
+        const file = resolve(root, normalized.relativePath);
+        if (!isCanonicalAbsolutePathInsideRoot(root, await realpath(file))) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_PATH, error: 'Blame path is outside the repository' };
+        if (!(await lstat(file)).isFile()) return { success: false, errorCode: 'unsupported_path', error: 'Blame requires a regular text file' };
+        const bytes = await readFile(file);
+        const hash = createHash('sha256').update(bytes).digest('hex');
+        if (request.expectedHash && request.expectedHash !== hash) return { success: false, errorCode: 'stale_file' };
+        if (bytes.includes(0)) return { success: false, errorCode: 'unsupported_path', error: 'Binary files have no line blame' };
+        try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch { return { success: false, errorCode: 'unsupported_path', error: 'Blame requires UTF-8 text' }; }
+        const tracked = await runScmCommand({ bin: 'git', cwd: root, args: ['ls-files', '--error-unmatch', '--', normalized.pathspec], signal });
+        if (signal?.aborted) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED };
+        if (!tracked.success) {
+            if (tracked.exitCode === 1 && !tracked.timedOut && !tracked.outputLimitExceeded) return { success: false, errorCode: 'untracked' };
+            return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: tracked.stderr || 'Failed to check blame path' };
+        }
+        const reader = createGitBlameReader();
+        // Unlike diff, blame takes one literal filename, not a Git pathspec.
+        const result = await runScmCommand({ bin: 'git', cwd: root, args: ['blame', '--incremental', '--', normalized.relativePath], signal, stdoutConsumer: reader.consume });
+        if (signal?.aborted) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED };
+        if (!result.success) {
+            if (result.outputLimitExceeded || result.timedOut) return { success: false,
+                errorCode: result.outputLimitExceeded ? SCM_OPERATION_ERROR_CODES.COMMAND_OUTPUT_LIMIT_EXCEEDED : SCM_OPERATION_ERROR_CODES.COMMAND_TIMEOUT,
+                error: result.stderr || 'Failed to read blame' };
+            const head = await runScmCommand({ bin: 'git', cwd: root, args: ['rev-parse', '--verify', '--quiet', 'HEAD'], signal });
+            if (head.exitCode === 1 && !head.timedOut && !head.outputLimitExceeded) return { success: false, errorCode: 'untracked' };
+            return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: result.stderr || 'Failed to read blame' };
+        }
+        // The displayed bytes may have changed while Git was reading. Never
+        // publish ranges against another version, even when no hash was supplied.
+        if (createHash('sha256').update(await readFile(file)).digest('hex') !== hash) return { success: false, errorCode: 'stale_file' };
+        const response = reader.finish();
+        if (!response.success) return response;
+        let lines = bytes.length > 0 && bytes.at(-1) !== 10 ? 1 : 0;
+        for (const byte of bytes) if (byte === 10) lines += 1;
+        if (response.ranges.reduce((count, range) => count + range.lineCount, 0) !== lines) throw new Error('Blame does not cover the current file');
+        return response;
+    } catch (error) {
+        if (request.expectedHash && error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+            return { success: false, errorCode: 'stale_file' };
+        }
+        return { success: false, errorCode: signal?.aborted ? SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED : SCM_OPERATION_ERROR_CODES.COMMAND_FAILED,
+            error: error instanceof Error ? error.message : 'Failed to read blame' };
+    }
+}
 
 const GIT_LOG_FIELDS_PER_ENTRY = 7;
 

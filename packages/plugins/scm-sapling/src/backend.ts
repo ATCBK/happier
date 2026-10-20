@@ -84,6 +84,7 @@ export function createSaplingScmBackendRegistration(): ScmBackendRuntimeRegistra
                 },
                 diffFile: saplingDiffFile,
                 diffCommit: saplingDiffCommit,
+                fileAtRevision: () => ({ success: false, errorCode: 'unsupported' }),
                 logList: saplingLogList,
             },
             changeSet: {

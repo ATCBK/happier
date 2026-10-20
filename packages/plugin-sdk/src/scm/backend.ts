@@ -27,6 +27,10 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
+    ScmBlameFileRequest,
+    ScmBlameFileResponse,
+    ScmFileAtRevisionRequest,
+    ScmFileAtRevisionResponse,
     ScmHostingRepositoryDescribePublishTargetsRequest,
     ScmHostingRepositoryDescribePublishTargetsResponse,
     ScmHostingRepositoryPublishRequest,
@@ -172,6 +176,8 @@ export type ScmBackendCapabilities = {
         ignoredPaths?: ScmBackendCapabilityLeaf;
         status?: ScmBackendCapabilityLeaf;
         diffFile?: ScmBackendCapabilityLeaf;
+        blame?: ScmBackendCapabilityLeaf;
+        fileAtRevision?: ScmBackendCapabilityLeaf;
         diffCommit?: ScmBackendCapabilityLeaf;
         log?: ScmBackendCapabilityLeaf;
         historyEntries?: ScmBackendCapabilityLeaf;
@@ -304,7 +310,7 @@ export type ScmBackendContribution = {
 export type BackendRuntimeContext = Readonly<{
     cwd: string;
     projectKey: string;
-    /** Host policy check for backend-derived filesystem mutation targets; throws on refusal. */
+    /** Host policy check for backend-derived filesystem targets; throws on refusal. */
     assertFilesystemPathAuthorized?: (targetPath: string) => void;
     /** Trusted host revalidation immediately before a queued filesystem effect; never request input. */
     beforeFilesystemMutation?: () => Promise<void>;
@@ -562,6 +568,12 @@ export type BackendRuntimeHandlers = Readonly<{
         diffFile?: (
             input: BackendRuntimeHandlerInput<ScmDiffFileRequest>
         ) => Promise<ScmDiffFileResponse> | ScmDiffFileResponse;
+        blameFile?: (
+            input: BackendRuntimeHandlerInput<ScmBlameFileRequest>
+        ) => Promise<ScmBlameFileResponse> | ScmBlameFileResponse;
+        fileAtRevision?: (
+            input: BackendRuntimeHandlerInput<ScmFileAtRevisionRequest>
+        ) => Promise<ScmFileAtRevisionResponse> | ScmFileAtRevisionResponse;
         diffCommit?: (
             input: BackendRuntimeHandlerInput<ScmDiffCommitRequest>
         ) => Promise<ScmDiffCommitResponse> | ScmDiffCommitResponse;

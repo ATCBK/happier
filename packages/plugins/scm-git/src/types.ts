@@ -33,6 +33,10 @@ import type {
   ScmDiffCommitResponse,
   ScmDiffFileRequest,
   ScmDiffFileResponse,
+  ScmBlameFileRequest,
+  ScmBlameFileResponse,
+  ScmFileAtRevisionRequest,
+  ScmFileAtRevisionResponse,
   ScmHostingRepositoryDescribePublishTargetsRequest,
   ScmHostingRepositoryDescribePublishTargetsResponse,
   ScmHostingRepositoryPublishRequest,
@@ -184,7 +188,9 @@ export type ScmBackendSelection = {
 };
 
 export interface ScmBackend {
+  fileAtRevision(input: { context: ScmBackendContext; request: ScmFileAtRevisionRequest; signal?: AbortSignal }): Promise<ScmFileAtRevisionResponse>;
   id: ScmBackendId;
+  blameFile?(input: { context: ScmBackendContext; request: ScmBlameFileRequest; signal?: AbortSignal }): Promise<ScmBlameFileResponse>;
   declaredCapabilities?: ScmBackendCapabilities;
   selection: ScmBackendSelection;
   workspaceIntegration?: ScmWorkspaceIntegration;

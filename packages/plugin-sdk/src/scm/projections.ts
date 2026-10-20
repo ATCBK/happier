@@ -15,12 +15,32 @@ import { ScmComparisonSourceProtocolSchema as canonicalScmComparisonSourceProtoc
 import { ScmHostingProviderKindProtocolSchema as canonicalScmHostingProviderKindProtocolSchema } from '@happier-dev/protocol/scm/pullRequests';
 import type { ScmComparison, ScmComparisonSource as CanonicalScmComparisonSource } from '@happier-dev/protocol/scm';
 import type { JsonValue, PluginContributionRef } from '../identity.js';
+export type { ScmFileAtRevisionRequest, ScmFileAtRevisionResponse } from '@happier-dev/protocol/scm';
+import { ScmFileAtRevisionRequestSchema as canonicalFileAtRevisionRequest, ScmFileAtRevisionResponseSchema as canonicalFileAtRevisionResponse } from '@happier-dev/protocol/scm';
+import type { ScmFileAtRevisionRequest, ScmFileAtRevisionResponse } from '@happier-dev/protocol/scm';
+export const ScmFileAtRevisionRequestSchema: {
+    parse(value: unknown): ScmFileAtRevisionRequest;
+    safeParse(value: unknown): { success: true; data: ScmFileAtRevisionRequest } | { success: false; error: unknown };
+} = canonicalFileAtRevisionRequest;
+export const ScmFileAtRevisionResponseSchema: {
+    parse(value: unknown): ScmFileAtRevisionResponse;
+    safeParse(value: unknown): { success: true; data: ScmFileAtRevisionResponse } | { success: false; error: unknown };
+} = canonicalFileAtRevisionResponse;
 import type { ScmComparisonSource } from './comparisonSource.js';
 export type { ScmComparisonSource } from './comparisonSource.js';
 import type { ProtocolComposableSchema } from '../protocol/protocolFacade.js';
 import { ScmHistoryEntriesInputV1Schema as canonicalHistoryInput, ScmHistoryEntriesResponseSchema as canonicalHistoryResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 export type { ScmEntryHistoryV1, ScmHistoryEntriesInputV1, ScmHistoryEntriesOutputV1, ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 import type { ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
+import { ScmBlameFileRequestSchema as canonicalBlameRequest, ScmBlameFileResponseSchema as canonicalBlameResponse } from '@happier-dev/protocol/scm';
+export const ScmBlameFileRequestSchema: {
+    parse(value: unknown): ScmBlameFileRequest;
+    safeParse(value: unknown): { success: true; data: ScmBlameFileRequest } | { success: false; error: unknown };
+} = canonicalBlameRequest;
+export const ScmBlameFileResponseSchema: {
+    parse(value: unknown): ScmBlameFileResponse;
+    safeParse(value: unknown): { success: true; data: ScmBlameFileResponse } | { success: false; error: unknown };
+} = canonicalBlameResponse;
 export const ScmHistoryEntriesInputV1Schema: {
     parse(value: unknown): ScmHistoryEntriesRequest;
     safeParse(value: unknown): { success: true; data: ScmHistoryEntriesRequest } | { success: false; error: unknown };
@@ -151,6 +171,14 @@ export type ScmDefaultBranchPushPolicy = 'allow' | 'requires-feature-branch' | '
 export type ScmSelectedMutationPath = string;
 export type ScmCloneProtocol = 'auto' | 'ssh' | 'https';
 export type ScmOperationErrorCode =
+    | 'CHANGE_MOVED_ON'
+    | 'FILE_CHANGED'
+    | 'COMPARISON_UNAVAILABLE'
+    | 'DISCARD_UNSUPPORTED'
+    | 'unsupported'
+    | 'not_found'
+    | 'too_large'
+    | 'blob_unavailable'
     | 'NOT_REPOSITORY'
     | 'INVALID_PATH'
     | 'INVALID_REQUEST'
@@ -197,10 +225,18 @@ export type ScmOperationErrorCode =
     | 'BACKEND_NOT_INSTALLED'
     | 'ROOT_NOT_FOUND';
 
+type CanonicalScmOperationErrorCode = typeof canonicalScmOperationErrorCodes[keyof typeof canonicalScmOperationErrorCodes];
+type _ScmOperationErrorProjectionMustMatchCanonical = AssertScmSourceProjection<
+    [ScmOperationErrorCode] extends [CanonicalScmOperationErrorCode]
+        ? [CanonicalScmOperationErrorCode] extends [ScmOperationErrorCode] ? true : false
+        : false
+>;
+
 export type ScmCapabilities = {
     capabilityScope: 'local-backend';
     readStatus: boolean;
     readDiffFile: boolean;
+    readBlame?: boolean;
     readDiffCommit: boolean;
     readLog: boolean;
     readHistoryEntries?: boolean;
@@ -580,6 +616,16 @@ export type ScmDiffFileResponse = {
     error?: string;
     errorCode?: ScmOperationErrorCode;
 };
+
+export type ScmBlameFileRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'backendPreference' | 'outcomeVersion'> & {
+    path: string;
+    expectedHash?: string;
+};
+export type ScmBlameRange = { startLine: number; lineCount: number; commitIndex: number | null };
+export type ScmBlameCommit = { sha: string; shortSha: string; authorName: string; authorEmail?: string; authoredAtMs: number; summary: string };
+export type ScmBlameFileResponse =
+    | { success: true; ranges: ScmBlameRange[]; commits: ScmBlameCommit[] }
+    | { success: false; error?: string; errorCode?: ScmOperationErrorCode | 'stale_file' | 'untracked' | 'unsupported_path' };
 
 export type ScmDiffCommitRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'backendPreference' | 'outcomeVersion'> & {
     commit: string;
@@ -1446,6 +1492,14 @@ export const SCM_COMMIT_MESSAGE_MAX_LENGTH: 4096 = canonicalScmCommitMessageMaxL
 export const SCM_COMMIT_PATCH_MAX_COUNT: 256 = canonicalScmCommitPatchMaxCount;
 export const SCM_COMMIT_PATCH_MAX_LENGTH: 200_000 = canonicalScmCommitPatchMaxLength;
 export const SCM_OPERATION_ERROR_CODES: Readonly<{
+    CHANGE_MOVED_ON: 'CHANGE_MOVED_ON';
+    FILE_CHANGED: 'FILE_CHANGED';
+    COMPARISON_UNAVAILABLE: 'COMPARISON_UNAVAILABLE';
+    DISCARD_UNSUPPORTED: 'DISCARD_UNSUPPORTED';
+    UNSUPPORTED: 'unsupported';
+    NOT_FOUND: 'not_found';
+    TOO_LARGE: 'too_large';
+    BLOB_UNAVAILABLE: 'blob_unavailable';
     NOT_REPOSITORY: 'NOT_REPOSITORY';
     INVALID_PATH: 'INVALID_PATH';
     INVALID_REQUEST: 'INVALID_REQUEST';

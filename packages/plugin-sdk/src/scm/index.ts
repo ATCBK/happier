@@ -1,4 +1,6 @@
 export type { GitFileLineage } from './comparisonOutput.js';
+export type { ScmFileAtRevisionRequest, ScmFileAtRevisionResponse } from './projections.js';
+export { ScmFileAtRevisionRequestSchema, ScmFileAtRevisionResponseSchema } from './projections.js';
 export type { PluginScmRegistrationApi } from './projections.js';
 export type { ProtocolScmHostingProviderKind } from './projections.js';
 export { SCM_COMMIT_MESSAGE_MAX_LENGTH } from './projections.js';
@@ -51,6 +53,8 @@ export type { ScmDiffCommitRequest } from './projections.js';
 export type { ScmDiffCommitResponse } from './projections.js';
 export type { ScmDiffFileRequest } from './projections.js';
 export type { ScmDiffFileResponse } from './projections.js';
+export type { ScmBlameFileRequest, ScmBlameFileResponse, ScmBlameRange, ScmBlameCommit } from './projections.js';
+export { ScmBlameFileRequestSchema, ScmBlameFileResponseSchema } from './projections.js';
 export type { ScmDirtyPolicy } from './projections.js';
 export type { ScmEntryHistoryV1 } from './projections.js';
 export type { ScmFollowupAction } from './projections.js';

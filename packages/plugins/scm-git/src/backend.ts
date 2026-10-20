@@ -41,7 +41,8 @@ import { gitCommitBackout, gitCommitCreate, gitCommitUndoLast } from './operatio
 import { gitCommitResolveOutcome } from './operations/commitOutcome.js';
 import { captureGitCommitTarget } from './operations/commitPublication.js';
 import { gitRemotePublish } from './operations/publishOperations.js';
-import { gitDiffCommit, gitDiffFile, gitLogList, gitHistoryEntries } from './operations/readOperations.js';
+import { gitDiffCommit, gitDiffFile, gitBlameFile, gitLogList, gitHistoryEntries } from './operations/readOperations.js';
+import { gitFileAtRevision } from './operations/fileAtRevision.js';
 import { gitRemoteAdd, gitRemoteRemove, gitRemoteSetUrl } from './operations/remoteManagementOperations.js';
 import { gitRemoteFetch, gitRemotePull, gitRemotePush } from './operations/remoteOperations.js';
 import { gitRemoveIndexLock } from './operations/removeIndexLockOperation.js';
@@ -114,7 +115,9 @@ export function createGitBackend(): ScmBackend {
         },
         ignoredPaths: gitIgnoredPaths,
         diffFile: gitDiffFile,
+        blameFile: gitBlameFile,
         diffCommit: gitDiffCommit,
+        fileAtRevision: gitFileAtRevision,
         changeInclude: gitChangeInclude,
         changeExclude: gitChangeExclude,
         changeDiscard: gitChangeDiscard,
@@ -219,7 +222,9 @@ export function createGitScmBackendRuntimeRegistration(): ScmBackendRuntimeRegis
                 worktreesEnrichment: backend.worktreesEnrichment,
                 ignoredPaths: backend.ignoredPaths,
                 diffFile: backend.diffFile,
+                blameFile: backend.blameFile,
                 diffCommit: backend.diffCommit,
+                fileAtRevision: backend.fileAtRevision,
                 logList: backend.logList,
                 historyEntries: backend.historyEntries,
                 stashList: backend.stashList,

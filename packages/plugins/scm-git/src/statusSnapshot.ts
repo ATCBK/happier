@@ -51,18 +51,20 @@ export function resolveRemoteDefaultBranch(input: Readonly<{
     remotes: readonly { name: string }[];
     upstreamRef: string | null | undefined;
 }>): string | null {
-    const ref = resolveRemoteDefaultRef(input);
+    const ref = resolveGitDefaultRef(input);
     return ref ? ref.slice(ref.indexOf('/') + 1) : null;
 }
 
-/** Preserve the selected remote identity when callers need an ancestry ref, not a display branch. */
-export function resolveRemoteDefaultRef(input: Readonly<{
+/** Preserve the selected remote identity; a verified local default is the final fallback. */
+export function resolveGitDefaultRef(input: Readonly<{
     remoteHeadRefsOutput?: string;
     remotes: readonly { name: string }[];
     upstreamRef: string | null | undefined;
+    /** Fully qualified local branch ref, positively verified by the Git reader. */
+    localDefaultRef?: string | null;
 }>): string | null {
     const refs = parseGitRemoteHeadRefs(input.remoteHeadRefsOutput ?? '');
-    if (refs.length === 0) return null;
+    if (refs.length === 0) return input.localDefaultRef ?? null;
 
     const refsByRemote = new Map(refs.map((ref) => [ref.remoteName, ref.branch]));
     const preferredRemoteNames = uniqueRemoteNames([
