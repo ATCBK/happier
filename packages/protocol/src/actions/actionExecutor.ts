@@ -428,7 +428,6 @@ import {
   resolvePluginSettingsAdministrationTargetV1,
 } from '../plugins/settingsAdministration.js';
 import {
-  PluginContributionIdentityV1Schema,
   PluginContributionLocalIdSchema,
 } from '../plugins/contributionIdentity.js';
 import {
@@ -1337,6 +1336,12 @@ async function prepareApprovalRequest(params: Readonly<{
   widgetSurfaceRead?: ReturnType<typeof WidgetSurfaceReadV1Schema.parse>;
 }>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | ActionExecuteFailure | null> {
   const spec = getActionSpec(params.actionId);
+  // A declared Service's native owner must select and review its exact target,
+  // copy/setup and Start effect. The generic SOURCE/input preview cannot carry
+  // that compound consent, even when the caller supplies an effect digest.
+  // Until that owner supplies pre-approval custody, refuse before publication.
+  if (params.actionId === 'localServices.launcher.start'
+    && readRecord(params.input).declaration !== undefined) return null;
   let computerApprovalDisplay = params.computerApprovalDisplay;
   if (!computerApprovalDisplay && (params.actionId === 'computer.target.select'
     || params.actionId === 'computer.capture' || params.actionId === 'computer.query' || params.actionId === 'computer.input')) {
