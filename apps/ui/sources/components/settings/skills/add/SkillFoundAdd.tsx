@@ -76,12 +76,18 @@ export function SkillFoundAdd(
     field?: React.ReactNode;
     /** Before anything is found. */
     empty: React.ReactNode;
+    /** The list's heading once something is found ("16 skills in this repository"). */
+    groupTitle: string;
     /** The facts' source for a found skill (its repository at the pin, or you). */
     factsSource: (item: Preview) => CapabilityFactsProps['source'];
     /** The details' "where it comes from" line. */
     installsSource?: (item: Preview) => SkillAddDetailInstalls['source'];
-    /** The footer's quiet note while nothing failed. */
+    /** The list footer's quiet note while nothing failed. */
     note: React.ReactNode;
+    /** The footer carries `note` before anything is found too (an upload says it never runs before you choose). */
+    noteWhileEmpty?: boolean;
+    /** The details footer's note (defaults to `note`). */
+    detailNote?: React.ReactNode;
     /** The footer added the ticked ones: the dialog closes onto the first. */
     onAdded: (skillId: string) => void;
     /** A detail's Add (or Open) closed the dialog: the page selects that skill. */
@@ -262,7 +268,7 @@ export function SkillFoundAdd(
 
   const detailFooter = React.useCallback(
     (item: Preview) => {
-      const note = <View style={styles.note}>{props.note}</View>;
+      const note = <View style={styles.note}>{props.detailNote ?? props.note}</View>;
       if (item.inLibrary !== undefined) {
         const held = item.inLibrary;
         return {
@@ -351,6 +357,7 @@ export function SkillFoundAdd(
       detailAdds,
       execute,
       locked,
+      props.detailNote,
       props.note,
       props.testID,
       several,
@@ -361,7 +368,9 @@ export function SkillFoundAdd(
 
   const allHeld = items.length > 0 ? readAllHeldFooter(items) : null;
   const footer =
-    items.length === 0 ? undefined : (
+    items.length === 0 ? (props.noteWhileEmpty ? (
+      <CapabilityAddFooter testID={`${props.testID}.footer`} start={<View style={styles.note}>{props.note}</View>}>{null}</CapabilityAddFooter>
+    ) : undefined) : (
       <CapabilityAddFooter
         testID={`${props.testID}.footer`}
         start={
@@ -417,6 +426,7 @@ export function SkillFoundAdd(
     ...(props.field === undefined ? {} : { field: props.field }),
     items,
     itemKey: keyOf,
+    ...(items.length > 0 ? { groups: [{ key: 'found', title: props.groupTitle, itemKeys: items.map(keyOf) }] } : {}),
     anatomy,
     empty: props.empty,
     ...(footer === undefined ? {} : { footer }),

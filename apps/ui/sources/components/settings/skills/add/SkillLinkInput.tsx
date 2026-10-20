@@ -104,6 +104,7 @@ export function SkillLinkInput(
       execute={props.execute}
       source={found ? { kind: 'link', url: found.url } : null}
       items={found?.items ?? null}
+      groupTitle={t('capabilities.skillAdd.link.chooseWhich')}
       field={field}
       empty={
         <View style={[styles.empty, edge]}>
@@ -119,6 +120,16 @@ export function SkillLinkInput(
             <Icon name="push-pin" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
             <Text variant="meta" numberOfLines={1} style={styles.noteText}>
               {`${t('capabilities.skillAdd.pinnedTo', { ref: pin })}. ${t('capabilities.skillAdd.link.openOne')}`}
+            </Text>
+          </>
+        ) : null
+      }
+      detailNote={
+        pin ? (
+          <>
+            <Icon name="push-pin" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+            <Text variant="meta" numberOfLines={1} style={styles.noteText}>
+              {t('capabilities.skillAdd.pinnedTo', { ref: pin })}
             </Text>
           </>
         ) : null

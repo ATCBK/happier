@@ -289,6 +289,7 @@ export type SkillAddTranslation = Readonly<{
     addSelected: (params: Count) => string;
     selectAll: string;
     openOne: string;
+    chooseWhich: string;
   }>;
   upload: Readonly<{
     title: string;
@@ -383,6 +384,7 @@ const enSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Add 1 skill' : `Add ${count} skills`,
     selectAll: 'Select all',
     openOne: 'Open one to see what it installs.',
+    chooseWhich: 'Choose which to add',
   },
   upload: {
     title: 'Upload',
@@ -669,6 +671,7 @@ const caSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Afegeix 1 habilitat' : `Afegeix ${count} habilitats`,
     selectAll: 'Selecciona-ho tot',
     openOne: 'Obre’n un per veure què instal·la.',
+    chooseWhich: 'Tria quins vols afegir',
   },
   upload: {
     title: 'Puja',
@@ -899,6 +902,7 @@ const deSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Einen Skill hinzufügen' : `${count} Skills hinzufügen`,
     selectAll: 'Alle auswählen',
     openOne: 'Öffne einen, um zu sehen, was er installiert.',
+    chooseWhich: 'Wähle aus, was hinzukommt',
   },
   upload: {
     title: 'Hochladen',
@@ -1121,6 +1125,7 @@ const esSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Añadir 1 habilidad' : `Añadir ${count} habilidades`,
     selectAll: 'Seleccionar todo',
     openOne: 'Abre uno para ver qué instala.',
+    chooseWhich: 'Elige cuáles añadir',
   },
   upload: {
     title: 'Subir',
@@ -1348,6 +1353,7 @@ const frSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Ajouter 1 skill' : `Ajouter ${count} skills`,
     selectAll: 'Tout sélectionner',
     openOne: 'Ouvrez-en un pour voir ce qu’il installe.',
+    chooseWhich: 'Choisissez lesquels ajouter',
   },
   upload: {
     title: 'Importer',
@@ -1568,6 +1574,7 @@ const itSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Aggiungi 1 skill' : `Aggiungi ${count} skill`,
     selectAll: 'Seleziona tutto',
     openOne: 'Aprine uno per vedere cosa installa.',
+    chooseWhich: 'Scegli quali aggiungere',
   },
   upload: {
     title: 'Carica',
@@ -1788,6 +1795,7 @@ const jaSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) => `スキルを ${count} 件追加`,
     selectAll: 'すべて選択',
     openOne: '開くと、インストールされる内容を確認できます。',
+    chooseWhich: '追加するものを選択',
   },
   upload: {
     title: 'アップロード',
@@ -2040,6 +2048,7 @@ const plSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Dodaj 1 umiejętność' : `Dodaj ${count} umiejętności`,
     selectAll: 'Zaznacz wszystko',
     openOne: 'Otwórz jeden, aby zobaczyć, co instaluje.',
+    chooseWhich: 'Wybierz, co dodać',
   },
   upload: {
     title: 'Prześlij',
@@ -2262,6 +2271,7 @@ const ptSkillAdd: SkillAddTranslation = {
       count === 1 ? 'Adicionar 1 habilidade' : `Adicionar ${count} habilidades`,
     selectAll: 'Selecionar tudo',
     openOne: 'Abra um para ver o que ele instala.',
+    chooseWhich: 'Escolha quais adicionar',
   },
   upload: {
     title: 'Enviar',
@@ -2527,6 +2537,7 @@ const ruSkillAdd: SkillAddTranslation = {
       }),
     selectAll: 'Выбрать все',
     openOne: 'Откройте любой, чтобы увидеть, что он устанавливает.',
+    chooseWhich: 'Выберите, что добавить',
   },
   upload: {
     title: 'Загрузить',
@@ -2744,6 +2755,7 @@ const zhHansSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) => `添加 ${count} 个技能`,
     selectAll: '全选',
     openOne: '打开一个即可查看它会安装什么。',
+    chooseWhich: '选择要添加的',
   },
   upload: {
     title: '上传',
@@ -2954,6 +2966,7 @@ const zhHantSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) => `新增 ${count} 個技能`,
     selectAll: '全選',
     openOne: '開啟一個即可查看它會安裝什麼。',
+    chooseWhich: '選擇要新增的',
   },
   upload: {
     title: '上傳',

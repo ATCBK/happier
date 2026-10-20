@@ -218,13 +218,11 @@ export function SkillUploadInput(
       execute={props.execute}
       source={ready ? { kind: 'upload', files: ready.files } : null}
       items={ready?.items ?? null}
+      groupTitle={t('capabilities.skillAdd.link.chooseWhich')}
       // Once something is read, choosing again stands where Browse has its search.
       {...(ready ? { field: choosers('small') } : {})}
       empty={
         <View style={[styles.body, edge]}>
-          <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
-            {t('capabilities.skillAdd.upload.body')}
-          </Text>
           <View
             {...(drop as object)}
             testID={`${props.testID}.drop`}
@@ -242,11 +240,16 @@ export function SkillUploadInput(
               size={ICON_SIZE.lg}
               color={theme.colors.text.secondary}
             />
-            <Text variant="body" style={{ color: theme.colors.text.secondary }}>
-              {state.kind === 'reading'
-                ? t('capabilities.skillAdd.upload.reading')
-                : t('capabilities.skillAdd.upload.dropHere')}
-            </Text>
+            <View style={styles.dropText}>
+              <Text variant="label" emphasis="semiBold" style={{ color: theme.colors.text.primary, textAlign: 'center' }}>
+                {state.kind === 'reading'
+                  ? t('capabilities.skillAdd.upload.reading')
+                  : t('capabilities.skillAdd.upload.dropHere')}
+              </Text>
+              <Text variant="body" style={{ color: theme.colors.text.secondary, textAlign: 'center' }}>
+                {t('capabilities.skillAdd.upload.body')}
+              </Text>
+            </View>
             {choosers('small')}
           </View>
           {state.kind === 'error' ? (
@@ -269,6 +272,7 @@ export function SkillUploadInput(
           </Text>
         </>
       }
+      noteWhileEmpty
       onAdded={props.onAdded}
       onSelectAdded={props.onSelectAdded}
       onDone={props.onDone}
@@ -293,5 +297,6 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
   },
   chooseRow: { flexDirection: 'row', gap: theme.space.s8 },
+  dropText: { alignItems: 'center', gap: theme.space.s4, paddingHorizontal: theme.space.s16 },
   noteText: { flexShrink: 1, color: theme.colors.text.secondary },
 }));
