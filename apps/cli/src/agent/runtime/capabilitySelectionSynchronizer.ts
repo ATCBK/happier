@@ -27,6 +27,8 @@ export type CapabilitySelectionSynchronizerInput = Readonly<{
   agent: CapabilityApplyTimingInputV1['agent'];
   isStarted: () => boolean;
   isSettled: () => boolean;
+  /** The receiving Session RPC owner retains Run creation before a Run exists. */
+  waitForIdle?: (signal: AbortSignal) => Promise<void>;
   skillsRunner?: SessionSkillsReapplyRunner;
   skillsTransports?: RunnerSkillsTransports;
   initialSkillRules?: SkillRuleObservation;
@@ -59,8 +61,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     return JSON.stringify(resolved.skills.items.filter(item => item.selected).map(item => item.id).sort());
   };
   const initialRules = input.initialSkillRules ?? input.readSkillRules?.();
-  // A preserved-process attach cannot infer native application from today's rules.
-  let appliedSkillRules = initialRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'skills') ? ruleSelection(initialRules, applied) : null;
+  // Explicit launch resolution is positive evidence even if an earlier runner's
+  // pending status survives. A preserved-process attach reading today's rules
+  // still cannot infer native application from that observation alone.
+  const appliedRuleBaseline = (kind: 'mcp' | 'skills', launch: string | null, observed: string | null = null) =>
+    launch ?? (readPendingCapabilityRuleApplyV1(initialMetadata, kind) ? null : observed);
+  let appliedSkillRules = appliedRuleBaseline('skills',
+    input.initialSkillRules ? ruleSelection(input.initialSkillRules, applied) : null,
+    initialRules ? ruleSelection(initialRules, applied) : null);
   let desiredSkillRules = initialRules ? ruleSelection(initialRules, desired) : appliedSkillRules;
   let skillRulesAvailable = initialRules != null;
   const mcpRuleSelection = (observation: RunnerMcpRuleObservation, selection: SessionCapabilitySelectionV1) => {
@@ -74,8 +82,8 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   // Only the launch resolver establishes the applied server set. In particular,
   // an unavailable launch or preserved-process refusal is not today's empty set.
   // A retained pending status cannot invalidate that positive launch evidence.
-  const appliedMcpRules = initialMcpRules
-    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null;
+  const appliedMcpRules = appliedRuleBaseline('mcp', initialMcpRules
+    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null);
   let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
   let mcpRulesAvailable = initialMcpRules != null;
 
@@ -134,6 +142,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const apply = async () => {
     observe();
     if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
+    const requested = pending();
+    if ((requested.mcp || requested.skills) && input.isSettled() && !waitForNextSettlement && !blocked) {
+      await input.waitForIdle?.(lifetime.signal);
+      // Rules, selection and foreground custody can change while an admitted
+      // Run is preparing. Decide from the current observation after it settles.
+      observe();
+      if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
+    }
     const captured = desired;
     const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;

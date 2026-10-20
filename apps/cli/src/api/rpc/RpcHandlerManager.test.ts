@@ -2016,6 +2016,62 @@ describe('RpcHandlerManager in-flight request tracking', () => {
 
     expect(idleResolved).toBe(true);
   });
+
+  it('cancels only the idle observer while an admitted request keeps its custody', async () => {
+    const handler = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler('demo.preparing', async () => { await handler.promise; return { ok: true }; });
+    const request = rpc.invokeLocal('demo.preparing', {});
+    const cancellation = new AbortController();
+    const cancelled = rpc.waitForIdle(cancellation.signal);
+    const retired = new Error('observer retired');
+    const rejection = expect(cancelled).rejects.toBe(retired);
+    const incumbent = rpc.waitForIdle();
+    cancellation.abort(retired);
+    try {
+      await rejection;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+    } finally { handler.resolve(); await request; await incumbent; }
+    await expect(rpc.waitForIdle(cancellation.signal)).rejects.toBe(cancellation.signal.reason);
+  });
+
+  it('observes selected Run admission custody without waiting for an unrelated long-lived reader', async () => {
+    const reader = createDeferredVoid();
+    const admission = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { await admission.promise; return { runId: 'run' }; });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, async () => { await reader.promise; return {}; });
+    const read = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, {});
+    const start = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve(); expect(settled).toBe(false);
+      admission.resolve(); await start; await idle;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+      expect(settled).toBe(true);
+    } finally { admission.resolve(); reader.resolve(); await start; await read; await idle; }
+  });
+
+  it('retains selected Run-start custody while receiving-host authorization is still pending', async () => {
+    const authorization = createDeferredVoid();
+    const entered = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {},
+      authorizeRequest: async () => { entered.resolve(); await authorization.promise; return { ok: true }; } });
+    const handler = vi.fn(async () => ({ runId: 'admitted-run' }));
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+    const request = rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    await entered.promise;
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve();
+      expect(handler).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+    } finally { authorization.resolve(); await request; await idle; }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
+  });
 });
 
 describe('RpcHandlerManager request lifetime', () => {

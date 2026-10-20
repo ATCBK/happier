@@ -3868,6 +3868,11 @@ export async function runHostSessionRuntime(
       terminalRemoteModeLoop,
       capabilitySelection: {
         agent: capabilitySelectionAgentFacts,
+        waitForIdle: signal => session.rpcHandlerManager.waitForIdle(signal, [
+          SESSION_RPC_METHODS.EXECUTION_RUN_START,
+          SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE,
+          SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START,
+        ]),
         initialSkillRules: runnerSkills?.reach,
         initialMcpRules: runnerMcpReach,
         readMcpRules: () => {

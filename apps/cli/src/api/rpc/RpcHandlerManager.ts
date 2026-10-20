@@ -141,7 +141,7 @@ export class RpcHandlerManager {
     private readonly permanentlyRejectedRegistrationMethods = new Set<string>();
     private acknowledgedRegistrationMethods = new Set<string>();
     private registrationReadinessWaiters = new Set<RegistrationReadinessWaiter>();
-    private inFlightRequestCount = 0;
+    private readonly inFlightRequestCounts = new Map<string, number>();
     private activeTransportRequestControllers = new Set<AbortController>();
     /**
      * The authenticated relay stamps this short-lived id immediately before it
@@ -581,7 +581,7 @@ export class RpcHandlerManager {
                 errorCode: RPC_ERROR_CODES.FORBIDDEN,
             });
         }
-        this.beginInFlightRequest();
+        this.beginInFlightRequest(this.readUnprefixedMethod(request.method));
         const controller = new AbortController();
         this.activeTransportRequestControllers.add(controller);
         if (requestId) {
@@ -977,7 +977,7 @@ export class RpcHandlerManager {
             if (requestId && this.activeTransportRequestControllersByRequestId.get(requestId) === controller) {
                 this.activeTransportRequestControllersByRequestId.delete(requestId);
             }
-            this.finishInFlightRequest();
+            this.finishInFlightRequest(this.readUnprefixedMethod(request.method));
         }
     }
 
@@ -1005,7 +1005,7 @@ export class RpcHandlerManager {
             if (!handler) {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }
-            this.beginInFlightRequest();
+            this.beginInFlightRequest(method);
             const handlerExecutionId = this.beginHandlerExecution(method);
             try {
                 return await handler(params, Object.freeze({
@@ -1029,7 +1029,7 @@ export class RpcHandlerManager {
                 }));
             } finally {
                 this.activeHandlerExecutions.delete(handlerExecutionId);
-                this.finishInFlightRequest();
+                this.finishInFlightRequest(method);
             }
         }, true);
     }
@@ -1198,7 +1198,7 @@ export class RpcHandlerManager {
     }
 
     getInFlightRequestCount(): number {
-        return this.inFlightRequestCount;
+        return Array.from(this.inFlightRequestCounts.values()).reduce((total, count) => total + count, 0);
     }
 
     getActiveHandlerExecutions(): readonly RpcHandlerActiveExecution[] {
@@ -1209,12 +1209,26 @@ export class RpcHandlerManager {
         }));
     }
 
-    async waitForIdle(): Promise<void> {
-        if (this.inFlightRequestCount === 0) {
+    /** Includes receiving authorization and cleanup, before/after handler execution. */
+    async waitForIdle(signal?: AbortSignal, methods?: readonly string[]): Promise<void> {
+        signal?.throwIfAborted();
+        const selected = methods ? new Set(methods) : null;
+        const busy = () => selected
+            ? Array.from(selected).some(method => this.inFlightRequestCounts.has(method))
+            : this.inFlightRequestCounts.size > 0;
+        if (!busy()) {
             return;
         }
-        await new Promise<void>((resolve) => {
-            this.idleResolvers.add(resolve);
+        await new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+                this.idleResolvers.delete(onIdle);
+                signal?.removeEventListener('abort', onAbort);
+            };
+            const onIdle = () => { if (!busy()) { cleanup(); resolve(); } };
+            const onAbort = () => { cleanup(); reject(signal?.reason); };
+            this.idleResolvers.add(onIdle);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            if (signal?.aborted) onAbort();
         });
     }
 
@@ -1449,15 +1463,16 @@ export class RpcHandlerManager {
         }
     }
 
-    private beginInFlightRequest(): void {
-        this.inFlightRequestCount += 1;
+    private beginInFlightRequest(method: string): void {
+        this.inFlightRequestCounts.set(method, (this.inFlightRequestCounts.get(method) ?? 0) + 1);
     }
 
-    private finishInFlightRequest(): void {
-        this.inFlightRequestCount = Math.max(0, this.inFlightRequestCount - 1);
-        if (this.inFlightRequestCount === 0 && this.idleResolvers.size > 0) {
+    private finishInFlightRequest(method: string): void {
+        const count = this.inFlightRequestCounts.get(method) ?? 0;
+        if (count <= 1) this.inFlightRequestCounts.delete(method);
+        else this.inFlightRequestCounts.set(method, count - 1);
+        if (this.idleResolvers.size > 0) {
             const resolvers = Array.from(this.idleResolvers);
-            this.idleResolvers.clear();
             for (const resolve of resolvers) {
                 resolve();
             }

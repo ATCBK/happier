@@ -1550,7 +1550,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(onUserMessage).toHaveBeenCalledTimes(1);
     });
 
-    it('delivers queued input once after automatic replacement and Resume with a captured MCP launch baseline', async () => {
+    it.each(['mcp', 'skills'] as const)('delivers queued input once after automatic replacement and Resume with a captured %s launch baseline', async kind => {
         const localId = 'queued-across-capability-replacement';
         const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: false,
             servers: [{ id: 'inherited', name: 'inherited', transport: 'http',
@@ -1559,7 +1559,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         // A retained status can still be pending while the replacement has
         // positively resolved and launched the requested server set.
         const session = createMockSession({ encryptionMode: 'plain', pendingCount: 1, pendingVersion: 3,
-            metadata: { capabilitySelectionApplyV1: { mcp: { source: 'rules', reason: 'next_turn' } } } });
+            metadata: { capabilitySelectionApplyV1: { [kind]: { source: 'rules', reason: 'next_turn' } } } });
         let claims = 0;
         const bindTransport = () => {
             const sessionSocket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
@@ -1579,27 +1579,57 @@ describe('ApiSessionClient pending queue materialization', () => {
         bindTransport();
         const retired = createClient(session);
         await waitForPendingInputContract(retired);
-        await retired.close();
+        const context = { machineId: 'test-machine', machinePlatform: 'posix' as const,
+            directory: '/repo', projectKey: null, agentId: 'fixture' };
+        const skillRules = [{ id: 'skill-rule', skillId: 'library', target: { t: 'allMachines' as const },
+            enabled: true, createdAt: 1, updatedAt: 1 }];
+        let releaseRestart!: () => void;
+        const restartCompletion = new Promise<void>(resolve => { releaseRestart = resolve; });
+        // Daemon restart is an OS/process boundary. The canonical synchronizer,
+        // Pending transport, queue and input-consumer logic remain real.
+        let restartRequests = 0;
+        const restart = vi.fn(async () => {
+            restartRequests += 1;
+            if (restartRequests > 1) await restartCompletion;
+            return { ok: true as const, status: 'restarted' as const, sessionId: retired.sessionId };
+        });
+        const originalSync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:fixture', session: retired,
+            runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
+            isStarted: () => true,
+            capabilitySelection: { session: retired, isStarted: () => true, isSettled: () => true,
+                agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+                ...(kind === 'mcp' ? {
+                    initialMcpRules: { context, settings: { ...settings, bindings: [] }, mcpPluginItems: [], selectedServerIds: [] },
+                    readMcpRules: () => ({ context, settings, mcpPluginItems: [] }),
+                } : {
+                    initialSkillRules: { context, rules: [] },
+                    readSkillRules: () => ({ context, rules: skillRules }),
+                }), requestRestart: restart } });
+        try {
+            await originalSync.flushPendingAfterStart();
+            expect(restart).toHaveBeenCalledTimes(1);
+            expect(claims).toBe(0);
+        } finally {
+            await originalSync.dispose?.();
+            await retired.close();
+        }
         bindTransport();
         const client = createClient(session);
         await waitForPendingInputContract(client);
         const queue = new MessageQueue2<{ id: string }>(() => 'mode');
         client.onUserMessage(message => queue.pushImmediate(message.content.text, { id: 'mode' }));
-        const context = { machineId: 'test-machine', machinePlatform: 'posix' as const,
-            directory: '/repo', projectKey: null, agentId: 'fixture' };
-        let releaseRestart!: () => void;
-        const restartCompletion = new Promise<void>(resolve => { releaseRestart = resolve; });
-        // Daemon restart is an OS/process boundary. The canonical synchronizer,
-        // Pending transport, queue and input-consumer logic remain real.
-        const restart = vi.fn(async () => { await restartCompletion;
-            return { ok: true as const, status: 'restarted' as const, sessionId: client.sessionId }; });
         const sync = createRuntimeOverrideSynchronizers({ agentTargetKey: 'backend:fixture', session: client,
             runtime: { setSessionMode: async () => {}, setSessionConfigOption: async () => {}, setSessionModelSelection: async () => {} },
             isStarted: () => true,
             capabilitySelection: { session: client, isStarted: () => true, isSettled: () => true,
                 agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
-                initialMcpRules: { context, settings, mcpPluginItems: [], selectedServerIds: ['inherited'] },
-                readMcpRules: () => ({ context, settings, mcpPluginItems: [] }), requestRestart: restart } });
+                ...(kind === 'mcp' ? {
+                    initialMcpRules: { context, settings, mcpPluginItems: [], selectedServerIds: ['inherited'] },
+                    readMcpRules: () => ({ context, settings, mcpPluginItems: [] }),
+                } : {
+                    initialSkillRules: { context, rules: skillRules },
+                    readSkillRules: () => ({ context, rules: skillRules }),
+                }), requestRestart: restart } });
         const consumer = createSessionProviderInputConsumer({ messageQueue: queue,
             session: { waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
                 materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
@@ -1612,14 +1642,14 @@ describe('ApiSessionClient pending queue materialization', () => {
         const waiting = consumer.waitForNextInput({ abortSignal: controller.signal }).then(batch => { delivered.push(batch); return batch; });
         try {
             await vi.waitFor(() => expect(delivered).toEqual([expect.objectContaining({ message: 'deliver once' })]));
-            expect(restart).not.toHaveBeenCalled();
+            expect(restart).toHaveBeenCalledTimes(1);
             expect(claims).toBe(1);
             expect(queue.size()).toBe(0);
             // The HTTP boundary withholds advisory status writes. Reobserving
             // that retained status still cannot restart or redeliver the input.
             sync.syncFromMetadata();
             await sync.flushPendingAfterStart();
-            expect(restart).not.toHaveBeenCalled();
+            expect(restart).toHaveBeenCalledTimes(1);
             expect(delivered).toHaveLength(1);
             expect(claims).toBe(1);
         } finally {

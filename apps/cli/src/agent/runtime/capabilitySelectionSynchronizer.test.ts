@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { logger } from '@/ui/logger';
 import { once } from 'node:events';
 import { configuration } from '@/configuration';
@@ -21,7 +22,7 @@ import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOw
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 
 function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 'restarted', sessionId: 'session' }],
-  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports' | 'readSkillRules' | 'initialMcpRules' | 'readMcpRules' | 'subscribeAccountSettings'>> = {}, initialMetadata = createTestMetadata()) {
+  options: Partial<Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'skillsTransports' | 'initialSkillRules' | 'readSkillRules' | 'initialMcpRules' | 'readMcpRules' | 'subscribeAccountSettings'>> = {}, initialMetadata = createTestMetadata()) {
   let metadata = initialMetadata;
   let settled = false;
   let refusePublication = false;
@@ -51,6 +52,81 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it.each([false, true])('uses positive skill launch evidence despite retained rule-pending metadata (changed: %s)', async changed => {
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: null, agentId: 'fixture' };
+    const rules = (enabled: boolean): SkillRuleV1[] => [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' },
+      enabled, createdAt: 1, updatedAt: enabled ? 1 : 2 }];
+    const f = fixture(undefined, {
+      initialSkillRules: { context, rules: rules(true) },
+      readSkillRules: () => ({ context, rules: rules(!changed) }),
+    }, createTestMetadata({ capabilitySelectionApplyV1: { skills: { source: 'rules', reason: 'next_turn' } } }));
+    try {
+      f.settle(); await f.sync.flushAfterSettledTurn('one');
+      f.sync.syncFromMetadata(); await f.sync.flushAfterSettledTurn('two');
+      expect(f.requests).toHaveLength(changed ? 1 : 0);
+      if (!changed) expect(readPendingCapabilityApplyV1(f.metadata).skills).toBe(false);
+    } finally { await f.sync.dispose(); }
+  });
+
+  it.each(['settled', 'restored', 'disposed'] as const)('keeps Run-creation RPC custody before a capability restart is %s', async outcome => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    let release!: () => void;
+    const preparing = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const admitted = new Promise<void>(resolve => { entered = resolve; });
+    const runs: string[] = [];
+    rpc.registerHandler('execution.run.start', async () => {
+      entered();
+      await preparing;
+      runs.push('retained-review');
+      return { runId: 'retained-review' };
+    });
+    const creating = rpc.invokeLocal('execution.run.start', {});
+    await admitted;
+    let metadata = createTestMetadata();
+    const restart = vi.fn(async () => {
+      // Physical replacement is the external boundary. Its existing retention
+      // owner can retain an admitted Run, but cannot retain an uncreated one.
+      expect(runs).toEqual(['retained-review']);
+      return { ok: true as const, status: 'restarted' as const, sessionId: 'session' };
+    });
+    let observingIdle!: () => void;
+    const waitingForIdle = new Promise<void>(resolve => { observingIdle = resolve; });
+    const idle = (signal: AbortSignal) => { observingIdle(); return rpc.waitForIdle(signal); };
+    const sync = createCapabilitySelectionSynchronizer({
+      session: { sessionId: 'session', getMetadataSnapshot: () => metadata,
+        updateMetadataAsCurrentPublisher: async update => { metadata = update(metadata); } },
+      agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+      isStarted: () => true, isSettled: () => true,
+      waitForIdle: idle, requestRestart: restart,
+    });
+    metadata = writeSessionCapabilitySelectionToMetadataV1(metadata, {
+      mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['server'] },
+    }, { sessionActive: true });
+    const applying = sync.flushAfterSettledTurn();
+    try {
+      await Promise.race([waitingForIdle, applying]);
+      expect(restart).not.toHaveBeenCalled();
+      if (outcome === 'restored') {
+        metadata = writeSessionCapabilitySelectionToMetadataV1(metadata, {
+          mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        }, { sessionActive: true });
+      }
+      if (outcome === 'disposed') {
+        await sync.dispose();
+        await applying;
+        expect(rpc.getInFlightRequestCount()).toBe(1);
+      }
+      release();
+      await expect(creating).resolves.toEqual({ runId: 'retained-review' });
+      await applying;
+      expect(restart).toHaveBeenCalledTimes(outcome === 'settled' ? 1 : 0);
+      expect(runs).toEqual(['retained-review']);
+    } finally {
+      release(); await creating; await sync.dispose(); await applying;
+    }
+  });
+
   it('records the changed capability basis before requesting runner replacement', async () => {
     const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const f = fixture();

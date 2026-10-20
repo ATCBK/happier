@@ -97,6 +97,7 @@ type AdmittedSessionRunOptions = Readonly<{
   directOwner?: boolean;
   runReportPolicy?: import('@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1').FollowPolicyV1;
   runReportPreferencesUnavailable?: boolean;
+  beforeRunReportPreferencesRead?: () => Promise<void>;
   runtimePluginIds?: readonly string[];
   acpCatalog?(directory: string): ReturnType<typeof AcpCatalogRecordV1Schema.parse>;
   run(fixture: AdmittedSessionRunFixture): Promise<void>;
@@ -297,11 +298,14 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
     });
   });
   home.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
-  home.get('/v2/account/session-follow-preferences', async (_request, reply) => options?.runReportPreferencesUnavailable
-    ? reply.code(503).send({ error: 'preferences_unavailable' })
-    : { assigned: true, direct: false, team: false, group: false,
+  home.get('/v2/account/session-follow-preferences', async (_request, reply) => {
+    await options?.beforeRunReportPreferencesRead?.();
+    return options?.runReportPreferencesUnavailable
+      ? reply.code(503).send({ error: 'preferences_unavailable' })
+      : { assigned: true, direct: false, team: false, group: false,
         managerPolicy: { preset: 'important' }, runReportPolicy: options?.runReportPolicy ?? { preset: 'important' },
-        discussionReceivePolicy: { preset: 'important' } });
+        discussionReceivePolicy: { preset: 'important' } };
+  });
   home.get('/v1/account/plugin-settings/:pluginId', async () =>
     PluginAccountSettingsReadResponseV1Schema.parse({ status: 'absent' }));
   home.get('/v1/account/encryption', async () =>
