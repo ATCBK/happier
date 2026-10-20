@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import type { ConnectedAccountCatalogSnapshotV1, ConnectedAccountCatalogUnavailableReasonV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -77,6 +78,7 @@ function refreshConnectedAccountCatalog(
         const reason: ConnectedAccountCatalogUnavailableReasonV1 = input.signal?.aborted ? 'cancelled'
           : code === 'scope-retired' || code === 'unauthorized' || code === 'forbidden' || code === 'unsupported'
             || code === 'account-mode-mismatch' || code === 'database_transaction_conflict_exhausted' ? code
+          : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
           : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable'
             ? 'encryption-material-unavailable'
           : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable';

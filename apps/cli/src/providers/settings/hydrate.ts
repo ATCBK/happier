@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { randomUUID } from 'node:crypto';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -138,6 +139,7 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
         catalog = { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled'
           : !current() || code === 'scope-retired' ? 'scope-retired'
           : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
+          : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
           : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
           : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
       }

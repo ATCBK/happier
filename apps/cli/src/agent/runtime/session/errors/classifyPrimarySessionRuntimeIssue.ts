@@ -23,6 +23,8 @@ import axios from 'axios';
 import { HttpStatusError } from '@/api/client/httpStatusError';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
+import { isRetryableMcpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import {
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE,
   DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW,
@@ -500,14 +502,15 @@ export function classifyPrimarySessionRuntimeIssue(
   // endpoint policy, so an Agent's own HTTP failure stays an Agent failure.
   const homeError = input.error instanceof Error && input.error.cause instanceof HttpStatusError
     ? input.error.cause : input.error;
-  const homeHttpFailure = input.cause === 'session_error' && (() => {
+  const homeHttpFailure = input.cause === 'session_error' && (isRetryableAccountEncryptionCurrentnessError(input.error)
+    || isRetryableMcpServerCatalogUnavailableError(input.error) || (() => {
     if (homeError instanceof HttpStatusError) return true;
     if (!axios.isAxiosError(homeError) || !homeError.config?.url) return false;
     try {
       const homeBase = `${resolveServerHttpBaseUrl()}/`;
       return new URL(homeError.config.url, homeError.config.baseURL ?? homeBase).href.startsWith(homeBase);
     } catch { return false; }
-  })() && ['server_error', 'timeout', 'network'].includes(classifyServerEndpointError(homeError).kind);
+  })() && ['server_error', 'timeout', 'network'].includes(classifyServerEndpointError(homeError).kind));
   const runtimeAuthClassification = readRuntimeAuthClassification(input.error);
   const runtimeAuthUsageLimit = buildUsageLimitDetailsFromRuntimeAuthClassification(
     runtimeAuthClassification,

@@ -178,6 +178,15 @@ Authentication and definitive client refusals retain their existing disposition;
 native Provider HTTP failures are not classified as Home preparation failures.
 This is 0.3 development source; loaded-runtime recovery requires a separate replay.
 
+Account catalog hydration also distinguishes a retryable Home-currentness read
+failure from missing or mismatched E2EE material. The former retains the existing
+`unreachable` catalog result; no private row is opened without successful
+currentness admission. Optional MCP preparation may omit that unavailable catalog
+with its existing notice. Strict MCP preparation instead publishes
+`preparation_pending` and exits with failure so the daemon's existing respawn
+owner can retry the retained input. Actual missing material remains closed and
+does not acquire this transient recovery disposition.
+
 Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
 including explicit Stop intent and terminal-control retirement. The generic
 Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop

@@ -22,6 +22,7 @@ import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/server
 import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import { McpServerCatalogRowMutationV1Schema, openMcpServerCatalogContentV1, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { readMcpServersSettingsForStartup } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -62,6 +63,56 @@ function mockAccountReads(readRow: () => Promise<unknown>, readHistory: () => Pr
 }
 
 describe('CLI MCP catalog Account publication', () => {
+  it.each(['server_error', 'network'] as const)('preserves a transient Account currentness %s for startup recovery without reading private rows', async failure => {
+    const credentials = seedAccount();
+    let recovered = false;
+    let privateReads = 0;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') {
+        if (!recovered) {
+          if (failure === 'network') throw new axios.AxiosError('private transport detail', 'ECONNRESET');
+          return { status: 503, data: { private: 'private response body' } };
+        }
+        return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 7,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      }
+      privateReads++;
+      if (path === '/v1/account/entity-rows/mcp') return { status: 200, data: present(4) };
+      throw new Error(`Unexpected private read: ${path}`);
+    });
+    const demand = () => prepareActiveMcpServerCatalog({ credentials, scopeKey: resolveAccountSettingsScopeKey(credentials),
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), maintainSource: false });
+    await expect(demand()).resolves.toEqual({ status: 'unavailable', reason: 'unreachable' });
+    expect(privateReads).toBe(0);
+    expect(getActiveAccountSettingsSnapshot()?.mcpServerCatalog?.status).not.toBe('ready');
+    const unavailable = getActiveAccountSettingsSnapshot()!;
+    expect(() => readMcpServersSettingsForStartup({ snapshot: unavailable })).toThrowError(
+      expect.objectContaining({ code: 'mcp_catalog_unavailable', reason: 'unreachable' }));
+    expect(readMcpServersSettingsForStartup({ snapshot: { ...unavailable,
+      settings: accountSettingsParse({ mcpServersStrictMode: false }) } })).toMatchObject({ status: 'unavailable' });
+    recovered = true;
+    await expect(demand()).resolves.toMatchObject({ status: 'ready', revision: 4 });
+  });
+
+  it.each(['missing', 'mismatched'] as const)('keeps actual %s E2EE material closed rather than requesting transient recovery', async material => {
+    const seeded = seedAccount();
+    const credentials = material === 'missing' ? seeded : { ...seeded,
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
+    let privateReads = 0;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'e2ee', version: 1, settingsVersion: 7, signingKeyFingerprint: null,
+        contentKeyFingerprint: 'a'.repeat(64), updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } };
+      privateReads++;
+      throw new Error('Private rows must remain unreadable');
+    });
+    await expect(prepareActiveMcpServerCatalog({ credentials, scopeKey: resolveAccountSettingsScopeKey(credentials),
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() })).resolves.toEqual({
+      status: 'unavailable', reason: 'encryption-material-unavailable' });
+    expect(privateReads).toBe(0);
+  });
+
   it('retains confirmed database rollback through MCP catalog hydration', async () => {
     const credentials = seedAccount();
     vi.spyOn(axios, 'get').mockImplementation(async url => {

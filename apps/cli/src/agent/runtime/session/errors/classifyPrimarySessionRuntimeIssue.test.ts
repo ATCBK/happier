@@ -6,8 +6,27 @@ import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { AccountEncryptionCurrentnessUnavailableError } from '@/api/client/accountEncryptionCurrentness';
+import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it('lets required unreachable MCP preparation recover while real missing material remains closed', () => {
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new McpServerCatalogUnavailableError('unreachable') }))
+      .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new McpServerCatalogUnavailableError('encryption-material-unavailable') }).code)
+      .not.toBe('preparation_pending');
+  });
+  it.each(['ECONNRESET', 'ECONNABORTED'])('retains transient Account currentness %s as a Home preparation dependency', code => {
+    const error = new AccountEncryptionCurrentnessUnavailableError(undefined, undefined, {
+      cause: new AxiosError('private transport detail', code),
+    });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error }))
+      .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(JSON.stringify(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error }))).not.toContain('private');
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new AccountEncryptionCurrentnessUnavailableError(
+      undefined, undefined, { cause: createHttpStatusError(403, 'refused') },
+    ) }).code).not.toBe('preparation_pending');
+  });
   it.each(['ECONNABORTED', 'ECONNRESET'])('classifies a Home %s as preparation while a foreign binding remains an Agent failure', code => {
     runWithServerHttpBaseUrl('https://home.example.test/happier', () => {
       const failure = new AxiosError('private transport detail', code, {

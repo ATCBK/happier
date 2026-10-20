@@ -1,4 +1,5 @@
 import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import { readPromptLibraryCatalogRecordV1, readRetainedPromptLibraryRecordV1, type PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { isPromptExternalLinkForMachine } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
@@ -39,6 +40,7 @@ function catalogReadFailure(error: unknown, aborted: boolean, current: boolean):
     : !current || code === 'scope-retired' ? 'scope-retired'
     : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch'
       || code === 'database_transaction_conflict_exhausted' ? code
+    : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
     : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
     : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
 }

@@ -62,6 +62,8 @@ import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcr
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readHttpStatus } from '@/api/client/httpStatusError';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
+import { isRetryableMcpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 import { HomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
@@ -4080,6 +4082,8 @@ export async function runHostSessionRuntime(
       && error.code === 'metadata_tuple_ambiguous';
     if (preparationFailurePublished && !metadataPublicationPending
       && readHttpStatus(error) === null
+      && !isRetryableAccountEncryptionCurrentnessError(error)
+      && !isRetryableMcpServerCatalogUnavailableError(error)
       && !(error instanceof Error && error.cause instanceof HomeReadPreparationError)) return;
     throw error;
   }
