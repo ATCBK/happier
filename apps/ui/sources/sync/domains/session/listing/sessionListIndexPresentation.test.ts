@@ -19,6 +19,7 @@ type QueryPresentationResolver = (input: Readonly<{
     retainedRowCount: number;
     sessionsEnabled?: boolean;
     workflowRunWindow?: Readonly<{
+        serverId?: string;
         status: 'loading' | 'loaded' | 'failed';
         hasMore: boolean;
         loadingMore: boolean;
@@ -28,7 +29,7 @@ type QueryPresentationResolver = (input: Readonly<{
         serverId: string;
         reason: 'not_selected' | 'unsupported';
     }>[];
-    homeSettling?: boolean;
+    settlingHomeServerId?: string | null;
 }>) => unknown;
 
 function queryState(partial: Partial<SessionListQueryHomeState>): SessionListQueryHomeState {
@@ -297,11 +298,35 @@ describe('resolveSessionListQueryPresentation', () => {
     it('reads a failed query as loading while the Home is still being reached, never as a settled error', () => {
         const failed = { selectedServerIds: ['home-a'], coverageComplete: false,
             statesByServerId: { 'home-a': queryState({ phase: 'error', failureReason: 'network' }) } } as const;
-        expect(resolve({ ...failed, retainedRowCount: 0, homeSettling: true })).toEqual({ kind: 'initial_loading' });
-        expect(resolve({ ...failed, retainedRowCount: 3, homeSettling: true })).toEqual({ kind: 'refreshing', retainedRows: true });
+        expect(resolve({ ...failed, retainedRowCount: 0, settlingHomeServerId: 'home-a' })).toEqual({ kind: 'initial_loading' });
+        expect(resolve({ ...failed, retainedRowCount: 3, settlingHomeServerId: 'home-a' })).toEqual({ kind: 'refreshing', retainedRows: true });
+        expect(resolve({ ...failed, retainedRowCount: 0, settlingHomeServerId: 'home-b' })).toEqual({ kind: 'error', retainedRows: false });
+        expect(resolve({ ...failed, selectedServerIds: ['home-a', 'home-b'], retainedRowCount: 0, settlingHomeServerId: 'home-a',
+            statesByServerId: { ...failed.statesByServerId, 'home-b': queryState({ phase: 'error', failureReason: 'network' }) },
+        })).toEqual({ kind: 'error', retainedRows: false });
         // Settling hides only an error; a ready query keeps its answer.
-        expect(resolve({ selectedServerIds: ['home-a'], coverageComplete: true, retainedRowCount: 0, homeSettling: true,
+        expect(resolve({ selectedServerIds: ['home-a'], coverageComplete: true, retainedRowCount: 0, settlingHomeServerId: 'home-a',
             statesByServerId: { 'home-a': queryState({ phase: 'ready', appliedQueryKey: 'query' }) } })).toEqual({ kind: 'ready', complete: true });
+    });
+
+    it('scopes failed Run windows to their producing Home, including pagination failures', () => {
+        for (const failure of [{ status: 'failed' as const, loadMoreFailed: false }, { status: 'loaded' as const, loadMoreFailed: true }]) {
+            const input = { selectedServerIds: ['home-a', 'home-b'], statesByServerId: {}, sessionsEnabled: false,
+                coverageComplete: false, retainedRowCount: 0,
+                workflowRunWindow: { ...failure, serverId: 'home-b', hasMore: false, loadingMore: false } };
+            expect(resolve({ ...input, settlingHomeServerId: 'home-a' })).toEqual({ kind: 'error', retainedRows: false });
+            expect(resolve({ ...input, settlingHomeServerId: 'home-b' })).toEqual({ kind: 'initial_loading' });
+            expect(resolve({ ...input, retainedRowCount: 2, settlingHomeServerId: 'home-b' })).toEqual({ kind: 'refreshing', retainedRows: true });
+        }
+    });
+
+    it('keeps another Home query failure visible while the failed Run Home settles', () => {
+        expect(resolve({ selectedServerIds: ['home-a', 'home-b'], coverageComplete: false, retainedRowCount: 0,
+            settlingHomeServerId: 'home-a', statesByServerId: {
+                'home-a': queryState({ phase: 'ready', appliedQueryKey: 'query' }),
+                'home-b': queryState({ phase: 'error', failureReason: 'network' }),
+            }, workflowRunWindow: { serverId: 'home-a', status: 'failed', hasMore: false, loadingMore: false, loadMoreFailed: false },
+        })).toEqual({ kind: 'error', retainedRows: false });
     });
 });
 

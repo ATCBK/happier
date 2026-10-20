@@ -62,6 +62,7 @@ export function resolveSessionListQueryPresentation(input: Readonly<{
         reason: 'not_selected' | 'unsupported';
     }>[];
     workflowRunWindow?: Readonly<{
+        serverId?: string | null;
         status: 'loading' | 'loaded' | 'failed';
         hasMore: boolean;
         loadingMore: boolean;
@@ -71,13 +72,19 @@ export function resolveSessionListQueryPresentation(input: Readonly<{
      * The Home is still being reached (right after sign-in or a restart): a query that failed in that gap
      * has not settled into an error, so it reads as loading and the reconnect reads it again.
      */
-    homeSettling?: boolean;
+    settlingHomeServerId?: string | null;
 }>): SessionListQueryPresentation {
     const presentation = resolveSettledSessionListQueryPresentation(input);
-    return input.homeSettling === true && presentation.kind === 'error'
-        ? presentation.retainedRows ? { kind: 'refreshing', retainedRows: true } : { kind: 'initial_loading' }
-        : presentation;
+    if (presentation.kind !== 'error') return presentation;
+    const { failedServerIds, ...error } = presentation;
+    return input.settlingHomeServerId && failedServerIds.length > 0
+        && failedServerIds.every(serverId => areServerProfileIdentifiersEquivalent(serverId, input.settlingHomeServerId))
+        ? error.retainedRows ? { kind: 'refreshing', retainedRows: true } : { kind: 'initial_loading' }
+        : error;
 }
+
+type ScopedQueryPresentation = Exclude<SessionListQueryPresentation, { kind: 'error' }>
+    | Readonly<{ kind: 'error'; retainedRows: boolean; failedServerIds: readonly string[] }>;
 
 function resolveSettledSessionListQueryPresentation(input: Readonly<{
     selectedServerIds: readonly string[];
@@ -90,15 +97,21 @@ function resolveSettledSessionListQueryPresentation(input: Readonly<{
         reason: 'not_selected' | 'unsupported';
     }>[];
     workflowRunWindow?: Readonly<{
+        serverId?: string | null;
         status: 'loading' | 'loaded' | 'failed';
         hasMore: boolean;
         loadingMore: boolean;
         loadMoreFailed: boolean;
     }>;
-}>): SessionListQueryPresentation {
+}>): ScopedQueryPresentation {
     const window = input.workflowRunWindow;
     if (window?.status === 'failed' || window?.loadMoreFailed) {
-        return { kind: 'error', retainedRows: input.retainedRowCount > 0 };
+        // A Run failure must not hide an independently failed Session query.
+        // Without the Run's producing Home we cannot attribute the combined failure.
+        const queryFailures = input.sessionsEnabled === false ? [] : input.selectedServerIds.filter(serverId =>
+            input.statesByServerId[serverId]?.phase === 'error');
+        return { kind: 'error', retainedRows: input.retainedRowCount > 0,
+            failedServerIds: window.serverId ? [window.serverId, ...queryFailures] : [] };
     }
     if (window?.status === 'loading') {
         return input.retainedRowCount > 0
@@ -129,7 +142,7 @@ function resolveSessionQueryPresentation(input: Readonly<{
     statesByServerId: Readonly<Record<string, SessionListQueryHomeState | undefined>>;
     coverageComplete: boolean;
     retainedRowCount: number;
-}>): SessionListQueryPresentation {
+}>): ScopedQueryPresentation {
     const selectedServerIds = normalizeTrimmedStringArrayWithSharedEmpty(input.selectedServerIds);
     if (selectedServerIds.length === 0) {
         return input.coverageComplete
@@ -172,7 +185,8 @@ function resolveSessionQueryPresentation(input: Readonly<{
     }
     if (unavailableHomes.length > 0) {
         if (!hasReadyHome && hasTerminalError) {
-            return { kind: 'error', retainedRows: input.retainedRowCount > 0 };
+            return { kind: 'error', retainedRows: input.retainedRowCount > 0,
+                failedServerIds: unavailableHomes.filter(home => home.reason === 'error').map(home => home.serverId) };
         }
         return { kind: 'partial', unavailableHomes };
     }

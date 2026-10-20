@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { SessionListFilterV1 } from '@happier-dev/protocol';
 
-import { useActiveHomeSettling } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
+import { useSettlingHomeServerId } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { useVisibleSessionListSummaryState } from './useVisibleSessionListSummaryState';
 import { useVisibleSessionListViewState, type VisibleSessionListViewState } from './useVisibleSessionListViewState';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
@@ -72,7 +72,7 @@ export function useVisibleSessionListPaneState(
         () => countVisibleSessions(visibleSessionListIndex),
         [visibleSessionListIndex],
     );
-    const homeSettling = useActiveHomeSettling();
+    const settlingHomeServerId = useSettlingHomeServerId();
     const queryPresentation = React.useMemo(() => query?.active === true || workflowRunWindow !== undefined || (workflowRunUnavailableHomes?.length ?? 0) > 0
         ? resolveSessionListQueryPresentation({
             selectedServerIds: (options.queryHomes ?? []).map((home) => home.serverId),
@@ -82,9 +82,9 @@ export function useVisibleSessionListPaneState(
             sessionsEnabled: options.botsRoster === true || options.workFilter?.show !== 'runs',
             workflowRunWindow,
             workflowRunUnavailableHomes,
-            homeSettling,
+            settlingHomeServerId,
         })
-        : undefined, [homeSettling, options.botsRoster, options.queryHomes, options.workFilter?.show, ordinarySummary.sessionsReady, query, visibleSessionCount, workflowRunWindow, workflowRunUnavailableHomes]);
+        : undefined, [settlingHomeServerId, options.botsRoster, options.queryHomes, options.workFilter?.show, ordinarySummary.sessionsReady, query, visibleSessionCount, workflowRunWindow, workflowRunUnavailableHomes]);
     const summary = React.useMemo(() => queryPresentation
         ? {
             sessionsReady: queryPresentation.kind !== 'initial_loading',

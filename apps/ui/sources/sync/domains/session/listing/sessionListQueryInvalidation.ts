@@ -11,6 +11,21 @@ type SessionListQueryInvalidationTarget = Readonly<{
 type SessionListQueryInvalidationReader = () => ReadonlyMap<string, SessionListQueryInvalidationTarget>;
 const mountedSessionListQueryReaders = new Set<SessionListQueryInvalidationReader>();
 
+const readEpochByServerId = new Map<string, number>();
+const invalidationsCounted = new WeakSet<object>();
+
+function advanceReadEpoch(serverId: string): void {
+    readEpochByServerId.set(serverId, (readEpochByServerId.get(serverId) ?? 0) + 1);
+}
+
+/**
+ * Which generation of a Home's corpus a page read belongs to. Every invalidation of the Home starts a
+ * new one, so a read already on the wire when a Home changed cannot answer a read asked for afterwards.
+ */
+export function readSessionListQueryReadEpoch(serverId: string): number {
+    return readEpochByServerId.get(serverId) ?? 0;
+}
+
 /**
  * Invalidates the mounted filtered-list controller for one exact Home.
  *
@@ -19,6 +34,7 @@ const mountedSessionListQueryReaders = new Set<SessionListQueryInvalidationReade
  * Account-change event (for example a persisted reminder becoming due).
  */
 export function invalidateSessionListQueryHome(serverId: string): Promise<void> {
+    advanceReadEpoch(serverId);
     const pending: Array<Promise<void>> = [];
     for (const readControllers of mountedSessionListQueryReaders) {
         const target = readControllers().get(serverId);
@@ -75,6 +91,11 @@ export function subscribeSessionListQueryHomeInvalidation(
     const unsubscribeAccountChanges = subscribeHomeAccountChange((event) => {
         const invalidation = resolveSessionListQueryInvalidationForAccountChange(event);
         if (invalidation === 'none') return;
+        // Each mounted corpus hears the same event; the Home's reads start a new generation once.
+        if (!invalidationsCounted.has(event)) {
+            invalidationsCounted.add(event);
+            advanceReadEpoch(event.serverId);
+        }
         const target = readControllers().get(event.serverId);
         if (!target) return;
         void (invalidation === 'structural' ? target.invalidate('structural') : target.invalidate());

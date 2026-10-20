@@ -98,8 +98,8 @@ describe('sessionListQueryRuntime', () => {
             { route: 'active' },
             { route: 'secondary' },
         ]);
-        expect(fetchActivePageSpy).toHaveBeenCalledWith('home-a', page);
-        expect(fetchConcurrentPageSpy).toHaveBeenCalledWith('home-b', page);
+        expect(fetchActivePageSpy).toHaveBeenCalledWith('home-a', { ...page, signal: expect.any(AbortSignal) });
+        expect(fetchConcurrentPageSpy).toHaveBeenCalledWith('home-b', { ...page, signal: expect.any(AbortSignal) });
     });
 
     it('does not route a torn-down applied Home through the singleton while another Home applies', async () => {
@@ -140,7 +140,7 @@ describe('sessionListQueryRuntime', () => {
 
         expect(fetchActivePageSpy).not.toHaveBeenCalled();
         expect(retryActiveServerConnectionSpy).not.toHaveBeenCalled();
-        expect(fetchConcurrentPageSpy).toHaveBeenCalledWith('home-a', page);
+        expect(fetchConcurrentPageSpy).toHaveBeenCalledWith('home-a', { ...page, signal: expect.any(AbortSignal) });
         expect(retryConcurrentHomeSpy).toHaveBeenCalledWith('home-a');
 
         getAppliedActiveServerSnapshotSpy.mockReturnValue({

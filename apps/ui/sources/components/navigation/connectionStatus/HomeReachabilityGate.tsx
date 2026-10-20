@@ -69,14 +69,19 @@ function subscribeAppliedHomeSummary(listener: () => void): () => void {
  * right after sign-in, a restart or a network change. A read that fails in that gap has not settled
  * into a failure; it reads as loading and is read again once the Home answers or is declared unreachable.
  */
-export function useActiveHomeSettling(homeServerId?: string): boolean {
+export function useSettlingHomeServerId(): string | null {
     // Until the connection manager has applied the Home, the connection health owner reads it as connecting too.
     const settling = React.useSyncExternalStore(subscribeAppliedHomeSummary,
         () => !isAppliedActiveServerRuntimeAvailable() || readAppliedHomeSummaryKind() === 'reconnecting', () => false);
     const reportedServerId = useReportedHomeServerId();
+    return settling ? reportedServerId : null;
+}
+
+export function useActiveHomeSettling(homeServerId?: string): boolean {
+    const settlingServerId = useSettlingHomeServerId();
     // Only the Home this device uses has a connection summary; another Home's reads settle on their own.
-    return settling && (homeServerId === undefined
-        || (reportedServerId !== null && areServerProfileIdentifiersEquivalent(homeServerId, reportedServerId)));
+    return settlingServerId !== null && (homeServerId === undefined
+        || areServerProfileIdentifiersEquivalent(homeServerId, settlingServerId));
 }
 
 /**
