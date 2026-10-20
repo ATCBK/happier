@@ -127,6 +127,12 @@ text does not prove an empty diff or a binary file. A failed page retains usable
 earlier evidence, and a changed base/head requires refresh rather than combining
 different versions into one exact comparison.
 
+GitLab merge requests use the same development comparison surface with the
+selected Connected Account for that deployment. File pages retain their pinned
+merge-base, target and head references. If GitLab reports a capped change count
+or omits patch content, the inventory or content remains explicitly incomplete;
+it is not presented as a clean or empty comparison.
+
 Reading this evidence does not checkout the PR into your worktree. A PR
 comparison can explain or inform a review, but cannot authorize local commit
 proposals. When a Session comparison is bound to that PR source, Files and
@@ -134,8 +140,9 @@ Walkthrough use the captured PR evidence, not the local pending diff. Missing
 patches and stale evidence remain visible. Reopening a pinned comparison reads
 the saved evidence rather than silently capturing a newer PR version.
 
-Development source adds **Walk through** to PR details in PRs & Issues. It uses a
-linked Session when its workspace is reachable; otherwise it asks for placement
+Development source adds **Walk through** to PR and GitLab merge-request details
+in PRs & Issues. It uses a linked Session when its workspace is reachable;
+otherwise it asks for placement
 through New Session. Reading uses a reference-only Session, without checking out
 the PR or sending a prompt. **Start review** still uses its isolated review
 workspace and selects walkthrough output by default. If comparison evidence is

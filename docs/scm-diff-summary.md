@@ -539,6 +539,21 @@ canonical occurrence references. A changed endpoint during pagination retains
 the earlier prefix as stale/incomplete rather than appending another code basis.
 Missing patch text remains unknown binary/content evidence, not an empty diff.
 
+In unreleased 0.3 development source, GitLab merge requests use the same host
+comparison reader through their existing Changes Action with `comparison: true`.
+The repository locator includes the normalized deployment so identically named
+projects and merge requests on different GitLab instances cannot share a scope.
+The source pins `diff_refs.base_sha` as the before endpoint, `start_sha` as the
+target witness and `head_sha` as the after endpoint; its native head must agree.
+Each page is bracketed by identity-checked metadata reads. Continuations retain
+the pinned tuple and cumulative coverage, and stay inside the selected diff
+resource. A changed tuple stops the walk as stale rather than mixing versions.
+GitLab's capped or unpopulated `changes_count` becomes an unknown total (`null`),
+which the host accepts only as incomplete inventory. Missing, collapsed,
+too-large and unproven patch content stays explicitly incomplete. The existing
+Action response byte boundary can omit patch text while retaining file identities.
+These are source contracts; loaded GitLab tenant verification is separate.
+
 Files reads PR, branch and commit evidence through the same capture operation,
 without a current-checkout diff fallback. Supplying `comparisonId` reads that
 retained comparison through `readCapturedScmComparison`; it never recaptures.
