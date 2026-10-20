@@ -19,3 +19,14 @@ export function resolveAccountActorPresentation(actor: TranscriptAccountActor, v
         },
     };
 }
+
+/** The transcript's byline visibility policy, shared by turn attribution surfaces. */
+export function resolveVisibleAccountActorPresentation(input: Readonly<{
+    actor: TranscriptAccountActor | null | undefined;
+    viewerScope: ServerAccountScope | null;
+    hasOtherNamedCollaborator: boolean;
+}>) {
+    if (!input.actor || !input.viewerScope) return null;
+    const presentation = resolveAccountActorPresentation(input.actor, input.viewerScope);
+    return presentation.isSelf && !input.hasOtherNamedCollaborator ? null : presentation;
+}

@@ -6,7 +6,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
+import { resolveVisibleAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import { t } from '@/text';
 
 export type SessionMessageAccountBylineProps = Readonly<{
@@ -17,10 +17,9 @@ export type SessionMessageAccountBylineProps = Readonly<{
 }>;
 
 export function SessionMessageAccountByline(props: SessionMessageAccountBylineProps) {
-    const { actor, viewerScope } = props;
-    if (!actor || !viewerScope) return null;
-    const { isSelf, name, avatar } = resolveAccountActorPresentation(actor, viewerScope);
-    if (isSelf && !props.hasOtherNamedCollaborator) return null;
+    const presentation = resolveVisibleAccountActorPresentation(props);
+    if (!presentation) return null;
+    const { name, avatar } = presentation;
     return (
         <View style={styles.byline}>
             <Text
