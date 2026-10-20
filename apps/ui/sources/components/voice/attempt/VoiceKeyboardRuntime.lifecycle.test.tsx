@@ -34,6 +34,10 @@ installDisconnectedServerSocketBoundary();
 const sdk = vi.hoisted(() => ({ startSession: vi.fn() }));
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
+// Decline any unexpected dialog: ordinary drawn/keyboard controls must start directly.
+vi.mock('@/modal', async () => (
+    await import('@/dev/testkit/mocks/modal')
+).createModalModuleMock({ confirmResult: false }).module);
 
 // Dimensions are the platform boundary; feature decisions, target resolution and admission stay real.
 vi.mock('react-native', async () => {
@@ -219,6 +223,8 @@ describe('Voice default-target lifecycle', () => {
             await act(async () => { expect(toggle()).toBe(true); });
             await act(async () => vi.waitFor(() => expect(getVoiceSessionSnapshot().status).toBe('connected')));
             expect(starts.at(-1)).toEqual(expected);
+            const { Modal } = await import('@/modal');
+            expect(Modal.confirm).not.toHaveBeenCalled();
             // Remove the runtime while keeping the command provider and its caller alive.
             // Calling a hook closure after its entire provider unmounted is not a product flow.
             await screen.update(<KeyboardShortcutProvider handlers={{}}><Invoke /></KeyboardShortcutProvider>);

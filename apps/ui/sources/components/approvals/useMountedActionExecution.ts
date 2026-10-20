@@ -81,6 +81,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
             ...(operation?.executionRunTargetMachineId ? { executionRunTargetMachineId: operation.executionRunTargetMachineId } : {}),
             ...(operation?.executionRunLaunchOrigin ? { executionRunLaunchOrigin: operation.executionRunLaunchOrigin } : {}),
             ...(operation?.externalActionTarget ? { externalActionTarget: operation.externalActionTarget } : {}),
+            ...(operation?.openRoute ? { openRoute: operation.openRoute } : {}),
         });
         if (!result.ok) return result;
         const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
@@ -93,6 +94,9 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
                 options?.onApprovalPending?.(registration);
             },
         });
+        } catch (error) {
+            if (!isCurrent()) return retired();
+            throw error;
         } finally { cancellation.dispose(); }
     }, [approval.requestApproval, binding, frontDoor, frontDoorOptions, isCurrent, lifetime, options?.onApprovalPending, options?.retainInvocation, scope]);
     /** Value-parsing clients unwrap only the terminal receipt delivered by this same mounted owner. */
