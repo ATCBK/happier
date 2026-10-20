@@ -7,6 +7,7 @@
  * this subpath rather than eagerly traversing that UI surface.
  */
 export * from './ui/sourcePanelProtocol.js';
+export { scanTriageSelectedScopeUnitsV1 } from './paging/selectedScopes.js';
 export {
   readTriageSourceAccountListingV1,
   type TriageSourceAccountListerV1,
