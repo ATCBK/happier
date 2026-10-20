@@ -607,6 +607,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [
       {
@@ -1102,6 +1103,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
@@ -2637,6 +2639,7 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
@@ -3267,6 +3270,7 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "languageServers": [],
     "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
