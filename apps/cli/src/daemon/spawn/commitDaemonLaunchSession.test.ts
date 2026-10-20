@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import { SessionInitialAccessServerError } from '@/api/session/sessionCreationInitialAccess';
-import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, SessionInitialTriggerAdmissionV1Schema, snapshotSessionRolesAtSpawnV1, readSessionWorkspaceWritesV1 } from '@happier-dev/protocol';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
@@ -79,6 +79,37 @@ function plainSessionRow(id: string, metadata: Record<string, unknown>) {
 }
 
 describe('commitDaemonLaunchSession', () => {
+  it('commits a brokered Provider-model slot and carries only the Home witness through attach', async () => {
+    const binding = { v: 1 as const, slot: { kind: 'provider_model' as const }, resourceId: 'accepted-resource',
+      expectedResourceRevision: 3, deliveryMode: 'brokered' as const, teamId: 'team-1' };
+    const options = { directory: '/repo', teamCredentialBindings: [binding] };
+    expect(daemonLaunchRequiresCommittedSession(options)).toBe(true);
+    const getOrCreateSession = vi.fn(async (input: { metadata: Record<string, unknown> }) => ({
+      id: 'session-brokered', metadata: input.metadata,
+      sessionCreationOutcome: { disposition: 'rejoined' as const, organizationPlacement: { folderId: null, tagIds: [] } },
+    }));
+    network.fetchSessionByIdCompat.mockImplementation(async () => ({
+      ...plainSessionRow('session-brokered', getOrCreateSession.mock.calls[0]![0].metadata),
+      acceptedTeamCredentialBinding: { ...binding, resourceId: 'original-resource' },
+    }));
+    const result = await commitDaemonLaunchSession({ api: { getOrCreateSession } as never, credentials,
+      directory: '/repo', options, accountSettings: {} });
+    expect(result).toMatchObject({ ok: true, session: { created: false, attachPayload: { snapshot: {
+      acceptedTeamCredentialBinding: { ...binding, resourceId: 'original-resource' },
+    } } } });
+    if (result.ok) expect(withoutFreshSessionCreationFields(result.session.options)).not.toHaveProperty('teamCredentialBindings');
+  });
+  it('refuses a Team model launch when the Home supplies no accepted inference witness', async () => {
+    const getOrCreateSession = vi.fn(async (input: { metadata: Record<string, unknown> }) => ({
+      id: 'session-no-witness', metadata: input.metadata,
+      sessionCreationOutcome: { disposition: 'rejoined' as const, organizationPlacement: { folderId: null, tagIds: [] } },
+    }));
+    network.fetchSessionByIdCompat.mockImplementation(async () => plainSessionRow('session-no-witness', getOrCreateSession.mock.calls[0]![0].metadata));
+    const result = await commitDaemonLaunchSession({ api: { getOrCreateSession } as never, credentials, directory: '/repo', accountSettings: {},
+      options: { directory: '/repo', teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, resourceId: 'unaccepted',
+        expectedResourceRevision: 1, deliveryMode: 'brokered', teamId: 'team-1' }] } });
+    expect(result).toMatchObject({ ok: false, result: { errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED } });
+  });
   it('requires server birth admission for Discussion participants before a native runner is started', () => {
     const discussionParticipant = { discussionId: 'discussion', participantSlotId: 'slot' };
     const discussionParticipantLaunch = { executionTarget: { serverId: 'home', machineId: 'machine-1' },
