@@ -62,6 +62,42 @@ describe('workspace Action intent adapter', () => {
         expect(execute(actionId, name === 'workspace.tabs.close_all' ? { groupId: 'missing' } : { tabId: 'missing' }))
             .toMatchObject({ ok: false, errorCode: name === 'workspace.tabs.close_all' ? 'workspace_group_not_found' : 'workspace_tab_not_found' });
     });
+    it('opens an exact Session file Find through the private handoff without leaking or retargeting the query', () => {
+        let state = createWorkspaceState({ id: 'a', target: { kind: 'session', params: { id: 'session-a', serverId: 'home-a' } }, pinned: false, preview: false });
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
+            dispatch: action => { state = reduceWorkspaceState(state, action); }, transport: { commit: () => {} },
+            createId: () => 'new', onChange: () => {} });
+        const handoff = createFileFindSeedHandoff();
+        const authority: ServerAccountScopeLifetime = { scope: { serverId: 'home-a', accountId: 'account' },
+            isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null,
+            createId: () => 'new', chatFind: { handoff, resolveAuthority: serverId => serverId === 'home-a' ? authority : null } });
+        const file = { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' }, path: 'src/index.ts' };
+        const find = { query: 'private session needle', options: { matchCase: true, regex: false }, target: {
+            kind: 'session-file', sessionId: 'session-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', path: file.path,
+        } };
+        const destination = { host: 'session' as const, id: 'session-a', path: file.path,
+            scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } };
+        try {
+            expect(execute('workspace.tabs.open', { file, find, mode: 'preview' })).toEqual({ ok: true });
+            expect(handoff.takeCurrent(destination)?.seed).toEqual({ query: find.query, options: find.options,
+                target: { kind: 'file', path: file.path } });
+            expect(JSON.stringify(state)).not.toContain(find.query);
+            for (const target of [
+                { ...find.target, sessionId: 'another-session' },
+                { ...find.target, serverId: 'another-home' },
+                { ...find.target, path: 'another.ts' },
+            ]) {
+                const before = state;
+                expect(execute('workspace.tabs.open', { file, find: { ...find, target } }))
+                    .toMatchObject({ ok: false, errorCode: 'workspace_find_unavailable' });
+                expect(state).toBe(before);
+                expect(handoff.peekCurrent(destination)).toBeNull();
+            }
+        } finally { handoff.dispose(); }
+    });
+
     it('opens an exact Project file Find through the private handoff without putting the query in navigation state', () => {
         let state = createWorkspaceState({ id: 'a', target: { kind: 'session', params: { id: 'a', serverId: 'home-a' } }, pinned: false, preview: false });
         const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
@@ -78,6 +114,10 @@ describe('workspace Action intent adapter', () => {
             kind: 'project-file' as const, workspaceRefId: 'wr_1', serverId: 'home-a', machineId: 'machine-a',
             rootPath: '/repo', path: 'src/index.ts',
         } };
+        expect(execute('workspace.tabs.open', { href, find: { ...find, target: { ...find.target, path: 'another.ts' } } }))
+            .toMatchObject({ ok: false, errorCode: 'workspace_find_unavailable' });
+        expect(handoff.peekCurrent({ host: 'project', id: 'wr_1', path: 'another.ts',
+            scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } })).toBeNull();
         expect(execute('workspace.tabs.open', { href, find })).toEqual({ ok: true });
         expect(handoff.takeCurrent({ host: 'project', id: 'wr_1', path: 'src/index.ts',
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' } })?.seed)

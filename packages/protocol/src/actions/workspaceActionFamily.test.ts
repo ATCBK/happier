@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
-import { WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, WORKSPACE_ACTION_SPECS } from './workspaceActionFamily.js';
+import { WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, WORKSPACE_ACTION_SPECS, isSafeWorkspaceFilePath } from './workspaceActionFamily.js';
 import { getActionSpec } from './actionSpecs.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('workspace client actions', () => {
+  it('admits a literal selected tilde entry without interpreting general home shorthand', () => {
+    expect(isSafeWorkspaceFilePath('~notes.txt')).toBe(true);
+    expect(isSafeWorkspaceFilePath('~')).toBe(false);
+    expect(isSafeWorkspaceFilePath('~/notes.txt')).toBe(false);
+    for (const path of ['../outside', 'src/../../outside', '/etc/passwd', 'C:/outside', 'src\\outside', 'src/./note', 'src\0note']) {
+      expect(isSafeWorkspaceFilePath(path)).toBe(false);
+    }
+  });
   it('opens root-relative files through one addressed file arm, including splits and private Find', () => {
     const open = WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.tabs.open'];
     const file = { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' }, path: 'src/a.ts',
@@ -21,6 +29,9 @@ describe('workspace client actions', () => {
     const project = { target: { kind: 'project', workspaceRefId: 'workspace-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, path: 'src/a.ts' };
     const find = { query: 'needle', target: { ...project.target, kind: 'project-file', path: project.path } };
     expect(open.safeParse({ file: project, find }).success).toBe(true);
+    expect(open.safeParse({ file, find: { query: 'needle', target: {
+      kind: 'session-file', sessionId: 'session-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', path: file.path,
+    } } }).success).toBe(true);
     expect(WORKSPACE_ACTION_SPECS.find(spec => spec.id === 'workspace.tabs.open')).toMatchObject({ safety: 'safe', approval: { result: 'required' } });
   });
   it('discovers strict pane-scoped bulk closes with user-configurable approval', () => {

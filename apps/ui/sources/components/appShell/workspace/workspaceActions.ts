@@ -7,6 +7,8 @@ import { createWorkspaceSplit } from './workspaceSplit';
 import type { FileFindSeedHandoff } from '../panes/fileFindSeedHandoff';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
+import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { readProjectFileRouteTarget } from '@/components/projects/detail/projectRouteState';
 
 export type WorkspaceActionOutcome = Readonly<{ ok: true }> | WorkspaceTabsListOutput | WorkspaceClosedTabsListOutput
     | Readonly<{ ok: true; url: string }>
@@ -126,7 +128,7 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                     if (data.find) {
                         const target = input.navigation.resolveOpenTarget(data.href);
                         const findTarget = data.find.target;
-                        const serverId = findTarget.kind === 'project-file' ? findTarget.serverId : target?.params.serverId;
+                        const serverId = findTarget.kind === 'native-message' ? target?.params.serverId : findTarget.serverId;
                         const authority = serverId ? input.chatFind?.resolveAuthority(serverId) : null;
                         if (!input.chatFind || !authority?.isCurrent()
                             || (target?.params.accountId && target.params.accountId !== authority.scope.accountId)) {
@@ -137,10 +139,17 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                             cancelFind = input.chatFind.handoff.stageChat({ sessionId: target.params.id,
                                 serverId: authority.scope.serverId, accountId: authority.scope.accountId }, { ...data.find, target: findTarget }, authority);
                         } else {
-                            if (target?.kind !== 'project' || target.params.workspaceRefId !== findTarget.workspaceRefId
-                                || (target.params.serverId && target.params.serverId !== findTarget.serverId)
+                            const isSession = findTarget.kind === 'session-file';
+                            const addressedFile = isSession
+                                ? target?.kind === 'session' ? parseSessionPaneUrlState(target.params)?.details : null
+                                : target?.kind === 'project' ? readProjectFileRouteTarget(target.params) : null;
+                            if (addressedFile?.kind !== 'file' || addressedFile.path !== findTarget.path
+                                || (isSession ? target?.kind !== 'session' || target.params.id !== findTarget.sessionId
+                                    : target?.kind !== 'project' || target.params.workspaceRefId !== findTarget.workspaceRefId)
+                                || (target?.params.serverId && target.params.serverId !== findTarget.serverId)
                                 || authority.scope.serverId !== findTarget.serverId) return workspaceActionFailure('workspace_find_unavailable');
-                            cancelFind = input.chatFind.handoff.stage({ host: 'project', id: findTarget.workspaceRefId,
+                            cancelFind = input.chatFind.handoff.stage({ host: isSession ? 'session' : 'project',
+                                id: isSession ? findTarget.sessionId : findTarget.workspaceRefId,
                                 accountId: authority.scope.accountId, scope: { serverId: findTarget.serverId,
                                     machineId: findTarget.machineId, rootPath: findTarget.rootPath }, path: findTarget.path },
                             { query: data.find.query, options: data.find.options ?? { matchCase: false, regex: false },

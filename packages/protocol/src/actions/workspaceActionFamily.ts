@@ -20,7 +20,7 @@ const id = z.string().check(z.trim(), z.minLength(1));
 /** Root-relative file addressing is shared by Action ingress and pane URL readers. */
 export function isSafeWorkspaceFilePath(path: string): boolean {
   return path.length > 0 && !path.includes('\0') && !path.includes('\\')
-    && !path.startsWith('/') && !path.startsWith('~') && !/^[A-Za-z]:/.test(path)
+    && !path.startsWith('/') && path !== '~' && !path.startsWith('~/') && !/^[A-Za-z]:/.test(path)
     && !path.includes('//') && !path.split('/').some(segment => segment === '.' || segment === '..');
 }
 
@@ -54,8 +54,17 @@ export const WorkspaceProjectFileFindSeedSchema = lazyZodSchema(() => z.strictOb
     anchor: z.optional(WorkspaceAnchorV1Schema),
   }),
 }));
+export const WorkspaceSessionFileFindSeedSchema = lazyZodSchema(() => z.strictObject({
+  query: z.string().check(z.minLength(1)), options: z.optional(FindOptionsSchema),
+  target: z.strictObject({
+    kind: z.literal('session-file'), sessionId: id, serverId: id, machineId: id,
+    rootPath: z.string().check(z.minLength(1)),
+    path: z.string().check(z.refine(isSafeWorkspaceFilePath, { message: 'A workspace-relative file path is required' })),
+    anchor: z.optional(WorkspaceAnchorV1Schema),
+  }),
+}));
 export const WorkspaceFindSeedSchema = lazyZodSchema(() => z.union([
-  WorkspaceChatFindSeedSchema, WorkspaceProjectFileFindSeedSchema,
+  WorkspaceChatFindSeedSchema, WorkspaceProjectFileFindSeedSchema, WorkspaceSessionFileFindSeedSchema,
 ]));
 export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
   'workspace.files.link.get': WorkspaceFileOpenInputSchema,
@@ -149,7 +158,7 @@ const inputFields = {
   'workspace.tabs.open': [
     { path: 'href', title: 'Destination', widget: 'text' }, { ...tabIdHint, required: false },
     { path: 'file', title: 'Workspace file', widget: 'json', description: 'Session or Project target, workspace-relative path, optional anchor, view, blame and Changes scope. Exclusive with href.' },
-    { path: 'find', title: 'Find target', widget: 'json', description: 'Query/options and an exact Session message or Project file target. Private launch input; not persisted in the URL or tab.' },
+    { path: 'find', title: 'Find target', widget: 'json', description: 'Query/options and an exact Session message, Session file or Project file target. Private launch input; not persisted in the URL or tab.' },
     { ...groupIdHint, required: false }, beforeTabHint,
     { path: 'reuseExisting', title: 'Go to an existing tab', widget: 'boolean' },
     { path: 'mode', title: 'Opening mode', widget: 'select', options: [
