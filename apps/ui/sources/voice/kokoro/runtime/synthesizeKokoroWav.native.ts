@@ -421,9 +421,7 @@ export async function prepareKokoroTts(
       manifestUrl,
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
-      onProgress: (p) => {
-        opts.onProgress?.({ loaded: p.loaded, total: p.total, file: (p as any)?.file });
-      },
+      onProgress: opts.onProgress,
     },
     { fs: fs as any },
   );

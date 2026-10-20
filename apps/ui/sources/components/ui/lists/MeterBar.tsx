@@ -60,9 +60,12 @@ function AnimatedMeterFill(props: Readonly<{ percentage: number; color: string; 
             value.setValue(fraction);
             return;
         }
+        // Transfers report progress every ~100ms and each report restarts this animation. A decelerating
+        // curve then lurches and stalls on every report; a linear glide spanning a few reports reads as
+        // one continuous motion.
         const animation = Animated.timing(value, {
-            toValue: fraction, duration: motionTokens.durationMs.fast,
-            easing: motionTokens.easing.standard, useNativeDriver: Platform.OS !== 'web',
+            toValue: fraction, duration: motionTokens.durationMs.slow,
+            easing: motionTokens.easing.linear, useNativeDriver: Platform.OS !== 'web',
         });
         animation.start();
         return () => animation.stop();

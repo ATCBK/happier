@@ -43,6 +43,31 @@ function runInstall(
 }
 
 describe('installModelPackWithHost (shared core)', () => {
+  it('withdraws rejected existing bytes before downloading their replacement', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const memory = createMemoryModelPackInstallerHost();
+    const url = 'https://example.com/model.onnx';
+    const manifest = manifestFor([
+      { path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length },
+    ]);
+    memory.seedPartialDownload('example/model.onnx', new Uint8Array(bytes.length).fill(9), deriveModelPackStagingPlan(manifest).key);
+    memory.serveFile(url, bytes, { chunks: [bytes.slice(0, 2), bytes.slice(2)] });
+    const progress: unknown[] = [];
+    let replacementStartedAt: unknown;
+    await installModelPackWithHost({
+      host: { ...memory.host, openDownload: async request => {
+        replacementStartedAt = progress.at(-1);
+        return memory.host.openDownload(request);
+      } },
+      packId: manifest.packId, manifest, signal: new AbortController().signal,
+      onProgress: event => progress.push(event),
+    });
+    expect(replacementStartedAt).toMatchObject({ loaded: 0, verified: 0, filesDone: 0 });
+    expect(progress).toContainEqual(expect.objectContaining({ loaded: 2, verified: 2, filesDone: 0 }));
+    expect(progress.at(-1)).toMatchObject({ loaded: bytes.length, verified: bytes.length, filesDone: 1 });
+    expect(memory.read('example/model.onnx')).toEqual(bytes);
+  });
+
   it.each([0, 2])('keeps progress monotonic when transport completes before verification with prefix %i', async (prefixLength) => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const host = createMemoryModelPackInstallerHost();
@@ -708,6 +733,78 @@ describe('model-pack transfer intents from PR 560', () => {
     await expect(installModelPackWithHost({ host: { ...memory.host, openDownload: async () => { attempts += 1; throw failure; } },
       packId: 'example', manifest: manifestFor([{ path: 'model.bin', url: 'https://example.com/model', sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: new AbortController().signal })).rejects.toBe(failure);
     expect(attempts).toBe(1);
+  });
+
+  it('reports verification progress after the transfer has delivered every byte', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const url = 'https://example.com/model.onnx';
+    memory.serveFile(url, bytes, { chunks: [bytes.slice(0, 2), bytes.slice(2, 4), bytes.slice(4)] });
+    const progress: Array<{ loaded: number; verified: number; filesDone: number }> = [];
+    await installModelPackWithHost({
+      host: { ...memory.host, openDownload: async (request) => {
+        // Native hosts finish the transfer before the core reads the file back to verify it.
+        request.onProgress?.(bytes.length);
+        return memory.host.openDownload(request);
+      } },
+      packId: 'example', manifest: manifestFor([{ path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal,
+      onProgress: (p) => { progress.push({ loaded: p.loaded, verified: p.verified, filesDone: p.filesDone }); },
+    });
+    expect(progress.some((p) => p.loaded === bytes.length && p.verified > 0 && p.verified < bytes.length && p.filesDone === 0)).toBe(true);
+    expect(progress.at(-1)).toEqual({ loaded: bytes.length, verified: bytes.length, filesDone: 1 });
+  });
+
+  it('keeps verification progress monotonic when a retry rehashes the kept prefix', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const url = 'https://example.com/model.onnx';
+    memory.serveFile(url, bytes);
+    let opened = 0;
+    const verified: number[] = [];
+    await installModelPackWithHost({
+      host: { ...memory.host, beginStaging: async (packId, plan) => {
+        const handle = await memory.host.beginStaging(packId, plan);
+        // Real hosts read the kept prefix back in bounded chunks rather than in one buffer.
+        return { ...handle, streamPartial: (filePath, onChunk) => handle.streamPartial(filePath, async (chunk) => {
+          for (let offset = 0; offset < chunk.byteLength; offset += 1) await onChunk(chunk.slice(offset, offset + 1));
+        }) };
+      }, openDownload: async (request) => {
+        opened += 1;
+        if (opened > 1) return memory.host.openDownload({ ...request, url });
+        const chunks = [bytes.slice(0, 2), bytes.slice(2, 4)];
+        return { contentLength: bytes.length, isPartial: false, read: async () => {
+          const chunk = chunks.shift();
+          if (!chunk) throw new Error('model_pack_download_failed:503');
+          return chunk;
+        } };
+      } },
+      packId: 'example', manifest: manifestFor([{ path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal,
+      onProgress: (p) => { verified.push(p.verified); },
+    });
+    expect(opened).toBe(2);
+    expect(verified).toEqual([...verified].sort((a, b) => a - b));
+    expect(verified.at(-1)).toBe(bytes.length);
+  });
+
+  it('starts the largest files first so they transfer alongside the small ones', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const small = new Uint8Array([1]);
+    const medium = new Uint8Array(16).fill(2);
+    const large = new Uint8Array(64).fill(3);
+    const smallFiles = Array.from({ length: 8 }, (_, index) => ({
+      path: `espeak-ng-data/f${index}`, url: `https://example.com/f${index}`, sha256: sha256Hex(small), sizeBytes: small.length,
+    }));
+    for (const entry of smallFiles) memory.serveFile(entry.url, small);
+    memory.serveFile('https://example.com/large', large);
+    memory.serveFile('https://example.com/medium', medium);
+    await runInstall(memory, manifestFor([
+      ...smallFiles,
+      { path: 'model.onnx', url: 'https://example.com/large', sha256: sha256Hex(large), sizeBytes: large.length },
+      { path: 'voices.bin', url: 'https://example.com/medium', sha256: sha256Hex(medium), sizeBytes: medium.length },
+    ]));
+    expect(memory.requestedUrls().slice(0, 2)).toEqual(['https://example.com/large', 'https://example.com/medium']);
   });
 
   it('reports file counts only after the file has verified', async () => {

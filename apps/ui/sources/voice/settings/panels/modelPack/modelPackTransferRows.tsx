@@ -38,32 +38,63 @@ export function readPartialDownloadBytes(summary: Readonly<{ installed: boolean;
     return summary.partialBytes ?? 0;
 }
 
-function ModelPackProgressBar(props: Readonly<{ progress: number }>) {
+function ModelPackProgressBar(props: Readonly<{ progress: number; accessibilityLabel: string }>) {
     const { theme } = useUnistyles();
     return <MeterBar tone="neutral" height={4} animated fillFraction={props.progress}
         fillColor={theme.colors.text.link}
-        progressAccessibilityLabel={t('settingsVoice.local.modelPackDownload.progressAccessibilityLabel')} />;
+        progressAccessibilityLabel={props.accessibilityLabel} />;
+}
+
+function progressSubtitle(
+    phase: 'download' | 'verify',
+    fraction: number,
+    accessibilityLabel: string,
+    line: string,
+): React.ReactNode {
+    // Item renders the string with its own subtitle typography below the bar.
+    return (
+        <>
+            <View style={styles.bar}>
+                {/* The bar's meaning changes between phases; a fresh bar starts at the new value instead of
+                    gliding backward from a full download bar to the verification still in progress. */}
+                <ModelPackProgressBar key={phase} progress={fraction} accessibilityLabel={accessibilityLabel} />
+            </View>
+            {line}
+        </>
+    );
 }
 
 function describeDownloading(progress: unknown): ModelPackRowPresentation {
     const info = parseDownloadProgress(progress);
     const detail = info.percent != null ? `${info.percent}%` : t('settingsVoice.local.kokoro.modelStatus.downloading');
     if (!info.bytes) return { detail, subtitle: null };
-    const loaded = formatStorageBytes(info.bytes.loaded);
     const total = formatStorageBytes(info.bytes.total);
+    // Every byte has arrived but files are still being hashed: large files take a while to check, so show
+    // that work instead of a download stuck at 100%.
+    if (info.files && info.verifiedBytes != null && info.bytes.loaded >= info.bytes.total && info.files.done < info.files.total) {
+        return {
+            detail: t('settingsVoice.local.modelPackDownload.verifyingDetail'),
+            subtitle: progressSubtitle(
+                'verify',
+                info.verifiedBytes / info.bytes.total,
+                t('settingsVoice.local.modelPackDownload.verifyingAccessibilityLabel'),
+                t('settingsVoice.local.modelPackDownload.verifyingProgress', {
+                    verified: formatStorageBytes(info.verifiedBytes), total, filesDone: info.files.done, filesTotal: info.files.total,
+                }),
+            ),
+        };
+    }
+    const loaded = formatStorageBytes(info.bytes.loaded);
     const line = info.files
         ? t('settingsVoice.local.modelPackDownload.progressWithFiles', { loaded, total, filesDone: info.files.done, filesTotal: info.files.total })
         : t('settingsVoice.local.modelPackDownload.progress', { loaded, total });
     return {
         detail,
-        // Item renders the string with its own subtitle typography below the bar.
-        subtitle: (
-            <>
-                <View style={styles.bar}>
-                    <ModelPackProgressBar progress={info.bytes.loaded / info.bytes.total} />
-                </View>
-                {line}
-            </>
+        subtitle: progressSubtitle(
+            'download',
+            info.bytes.loaded / info.bytes.total,
+            t('settingsVoice.local.modelPackDownload.progressAccessibilityLabel'),
+            line,
         ),
     };
 }
