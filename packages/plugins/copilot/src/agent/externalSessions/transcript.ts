@@ -110,14 +110,14 @@ export function projectCopilotEvent(value: unknown, offset: number, supported: b
   return BOOKKEEPING.has(record.type) ? null : unsupported();
 }
 
-export function copilotItemText(item: AgentExternalSessionTranscriptItem): string | null {
+export function copilotItemText(item: AgentExternalSessionsTranscriptPage['items'][number]): string | null {
   if (item.raw.role === 'user') return item.raw.content.text;
   const content = item.raw.content;
   if (!isRecord(content) || !isRecord(content.data)) return null;
   return content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message
     : content.data.type === 'tool-result' && typeof content.data.output === 'string' ? content.data.output : null;
 }
-export function isCopilotUnsupported(item: AgentExternalSessionTranscriptItem): boolean {
+export function isCopilotUnsupported(item: AgentExternalSessionsTranscriptPage['items'][number]): boolean {
   return item.localId === null;
 }
 

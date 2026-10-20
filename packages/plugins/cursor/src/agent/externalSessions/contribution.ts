@@ -30,7 +30,7 @@ function samePrefix(a: CursorFileWitness, b: CursorFileWitness) { return a.ident
 
 async function page(root: CursorNativeSource, request: AgentExternalSessionsPageTranscriptRequest): Promise<AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage>> {
   const file = await findFile(root, request.remoteSessionId, request.signal);
-  if (!file) return { ok: false, code: 'source_unavailable' };
+  if (!file) return { ok: false, code: 'candidate_not_found' };
   const metadata = await readCursorMetadata(file);
   if (!metadata.supported) return { ok: false, code: 'unsupported' };
   const previous = request.cursor ? decodeTranscriptCursor(request.cursor) : null;
@@ -67,6 +67,8 @@ async function page(root: CursorNativeSource, request: AgentExternalSessionsPage
   return result;
 }
 
+type ReadAfterTranscriptValue = Awaited<ReturnType<AgentExternalSessionsContribution['readAfterTranscript']>> extends AgentExternalSessionsResult<infer V> ? V : never;
+
 export const cursorExternalSessionsContribution: AgentExternalSessionsContribution = {
   resolveSource(request) { return run(request, async () => {
     const root = await resolveCursorNativeSource(request.source);
@@ -89,7 +91,7 @@ export const cursorExternalSessionsContribution: AgentExternalSessionsContributi
     const root = await resolveCursorNativeSource(request.source);
     if (!root) return { ok: false, code: 'source_invalid' };
     const file = await findFile(root, request.remoteSessionId, request.signal);
-    if (!file) return { ok: false, code: 'source_unavailable' };
+    if (!file) return { ok: false, code: 'candidate_not_found' };
     if (!(await readCursorMetadata(file)).supported) return { ok: false, code: 'unsupported' };
     return ok({ source: root.source, remoteSessionId: file.id, linkData: {} });
   }); },
@@ -98,7 +100,7 @@ export const cursorExternalSessionsContribution: AgentExternalSessionsContributi
     const root = await resolveCursorNativeSource(request.source);
     return root ? page(root, request) : { ok: false, code: 'source_invalid' };
   }); },
-  readAfterTranscript(request) { return run(request, async () => {
+  readAfterTranscript(request) { return run<ReadAfterTranscriptValue>(request, async () => {
     const root = await resolveCursorNativeSource(request.source);
     if (!root) return ok({ outcome: 'source_unavailable' as const });
     const previous = decodeTranscriptCursor(request.cursor);
