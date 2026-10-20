@@ -42,6 +42,7 @@ export type WalkthroughStop = Readonly<{
     number: number;
     title: string;
     explanationMarkdown: string;
+    suggestedQuestions?: ScmDiffSummaryWalkthrough['stops'][number]['suggestedQuestions'];
     /** Saved explanation blocks remain distinct from the narrator's prose. */
     reviewExplanations?: ScmDiffSummaryWalkthrough['stops'][number]['reviewExplanations'];
     importance: 'low' | 'medium' | 'high' | null;
@@ -304,6 +305,7 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
             ...progress.stops[index]!,
             number,
             explanationMarkdown: stop.explanationMarkdown,
+            suggestedQuestions: stop.suggestedQuestions,
             reviewExplanations: stop.reviewExplanations,
             importance: stop.importance ?? null,
             files,

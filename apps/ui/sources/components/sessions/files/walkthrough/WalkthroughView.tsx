@@ -97,7 +97,7 @@ export type WalkthroughViewProps = Readonly<{
   /** The matching Account record has loaded; unknown marks are not confirmed zero progress. */
   reviewedProgressAvailable?: boolean;
   /** Discuss with the generator; absent when it cannot take a turn. */
-  onAsk?: (stop: WalkthroughStop) => void;
+  onAsk?: (stop: WalkthroughStop, question?: string) => void;
   askingStopId?: string | null;
   onOpenFile?: (path: string) => void;
   onShowFiles?: () => void;

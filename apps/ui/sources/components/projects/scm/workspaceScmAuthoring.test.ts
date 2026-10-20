@@ -43,6 +43,15 @@ const result = ScmDiffSummaryResultSchema.parse({ resultId: 'saved-result', revi
 afterEach(resetSessionDraftRepositoryForTests);
 
 describe('workspace SCM ordinary authoring seed', () => {
+    it('carries a chosen stop question through the existing editable authoring seed', () => {
+        const question = 'Why does this change keep the earlier value?';
+        const seed = buildWorkspaceScmAuthoringSeed({ workspace, accountId: scope.accountId, comparison, result,
+            stopId: 'stop-one', question });
+        expect(seed?.prompt).toContain(question);
+        expect(seed?.prompt).toContain('Saved explanation');
+        expect(seed?.prompt).not.toContain('+otherAfter');
+        expect(seed).toMatchObject({ placement: { kind: 'exactTarget', machineId: workspace.machineId } });
+    });
     it('captures the exact checkout and basis with only the selected stop authorized excerpts', () => {
         const seed = buildWorkspaceScmAuthoringSeed({ workspace, accountId: scope.accountId, comparison, result, stopId: 'stop-one' });
         expect(seed).not.toBeNull();

@@ -133,7 +133,7 @@ export type WalkthroughStopSectionProps = Readonly<{
     onToggleReviewed?: (stop: WalkthroughStop) => void;
     marksDisabledReason?: string | null;
     /** Discuss needs a generator that can take a turn; absent hides Ask. */
-    onAsk?: (stop: WalkthroughStop) => void;
+    onAsk?: (stop: WalkthroughStop, question?: string) => void;
     asking?: boolean;
     onOpenFile?: (path: string) => void;
     /** A review's finding chips, after the prose (lab WT5-R6). */

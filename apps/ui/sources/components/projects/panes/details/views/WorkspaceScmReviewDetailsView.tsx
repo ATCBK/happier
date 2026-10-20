@@ -91,7 +91,7 @@ export type WorkspaceScmReviewDetailsViewProps = Readonly<{
     /** The host's own mode control (the Project page's Review | Git), led into the comparison bar. */
     hostSwitch?: React.ReactNode;
     onSelectTarget?: (target: WorkspaceReviewTarget) => void;
-    onAsk?: (input: Readonly<{ comparison: ScmComparison; result: ScmDiffSummaryResult | null; stop: WalkthroughStop; isCurrent: () => boolean }>) => void;
+    onAsk?: (input: Readonly<{ comparison: ScmComparison; result: ScmDiffSummaryResult | null; stop: WalkthroughStop; question?: string; isCurrent: () => boolean }>) => void;
     onExplain?: (input: Readonly<{ comparison: ScmComparison; result: ScmDiffSummaryResult | null; isCurrent: () => boolean }>) => void;
 }>;
 
@@ -451,9 +451,10 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                         sessionId={props.host.sessionId} startedReviewRunIds={props.host.sessionId ? startedReviewRunIds : null}
                         comparison={comparison} scopeLabel={scopeLabel} scopeDetail={scopeDetail} layout={layout}
                         renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={(path) => props.onOpenFile?.(path)}
-                        onAskStop={bound.capturedComparison ? (stop) => {
+                        onAskStop={bound.capturedComparison ? (stop, question) => {
                             if (!readingIsCurrent() || !bound.capturedComparison) return;
-                            onAsk({ comparison: bound.capturedComparison, result: bound.viewModel?.savedResult ?? null, stop, isCurrent: readingIsCurrent });
+                            onAsk({ comparison: bound.capturedComparison, result: bound.viewModel?.savedResult ?? null, stop,
+                                ...(question ? { question } : {}), isCurrent: readingIsCurrent });
                         } : undefined} />
                 </View>}
                 renderFiles={(comparisonChrome) => comparison.kind !== 'workingTree' || comparison.comparisonId

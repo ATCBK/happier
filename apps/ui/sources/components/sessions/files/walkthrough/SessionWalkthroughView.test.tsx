@@ -175,6 +175,8 @@ const { AppPaneProvider } = await import('@/components/appShell/panes/AppPanePro
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
 const { ScmWalkthroughView } = await import('./ScmWalkthroughView');
+const { WalkthroughStopSection } = await import('./WalkthroughStopSection');
+const { getSessionComposerDraftSnapshot, writeExistingSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const initialStorage = getStorage().getState();
 const initialAppliedHome = getAppliedActiveServerSnapshot();
@@ -267,7 +269,7 @@ function generationCalls() {
     return boundary.calls.filter((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE);
 }
 
-async function mountWithAccountMarks(sessionId: string) {
+async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: string[]) {
     const before = 'a'.repeat(40);
     const after = 'b'.repeat(40);
     const comparison = { id: buildScmComparisonIdentity({ source: { kind: 'workingTree' }, repositoryRootPath: '/repo/exact',
@@ -280,9 +282,11 @@ async function mountWithAccountMarks(sessionId: string) {
     boundary.savedSessionId = sessionId;
     boundary.savedResult = ScmDiffSummaryResultSchema.parse({ resultId: `result:${sessionId}`, revision: 1, canUndo: false,
         output: { success: true, resultId: `result:${sessionId}`, revision: 1, sourceKey: comparison.id,
+            ...(suggestedQuestions ? { runId: 'question-generator' } : {}),
             metadata: { sourceKey: comparison.id, source: comparison.source }, requestedOutputs: ['walkthrough'], comparison,
             outputs: { walkthrough: { state: 'complete', value: { title: 'Retained reading', intro: '',
-                stops: [{ id: 'retained', title: 'Retained stop', importance: 'high', explanationMarkdown: 'The saved code remains readable.', changeRefs: ['captured-change'] }], otherChangeRefs: [] } } },
+                stops: [{ id: 'retained', title: 'Retained stop', importance: 'high', explanationMarkdown: 'The saved code remains readable.', changeRefs: ['captured-change'],
+                    ...(suggestedQuestions ? { suggestedQuestions } : {}) }], otherChangeRefs: [] } } },
             analysis: { suppliedChangeRefs: ['captured-change'], analysedChangeRefs: ['captured-change'], remainingChangeRefs: [] },
         } });
     let stored = encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: applyScmReviewedMarkIntent(boundary.savedResult.output.comparison!, null, [], true) });
@@ -323,6 +327,32 @@ async function mountWithAccountMarks(sessionId: string) {
 }
 
 describe('SessionWalkthroughView retained offline reading through real Account marks', () => {
+    it('prepares a suggested question in the existing Ask composer without discarding its draft', async () => {
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {
+            runId: 'question-generator', callId: 'question-call', sidechainId: 'question-sidechain', intent: 'scm_diff_summary',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
+            runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 100,
+            interaction: { kind: 'retained_agent_session.v1', capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+        } });
+        const question = 'Why keep the saved code after refresh?';
+        const sessionId = 'question-composer';
+        const { screen, home } = await mountWithAccountMarks(sessionId, [question]);
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-ask-retained')).toBeTruthy());
+        const scope = { serverId: home.id, accountId: 'walkthrough-account' };
+        const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+        await prepareSessionDraftPersistenceStorage();
+        writeExistingSessionDraft({ scope, sessionId, patch: { text: 'My pending question' } });
+        const section = screen.findByType(WalkthroughStopSection);
+        await act(async () => section.props.onAsk(section.props.stop, question));
+        const draft = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId });
+        expect(draft?.composer.text.value).toBe(`My pending question\n\n${question}`);
+        const target = draft?.document.target;
+        expect(target?.kind === 'session' && target.routing.recipient?.value).toMatchObject({ mode: 'scm_diff_summary',
+            recipient: { kind: 'execution_run', runId: 'question-generator' },
+            target: { cwd: '/repo/exact', resultId: `result:${sessionId}`, expectedRevision: 1, stopIds: ['retained'] },
+        });
+        expect(generationCalls()).toEqual([]);
+    });
     it('shows admitted review progress from a captured comparison destination before any saved narration exists', async () => {
         boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {
             runId: 'review-run', callId: 'review-call', sidechainId: 'review-sidechain', intent: 'review',
@@ -507,9 +537,15 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         expect(boundary.calls.filter(call => call.method.startsWith('scm.diffSummary.')).every(call => call.authorization === undefined)).toBe(true);
         const savedState = Object.values(getScmDiffSummaryState().entriesByKey).find((entry) => entry.savedResult?.resultId === 'workspace-saved');
         expect(savedState).toMatchObject({ sessionId: null, machineId: machine.id, input: { cwd: '/workspace/exact' } });
+        expect(savedState?.observedAtMs).toBeGreaterThan(0);
         await act(async () => getStorage().setState({ machines: {}, machineListByServerId: { [home.id]: [] } }));
         expect(screen.getTextContent()).toContain('My workspace title');
         expect(Boolean(screen.findHostByTestId('walkthrough-notice-offline'))).toBe(false);
+        const workspaceReading = screen.find(node => node.props.scopeLabel === 'Workspace'
+            && node.props.reading !== undefined && node.props.start !== undefined);
+        expect(workspaceReading.props.offline).toBeNull();
+        expect(Object.values(getScmDiffSummaryState().entriesByKey).find(entry => entry.savedResult?.resultId === 'workspace-saved')?.observedAtMs)
+            .toBe(savedState?.observedAtMs);
         await screen.update(<Workspace rootPath="/workspace/other" />);
         expect(screen.getTextContent()).not.toContain('My workspace title');
         expect(boundary.calls.filter((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT)).toEqual([
@@ -544,7 +580,16 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         expect(Object.values(getScmDiffSummaryState().entriesByKey).find(value => value.sessionId === 'offline-marks')?.observedAtMs).toBe(observedAtMs);
         await act(async () => getStorage().setState({ machines: {}, machineListByServerId: { [home.id]: [] } }));
         expect(screen.getTextContent()).toContain('Retained reading');
-        expect(Boolean(screen.findHostByTestId('walkthrough-notice-offline'))).toBe(false);
+        // The external presence store settles from unreachable to unknown when the row disappears.
+        // Unknown must not be presented as an offline witness or as a fresh code observation.
+        await vi.waitFor(() => {
+            const unlistedReading = screen.find(node => node.props.scopeLabel === 'Shown comparison'
+                && node.props.reading !== undefined && node.props.start !== undefined);
+            expect(unlistedReading.props.offline).toBeNull();
+            expect(screen.findHostByTestId('walkthrough-notice-offline')).toBeNull();
+        });
+        expect(Object.values(getScmDiffSummaryState().entriesByKey).find(value => value.sessionId === 'offline-marks')?.observedAtMs).toBe(observedAtMs);
+        expect(screen.findByTestId('walkthrough-mark-retained')?.props.disabled).toBe(false);
     }, 120_000);
 
     it('does not admit fresh machine evidence on activity while offline, and rereads the current revision on reconnect', async () => {

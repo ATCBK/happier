@@ -14,7 +14,7 @@ import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifica
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { resolveScmDiffSummaryDiscussionTarget } from '@/sync/domains/scm/diffSummary/discussion';
-import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionComposerDraftSnapshot, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
 import { ScmDiffSummaryStartOptions, scmDiffSummaryPrerequisiteOf, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
@@ -38,7 +38,7 @@ export type ScmWalkthroughViewProps = Readonly<{
     sessionId?: string;
     bound: ReturnType<typeof useScmDiffSummaryBinding>;
     displayMachineId: string | null;
-    onAskStop?: (stop: WalkthroughStop) => void;
+    onAskStop?: (stop: WalkthroughStop, question?: string) => void;
     serverId?: string | null;
     comparison: SessionScmReviewComparison | null;
     scopeLabel: string;
@@ -111,9 +111,11 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         if (!sessionId || !onOpenComposer || discussion?.kind !== 'continue' || !scope || !cwd || !viewModel?.savedResult) return props.onAskStop;
         const recipient = discussion.recipient;
         const saved = viewModel.savedResult;
-        return (stop: WalkthroughStop) => {
+        return (stop: WalkthroughStop, question?: string) => {
             if (!bound.isCurrent()) return;
-            writeExistingSessionDraft({ scope, sessionId, patch: { routing: { recipient: StrictJsonValueSchema.parse({ mode: 'scm_diff_summary', recipient,
+            const currentText = question ? getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId })?.composer.text.value ?? '' : '';
+            writeExistingSessionDraft({ scope, sessionId, patch: { ...(question ? { text: currentText ? `${currentText}\n\n${question}` : question } : {}),
+                routing: { recipient: StrictJsonValueSchema.parse({ mode: 'scm_diff_summary', recipient,
                 target: { cwd, resultId: saved.resultId, expectedRevision: saved.revision, stopIds: [stop.id] } }) } } });
             onOpenComposer();
         };

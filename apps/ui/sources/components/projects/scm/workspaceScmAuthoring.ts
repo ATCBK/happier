@@ -21,6 +21,7 @@ export function buildWorkspaceScmAuthoringSeed(input: Readonly<{
     comparison: ScmComparison;
     result: ScmDiffSummaryResult | null;
     stopId?: string;
+    question?: string;
 }>): PluginUiNewSessionSeedV1 | null {
     const { workspace, comparison, result } = input;
     if (normalizeWorkspaceRootPath(workspace.rootPath) !== normalizeWorkspaceRootPath(comparison.repository.rootPath)
@@ -44,7 +45,7 @@ export function buildWorkspaceScmAuthoringSeed(input: Readonly<{
         evidence,
     };
     return {
-        prompt: `${t(stop ? 'projects.review.askPrompt' : 'projects.review.explainPrompt')}\n\n${t('projects.review.capturedContext')}\n${JSON.stringify(context, null, 2)}${stop ? `\n\n${t('projects.review.question')}` : ''}`,
+        prompt: `${t(stop ? 'projects.review.askPrompt' : 'projects.review.explainPrompt')}\n\n${t('projects.review.capturedContext')}\n${JSON.stringify(context, null, 2)}${stop ? `\n\n${input.question ?? t('projects.review.question')}` : ''}`,
         placement: { kind: 'exactTarget', serverId: workspace.serverId, machineId: workspace.machineId, directory: workspace.rootPath },
         checkoutIntent: 'reuseWorkspace',
         origin: { kind: 'project', accountId: input.accountId, workspace, page: 'changes', comparisonId: comparison.id },
@@ -58,6 +59,7 @@ export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     comparison: ScmComparison;
     result: ScmDiffSummaryResult | null;
     stop?: WalkthroughStop;
+    question?: string;
     /** Exact displayed comparison/revision + mounted host lifetime, supplied by the review owner. */
     isCurrent: () => boolean;
     signal?: AbortSignal;
@@ -69,7 +71,8 @@ export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     if (!checkout) return { kind: 'unavailable', reason: 'origin_unavailable' };
     const workspace = workspaceAddressFromRefV1(checkout);
     const seed = buildWorkspaceScmAuthoringSeed({ workspace, accountId: lifetime.scope.accountId,
-        comparison: input.comparison, result: input.result, ...(input.stop ? { stopId: input.stop.id } : {}) });
+        comparison: input.comparison, result: input.result, ...(input.stop ? { stopId: input.stop.id } : {}),
+        ...(input.question ? { question: input.question } : {}) });
     if (!seed) return { kind: 'unavailable', reason: 'origin_unavailable' };
     const current = () => !input.signal?.aborted && lifetime.isCurrent() && input.isCurrent()
         && resolveWorkspaceRefByAddress(readProjectWorkspaceRefs(storage.getState()), workspace).kind === 'resolved';
