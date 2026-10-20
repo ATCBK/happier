@@ -36,6 +36,24 @@ class AppFailureProbe extends React.Component<React.PropsWithChildren, { failed:
 }
 
 describe('SessionPaneLazyLoader', () => {
+    it('renders an already loaded pane in the first remount commit', async () => {
+        let rendered = false;
+        const LoadedPane = () => { rendered = true; return React.createElement('RetainedPane'); };
+        const load = async () => LoadedPane;
+        const first = await renderScreen(<SessionPaneLazyLoader testID="retained" load={load} props={{}} />);
+        expect(rendered).toBe(true);
+        await first.unmount();
+        rendered = false;
+        const firstCommit: boolean[] = [];
+        function ReturnToPane() {
+            React.useLayoutEffect(() => { firstCommit.push(rendered); }, []);
+            return <SessionPaneLazyLoader testID="retained" load={load} props={{}} />;
+        }
+        const returned = await renderScreen(<ReturnToPane />);
+        expect(firstCommit).toEqual([true]);
+        await returned.unmount();
+    });
+
     afterEach(() => {
         vi.clearAllMocks();
     });

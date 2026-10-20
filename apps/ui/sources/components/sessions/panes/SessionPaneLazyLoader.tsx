@@ -12,6 +12,9 @@ export type SessionPaneLazyLoaderProps<TProps extends object> = Readonly<{
 
 type PaneFailureCode = 'pane_module_load_failed' | 'pane_render_failed';
 
+// Module identity survives a pane's view lifetime. No view state or output is retained here.
+const resolvedPanes = new WeakMap<object, unknown>();
+
 /** A pane whose code failed to load or whose render threw: it fails alone, says so and retries. */
 function PaneFailure(props: Readonly<{ testID: string; code: PaneFailureCode; onRetry: () => void }>) {
     return (
@@ -42,17 +45,22 @@ export class SessionPaneErrorBoundary extends React.Component<
 }
 
 export function SessionPaneLazyLoader<TProps extends object>(input: SessionPaneLazyLoaderProps<TProps>) {
-    const [Impl, setImpl] = React.useState<React.ComponentType<TProps> | null>(null);
+    // The loader function is the key for its exact component/props pair.
+    const resolved = resolvedPanes.get(input.load) as React.ComponentType<TProps> | undefined;
+    const [loaded, setLoaded] = React.useState<Readonly<{ load: typeof input.load; Impl: React.ComponentType<TProps> }> | null>(null);
+    const Impl = resolved ?? (loaded?.load === input.load ? loaded.Impl : null);
     const [retryNonce, setRetryNonce] = React.useState(0);
     const [error, setError] = React.useState<unknown>(null);
 
     React.useEffect(() => {
+        if (resolvedPanes.has(input.load)) return;
         let cancelled = false;
         setError(null);
         void input.load()
             .then((mod) => {
+                resolvedPanes.set(input.load, mod);
                 if (cancelled) return;
-                setImpl(() => mod);
+                setLoaded({ load: input.load, Impl: mod });
             })
             .catch((loadError) => {
                 if (cancelled) return;
@@ -64,7 +72,7 @@ export function SessionPaneLazyLoader<TProps extends object>(input: SessionPaneL
     }, [input.load, retryNonce]);
 
     if (error) return <PaneFailure testID={input.testID} code="pane_module_load_failed" onRetry={() => {
-        setImpl(null);
+        setLoaded(null);
         setError(null);
         setRetryNonce((value) => value + 1);
     }} />;
