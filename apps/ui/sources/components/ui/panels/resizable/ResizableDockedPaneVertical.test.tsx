@@ -1,12 +1,13 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { findFirstByType, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installPanelCommonModuleMocks } from '../panelTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installPanelCommonModuleMocks();
+afterEach(() => vi.unstubAllGlobals());
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -127,6 +128,9 @@ describe('ResizableDockedPaneVertical (web pointer drag)', () => {
 
     it('uses updated maxHeightPx while an active drag is still in progress', async () => {
         const onCommitHeightPx = vi.fn();
+        let frame: FrameRequestCallback | undefined;
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+        vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
 
         const fakeWindow = new (globalThis as any).EventTarget();
         (globalThis as any).window = fakeWindow;
@@ -174,12 +178,13 @@ describe('ResizableDockedPaneVertical (web pointer drag)', () => {
         });
 
         await act(async () => {
-            (globalThis as any).window.dispatchEvent(new (globalThis as any).PointerEvent('pointermove', { clientY: 0 }));
-        });
-
-        await act(async () => {
             (globalThis as any).window.dispatchEvent(new (globalThis as any).PointerEvent('pointermove', { clientY: -140 }));
         });
+
+        // This frame expands the owning overlay's budget. Release must resolve the
+        // current attempted size against that new budget without another move.
+        expect(frame).toBeDefined();
+        await act(async () => { frame?.(0); });
 
         await act(async () => {
             (globalThis as any).window.dispatchEvent(new (globalThis as any).PointerEvent('pointerup', { clientY: -140 }));

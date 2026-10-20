@@ -1,12 +1,13 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { findAllByType, findFirstByType, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installPanelCommonModuleMocks } from './panelTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installPanelCommonModuleMocks();
+afterEach(() => vi.unstubAllGlobals());
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -370,6 +371,9 @@ describe('ResizableDockedPane (web pointer drag)', () => {
     it('reports when a single drag gesture overshoots the minimum width', async () => {
         const onCommitWidthPx = vi.fn();
         const onDragWidthPx = vi.fn();
+        let frame: FrameRequestCallback | undefined;
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+        vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
 
         const fakeWindow = new (globalThis as any).EventTarget();
         (globalThis as any).window = fakeWindow;
@@ -408,6 +412,9 @@ describe('ResizableDockedPane (web pointer drag)', () => {
         await act(async () => {
             (globalThis as any).window.dispatchEvent(new (globalThis as any).PointerEvent('pointermove', { clientX: 100 }));
         });
+
+        expect(frame).toBeDefined();
+        await act(async () => { frame?.(0); });
 
         await act(async () => {
             (globalThis as any).window.dispatchEvent(new (globalThis as any).PointerEvent('pointerup', { clientX: 100 }));
