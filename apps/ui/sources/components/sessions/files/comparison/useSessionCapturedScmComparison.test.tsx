@@ -4,6 +4,7 @@ import { ScmComparisonSchema, ScmDiffSummaryResultSchema } from '@happier-dev/pr
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { ScmComparison } from '@happier-dev/protocol/scm';
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import type { DiscardChangeMessages } from '@/components/sessions/files/review/discardChange';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 // Account policy reads also cross HTTP before SCM dispatch; keep that boundary
@@ -84,9 +85,10 @@ const changedFile = { path: 'src/changed.ts', changeKind: 'modified', binary: fa
     evidence: { state: 'available', unifiedDiff: 'diff --git a/src/changed.ts b/src/changed.ts\n--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] } as const;
 
 describe('Files reads the canonical captured comparison through authenticated RPC', () => {
+    const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
+        discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo',
+        note_failed: 'note failed', undo_unavailable: 'undo unavailable' } satisfies DiscardChangeMessages;
     it('offers restore-before-turn only for the turn scope while session keeps whole-file discard', async () => {
-        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
-            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
         const hook = await renderHook((selector: SessionScmReviewComparison) => useFileChangesActions({
             target: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo/exact' }, filePath: 'src/a.ts', selector,
             comparison: ScmComparisonSchema.parse({ id: 'a'.repeat(64),
@@ -107,8 +109,6 @@ describe('Files reads the canonical captured comparison through authenticated RP
         boundary.calls = [];
         const sessionId = 'capture-session';
         const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
-        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
-            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
         const first = { path: 'src/a.ts', turnId: 'turn-4', hash: 'b'.repeat(64), comparisonId: 'a'.repeat(64) };
         const second = { path: 'src/b.ts', turnId: 'turn-8', hash: 'd'.repeat(64), comparisonId: 'c'.repeat(64) };
         const hook = await renderHook((selected: typeof first) => useFileChangesActions({
@@ -138,8 +138,6 @@ describe('Files reads the canonical captured comparison through authenticated RP
         const onReplacedUnsavedEdits = vi.fn();
         const sessionId = 'capture-session';
         const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
-        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
-            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
         const hook = await renderHook((dirty: boolean) => useFileChangesActions({
             target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
             filePath: 'src/a.ts', selector: { kind: 'workingTree' }, comparison: null, messages,
@@ -167,8 +165,6 @@ describe('Files reads the canonical captured comparison through authenticated RP
         const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'turnCheckpoint', turnId: 'turn-4' },
             repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
         const offerWholeTurnRollback = vi.fn();
-        const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
-            discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo' };
         const hook = await renderHook(() => useFileChangesActions({
             target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
             filePath: 'src/a.ts', selector: { kind: 'turnCheckpoint', turnId: 'turn-4' }, comparison, messages,

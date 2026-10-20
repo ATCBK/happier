@@ -13,6 +13,8 @@ export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> 
     selector: SessionScmReviewComparison;
     comparison: ScmComparison | null;
     expectedHash?: string | null;
+    /** Selected deletion; the canonical mutation result determines whether Undo exists. */
+    deleted?: boolean;
     hasUnsavedEdits: () => boolean;
     onReplacedUnsavedEdits: () => void;
     confirmUnsaved: Readonly<{ title: string; message?: string; confirmText?: string; cancelText?: string }>;
@@ -45,5 +47,5 @@ export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> 
         ...(intent.restoreBeforeTurn ? { restoreBeforeTurn: restore,
             ...(input.restoreBeforeTurnTitle ? { restoreBeforeTurnTitle: input.restoreBeforeTurnTitle } : {}) } : {}),
     } : {};
-    return { changes, result };
+    return { changes, result, restoreDeleted: input.deleted && intent.entry ? restore : undefined };
 }
