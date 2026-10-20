@@ -38,7 +38,7 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
     ...options,
     requestRestart: async request => { requests.push(request); return results.shift() ?? { ok: true, status: 'restarted', sessionId: 'session' }; },
   });
-  return { sync, requests, get metadata() { return metadata; }, settle: () => { settled = true; },
+  return { sync, requests, get metadata() { return metadata; }, settle: () => { settled = true; }, startTurn: () => { settled = false; },
     refusePublication: () => { refusePublication = true; },
     refuseNextPublication: () => { refuseNextPublication = true; },
     patch: (value: Partial<typeof metadata>) => { metadata = { ...metadata, ...value }; sync.syncFromMetadata(); },
@@ -51,6 +51,20 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it('keeps an equivalent skill-rule selection applied across reordered and retimestamped observations', async () => {
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: null, agentId: 'fixture' };
+    const rules: SkillRuleV1[] = ['alpha', 'beta'].map(skillId => ({ id: skillId, skillId,
+      target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }));
+    const f = fixture(undefined, { initialSkillRules: { context, rules },
+      readSkillRules: () => ({ context, rules: [...rules].reverse().map(rule => ({ ...rule, updatedAt: 2 })) }) });
+    try {
+      f.settle(); await f.sync.flushAfterSettledTurn('one');
+      f.sync.syncFromMetadata(); await f.sync.flushAfterSettledTurn('two');
+      expect(f.requests).toEqual([]);
+      expect(readPendingCapabilityApplyV1(f.metadata).skills).toBe(false);
+    } finally { await f.sync.dispose(); }
+  });
+
   it.each([false, true])('uses positive skill launch evidence despite retained rule-pending metadata (changed: %s)', async changed => {
     const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: null, agentId: 'fixture' };
     const rules = (enabled: boolean): SkillRuleV1[] => [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' },
@@ -297,7 +311,7 @@ describe('capability selection settled-turn apply', () => {
     expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ mcp: { reason: 'restart_to_apply', restartBy } });
     expect(f.metadata.mcpSelectionRestartRequiredV1).toBeDefined();
   });
-  it.each(['applied', 'restart_required', 'advancing', 'ack_failed'] as const)('uses the real skill reapply owner after settlement and handles native %s', async nativeOutcome => {
+  it.each(['applied', 'restart_required', 'input_arrives', 'advancing', 'ack_failed'] as const)('uses the real skill reapply owner after settlement and handles native %s', async nativeOutcome => {
     const restoreProjectHttp = installEmptyProjectAccountRowsHttpBoundary();
     const home = await mkdtemp(join(tmpdir(), 'happier-impl-p2c-u6-skills-'));
     await mkdir(join(home, 'project'));
@@ -331,7 +345,8 @@ describe('capability selection settled-turn apply', () => {
               f.changeSkills({ v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: ['second-change'], excludeNativeSkillNames: [] });
             }
             if (nativeOutcome === 'ack_failed') f.refuseNextPublication();
-            return nativeOutcome !== 'restart_required' ? { kind: 'applied' } : { kind: 'restart_required', reason: 'launch_path_unsupported' };
+            if (nativeOutcome === 'input_arrives' && reloads === 1) f.startTurn();
+            return nativeOutcome !== 'restart_required' && nativeOutcome !== 'input_arrives' ? { kind: 'applied' } : { kind: 'restart_required', reason: 'launch_path_unsupported' };
           } },
           onApplied: result => { appliedItems = result.delivery?.items ?? null; },
         },
@@ -343,7 +358,12 @@ describe('capability selection settled-turn apply', () => {
       f.settle(); await f.sync.flushAfterSettledTurn();
       if (nativeOutcome === 'advancing') await expect.poll(() => reloads).toBe(2);
       else expect(reloads).toBe(1);
-      if (nativeOutcome === 'ack_failed') {
+      if (nativeOutcome === 'input_arrives') {
+        expect(appliedItems).toBeNull();
+        expect(f.requests).toEqual([]);
+        f.settle(); await f.sync.flushAfterSettledTurn('next');
+        expect(f.requests).toHaveLength(1);
+      } else if (nativeOutcome === 'ack_failed') {
         expect(appliedItems).toEqual([]); expect(f.requests).toEqual([]);
         expect(f.metadata.skillSelectionRestartRequiredV1).toBeDefined();
         expect(readCapabilitySelectionApplyV1(f.metadata)).toEqual({ skills: { reason: 'apply_failed' } });

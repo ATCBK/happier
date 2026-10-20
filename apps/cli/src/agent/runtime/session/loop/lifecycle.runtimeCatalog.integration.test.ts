@@ -209,6 +209,79 @@ describe('runSessionLoopLifecycle presence renewal', () => {
     }
   });
 
+  it('defers rule replacement while a collected prompt is preparing, then applies after its turn', async () => {
+    capabilityRestart.mockReset();
+    capabilityRestart.mockResolvedValue({ ok: true, status: 'restarted', sessionId: 'session-1' });
+    const base = createLifecycleParams();
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    queue.push({ text: 'Reply only READY', localId: 'prepared-input' }, { permissionMode: 'default' });
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { releasePreparation = resolve; });
+    let preparing = false;
+    let sent = false;
+    let sentTurnId = '';
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const provider: AgentSessionRuntime = {
+      async send(request) {
+        sent = true;
+        sentTurnId = request.delivery.turnId;
+        listener?.(canonicalRuntimeEvent({ kind: 'input-accepted', sessionId: 'session-1', inputIds: request.inputIds, delivery: request.delivery, emittedAtMs: 1 }));
+        listener?.(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'session-1', turnId: sentTurnId, emittedAtMs: 1 }));
+        return { status: 'admitted' };
+      },
+      watch(value) { listener = value; return { dispose() { listener = undefined; } }; },
+      dispose() {},
+    };
+    const runtime = createNativeAgentSessionOperations(provider, 'session-1', undefined, undefined, undefined, undefined, undefined, {
+      context: {} as AgentSessionRuntimeContext, cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+      cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    const fixture = createMutableApiSessionClientFixture({ sessionId: 'session-1', metadata: createMetadata() });
+    const session = Object.assign(fixture, {
+      updateMetadataAsCurrentPublisher: async (update: (current: Metadata) => Metadata) => {
+        fixture.updateMetadata(current => update(current!));
+      },
+      enqueueSessionEventCommitted: async () => ({ persisted: true as const, delivered: false as const }),
+    });
+    let enabled = true;
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/workspace', projectKey: null, agentId: 'codex' };
+    const rules = () => [{ id: 'rule', skillId: 'library', target: { t: 'allMachines' as const }, enabled, createdAt: 1, updatedAt: 1 }];
+    let wake = () => {};
+    const run = runSessionLoopLifecycle({ ...base, session, runtime, hookRuntime: runtime,
+      config: { ...base.config, startRuntimeBeforeFirstPrompt: true, lifecycleHooks: { createCheckpointLifecycle: () => ({}) } },
+      capabilitySelection: { agent: { vendorResume: 'supported', skillsLiveReload: 'unsupported' },
+        initialSkillRules: { context, rules: rules() }, readSkillRules: () => ({ context, rules: rules() }),
+        subscribeAccountSettings: listener => { wake = listener; return () => {}; } },
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      deps: { ...base.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources, registerKillSessionHandlerFn: undefined,
+        runPermissionModePromptLoopFn: opts => runPermissionModePromptLoop({ ...opts,
+          resolveFreshSessionSystemPrompt: async () => { preparing = true; await preparation; return ''; } }),
+        registerRunnerTerminationHandlersFn: options => registerRunnerTerminationHandlers({
+          ...options, processLifecycleOwnership: 'caller', sessionExitReport: null, exit: () => undefined,
+        }) },
+    });
+    try {
+      await vi.waitFor(() => expect(preparing).toBe(true));
+      enabled = false;
+      wake();
+      await vi.waitFor(() => expect(fixture.getMetadataSnapshot()?.capabilitySelectionApplyV1?.skills).toMatchObject({ source: 'rules' }));
+      expect(sent).toBe(false);
+      expect(capabilityRestart).not.toHaveBeenCalled();
+      releasePreparation();
+      await vi.waitFor(() => expect(sent).toBe(true));
+      expect(capabilityRestart).not.toHaveBeenCalled();
+      listener?.(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1', turnId: sentTurnId, emittedAtMs: 2 }));
+      await vi.waitFor(() => expect(capabilityRestart).toHaveBeenCalledOnce());
+    } finally {
+      releasePreparation();
+      listener?.(canonicalRuntimeEvent({ kind: 'runtime-ended', sessionId: 'session-1', cause: 'providerEnded', retryable: false, emittedAtMs: 3 }));
+      // Teardown may dispose the boundary while a failed assertion holds preparation.
+      await run.catch(error => { if (!(error instanceof Error) || error.name !== 'AbortError') throw error; });
+    }
+  });
+
   it('applies capability changes after a provider-owned turn settles while the host input queue remains idle', async () => {
     capabilityRestart.mockReset();
     capabilityRestart.mockResolvedValue({ ok: true, status: 'restarted', sessionId: 'session-1' });

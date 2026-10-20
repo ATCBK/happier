@@ -1370,7 +1370,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       replaySeedRetirement: params.permissionModeState.replaySeedRetirement,
       permissionHandler: params.permissionHandler,
       runtime: runtimeForPromptLoop,
-      createOverrideSynchronizer: (isStarted): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => {
+      createOverrideSynchronizer: (isStarted, isInputSettled): PromptLoopOverrideSynchronizer | RuntimeOverrideSynchronizers => {
         const sync = createRuntimeOverrideSynchronizersFn({
         agentTargetKey: buildBackendTargetKeyV2(params.opts.backendTarget
           ? params.opts.backendTarget
@@ -1382,7 +1382,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           ...params.capabilitySelection,
           session: params.session,
           isStarted,
-          isSettled: () => !sessionTurnLifecycle.hasActiveTurn() && !params.runtimeState.thinking,
+          isSettled: () => isInputSettled() && !sessionTurnLifecycle.hasActiveTurn() && !params.runtimeState.thinking,
         } } : {}),
         });
         capabilityOverrideSync = sync;

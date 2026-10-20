@@ -202,7 +202,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     }
     // The daemon rechecks active turns and approvals immediately before signaling.
     const requestRestart = input.requestRestart ?? (await import('@/daemon/controlClient')).requestDaemonSessionRunnerRestart;
-    if (lifetime.signal.aborted) return;
+    if (lifetime.signal.aborted || !input.isSettled()) return;
     logger.infoFile('[CapabilitySelection] Requesting runner refresh', {
       sessionId: input.session.sessionId,
       changes: { mcpSelection: kinds.mcp && changes.mcpSelection, skillsSelection: kinds.skills && changes.skillsSelection,

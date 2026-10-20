@@ -618,7 +618,7 @@ export async function runPermissionModePromptLoop(opts: {
   runtime: PermissionModePromptLoopTurnOperations;
   /** Host composition must not clone the Agent's receiver-sensitive operations. */
   prepareHostContext?: PermissionModePromptLoopTurnOperations['prepareHostContext'];
-  createOverrideSynchronizer: (isStarted: () => boolean) => PromptLoopOverrideSynchronizer;
+  createOverrideSynchronizer: (isStarted: () => boolean, isInputSettled: () => boolean) => PromptLoopOverrideSynchronizer;
   messageBuffer: MessageBuffer;
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal;
@@ -857,7 +857,9 @@ export async function runPermissionModePromptLoop(opts: {
     snapshotFreshForNextPromptBoundary = opts.session.getMetadataSnapshot() !== null;
   }
 
-  const overrideSync = opts.createOverrideSynchronizer(() => wasStarted);
+  // Native turn facts start only after prompt preparation succeeds. Capability
+  // replacement must also wait for this loop's already-collected input.
+  const overrideSync = opts.createOverrideSynchronizer(() => wasStarted, () => !turnInFlight);
 
   const permissionModeStateSync = await initializePermissionModeStateSync({
     explicitPermissionMode: opts.explicitPermissionMode,
@@ -1058,6 +1060,7 @@ export async function runPermissionModePromptLoop(opts: {
       message = { message: next.message, mode: next.mode, hash: next.hash };
     }
     if (!message) continue;
+    turnInFlight = true;
     // Optional quiet inputs keep queue custody until their exact original
     // occurrence reaches the provider. A local command, blocked user input or
     // omitted context must leave them available to the next real turn.
@@ -1235,7 +1238,6 @@ export async function runPermissionModePromptLoop(opts: {
       await settlement;
     };
     try {
-      turnInFlight = true;
       const promptDeliveryIdentity = readQueuedPromptDeliveryIdentity(message.message);
       const localIds = [...promptDeliveryIdentity.localIds];
       const userMessageSeqs = [...promptDeliveryIdentity.userMessageSeqs];
@@ -1988,6 +1990,7 @@ export async function runPermissionModePromptLoop(opts: {
       }
     }
       } finally {
+        turnInFlight = false;
         inputConsumer.releaseInputBatch();
       }
   }
