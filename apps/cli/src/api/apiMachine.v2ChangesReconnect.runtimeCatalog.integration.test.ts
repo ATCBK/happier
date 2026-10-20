@@ -304,11 +304,17 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient(credentials.token, machine);
         const settingsHint = vi.fn();
         client.onAccountSettingsVersionHint(settingsHint);
+        const retainedCatalogRevisions: (number | 'absent' | undefined)[] = [];
+        client.onManagedProviderRetainedCurrentnessInvalidation(async () => {
+            const catalog = getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog;
+            retainedCatalogRevisions.push(catalog?.status === 'ready' ? catalog.revision : undefined);
+        });
         try {
             await (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> }).syncChangesOnConnect({ reason: 'live' });
             expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
             expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(7);
             expect(settingsHint).not.toHaveBeenCalled();
+            expect(retainedCatalogRevisions).toEqual([2]);
         } finally {
             await client.shutdown(); stored.mockRestore(); clearActiveAccountSettingsSnapshot();
             if (previous) setActiveAccountSettingsSnapshot(previous);

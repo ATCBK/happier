@@ -6,11 +6,12 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { beginActiveProviderConnectionsCatalogRefresh, commitActiveProviderConnectionsCatalog,
   getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation, observeProviderCatalogPhase } from './catalogStore';
 export { readActiveProviderConnectionsCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const pending = new Map<string, {
-  completion: Promise<ProviderConnectionsCatalogSnapshotV1>; readers: Set<() => void>; readable: boolean;
+  completion: Promise<ProviderConnectionsCatalogSnapshotV1>; readers: Set<() => void>;
 }>();
 const reloadAfterPending = new Set<string>();
 type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
@@ -84,20 +85,17 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
   if (!current() || input.signal?.aborted) return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
   const existing = context ? undefined : pending.get(key);
   if (existing) {
-    // Readers arriving before the row is published share that observation.
-    // A later explicit read must reobserve authority, even while the previous
-    // read's optional cleanup continues; actual changes always invalidate it.
-    if (intent === 'change' || intent === 'reobserve' && existing.readable) {
-      existing.readable = false;
+    // Pending covers observation through publication, never optional history.
+    // Read demand joins this pass; only an actual change invalidates its basis.
+    if (intent === 'change') {
       reloadAfterPending.add(key); beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
     }
-    if (onReadable) {
-      if (existing.readable) onReadable();
-      else existing.readers.add(onReadable);
-    }
+    if (onReadable) existing.readers.add(onReadable);
     return existing.completion;
   }
-  if (!context) beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
+  if (!context && (intent !== 'reobserve' || readSnapshot()?.providerConnectionsCatalog?.status !== 'ready')) {
+    beginActiveProviderConnectionsCatalogRefresh({ scopeKey, lifetimeToken });
+  }
   const store = context ? createCliProviderConnectionsStoreForOperation({ operationContext: context, signal: input.signal })
     : createCliProviderConnectionsStore(input);
   const publish = async (catalog: ProviderConnectionsCatalogSnapshotV1) => {
@@ -112,8 +110,6 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       if (!context) reloadAfterPending.delete(key);
-      const request = context ? undefined : pending.get(key);
-      if (request) request.readable = false;
       let catalog: ProviderConnectionsCatalogSnapshotV1;
       let publishedReady: ProviderConnectionsCatalogSnapshotV1 | undefined;
       try {
@@ -121,19 +117,22 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
           if (!context && reloadAfterPending.has(key)) return;
           if (await publish(ready)) {
             if (!context && reloadAfterPending.has(key)) return;
-            publishedReady = ready;
+            const admitted = readSnapshot()?.providerConnectionsCatalog;
+            publishedReady = admitted?.status === 'ready' ? admitted : ready;
             if (context) onReadable?.();
             else {
               const request = pending.get(key);
               if (request) {
-                request.readable = true;
                 const readers = [...request.readers];
                 request.readers.clear();
+                // A later explicit reobservation can start immediately. Its
+                // readers share that next pass while this pass cleans history.
+                pending.delete(key);
                 for (const reader of readers) reader();
               }
             }
           }
-        }, hasPendingCleanup: () => !context && reloadAfterPending.has(key) });
+        }, hasPendingCleanup: () => !context && pending.get(key)?.completion === work && reloadAfterPending.has(key) });
       } catch (error) {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
         catalog = { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled'
@@ -143,6 +142,13 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
           : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
+      if (!context && publishedReady) {
+        // Maintenance from an older observation cannot overwrite a later
+        // publication or a genuine change's withdrawal.
+        const result = catalog.status === 'unavailable' && catalog.reason === 'cancelled' ? publishedReady : catalog;
+        if (sameProviderConnectionsCatalogAuthority(publishedReady, readSnapshot()?.providerConnectionsCatalog)) await publish(result);
+        return result;
+      }
       if (!context && reloadAfterPending.has(key)) continue;
       if (!context && pending.get(key)?.completion === work) pending.delete(key);
       // Cancelling optional maintenance cannot withdraw a row already admitted
@@ -154,7 +160,7 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
   })().finally(() => {
     if (pending.get(key)?.completion === work) { pending.delete(key); reloadAfterPending.delete(key); }
   });
-  if (!context) pending.set(key, { completion: work, readers: new Set(onReadable ? [onReadable] : []), readable: false });
+  if (!context) pending.set(key, { completion: work, readers: new Set(onReadable ? [onReadable] : []) });
   return work;
 }
 

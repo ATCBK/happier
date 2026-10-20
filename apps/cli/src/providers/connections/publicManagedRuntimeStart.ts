@@ -150,6 +150,11 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
             ...(input.signal ? { signal: input.signal } : {}),
           })
         : null);
+      // Public Start retains configuration authority just like broker claims.
+      // Account catalog invalidations must be able to withdraw that exact claim
+      // through the custody owner's existing settlement and idle-stop path.
+      const revalidateRetainedCurrentness = input.revalidateRetainedCurrentness
+        ?? (input.operationClaim ? undefined : request.revalidateAuthorization);
       const joined = await runManagedProviderExplicitStart({
         ...(sharedGateway ? { sharedGateway } : {}),
         ...(input.retirementGroup ? { retirementGroup: input.retirementGroup } : {}),
@@ -158,10 +163,9 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
         machineId: input.machineId,
         ...(input.operationClaim ? { operationClaim: input.operationClaim } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
-        ...(input.revalidateRetainedCurrentness
+        ...(revalidateRetainedCurrentness
           ? {
-              revalidateRetainedCurrentness:
-                input.revalidateRetainedCurrentness,
+              revalidateRetainedCurrentness,
             }
           : {}),
         isCurrent: request.isAuthorizationCurrent,

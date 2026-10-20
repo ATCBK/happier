@@ -33,6 +33,8 @@ import { createBrokerProviderRegistry } from '@/providers/broker/providerBroker.
 import { createSavedSecretMaterializerV1 } from '@/settings/secrets/savedSecretCatalog';
 import { commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { refreshActiveProviderConnectionsCatalog, refreshDemandedActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import * as accountSnapshots from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import * as providerContributions from '@/providers/registry/contributions';
 import {
@@ -62,11 +64,127 @@ afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-it('cancels broker eligibility inside its pending catalog HTTP read', async () => {
+it('settles steady source-any eligibility across three Agents without replaying catalog observation behind history', async () => {
+  const credentials = { token: 'eligibility-steady-polling', encryption: null };
+  const scopeKey = resolveAccountSettingsScopeKeyForToken(credentials.token);
+  setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1),
+    scopeKey, providerConnectionsCatalog: undefined });
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  // Observe the real withdrawal owner: polling has no Account-change input.
+  const withdrawals = vi.spyOn(accountSnapshots, 'beginActiveProviderConnectionsCatalogRefresh');
+  const boundaryDelayMs = 20;
+  const onePassDeadlineMs = 10 * (2 * boundaryDelayMs);
+  const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+  let releaseHistory = () => {};
+  let enterHistory = () => {};
+  const historyReleased = new Promise<void>(resolve => { releaseHistory = resolve; });
+  const historyEntered = new Promise<void>(resolve => { enterHistory = resolve; });
+  let revision = 1;
+  let rowReads = 0;
+  let sourceReads = 0;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') {
+      rowReads++;
+      await delay(boundaryDelayMs);
+      return { status: 200, data: { status: 'present', revision,
+        content: { t: 'plain', v: splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1).catalog } } };
+    }
+    if (path === '/v2/account/settings') {
+      sourceReads++;
+      await delay(boundaryDelayMs);
+      return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+    }
+    if (path === '/v2/account/settings/history') {
+      enterHistory();
+      await historyReleased;
+      return { status: 200, data: { snapshots: [] } };
+    }
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    throw new Error(`Unexpected polling HTTP boundary: ${path}`);
+  });
+  const projectedTargets: string[] = [];
+  let retireOnProjection = false;
+  // The loaded-plugin boundary declares three Agents without Provider adapters.
+  // Eligibility must try all three through the real projector and return unavailable.
+  const executable = {
+    generation: 7,
+    contributes: { agentDefinitionsById: new Map(['a', 'b', 'c'].map(id => [id, {
+      id, pluginId: 'acme.polling', identity: { pluginId: 'acme.polling', localId: id },
+      definition: { id, kindVersion: 1 },
+    }])) },
+    activateContributionsOnDemand: async (demands: readonly { localId: string }[]) => {
+      projectedTargets.push(...demands.map(demand => demand.localId));
+      if (retireOnProjection) {
+        retireOnProjection = false;
+        setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1), scopeKey: 'replacement-account' });
+      }
+      return [];
+    },
+    agentRuntimesByAgentId: new Map(),
+  } as unknown as ResolvedExecutablePluginRuntimeRegistry;
+  const lease: PluginRuntimeRegistryLease = { registry: executable, source: 'active', durableRevision: -1,
+    release: async () => {} };
+  const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
+    featureGate: { isEnabled: () => true }, acquireRuntimeLease: async () => lease,
+    modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during eligibility'); } });
+  const request = { machineId: 'machine-a', teamId: 'team-a', resourceId: 'resource-a', expectedResourceRevision: 1,
+    scope: 'source_any' as const,
+    source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection', connectionId: 'connection-a',
+      connectionSecurityFingerprint: 'connection-security:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', credentialSlotId: 'slot-a' }) };
+  const calls: Promise<unknown>[] = [];
+  const latencies: number[] = [];
+  const poll = () => {
+    const started = performance.now();
+    const call = services.resolveTeamCredentialBrokerEligibility(request).then(result => {
+      latencies.push(performance.now() - started);
+      expect(result).toEqual({ status: 'unavailable', reason: 'model_unavailable' });
+    });
+    void call.catch(() => {});
+    calls.push(call);
+    return call;
+  };
+  let changed: Promise<void> | undefined;
+  const maintenance = refreshActiveProviderConnectionsCatalog({ credentials });
+  try {
+    poll();
+    await historyEntered;
+    for (let i = 0; i < 15; i++) { await delay(200); poll(); }
+    await vi.waitFor(() => expect(latencies, `row=${rowReads}, source=${sourceReads}, withdrawals=${withdrawals.mock.calls.length}`)
+      .toHaveLength(16), { timeout: onePassDeadlineMs });
+    await Promise.all(calls);
+    expect(Math.max(...latencies)).toBeLessThan(onePassDeadlineMs);
+    expect(projectedTargets).toEqual(Array.from({ length: 16 }, () => ['a', 'b', 'c']).flat());
+    // One row+source observation despite steady post-publication demand. The
+    // history owner has additionally verified destination row authority once.
+    expect(sourceReads).toBe(1);
+    expect(rowReads).toBe(2);
+    expect(withdrawals).toHaveBeenCalledTimes(1);
+
+    revision = 2;
+    changed = refreshDemandedActiveProviderConnectionsCatalog({ token: credentials.token });
+    await vi.waitFor(() => expect(withdrawals).toHaveBeenCalledTimes(2));
+    await poll();
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
+    expect(sourceReads).toBe(2);
+    retireOnProjection = true;
+    await expect(services.resolveTeamCredentialBrokerEligibility(request))
+      .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
+  } finally {
+    releaseHistory();
+    await Promise.allSettled([...calls, changed, maintenance]);
+  }
+});
+
+it.each(['owner', 'joined'] as const)('cancels %s broker eligibility inside its pending catalog HTTP read', async custody => {
   const credentials = { token: 'eligibility-cancellation', encryption: null };
   const snapshot = providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1);
-  setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
-  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
+    providerConnectionsCatalog: undefined });
+  const readCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
   const controller = new AbortController();
   let enterRow = () => {};
   let releaseRow = () => {};
@@ -92,19 +210,23 @@ it('cancels broker eligibility inside its pending catalog HTTP read', async () =
   const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
     featureGate: { isEnabled: () => true },
     modelSettingsMutation: async (): Promise<never> => { throw new Error('No model mutation during eligibility'); } });
+  const maintenance = custody === 'joined' ? refreshActiveProviderConnectionsCatalog({ credentials }) : undefined;
+  let settled = false;
   const eligibility = services.resolveTeamCredentialBrokerEligibility({ machineId: 'machine-a',
     teamId: 'team-a', resourceId: 'resource-a', expectedResourceRevision: 1,
     source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection', connectionId: 'connection-a',
       connectionSecurityFingerprint: 'connection-security:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', credentialSlotId: 'slot-a' }),
     application: { agentTargetKey: 'agent:acme.example/a', implementationIdentity: { pluginId: 'acme.example', localId: 'provider' },
       endpointTemplateId: 'chat', protocol: 'openai-chat' }, modelId: 'model-a', sourceRevision: 'revision-a',
-  }, controller.signal);
+  }, controller.signal).then(result => { settled = true; return result; });
   try {
     await rowEntered;
+    await vi.waitFor(() => expect(readCredentials).toHaveBeenCalledTimes(1));
     controller.abort();
-    await vi.waitFor(() => expect(transportAborted).toBe(true));
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(transportAborted).toBe(custody === 'owner');
     await expect(eligibility).resolves.toMatchObject({ status: 'unavailable' });
-  } finally { releaseRow(); await eligibility; }
+  } finally { releaseRow(); await eligibility; await maintenance; }
 });
 
 async function runtimeStoreWithState(state = createEmptyProviderRuntimeStateFileV1('machine-a')) {

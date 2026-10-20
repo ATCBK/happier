@@ -5178,6 +5178,7 @@ export class ApiMachineClient {
             || hasTeamChange
             || hasConnectedServicesChange
             || hasSavedSecretCatalogChange
+            || hasProviderConnectionsChange
         ) {
             signal.throwIfAborted();
             await this.notifyManagedProviderRetainedCurrentnessInvalidation({

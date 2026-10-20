@@ -43,6 +43,70 @@ import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
 import { waitForProcessExit } from '@/testkit/process/spawn';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { composeProviderSettingsV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+
+it('G1 releases only the deleted connection explicit Start claim through retained custody', async () => {
+  await withConfiguredDaemonTestHome({ prefix: 'gateway-delete-retention-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller, physicalGateway: true });
+    const gateway = fixture.gateway!;
+    const connectionId = fixture.record.connectionId;
+    const otherConnectionId = 'independent-gateway';
+    let providerSettings = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings,
+      connections: [...fixture.providerSettings.connections, { ...fixture.providerSettings.connections[0],
+        id: otherConnectionId, role: 'named', displayNameMode: 'custom', displayName: 'Independent Gateway' }] });
+    let catalogRevision = 1;
+    let catalogAvailable = true;
+    // The Account catalog's persistent read/write boundary is in memory; its
+    // Action semantics, service, executable registry and process custody are real.
+    const accountExecute = createAccountProviderActionExecuteV1({ assertCurrent() {},
+      readCatalog: async () => ({ status: 'ready', revision: catalogRevision, catalog: splitProviderSettingsV1(providerSettings).catalog }),
+      writeCatalog: async value => {
+        expect(value.expectedRevision).toBe(catalogRevision);
+        providerSettings = composeProviderSettingsV1(value.catalog, splitProviderSettingsV1(providerSettings).defaults);
+        catalogRevision += 1;
+        return { status: 'updated' };
+      },
+      readDefinitions: async () => [...fixture.contributes.providersByContributionKey].map(([contributionKey, contribution]) => ({
+        contributionKey, definition: contribution.definition, provenance: contribution.provenance })), now: () => 2 });
+    const unavailable = async (): Promise<never> => { throw new Error('Unexpected machine operation'); };
+    const service = createProviderConnectionService({ machineId: fixture.machineId, featureGate: { isEnabled: () => true },
+      accountProviderActionExecute: request => accountExecute(request, { surface: 'cli' }),
+      loadSnapshot: async () => {
+        if (!catalogAvailable) throw new Error('Account catalog temporarily unavailable');
+        return { accountSettings: fixture.snapshot.settings, rawAccountSettings: {}, providerSettings, registry: fixture.contributes };
+      }, updateProviderSettings: unavailable, collectDnsEvidence: unavailable, runtimeSummary: unavailable, now: () => 2,
+      resolveConnection: input => resolveProviderConnectionForMachine({ ...input, dnsEvidenceByEndpointUrl: input.dnsEvidence }),
+      resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      startManagedProviderRuntime: createPublicManagedProviderRuntimeStartOperation({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        controller, resolveSharedGateway: createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+          readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) }) }),
+    });
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+    const start = (id: string) => service.startLocal({ action: 'startLocal', machineId: fixture.machineId,
+      contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`, connectionId: id });
+    try {
+      expect(await start(connectionId)).toMatchObject({ status: 'success', phase: 'running' });
+      const deletedPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      expect(await start(otherConnectionId)).toMatchObject({ status: 'success', phase: 'running' });
+      const retainedPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      expect(retainedPid).not.toBe(deletedPid);
+      catalogAvailable = false;
+      expect(await custody.revalidateRetainedClaims()).toBe(0);
+      expect(process.kill(deletedPid, 0)).toBe(true);
+      catalogAvailable = true;
+      expect(await service.delete({ action: 'delete', connectionId })).toEqual({ status: 'success', connectionId });
+      expect(providerSettings.connections.map(connection => connection.id)).toEqual([otherConnectionId]);
+      expect(await custody.revalidateRetainedClaims()).toBe(1);
+      expect(await waitForProcessExit(deletedPid)).toBe(true);
+      expect(process.kill(retainedPid, 0)).toBe(true);
+      expect(await custody.revalidateRetainedClaims()).toBe(0);
+    } finally { await fixture.cleanup(); }
+  });
+});
 
 it.each(['Start', 'next-request', 'new-stream'] as const)('G1 recovers retained consumers through %s custody without changing native access or replaying input', async recovery => {
   await withConfiguredDaemonTestHome({ prefix: 'gateway-outage-recovery-' }, async ({ homeDir }) => {

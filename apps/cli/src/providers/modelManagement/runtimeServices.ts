@@ -48,7 +48,8 @@ import {
 } from '@/providers/catalog';
 import type { ProviderConnectionCatalog } from '@/providers/catalog';
 import { resolveProviderModelCompatibility } from '@/providers/catalog/compatibility';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { prepareProviderConnectionsCatalogForCli, refreshProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import { configuration } from '@/configuration';
@@ -258,7 +259,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
   readModelProjection?: ProviderRuntimeModelProjectionReader;
   openTeamDirect?: Parameters<typeof createRuntimeProviderServices>[0]['openTeamDirect'];
 }>): RuntimeProviderModelManagementServices {
-  const readAdmittedSnapshot = async (context?: RuntimeProviderAccountModelProjectionContext, signal?: AbortSignal) => {
+  const readAdmittedSnapshot = async (context?: RuntimeProviderAccountModelProjectionContext, signal?: AbortSignal, reobserve = true) => {
     const readSnapshot = context?.getAccountSettingsSnapshot
       ?? input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot;
     const captured = readSnapshot();
@@ -267,7 +268,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     if (context && captured.providerConnectionsCatalog?.status !== 'ready') return null;
     const catalog = captured.providerConnectionsCatalog?.status === 'ready' && (context || input.getAccountSettingsSnapshot)
       ? captured.providerConnectionsCatalog
-      : await (context || input.getAccountSettingsSnapshot ? prepareProviderConnectionsCatalogForCli
+      : await (!reobserve || context || input.getAccountSettingsSnapshot ? prepareProviderConnectionsCatalogForCli
         : refreshProviderConnectionsCatalogForCli)({ expectedScopeKey: captured.scopeKey, signal });
     const snapshot = readSnapshot();
     return input.featureGate.isEnabled('providers') && catalog.status === 'ready' && snapshot?.scopeKey === captured.scopeKey
@@ -339,6 +340,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     request: DaemonProviderModelProjectionRequestV1,
     accountContext?: RuntimeProviderAccountModelProjectionContext,
     signal?: AbortSignal,
+    observeSnapshot?: (signal?: AbortSignal) => ReturnType<typeof readAdmittedSnapshot>,
   ): Promise<DaemonProviderModelProjectionResponseV1> => {
     if (!input.featureGate.isEnabled('providers')) {
       return DaemonProviderModelProjectionResponseV1Schema.parse({
@@ -371,7 +373,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       if (!await isAccountCurrent()) {
         return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
       }
-      snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
+      snapshot = await awaitWithinProviderOperation(observeSnapshot
+        ? observeSnapshot(operationLifetime.signal) : readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
         return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable', { machineId: request.machineId }) };
@@ -1094,8 +1097,17 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     request: DaemonProviderTeamCredentialBrokerEligibilityRequestV1,
     signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialBrokerEligibilityResponseV1> => {
+    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+    // Eligibility is a current-observation read, not an explicit catalog
+    // refresh. All Agent targets in this operation consume the same admission.
+    const observation: {
+      pending?: ReturnType<typeof readAdmittedSnapshot>;
+      admitted?: ActiveAccountSettingsSnapshot | null;
+    } = {};
+    const observeSnapshot = (signal?: AbortSignal) => observation.pending ??= readAdmittedSnapshot(undefined, signal, false)
+      .then(snapshot => { observation.admitted = snapshot; return snapshot; });
     const projectCurrentModels = (projectionRequest: DaemonProviderModelProjectionRequestV1) => (
-      projectModels({ ...projectionRequest, refreshPolicy: 'current_only' }, undefined, signal)
+      projectModels({ ...projectionRequest, refreshPolicy: 'current_only' }, undefined, signal, observeSnapshot)
     );
     const result = 'scope' in request
       ? await resolveTeamCredentialBrokerEligibility({
@@ -1109,6 +1121,14 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           projectModels: projectCurrentModels,
           ...(signal ? { signal } : {}),
         });
+    // A cancelled joiner must not wait again for another caller's transport.
+    const admitted = observation.admitted;
+    const current = (input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot)();
+    if (admitted && (signal?.aborted || current?.scopeKey !== admitted.scopeKey
+      || !input.getAccountSettingsSnapshot && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken
+      || !sameProviderConnectionsCatalogAuthority(admitted.providerConnectionsCatalog, current?.providerConnectionsCatalog))) {
+      return { status: 'unavailable', reason: 'source_unavailable' };
+    }
     return DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema.parse(result);
   };
 

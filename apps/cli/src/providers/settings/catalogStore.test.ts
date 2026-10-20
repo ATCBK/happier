@@ -156,8 +156,6 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     if (mode === 'late-reobserve') {
       observedRevision = 8;
       readers.push(...Array.from({ length: 12 }, () => refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })));
-      await vi.waitFor(() => expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog?.status).toBe('loading'));
-      releaseHistory();
     }
     if (mode === 'repeated-reobserve' || mode === 'late-reobserve') {
       let settled = false;
@@ -169,6 +167,9 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
     if (cancelCleanup) controller.abort();
   } finally { releaseRow(); releaseHistory(); await demand; await maintenance; await Promise.all(readers); unsubscribe(); }
   expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: observedRevision });
+  if (mode === 'joined-equal') {
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ cleanup: { status: 'complete' } });
+  }
   // One catalog read plus the history owner's two destination-authority checks.
   // Cancelled history stops before the last authority check.
   expect(rowReads).toBe(mode === 'late-reobserve' ? 6 : cancelCleanup ? 2 : 3);
