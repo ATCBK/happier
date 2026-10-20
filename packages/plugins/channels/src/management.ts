@@ -30,6 +30,7 @@ import {
   ConversationProviderConnectionStopInputV1Schema,
   ConversationProviderConnectionStopResultV1Schema,
   ConversationProviderSetupOutcomeV1Schema,
+  ConversationProviderSetupRemediationResultV1Schema,
   ConversationPrincipalResolveInputV1Schema,
   ConversationPrincipalResolveResultV1Schema,
   SessionPullRequestBindingInputV1Schema,
@@ -63,6 +64,8 @@ import {
   type ConversationProviderConnectionStopInputV1,
   type ConversationConnectionPrepareInputV1,
   type ConversationConnectionPrepareResultV1,
+  type ConversationConnectionSetupRemediateInputV1,
+  type ConversationProviderSetupRemediationResultV1,
   type ConversationSessionProjectionBaselineAcceptInputV1,
   type ConversationSessionProjectionBaselineAcceptResultV1,
   type ConversationConnectionUpdateInputV1,
@@ -233,6 +236,7 @@ type ConversationConnectionSetupAndTestInput = Pick<
 type CurrentProvider = Readonly<{
   pluginId: string;
   setup: AdmittedTargetedOperationExecutionHandle;
+  setupRemediation: AdmittedTargetedOperationExecutionHandle | undefined;
   connectionTest: AdmittedTargetedOperationExecutionHandle;
   observationsPoll: AdmittedTargetedOperationExecutionHandle | undefined;
   connectionStop: AdmittedTargetedOperationExecutionHandle | undefined;
@@ -2235,6 +2239,7 @@ function providerFromSelectedContribution(input: Awaited<
   return {
     pluginId: input.contributor.pluginId,
     setup: input.operations.setup,
+    setupRemediation: input.operations.setupRemediation,
     connectionTest: input.operations.connectionTest,
     observationsPoll: input.operations.observationsPoll,
     connectionStop: input.operations.connectionStop,
@@ -2257,7 +2262,7 @@ async function readCurrentSelectedProvider(input: Readonly<{
 function assertProviderExecutionOrigin(input: Readonly<{
   provider: CurrentProvider;
   executionOrigin: PluginMachineExecutionOriginV1;
-  operation: 'setup' | 'connectionTest';
+  operation: 'setup' | 'setupRemediation' | 'connectionTest';
 }>): void {
   const ref = getPluginMachineExecutionOriginRef(input.executionOrigin);
   if (ref.pluginId === input.provider.pluginId) return;
@@ -2507,6 +2512,27 @@ export async function prepareConversationConnectionForInvocation(
       ? {}
       : { destinationLabel: prepared.setup.integrationPrincipal.label }),
   };
+}
+
+/** The selected provider owns the repair; Channels owns its public intent. */
+export async function remediateConversationConnectionSetupForInvocation(
+  input: JsonValue,
+  context: PluginInvocationContext,
+): Promise<ConversationProviderSetupRemediationResultV1> {
+  const remediationInput = admittedActionInput<ConversationConnectionSetupRemediateInputV1>(input);
+  const provider = await readCurrentSelectedProvider({ context, selection: remediationInput.providerSelection });
+  if (provider.setupRemediation === undefined) {
+    throw pluginError('channels_connection_setup_remediation_unavailable', 'The selected provider has no current setup remediation operation.');
+  }
+  assertNotAborted(context.signal);
+  const execution = await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
+    provider.setupRemediation,
+    remediationInput.providerRemediationInput,
+    { signal: context.signal, expectedSelectedConnectedAccountRef: remediationInput.credentialRef },
+  );
+  assertNotAborted(context.signal);
+  assertProviderExecutionOrigin({ provider, executionOrigin: execution.executionOrigin, operation: 'setupRemediation' });
+  return ConversationProviderSetupRemediationResultV1Schema.parse(execution.result);
 }
 
 /** One retained-row CAS owner for the lifecycle-only management operations. */

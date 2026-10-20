@@ -227,7 +227,10 @@ describe('admitted targeted-operation execution', () => {
         expect(invokeContributedAction).toHaveBeenCalledTimes(2);
     });
 
-    it('reconstructs only an exact current selected settlement before invoking its admitted provider Action', async () => {
+    it.each([
+        ['setup', 'connection/prepare-v1'],
+        ['setupRemediation', 'connection/setup-remediate-v1'],
+    ] as const)('reconstructs only the exact selected %s settlement through its Channels management Action', async (role, parentActionId) => {
         const account = {
             service: { pluginId: 'acme.github', localId: 'github' },
             accountId: 'account-a',
@@ -240,8 +243,8 @@ describe('admitted targeted-operation execution', () => {
                 occurrenceId: 'provider-occurrence-a',
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'provider-occurrenceId-a', installSource: 'archive' },
             },
-            role: 'setup',
-            action: { pluginId: 'acme.provider', localId: 'connection/setup' },
+            role,
+            action: { pluginId: 'acme.provider', localId: `connection/${role}` },
         } as const;
         const selectedActionInputCarrier = {
             operation,
@@ -280,7 +283,7 @@ describe('admitted targeted-operation execution', () => {
         const service = createPluginInvocationActionsService({
             seed: {
                 plugin: { id: 'happier.channels', version: '1.0.0' },
-                contribution: { id: 'connection-create', qualifiedId: 'happier.channels/actions/connection-create' },
+                contribution: { id: parentActionId, qualifiedId: `happier.channels/actions/${parentActionId}` },
                 occurrenceId: 'channels-occurrence-a',
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'channels-occurrenceId-a', installSource: 'archive' },
                 surface: 'plugin',
@@ -316,6 +319,11 @@ describe('admitted targeted-operation execution', () => {
         )).resolves.toEqual({ accepted: true });
         expect(invokeContributedAction).toHaveBeenLastCalledWith(expect.objectContaining({
             action: operation.action,
+            caller: expect.objectContaining({
+                kind: 'plugin',
+                pluginId: 'happier.channels',
+                contribution: { id: parentActionId, qualifiedId: `happier.channels/actions/${parentActionId}` },
+            }),
             input: {
                 repository: 'happier-dev/happier',
                 credentialRef: account,
