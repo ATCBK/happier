@@ -24,6 +24,7 @@ import {
     type WorkspaceSyncRelationshipSummary,
 } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { useWorkspaceSyncRelationshipSummaries } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
+import { presentWorkspaceSyncFailure } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
 import {
     buildWorkspaceContentPolicy,
     parseSessionHandoffIgnoredIncludeGlobs,
@@ -215,7 +216,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             }
             setError(signal.aborted
                 ? t('workspaceSync.error.needsAttention')
-                : caught instanceof Error ? caught.message : t('errors.operationFailed'));
+                : presentWorkspaceSyncFailure(caught) ?? (caught instanceof Error ? caught.message : t('errors.operationFailed')));
             setPhase('approval_pending');
         }
     }, [destinationIntent, homeDir, mode, props.source.serverId, resolvedPath, selectedMachine]);
@@ -307,7 +308,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             }
             setError(controller.signal.aborted
                 ? t('workspaceSync.error.needsAttention')
-                : caught instanceof Error ? caught.message : t('errors.operationFailed'));
+                : presentWorkspaceSyncFailure(caught) ?? (caught instanceof Error ? caught.message : t('errors.operationFailed')));
             setPhase('idle');
         }
         } finally {

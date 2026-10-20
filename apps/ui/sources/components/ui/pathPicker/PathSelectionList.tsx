@@ -87,6 +87,12 @@ export type PathSelectionListProps = Readonly<{
      * and only starts folder suggestions after explicit user input.
      */
     initialSuggestionMode?: PathSelectionInitialSuggestionMode;
+    /**
+     * Focus the path field on web when the list mounts (default). A picker opened on purpose wants the
+     * keyboard there; a list embedded in a page form passes `false`, so opening the page neither moves
+     * focus nor scrolls the form to this field.
+     */
+    autoFocusInput?: boolean;
     favorites: ReadonlyArray<PathSelectionListFavorite>;
     recents: ReadonlyArray<PathSelectionListRecent>;
     machineHomeDir: string;
@@ -681,7 +687,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
             inputBehavior={inputBehavior}
             inputSuffix={inputSuffix}
             inputValueEllipsizeMode="head"
-            autoFocusInputOnWeb
+            autoFocusInputOnWeb={props.autoFocusInput !== false}
             maxHeight={maxHeight}
             heightBehavior={props.heightBehavior ?? (
                 maxHeight !== undefined ? 'stabilizedContentHeight' : undefined

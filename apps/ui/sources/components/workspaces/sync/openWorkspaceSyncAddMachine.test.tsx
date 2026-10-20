@@ -282,6 +282,16 @@ describe('Project Add machine modal', () => {
         });
     });
 
+    it('says a typed daemon refusal of the link in product words, not the daemon message', async () => {
+        confirmModal.mockResolvedValueOnce(true);
+        const modal = await startAddMachineLink();
+        await act(async () => {
+            pendingCreate.resolve({ error: 'Workspace sync relationship is not ready', errorCode: 'relationship_not_ready' });
+        });
+        await vi.waitFor(() => expect(modal.screen.getTextContent()).toContain('workspaceSync.error.needsAttention'));
+        expect(modal.screen.getTextContent()).not.toContain('Workspace sync relationship is not ready');
+    });
+
     it('keeps an acknowledged committed result visible when the modal is dismissed', async () => {
         confirmModal.mockResolvedValueOnce(true);
         const modal = await startAddMachineLink();

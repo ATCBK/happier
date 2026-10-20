@@ -95,6 +95,19 @@ describe('attachChipRailReveal', () => {
         node.remove();
     });
 
+    it('scrolls a pressed chip clear of the trailing scroll indicator, where the rail mask would hide it', () => {
+        // Rail scrolled to 500: the third chip ends exactly at the viewport edge, under the trailing indicator.
+        const { node, chips } = railWithChips([[520, 600], [610, 700], [710, 800], [810, 900]]);
+        document.body.appendChild(node);
+        const cleanup = attachChipRailReveal({ node, onScroll: () => {} });
+        chips[2]!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        chips[2]!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        chips[2]!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        expect(node.scrollLeft).toBe(524);
+        cleanup();
+        node.remove();
+    });
+
     it('leaves a rail the person dragged where it was dropped instead of revealing the pressed chip', () => {
         const { node, chips } = railWithChips([[420, 500], [510, 590], [600, 680], [690, 770]]);
         document.body.appendChild(node);

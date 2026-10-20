@@ -1,3 +1,5 @@
+import { END_INDICATOR_ROOM_PX } from './resolveChipRailCutEdges';
+
 type Edge = Readonly<{ left: number; right: number }>;
 
 export type ChipRailRevealInput = Readonly<{
@@ -6,6 +8,8 @@ export type ChipRailRevealInput = Readonly<{
     control: Edge;
     previous?: Edge | null;
     next?: Edge | null;
+    /** Trailing room the rail's scroll indicator covers; a chip ending inside it is cut by the rail mask. */
+    endIndicatorRoom?: number;
 }>;
 
 /**
@@ -13,7 +17,8 @@ export type ChipRailRevealInput = Readonly<{
  * whole, never a chip cut mid-word. When the neighbours do not fit with it, the chip alone is made whole.
  */
 export function resolveChipRailRevealDelta(input: ChipRailRevealInput): number {
-    const { viewportWidth, control } = input;
+    const { control } = input;
+    const viewportWidth = input.viewportWidth - (input.endIndicatorRoom ?? 0);
     const lo = Math.min(control.left, input.previous?.left ?? control.left);
     const hi = Math.max(control.right, input.next?.right ?? control.right);
     if (hi - lo <= viewportWidth) {
@@ -66,6 +71,7 @@ export function attachChipRailReveal(params: AttachChipRailRevealParams): () => 
             control: edge(control)!,
             previous: withNeighbours ? edge(controls[index - 1]) : null,
             next: withNeighbours ? edge(controls[index + 1]) : null,
+            endIndicatorRoom: END_INDICATOR_ROOM_PX,
         });
         if (delta !== 0) node.scrollLeft += delta;
     };

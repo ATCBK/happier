@@ -1222,6 +1222,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
 
                                         <View style={{ marginBottom: theme.space.s24 }}>
                                             <PathSelectionList
+                                                autoFocusInput={false}
                                                 initialValue={selectedPath}
                                                 machineHomeDir={selectedMachineHomeDir}
                                                 favorites={favoriteDirectories.map((path) => ({ path }))}

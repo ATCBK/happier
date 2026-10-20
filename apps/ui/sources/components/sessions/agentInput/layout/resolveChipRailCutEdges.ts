@@ -6,8 +6,8 @@ export type ChipRailCutEdges = Readonly<{
     end?: Readonly<{ solidUntilPx: number; clearFromPx: number }>;
 }>;
 
-/** Room the trailing scroll indicator needs: a chip that ends inside it counts as cut. */
-const END_INDICATOR_ROOM_PX = 24;
+/** Room the trailing scroll indicator needs: a chip that ends inside it counts as cut (and the reveal clears it). */
+export const END_INDICATOR_ROOM_PX = 24;
 /** Same overflow test the rail's edge fades use (`useScrollEdgeFades`): a last chip within this of the edge is not overflow. */
 const END_OVERFLOW_TOLERANCE_PX = 4;
 const START_SCROLL_TOLERANCE_PX = 2;
