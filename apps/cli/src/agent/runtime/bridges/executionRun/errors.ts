@@ -8,6 +8,9 @@ import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/erro
 import { readRuntimeTurnFailureAlreadySurfacedEvent } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { ExecutionRunState } from './executionRunTypes';
 import type { AgentRuntimeDiagnosticDataV1 } from '@happier-dev/protocol/runtime/agentRuntimeDiagnosticV1';
+import { redactDiagnosticsUrl } from '@happier-dev/protocol/browser/diagnostics/egress/headers';
+import { isSensitiveUrlPathSegment } from '@happier-dev/protocol/browser/diagnostics/egress/url';
+import axios from 'axios';
 
 /**
  * Preparation precedes fresh Run creation. The refusal keeps the error's own typed code; an error with
@@ -109,7 +112,35 @@ export function projectExecutionRunError(error: unknown): NonNullable<ExecutionR
 }
 
 /** Keep the typed cause across a redaction boundary without copying private details. */
-export function sanitizeExecutionRunError(error: unknown, sanitize: (value: string) => string): Error & { code?: string } {
+export function sanitizeExecutionRunError(
+  error: unknown,
+  sanitize: (value: string) => string,
+  context?: Readonly<{ runId: string }>,
+): Error & { code?: string } {
+  // Record request identity before deliberately discarding Axios's private
+  // config, headers and bodies. This serves installed Agents as well as bundled ones.
+  if (axios.isAxiosError<unknown>(error)) {
+    // Query values are never diagnostic. Do not re-run a plugin's serializer
+    // while projecting its failure: it can itself throw and replace the cause.
+    const url = redactDiagnosticsUrl(axios.getUri({ ...error.config, params: null }));
+    const body = error.response?.data;
+    const domainError = body && typeof body === 'object' && 'error' in body ? body.error : undefined;
+    const domainCode = domainError && typeof domainError === 'object' && 'code' in domainError
+      ? domainError.code
+      : typeof domainError === 'string' ? domainError
+      : body && typeof body === 'object' && 'code' in body ? body.code : undefined;
+    logger.warnLocalFile('[EXECUTION RUN] HTTP request failed', {
+      ...(context ? { runId: context.runId } : {}),
+      method: (error.config?.method ?? 'get').toUpperCase(),
+      origin: sanitize(url.origin ?? 'unknown:'),
+      path: sanitize(url.path),
+      ...(error.response ? { status: error.response.status } : {}),
+      // Only a machine identifier is diagnostic metadata; never include prose or the body.
+      ...(typeof domainCode === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]*$/u.test(domainCode)
+        && !isSensitiveUrlPathSegment(domainCode)
+        ? { domainCode: sanitize(domainCode) } : {}),
+    });
+  }
   const sanitized = new Error(sanitize(typeof error === 'string' ? error : readExecutionRunErrorMessage(error)));
   if (error instanceof Error) sanitized.name = error.name;
   const code = readExecutionRunErrorCode(error);

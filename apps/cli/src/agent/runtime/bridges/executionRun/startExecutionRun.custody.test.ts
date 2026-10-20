@@ -23,7 +23,7 @@ import { createTestExecutionRunHostRuntime } from './testkit';
 import { ExecutionRunConnectedServicesError } from './runtime/connectedServicesEnv';
 import { observeWorkflowDetachedExecutionRunInput } from '@/daemon/workflows/stepExecution';
 import { projectExecutionRunPublicState } from './publicState';
-import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunGetResponseSchema, isExecutionRunActive } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { createExecutionRunOccurrenceWitnessRegistry, projectExecutionRunInputTurns } from './runOccurrenceWitness';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
@@ -345,6 +345,9 @@ describe('execution run start transcript custody', () => {
     await vi.waitFor(() => expect(enqueueRetainedRunInitialInput).toHaveBeenCalledTimes(2));
     expect(unresolvedController.runtimeId).toBe('provider-session-1');
     expect(attachRetainedRunSessionInput).toHaveBeenCalledOnce();
+    // Provisioning has produced a runtime, but the accepted initial Pending input
+    // has not reached the provider. A planned refresh must still retain this host.
+    expect(isExecutionRunActive(projectExecutionRunPublicState(runs.get(unresolvedRunId!)!, unresolvedController))).toBe(true);
     expect(runs.get(unresolvedRunId!)).toMatchObject({
       status: 'running',
       error: {

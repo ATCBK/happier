@@ -1090,6 +1090,8 @@ async function startAdmittedExecutionRun(
       turnCount: 0,
       turnEpoch: 0,
       turnInFlight: false,
+      initialInputPending: args.params.initialInput?.kind !== 'deferred_session_pending'
+        && Boolean(args.params.instructions?.trim()),
       turnCancelReason: null,
       turnCancelEpoch: null,
       admittedLiveInterventions: [],
@@ -1403,6 +1405,7 @@ async function startAdmittedExecutionRun(
               ? attachment.awaitInputAdmission(retainedInitialInputLocalId)
               : Promise.resolve('unknown' as const);
             ctrl.initialPendingInputAdmission = admission.then((outcome) => {
+              if (outcome !== 'unknown') ctrl.initialInputPending = false;
               if (
                 outcome !== 'unknown'
                 && isExecutionRunControllerCurrent({
@@ -1508,6 +1511,8 @@ async function startAdmittedExecutionRun(
               code: result.errorCode ?? 'execution_run_failed',
             });
           }
+          ctrl.initialInputPending = false;
+          args.onPublicStateUpdated?.(runId);
         }
       } catch (error: unknown) {
         if (ctrl.cancelled || !isExecutionRunControllerCurrent({ runId, controller: ctrl, controllers: args.controllers })) {

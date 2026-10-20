@@ -555,7 +555,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 if (providerLaunch || secretReferenceRedaction) {
                     const sanitized = sanitizeExecutionRunError(error, value => secretReferenceRedaction?.redact(
                         providerLaunch?.sanitizeDiagnosticText(value) ?? value,
-                    ) ?? providerLaunch?.sanitizeDiagnosticText(value) ?? value);
+                    ) ?? providerLaunch?.sanitizeDiagnosticText(value) ?? value, opts.runId ? { runId: opts.runId } : undefined);
                     secretReferenceRedaction?.close();
                     throw sanitized;
                 }

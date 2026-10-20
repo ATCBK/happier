@@ -122,6 +122,8 @@ export type ExecutionRunBackendController = {
    * A direct execution.run.send must not overtake that Session-owned input.
    */
   initialPendingInputAdmission?: Promise<DurableProviderInputAcceptanceV1>;
+  /** Initial work admitted by Start still awaits its Pending/native acceptance. */
+  initialInputPending?: boolean;
   /** Provider output waits for the existing Pending owner's exact user anchor. */
   pendingInputAcceptance?: Promise<DurableProviderInputAcceptanceV1>;
   terminalMarkerWritePromise?: Promise<void>;

@@ -80,6 +80,7 @@ export function createRetainedExecutionRunInputDelivery(
     let activeTurnId: string | null = null;
     const beginTurn = (turnId: string) => {
         if (activeTurnId === turnId) return;
+        controller.initialInputPending = false;
         activeTurnId = turnId;
         controller.turnEpoch += 1;
         controller.turnCount += 1;

@@ -327,6 +327,9 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
       ...(comparison ? { intentInput: { comparisonId: comparison.comparison.id, outputs: ['walkthrough'] } } : {}),
       retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', localInputId: 'review-initial' });
     await original.firstEnqueuedInput;
+    const initialController = original.controllers.get(started.runId) as ExecutionRunBackendController;
+    await initialController.provisioningPromise;
+    expect(original.manager.getPublic(started.runId)).toMatchObject({ turnInFlight: true });
     await vi.waitFor(() => expect(original.consume({ role: 'user', content: { type: 'text', text: 'Review.' },
       localId: 'review-initial', authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' })).toBe(true));
     if (narration) {

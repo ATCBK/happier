@@ -1226,7 +1226,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 const custody = params.createExecutionRunContext?.onTurnTerminal?.(active.turnId);
                 if (custody) {
                     const settlement = custody.then(settle, error => {
-                        const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                        const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
                         failRuntime(failure.message, readExecutionRunErrorCode(failure) ?? undefined);
                     });
                     conversationTurnSettlement = settlement;
@@ -1278,7 +1278,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             });
         } catch (error) {
             conversationTurn = null;
-            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             failRuntime(failure.message, readExecutionRunErrorCode(failure) ?? undefined);
             throw failure;
         }
@@ -1321,7 +1321,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             try {
                 providerCurrent = await params.options.revalidateProviderBeforeOpen?.();
             } catch (error) {
-                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             }
             if (providerCurrent && !providerCurrent.ok) {
                 throw Object.assign(
@@ -1380,7 +1380,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                     throw error;
                 }
                 await opened.runtime.dispose();
-                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             } finally {
                 openingInitialInput = false;
             }
@@ -1390,7 +1390,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             // the same completion fence observed by long-lived input custody.
             // The explicit pre-start rejection retains its identity for pool recovery.
             if (error === rejectedStart) throw error;
-            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             const code = readExecutionRunErrorCode(failure) ?? 'agent_execution_run_open_failed';
             logProviderFailure('open', code);
             failRuntime(failure.message, code);
@@ -1520,7 +1520,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 });
             } catch (error) {
                 logProviderFailure('send', readExecutionRunErrorCode(error) ?? 'agent_execution_run_send_failed');
-                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             }
             if (result.status !== 'admitted') {
                 const message = diagnosticMessage(result.diagnostic, sanitizeProviderDiagnosticText);
@@ -1557,7 +1557,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                         : { status: 'notRunning' };
             } catch (error) {
                 logProviderFailure('stop', readExecutionRunErrorCode(error) ?? 'agent_execution_run_stop_failed');
-                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                throw sanitizeThrownError(error, sanitizeProviderDiagnosticText, { runId });
             }
             if (result.status === 'unavailable' || result.status === 'unsupported') {
                 throw new Error(`Native Agent execution run stop is ${result.status}`);
@@ -2041,7 +2041,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 throw error;
             }
         })().catch(error => {
-            throw sanitizeThrownError(error, sanitize);
+            throw sanitizeThrownError(error, sanitize, { runId });
         });
         return await openPromise;
     };
@@ -2075,7 +2075,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
         if (!completionError) return;
         const event = readRuntimeTurnFailureAlreadySurfacedEvent(completionError);
         if (event?.diagnostic.code !== WORKFLOW_INTERACTION_CAPACITY_EXCEEDED) {
-            if (!event) throw sanitizeThrownError(completionError, sanitize);
+            if (!event) throw sanitizeThrownError(completionError, sanitize, { runId });
             throw createRuntimeTurnFailureAlreadySurfacedError({
                 message: sanitize(completionError instanceof Error ? completionError.message : event.diagnostic.code),
                 event: {
