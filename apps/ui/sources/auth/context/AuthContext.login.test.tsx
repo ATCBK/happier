@@ -146,6 +146,11 @@ describe('AuthContext.login', () => {
     });
 
     it('keeps the session authenticated while a login-triggered server refresh is still rebinding credentials', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previousState = storage.getState();
+        storage.getState().applyLocalSettings({ hasCompletedAuthOnce: false }, { source: 'sync' });
+        storage.setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
         switchConnectionToActiveServerSpy.mockImplementation(
             () => new Promise<null>(() => {}),
         );
@@ -173,6 +178,7 @@ describe('AuthContext.login', () => {
             await loginPromise;
 
             expect(getCurrentAuth()?.isAuthenticated).toBe(true);
+            expect(storage.getState().localSettings.hasCompletedAuthOnce).toBe(true);
 
             await act(async () => {
                 activeServerListener?.({
@@ -185,6 +191,7 @@ describe('AuthContext.login', () => {
             expect(getCurrentAuth()?.isAuthenticated).toBe(true);
         } finally {
             await screen.unmount();
+            storage.setState(previousState, true);
         }
     });
 

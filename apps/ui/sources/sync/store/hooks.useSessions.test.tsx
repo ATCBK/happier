@@ -520,6 +520,11 @@ describe('useSessionListIndexByServerId', () => {
 });
 
 describe('mobile cockpit surface local-setting selectors', () => {
+    beforeEach(() => {
+        storage.setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
+    });
+
     it('does not read a legacy bare session selection without a resolved Account realm', async () => {
         const previousState = storage.getState();
         try {

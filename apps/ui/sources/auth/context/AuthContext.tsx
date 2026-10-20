@@ -8,7 +8,7 @@ import { forgetPluginAccountAvailabilityArtifacts } from '@/sync/domains/plugins
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { trackLogout } from '@/track';
 import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
 import {
@@ -163,7 +163,6 @@ export function AuthProvider({ children, initialCredentials }: { children: React
     );
     const isLoginSyncInFlightRef = React.useRef(false);
     const loginSyncServerKeyRef = React.useRef<string | null>(null);
-    const applyLocalSettings = useApplyLocalSettings();
 
     const refreshFromActiveServer = React.useCallback(async () => {
         const nextCredentials = await switchConnectionToActiveServer();
@@ -232,7 +231,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         // screen reads it via useLocalSetting('hasCompletedAuthOnce') to swap to
         // the warmer "Good to have you back" copy on subsequent visits.
         if (!loadLocalSettings().hasCompletedAuthOnce) {
-            applyLocalSettings({ hasCompletedAuthOnce: true });
+            getStorage().getState().applyLocalSettings({ hasCompletedAuthOnce: true }, { source: 'sync' });
         }
         if (target && !isSameServerTarget(target, getActiveServerSnapshot())) {
             // The credential belongs to a Home that is no longer focused. It is
@@ -271,7 +270,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
             { tag: 'AuthContext.login.switchConnectionToActiveServer' },
         );
         return { kind: 'completed' };
-    }, [applyLocalSettings, refreshFromActiveServer]);
+    }, [refreshFromActiveServer]);
 
     const login = React.useCallback(
         async (

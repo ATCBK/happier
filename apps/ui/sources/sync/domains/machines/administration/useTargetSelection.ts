@@ -27,7 +27,8 @@ import {
     useSetting,
     useActiveServerAccountScope,
 } from '@/sync/store/hooks';
-import { useApplySettings, useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 
 import {
@@ -204,7 +205,6 @@ export function useMachineAdministrationTargetSelection(
     const reachabilityRevision = useMachineReachabilityRevision();
     const explicitSelection = options.explicitSelection ?? 'live';
     const selections = useSetting('machineAdministrationTargetsLocalV1');
-    const applySettings = useApplySettings();
     const expectedSettingsScope = useAccountSettingsScope();
     const activeAccountScope = useActiveServerAccountScope();
     const initialTarget = options.initialTarget ?? null;
@@ -276,10 +276,10 @@ export function useMachineAdministrationTargetSelection(
         releaseInitialTarget();
         const previous = current.settings.machineAdministrationTargetsLocalV1[selectionKey];
         if (previous?.machineId === candidate.target.machineId && previous.serverIdentityId === candidate.target.serverIdentityId) return;
-        applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey, candidate.target,
-        ) });
-    }, [applySettings, candidates, enabled, expectedSettingsScope, explicitSelection, initialTarget, initialTargetKey, initialTargetPending, releaseInitialTarget, selectionKey]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [candidates, enabled, expectedSettingsScope, explicitSelection, initialTarget, initialTargetKey, initialTargetPending, releaseInitialTarget, selectionKey]);
 
     React.useEffect(() => {
         if (storedTarget || !allowSoleCandidate || targetState.kind !== 'online') return;
@@ -287,10 +287,10 @@ export function useMachineAdministrationTargetSelection(
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         if (current.settings.machineAdministrationTargetsLocalV1[selectionKey]) return;
         // Initial-target memory is local; mounting a route never mutates Account policy.
-        applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey, targetState.target,
-        ) });
-    }, [allowSoleCandidate, applySettings, expectedSettingsScope, selectionKey, storedTarget, targetState]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [allowSoleCandidate, expectedSettingsScope, selectionKey, storedTarget, targetState]);
 
     const selectTarget = React.useCallback((target: MachineAdministrationTargetV1) => {
         const candidate = candidates.find((item) => (
@@ -301,19 +301,19 @@ export function useMachineAdministrationTargetSelection(
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         releaseInitialTarget();
-        applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: setMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey, candidate.target,
-        ) });
-    }, [applySettings, candidates, expectedSettingsScope, explicitSelection, releaseInitialTarget, selectionKey]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [candidates, expectedSettingsScope, explicitSelection, releaseInitialTarget, selectionKey]);
 
     const clearTarget = React.useCallback(() => {
         const current = storage.getState();
         if (!expectedSettingsScope || !areAccountSettingsScopesEqual(expectedSettingsScope, current.settingsScope)) return;
         releaseInitialTarget();
-        applySettings({ machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
+        getSyncSingleton().applySettings({ machineAdministrationTargetsLocalV1: clearMachineAdministrationTargetPreference(
             current.settings.machineAdministrationTargetsLocalV1, selectionKey,
-        ) });
-    }, [applySettings, expectedSettingsScope, releaseInitialTarget, selectionKey]);
+        ) }, { expectedSettingsScope, source: 'ui' });
+    }, [expectedSettingsScope, releaseInitialTarget, selectionKey]);
 
     const resolveExecutionTarget = React.useCallback((options?: MachineAdministrationExecutionTargetOptions) => {
         if (!enabled) return null;

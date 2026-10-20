@@ -2965,7 +2965,6 @@ export function useSessionLastMobileSurface(
   serverId?: string | null,
 ): LocalSettings['sessionLastMobileSurfaceBySessionId'][string] | null {
   const activeServer = useActiveServerSnapshot();
-  const applyLocalSettings = useApplyLocalSettings();
   const selection = getStorage()(useShallow((state) => {
     if (!sessionId) return null;
     const normalizedSessionId = normalizeSessionId(sessionId);
@@ -3003,8 +3002,8 @@ export function useSessionLastMobileSurface(
       next[currentStorageKey] = currentPredecessorSurface;
     }
     delete next[predecessorStorageKey];
-    applyLocalSettings({ sessionLastMobileSurfaceBySessionId: next });
-  }, [applyLocalSettings, currentStorageKey, predecessorStorageKey, predecessorSurface]);
+    state.applyLocalSettings({ sessionLastMobileSurfaceBySessionId: next }, { source: 'sync' });
+  }, [currentStorageKey, predecessorStorageKey, predecessorSurface]);
 
   return selection?.surface ?? null;
 }
@@ -3014,7 +3013,6 @@ export function usePersistSessionLastMobileSurface(): (
   surface: LocalSettings['sessionLastMobileSurfaceBySessionId'][string],
   serverId?: string | null,
 ) => void {
-  const applyLocalSettings = useApplyLocalSettings();
   const activeServer = useActiveServerSnapshot();
   return React.useCallback((sessionId, surface, serverId) => {
     const normalizedSessionId = normalizeSessionId(sessionId);
@@ -3036,10 +3034,10 @@ export function usePersistSessionLastMobileSurface(): (
       [currentStorageKey]: surface,
     };
     delete next[predecessorStorageKey];
-    applyLocalSettings({
+    state.applyLocalSettings({
       sessionLastMobileSurfaceBySessionId: next,
-    });
-  }, [activeServer.serverId, applyLocalSettings]);
+    }, { source: 'ui' });
+  }, [activeServer.serverId]);
 }
 
 export type SessionCompanionPreferenceEntry = LocalSettings['sessionCompanionPreferencesBySessionV1'][string];
@@ -3141,7 +3139,6 @@ export function usePersistProjectLastMobileSurface(): (
   surface: LocalSettings['projectLastMobileSurfaceByWorkspaceRefId'][string],
   serverId?: string | null,
 ) => void {
-  const applyLocalSettings = useApplyLocalSettings();
   const activeServer = useActiveServerSnapshot();
   return React.useCallback((workspaceRefId, surface, serverId) => {
     const state = getStorage().getState();
@@ -3154,13 +3151,13 @@ export function usePersistProjectLastMobileSurface(): (
     if (!storageKey) return;
     const current = state.localSettings.projectLastMobileSurfaceByWorkspaceRefId ?? {};
     if (current[storageKey] === surface) return;
-    applyLocalSettings({
+    state.applyLocalSettings({
       projectLastMobileSurfaceByWorkspaceRefId: {
         ...current,
         [storageKey]: surface,
       },
-    });
-  }, [activeServer.serverId, applyLocalSettings]);
+    }, { source: 'ui' });
+  }, [activeServer.serverId]);
 }
 
 // Artifact hooks

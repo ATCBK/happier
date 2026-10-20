@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { useHomeWelcome, type HomeWelcome } from './useHomeWelcome';
 
 vi.mock('react-native', async () => {
@@ -23,13 +24,15 @@ describe('Home Welcome planet', () => {
     let previous: ReturnType<typeof storage.getState>;
     beforeEach(() => {
         previous = storage.getState();
-        storage.setState(state => ({ ...state, localSettings: { ...localSettingsDefaults, homeWelcomeSeenAt: null } }));
+        storage.setState(state => ({ ...state,
+            settings: settingsParse({ actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
+            localSettings: { ...localSettingsDefaults, homeWelcomeSeenAt: null } }));
     });
     afterEach(async () => {
         await act(async () => { storage.setState(previous, true); });
     });
 
-    it('plays once, on the first arrival at Home, and never again on this device', async () => {
+    it('plays once and remembers the arrival on this device even with Settings writes Off', async () => {
         const first: HomeWelcome[] = [];
         const screen = await renderScreen(<Home eligible={false} seen={first} />);
         expect(first.some(welcome => welcome.playing)).toBe(false);

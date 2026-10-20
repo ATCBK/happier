@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 describe('machine administration target demand', () => {
-    it.each(['select', 'clear'] as const)('releases an unavailable route when the person explicitly chooses to %s', async (intent) => {
+    it.each(['select', 'clear'] as const)('remembers %s navigation past an unavailable route with Settings writes Off', async (intent) => {
         const syncRuntime = await import('@/sync/syncEngine');
         const requiredSync: typeof import('@/sync/sync') = createRequire(import.meta.url)('../../../sync.ts');
         requiredSync.registerSyncRuntime(syncRuntime);
@@ -53,7 +53,8 @@ describe('machine administration target demand', () => {
                 machineListByServerId: { [profile.id]: [createMachineFixture({ id: saved.machineId, activeAt: Date.now() }),
                     createMachineFixture({ id: 'other-machine', activeAt: Date.now() })] },
                 machineListStatusByServerId: { [profile.id]: 'idle' },
-                settings: { ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved } } }));
+                settings: { ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved },
+                    actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
             const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', { initialTarget: requested }));
             expect(hook.getCurrent().selectedTarget).toEqual(requested);
             expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
