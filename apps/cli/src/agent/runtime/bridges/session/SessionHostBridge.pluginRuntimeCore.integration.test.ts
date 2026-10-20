@@ -23,6 +23,8 @@ import { createSessionAttachFile } from '@/daemon/sessionAttachFile';
 import { createNativeSessionClientTestPort } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
 import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
+import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
+import type { HostSessionRuntimeHookRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 
 const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
 
@@ -185,6 +187,7 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
           source: 'provider' as const,
         }],
         additionalRedactionValues: ['synthetic-consumer-token'],
+        cleanup: async () => {},
       }));
       const binding = { v: 1 as const, slot: { kind: 'provider_model' as const }, resourceId: 'resource-1',
         expectedResourceRevision: 3, deliveryMode: 'brokered' as const, teamId: 'team-1' };
@@ -234,7 +237,7 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
           transcriptSession: {},
           messageBuffer: {},
           mcpServers: {},
-          permissionHandler: {},
+          permissionHandler: { cancelByPluginTurn: async () => undefined },
           getPermissionMode: () => 'safe-yolo',
           memoryRecallGuidanceEnabled: false,
         } as never);
@@ -245,6 +248,9 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
             resetOrDisposeRuntime: expect.any(Function),
           },
         });
+        if (!runtime) throw new Error('Expected the created host runtime');
+        const resolved = resolveHostSessionRuntimeFactoryResult(runtime);
+        const hookRuntime = (resolved.nativeRuntime ?? resolved.runtime) as HostSessionRuntimeHookRuntime;
         const operations = (runtime as Readonly<{ operations: Readonly<{
           sendTurnPrompt(prompt: string, input: Readonly<{
             turnId: string;
@@ -252,13 +258,6 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
             userMessageSeq: number;
           }>): Promise<void>;
           subscribeRuntimeEvents(listener: (event: Readonly<{ kind?: string; turnId?: string }>) => void): (() => void) | void;
-          prepareRunTeamCredentialProviderBinding?(request: Readonly<{
-            runId: string;
-            agentId: string;
-            resourceId: string;
-            modelId: string;
-            selection?: import('@happier-dev/protocol').TeamCredentialProviderModelSelectionV1;
-          }>): Promise<unknown>;
           resetOrDisposeRuntime(): Promise<void>;
         }> }>).operations;
         const events: Readonly<{ kind?: string; turnId?: string }>[] = [];
@@ -270,10 +269,10 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
         });
         expect(events).toContainEqual(expect.objectContaining({
           kind: 'input-accepted',
-          turnId: 'runner-external-turn-1',
+          delivery: { kind: 'newTurn', turnId: 'runner-external-turn-1' },
         }));
         expect(upstreamRequests).toEqual([{ model: 'gpt-5.5', input: 'brokered turn through external plugin' }]);
-        await expect(operations.prepareRunTeamCredentialProviderBinding?.({
+        await expect(hookRuntime.prepareRunTeamCredentialProviderBinding?.({
           runId: 'run-1',
           agentId,
           resourceId: 'resource-1',
@@ -295,7 +294,7 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
         });
         // An attached Run that independently selected a direct resource for
         // another Agent opens its own selection for its own Agent.
-        await operations.prepareRunTeamCredentialProviderBinding?.({
+        await hookRuntime.prepareRunTeamCredentialProviderBinding?.({
           runId: 'run-direct',
           agentId: 'run-agent',
           resourceId: 'resource-direct',
