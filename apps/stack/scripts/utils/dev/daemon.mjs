@@ -254,6 +254,16 @@ export async function startDevDaemon({
     }
     return { started: true };
   } catch (error) {
+    if (error?.code === 'source_bundle_unavailable') {
+      // No daemon generation has been built for this Stack yet. The reload
+      // coordinator's initial daemon refresh is building one and cold-starts the
+      // daemon when it lands; restarting the Stack would only restart that build.
+      logger.warn(
+        '[local] daemon: the first daemon build is running in the background; the daemon starts as soon as it is ready. ' +
+          'Keep the stack running: a restart starts that build over.',
+      );
+      return { started: false, reason: 'daemon-awaiting-first-build' };
+    }
     logger.warn(
       '[local] daemon startup failed; keeping the stack running so daemon recovery or the next source reload can retry. ' +
         `(${error instanceof Error ? error.message : String(error)})`,

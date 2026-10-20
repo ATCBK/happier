@@ -370,7 +370,10 @@ async function readSelectedSourceRuntimeBundle({ stackBaseDir, component, requir
   const record = selected?.entrypoint
     ? await readOptionalJson(join(resolve(dirname(selected.entrypoint), '../../..'), 'source-bundle.json')) : null;
   if (!record?.identity || record.entrypoint !== selected?.entrypoint || !existsSync(record.entrypoint)) {
-    throw new Error(`[source-bundle] selected source ${component} bundle is unavailable; explicitly restart the Stack to select current source`);
+    throw Object.assign(
+      new Error(`[source-bundle] selected source ${component} bundle is unavailable; explicitly restart the Stack to select current source`),
+      { code: 'source_bundle_unavailable' },
+    );
   }
   const { reuseFingerprint, sourceInputDigests, inputIdentity, ...built } = record;
   return built;
