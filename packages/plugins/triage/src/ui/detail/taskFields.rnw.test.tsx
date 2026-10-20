@@ -9,7 +9,7 @@ import type { PluginUiTargetedContributionsV1 } from '@happier-dev/plugin-sdk/ui
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1, TriageSourceDescriptorV1Schema,
-  type TriageTaskFieldV1, type TriageTaskFieldsV1, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
+  type TriageTaskCapabilitiesV1, type TriageTaskFieldV1, type TriageTaskFieldsV1, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observations.test-support.js';
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
@@ -22,7 +22,7 @@ afterEach(async () => { for (const fixture of mounted.splice(0)) await fixture.d
 
 function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, role: 'create' | 'edit', readOnly = false,
   fields: readonly TriageTaskFieldV1[] = ['title', 'body'],
-  transitions: readonly Readonly<{ id: string; label: string }>[] = []): PluginUiTargetedContributionsV1 {
+  transitions: NonNullable<TriageTaskCapabilitiesV1['transitions']> = []): PluginUiTargetedContributionsV1 {
   const protocol = { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 };
   const contributor = { pluginId: source.pluginId, contributionId: source.localId,
     occurrenceId: 'source-one', sourceCustody: { kind: 'development' as const, registeredRootId: 'task-source' } };
@@ -98,13 +98,15 @@ it('keeps task creation unavailable until sources are read and distinguishes set
 });
 
 async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean; truncated?: boolean; readFailed?: boolean;
-  fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1; transitions?: readonly Readonly<{ id: string; label: string }>[] }> = {}) {
+  fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1; transitions?: NonNullable<TriageTaskCapabilitiesV1['transitions']>;
+  nativeLabel?: string }> = {}) {
   const source = createTriageSourceV1Fixture();
   const entryRef = testkitEntryRef();
   const base = testkitObservation();
   if (base.outcome.kind !== 'present') throw new Error('Expected a present fixture');
   const observation = { ...base, outcome: { ...base.outcome, snapshot: { ...base.outcome.snapshot,
-    ...(options.truncated ? { projectionTruncated: true as const } : {}) } } };
+    ...(options.truncated ? { projectionTruncated: true as const } : {}),
+    ...(options.nativeLabel === undefined ? {} : { state: { presentation: 'active' as const, nativeLabel: options.nativeLabel } }) } } };
   const row = foldTriageListWindow({ observations: [{ ...observation, entryRef }], lanes: [],
     configuredSourcesStatus: 'complete', activeSourceInstanceIds: [observation.sourceInstanceId],
     lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: 1_000 }).rows[0]!;
@@ -253,10 +255,14 @@ it('edits labels as a list of names, like assignees, not as a JSON document', as
 });
 
 it('offers the source transitions as a Change status menu beside Edit task and commits the chosen one', async () => {
-  const { fixture, saved, transitioned } = await mountEditor({ transitions: [{ id: 'close', label: 'Closed' }, { id: 'reopen', label: 'Open' }] });
+  const { fixture, saved, transitioned } = await mountEditor({ transitions: [
+    { id: 'close', label: 'Closed', state: { presentation: 'resolved', nativeLabel: 'Closed', completionReason: 'completed' } },
+    { id: 'reopen', label: 'Open', state: { presentation: 'active', nativeLabel: 'Open' } },
+  ] });
   // An operation, not a field: no unlabelled "Choose…" select waiting for a value.
   expect(document.querySelector('[aria-label="Change status"][role="combobox"]')).toBeNull();
-  const trigger = await fixture.getByRole('button', { name: 'Change status' });
+  // The fixture task is Open: the control says so, and its name keeps the operation.
+  const trigger = await fixture.getByRole('button', { name: 'Change status, Open' });
   await act(async () => { await fixture.press(trigger); });
   const closed = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes('Closed'));
   expect(closed).toBeDefined();
@@ -264,6 +270,15 @@ it('offers the source transitions as a Change status menu beside Edit task and c
   expect(transitioned).toHaveLength(1);
   expect(transitioned[0]).toMatchObject({ transitionId: 'close' });
   expect(saved).toEqual([]);
+});
+
+it('names the status control by the task\'s current status in the source\'s own word', async () => {
+  const { fixture } = await mountEditor({ nativeLabel: 'In Review', transitions: [
+    { id: 'done', label: 'Done', state: { presentation: 'resolved', nativeLabel: 'Done', completionReason: 'completed' } },
+  ] });
+  const trigger = await fixture.getByRole('button', { name: 'Change status, In Review' });
+  expect(trigger).toBeDefined();
+  await expect(fixture.getByText('In Review')).resolves.toBeDefined();
 });
 
 it('does not report an unsettled commit when its authoritative reread fails', async () => {

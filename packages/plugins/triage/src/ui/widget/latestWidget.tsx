@@ -9,6 +9,7 @@ import {
   Item,
   ItemGroup,
   LoadingState,
+  TaskStatusGlyph,
   defineUiSurface,
   usePluginHostApi,
   usePluginTranslation,
@@ -18,13 +19,13 @@ import {
 } from '@happier-dev/plugin-ui';
 
 import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, type TriageMountedUiOperationV1, type TriageMountedUiResultV1 } from '../../actions/mountedUiProtocol.js';
-import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, triageTaskStatusCategoryV1 } from '@happier-dev/triage-protocol/v1';
 import { bindTriageMountedUiActions } from '../mountedActions.js';
 import { useTriageCurrentUiContextPublication } from '../currentContextPublication.js';
 import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1, TRIAGE_TASK_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
 import { TRIAGE_LIST_DEFAULT_LENS_V1, triageEntryRowKey } from '../../projection/listWindow.js';
 import { readTriageSourceDescriptorV1 } from '../detail/sourceSurface.js';
-import { readTriageRowDetailToneV1, readTriageRowMarkV1 } from '../list/rows.js';
+import { readTriageRowBylinePlaceV1, readTriageRowDetailToneV1, readTriageRowMarkV1 } from '../list/rows.js';
 import { openTriageLinkedEntry } from '../navigation/openLinkedEntry.js';
 import { projectTriageEntryDisplay } from '../window/entryDisplay.js';
 import { projectTriageListWindow } from '../window/mountedWindow.js';
@@ -162,6 +163,28 @@ export function TriageLatestWidget({ tasksOnly = false }: Readonly<{ tasksOnly?:
           ?.kinds.find((kind) => kind.id === row.entryRef.kindId)?.workflowSubject ?? null;
         const mark = readTriageRowMarkV1(display, workflowSubject);
         const detailTone = readTriageRowDetailToneV1(display);
+        // My tasks (lab `tasks-widget`): the status category leads, line two is where and the key, and the one
+        // loud fact a task has here is a blocker; why-it's-here reasons stay on PRs & Issues.
+        const snapshot = row.content?.outcome.snapshot;
+        const category = tasksOnly && snapshot !== undefined ? triageTaskStatusCategoryV1(snapshot.state) : null;
+        if (tasksOnly) {
+          const blocked = (snapshot?.relations?.blockedBy?.length ?? 0) > 0;
+          return (
+            <Item
+              key={display.key}
+              testID={`triage-latest-widget.row.${display.key}`}
+              title={display.title}
+              titleNumberOfLines={1}
+              subtitle={readTriageRowBylinePlaceV1(display)}
+              subtitleNumberOfLines={1}
+              icon={category === null ? <Icon name={mark.name} size="small" tone={mark.tone} /> : <TaskStatusGlyph category={category} />}
+              {...(blocked ? { detail: text('plugins.triage.tasks.progress.blocked', 'Blocked'), detailNumberOfLines: 1 } : {})}
+              density="compact"
+              onPress={() => { void openTriageLinkedEntry(hostApi, row.entryRef, undefined,
+                { ...TRIAGE_ROUTE_DEFAULT_LENS_V1, filters: { ...TRIAGE_ROUTE_DEFAULT_LENS_V1.filters, tasks: 'mine' } }); }}
+            />
+          );
+        }
         return (
           <Item
             key={display.key}

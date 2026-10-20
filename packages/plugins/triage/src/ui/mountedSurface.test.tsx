@@ -415,11 +415,13 @@ const SOURCE_REACHING_ACTIONS: ReadonlySet<string> = new Set([
 ]);
 
 describe('the mounted PRs & Issues surface', () => {
-    it('opens task creation from the Tasks lens without a second list mount or a provider write', async () => {
+    it('opens New task as a draft in the detail\'s place without a second list mount or a provider write', async () => {
         const harness = createHarness();
         const shell = await mountSurface(renderShellSurface, harness, 'tasks-create-entry', {}, { subPath: 'tasks,everyone' });
         await settleWindow('view', shell);
-        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Create task' })); });
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'New task' })); });
+        // The detail frame names the draft; where it goes comes first.
+        await expect(shell.getByRole('heading', { name: 'New task' })).resolves.toBeDefined();
         await expect(shell.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
         expect(harness.actionCalls.filter((id) => id === 'tasks/create-v1')).toEqual([]);
     });

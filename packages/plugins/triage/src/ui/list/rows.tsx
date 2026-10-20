@@ -12,6 +12,7 @@ import {
   Row,
   Stack,
   Status,
+  TaskStatusGlyph,
   Text,
   usePluginHostApi,
   usePluginTranslation,
@@ -20,12 +21,13 @@ import {
   type CollectionRowActions,
   type IconName,
   type ListItemProps,
+  type PluginTranslate,
   type TextTone,
 } from '@happier-dev/plugin-ui';
 import { formatTriageTimestampV1, resolveTriageRowFactStatusToneV1 } from '@happier-dev/triage-protocol/v1';
 
 import type { TriageListDisplayRowV1 } from '../marks/pinnedRows.js';
-import type { TriageSourceDescriptorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
+import type { TriageEntryRelationsV1, TriageSourceDescriptorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
 import { readTriageSourceDescriptorV1, resolveTriageSourceDescriptorV1, resolveTriageSourceWorkflowSubjectV1 } from '../detail/sourceSurface.js';
 import {
   readTriageEntryRowAnnouncementV1,
@@ -530,6 +532,12 @@ export function useTriageListAnatomyV1(input: Readonly<{
   organizing?: boolean;
   /** Groups whose one shared suggestion their header already says (`readTriageSharedGroupReasonsV1`). */
   sharedGroupReasons?: ReadonlyMap<TriageListGroupIdV1, string>;
+  /**
+   * The Tasks lens (lab `tasks-list`): the status category as the glyph, the source's own status word in a Status
+   * column after the task, and the relation hint (sub-tasks done, blocked) in Progress. Why-it's-here reasons and
+   * the PR signal stay on PRs & Issues; the agent's state stays in Agent.
+   */
+  tasks?: boolean;
 }>): CollectionAnatomy<TriageListItemV1> {
   const text = usePluginTranslation();
   const { locale, targetedContributions } = useSurfaceContext();
@@ -537,7 +545,9 @@ export function useTriageListAnatomyV1(input: Readonly<{
   // host-context pushes must not replace every row's anatomy and callbacks.
   const contributionSnapshotJson = JSON.stringify(targetedContributions);
   // A column no listed entry fills is not drawn: an all-dash Agent column is noise, like an all-dash Signal one.
-  const { withSignal, withAgent = true, withReason = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS } = input;
+  const { withAgent = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS, tasks = false } = input;
+  const withSignal = input.withSignal && !tasks;
+  const withReason = (input.withReason ?? true) && !tasks;
   return React.useMemo<CollectionAnatomy<TriageListItemV1>>(() => {
     const descriptorOf = (item: TriageListItemV1) => resolveTriageSourceDescriptorV1(targetedContributions, item.row.entryRef.source);
     return {
@@ -577,6 +587,8 @@ export function useTriageListAnatomyV1(input: Readonly<{
         );
       },
       glyph: (item) => {
+        const category = item.task?.category ?? null;
+        if (category !== null) return <TaskStatusGlyph category={category} />;
         const mark = readTriageRowMarkV1(
           item.row,
           resolveTriageSourceWorkflowSubjectV1(targetedContributions, item.row.entryRef),
@@ -609,10 +621,28 @@ export function useTriageListAnatomyV1(input: Readonly<{
             pluginId={row.entryRef.source.pluginId}
             label={place}
             keep={designation}
-            trail={row.authorLabel}
+            trail={tasks ? item.task?.statusLabel ?? null : row.authorLabel}
           />
         );
       },
+      ...(tasks ? { fields: [{
+        key: 'status',
+        title: text('plugins.triage.tasks.column.status', 'Status'),
+        leading: true,
+        minWidth: 104,
+        priority: 3,
+        render: (item: TriageListItemV1) => item.task?.statusLabel == null ? null
+          : <Text variant="meta" tone="secondary" value={item.task.statusLabel} numberOfLines={1} />,
+      }, {
+        key: 'progress',
+        title: text('plugins.triage.tasks.column.progress', 'Progress'),
+        minWidth: 120,
+        priority: 2,
+        render: (item: TriageListItemV1) => {
+          const progress = readTriageTaskProgressV1(item.task?.relations ?? null, text);
+          return progress === null ? null : <Text variant="meta" tone="secondary" value={progress} numberOfLines={1} />;
+        },
+      }] } : {}),
       ...(withReason ? { reason: (item: TriageListItemV1) => {
         const { row } = item;
         // The group's header already says the one suggestion all its rows share; the row does not repeat it.
@@ -667,7 +697,7 @@ export function useTriageListAnatomyV1(input: Readonly<{
       }).accessibilityHint,
       testID: (item) => triageListRowTestId(item.row.key),
       columnTitles: {
-        title: text('plugins.triage.surface.column.entry', 'Entry'),
+        title: tasks ? text('plugins.triage.tasks.column.task', 'Task') : text('plugins.triage.surface.column.entry', 'Entry'),
         where: text('plugins.triage.surface.column.where', 'Where'),
         reason: text('plugins.triage.surface.column.reason', 'Why it’s here'),
         signal: text('plugins.triage.surface.column.signal', 'Signal'),
@@ -675,5 +705,27 @@ export function useTriageListAnatomyV1(input: Readonly<{
         age: text('plugins.triage.surface.column.age', 'Age'),
       },
     };
-  }, [contributionSnapshotJson, locale, organizing, sharedGroupReasons, text, withAgent, withReason, withSignal]);
+  }, [contributionSnapshotJson, locale, organizing, sharedGroupReasons, tasks, text, withAgent, withReason, withSignal]);
+}
+
+/**
+ * A task's relation hint for its Progress cell, from the source's live relations: a blocker first (it decides what
+ * can happen next), then sub-tasks done ("3 of 5"), then the parent it belongs to. Unread relations say nothing:
+ * absent is unknown, never "none".
+ */
+export function readTriageTaskProgressV1(
+  relations: TriageEntryRelationsV1 | null,
+  text: PluginTranslate,
+): string | null {
+  if (relations === null) return null;
+  const blockers = relations.blockedBy?.length ?? 0;
+  if (blockers > 0) return text('plugins.triage.tasks.progress.blocked', 'Blocked');
+  const children = relations.children;
+  if (children !== undefined && children.total > 0) {
+    return children.completed === undefined
+      ? text('plugins.triage.tasks.progress.subtasks', '{total} sub-tasks', { total: children.total })
+      : text('plugins.triage.tasks.progress.done', '{completed} of {total}', { completed: children.completed, total: children.total });
+  }
+  if (relations.parent !== undefined) return text('plugins.triage.tasks.progress.subtask', 'Sub-task');
+  return null;
 }

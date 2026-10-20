@@ -330,6 +330,8 @@ export const TRIAGE_SHELL_LIST_REGION_TEST_ID_V1 = 'triage-shell-list-region';
 
 /** The single responsive container that owns the mounted source detail. */
 export const TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 = 'triage-shell-detail-region';
+/** The Collection key of a new task's draft while it is open in the detail's place; never an entry's key. */
+export const TRIAGE_TASK_DRAFT_KEY_V1 = 'triage:task-draft';
 
 const TRIAGE_FILL_STYLE_V1 = Object.freeze({
   flex: 1,
@@ -403,6 +405,13 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   React.useEffect(() => {
     if (props.createDraft !== undefined) setCreatingTask(true);
   }, [props.createDraft]);
+  // A new task is a draft in the detail's own place (lab `tasks-form`): the list stays in view beside it, and Create
+  // turns it into that task's detail in place. Closing the draft also ends a handed-off draft (a message's Create task).
+  const onCreateDraftClose = props.onCreateDraftClose;
+  const closeTaskDraft = React.useCallback(() => {
+    setCreatingTask(false);
+    onCreateDraftClose?.();
+  }, [onCreateDraftClose]);
   const [editingSources, setEditingSources] = React.useState(false);
   const [organizing, setOrganizing] = React.useState(false);
   /**
@@ -588,10 +597,10 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const groupAxis = React.useMemo(() => ({
     axis: taskAudience !== undefined ? [
       { key: 'pinned', title: text('plugins.triage.surface.section.pinned', 'Pinned') },
+      { key: 'started', title: text('plugins.triage.tasks.started', 'In progress') },
+      { key: 'unstarted', title: text('plugins.triage.tasks.unstarted', 'To do') },
       { key: 'backlog', title: text('plugins.triage.tasks.backlog', 'Backlog') },
-      { key: 'unstarted', title: text('plugins.triage.tasks.unstarted', 'Unstarted') },
-      { key: 'started', title: text('plugins.triage.tasks.started', 'Started') },
-      { key: 'completed', title: text('plugins.triage.tasks.completed', 'Completed') },
+      { key: 'completed', title: text('plugins.triage.tasks.completed', 'Done') },
       { key: 'canceled', title: text('plugins.triage.tasks.canceled', 'Canceled') },
       { key: 'everythingElse', title: text('plugins.triage.tasks.unclassified', 'Other states') },
     ] : [
@@ -1400,7 +1409,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     window: collectionWindow,
     // Open is the reducer's selection, whether or not the window still lists it: an entry that left the window
     // keeps its detail (with the last known header) until the reader closes it.
-    openKey: surface.selection === null ? null : triageEntryRowKey(surface.selection.entryRef),
+    openKey: creatingTask ? TRIAGE_TASK_DRAFT_KEY_V1
+      : surface.selection === null ? null : triageEntryRowKey(surface.selection.entryRef),
     onOpenChange: onCollectionOpenChange,
     expandable: true,
   });
@@ -1629,6 +1639,12 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   }), [currentUiContextRows, detailSessions, detailTab, selectedKey, mountId, mountedCommands, surface, text]);
   useTriageCurrentUiContextPublication(hostApi, currentUiContext);
   openChangeRef.current = (key) => {
+    if (key === TRIAGE_TASK_DRAFT_KEY_V1) return;
+    // Opening a row, or closing the pane, puts the draft away: nothing was sent while it was a draft.
+    if (creatingTask) {
+      closeTaskDraft();
+      if (key === null) return;
+    }
     if (key === null) dismissDetail();
     else activateRow(key);
   };
@@ -1644,6 +1660,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     withReason: items.some((item) => readTriageRowSaysReasonV1(item, sharedGroupReasons)),
     organizing,
     sharedGroupReasons,
+    tasks: taskAudience !== undefined,
   });
   // Every row names its own selection below; the current detail must not
   // replace all row destinations when the rest of the lens is unchanged.
@@ -1943,7 +1960,20 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const renderListToolbar = (slots?: CollectionHeaderSlots) => (
     <CollectionToolbar
       {...(slots === undefined ? {} : { slots })}
-      lens={views.control}
+      // On Tasks the lens leads with whose tasks (Mine · Agents · Everyone), three short options as one segmented
+      // control, then the saved view.
+      lens={taskAudience === undefined ? views.control : <Row gap="small" align="center"><Select
+        label={text('plugins.triage.tasks.audience', 'Show tasks')}
+        presentation="segmented"
+        value={taskAudience}
+        options={(['mine', 'agents', 'everyone'] as const).map((value) => ({ value,
+          label: text(`plugins.triage.tasks.${value}`, value === 'mine' ? 'Mine' : value === 'agents' ? 'Agents' : 'Everyone') }))}
+        onChange={(value) => { if (value === 'mine' || value === 'agents' || value === 'everyone')
+          applyLensEdit({ kind: 'taskAudienceChanged', audience: value }, 'lens'); }}
+      />{views.control}</Row>}
+      // New task is the Tasks page's one primary action.
+      {...(taskAudience === undefined ? {} : { primary: { label: text('plugins.triage.tasks.new', 'New task'),
+        onPress: () => setCreatingTask(true) } })}
       refine={{
         label: text('plugins.triage.surface.filters', 'Filters'),
         activeCount: activeFilterCount,
@@ -1974,16 +2004,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           onChangeSmartPolicy: changeSmartPolicy,
         }),
       }}
-      accessory={taskAudience !== undefined ? <Row gap="small"><Select
-        label={text('plugins.triage.tasks.audience', 'Show tasks')}
-        presentation="segmented"
-        value={taskAudience}
-        options={(['mine', 'agents', 'everyone'] as const).map((value) => ({ value,
-          label: text(`plugins.triage.tasks.${value}`, value === 'mine' ? 'Mine' : value === 'agents' ? 'Agents' : 'Everyone') }))}
-        onChange={(value) => { if (value === 'mine' || value === 'agents' || value === 'everyone')
-          applyLensEdit({ kind: 'taskAudienceChanged', audience: value }, 'lens'); }}
-      /><Button title={text('plugins.triage.tasks.create', 'Create task')} variant="plain"
-        onPress={() => setCreatingTask(true)} /></Row> : organizing ? (
+      accessory={organizing ? (
         <Button
           titleKey="plugins.triage.sessionLinks.done"
           title="Done"
@@ -2171,7 +2192,16 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   );
 
   /** The one detail composition, in whichever container the Collection holds it. */
-  const renderDetail = (_key: string, { headerHosted, pushed }: CollectionDetailRenderContext): React.ReactNode => detailContent(headerHosted, pushed);
+  const renderDetail = (key: string, { headerHosted, pushed }: CollectionDetailRenderContext): React.ReactNode => key === TRIAGE_TASK_DRAFT_KEY_V1
+    ? <TriageCreateTaskFields key={JSON.stringify(props.createDraft ?? {})} sources={configuredSources.sources}
+      sourcesLoaded={configuredSources.loaded} sourcesUnavailableReason={configuredSources.unavailableReason}
+      {...(props.createDraft === undefined ? {} : { draft: props.createDraft })}
+      onApplied={refresh} onClose={closeTaskDraft}
+      onCreated={(created) => {
+        closeTaskDraft();
+        applyLensEdit({ kind: 'rowActivated', sectionId: null, entryRef: created.entryRef, sourceInstanceId: created.sourceInstanceId }, 'selection');
+      }} />
+    : detailContent(headerHosted, pushed);
   const selectedHeader = selectedRow === null ? lastKnownHeader : projectTriageDetailHeaderV1({
     row: selectedRow,
     lanes: listWindow?.window.lanes ?? [],
@@ -2181,7 +2211,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     linkedSessionsHasMore: false,
     text,
   });
-  const detailHeader = () => {
+  const detailHeader = (key: string) => {
+    if (key === TRIAGE_TASK_DRAFT_KEY_V1) return { title: text('plugins.triage.tasks.new', 'New task') };
     if (selectedHeader === null) return { title: neverListedHere
       ? text('plugins.triage.surface.entryNotInFilter.heading', 'This entry is outside the current filter')
       : text('plugins.triage.surface.entryGone.heading', 'This entry is no longer in the list') };
@@ -2205,13 +2236,6 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   return (
     <Screen safeArea style={TRIAGE_FILL_STYLE_V1}>
       <Stack gap="small" style={TRIAGE_FILL_STYLE_V1}>
-      {!creatingTask ? null : <TriageCreateTaskFields key={JSON.stringify(props.createDraft ?? {})} sources={configuredSources.sources}
-        sourcesLoaded={configuredSources.loaded} sourcesUnavailableReason={configuredSources.unavailableReason}
-        {...(props.createDraft === undefined ? {} : { draft: props.createDraft })}
-        onApplied={refresh} onClose={() => {
-          setCreatingTask(false);
-          props.onCreateDraftClose?.();
-        }} />}
       {routeWriteFailure === null ? null : (
         <Banner
           tone="warning"
@@ -2237,7 +2261,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           anatomy={anatomy}
           accessibilityLabel={pageTitle}
           title={pageTitle}
-          presentation={taskAudience !== undefined ? 'list' : collectionView === 'board' ? 'board' : 'table'}
+          presentation={taskAudience === undefined && collectionView === 'board' ? 'board' : 'table'}
           // The first run is a page to read, not a list to scan: it scrolls with the page, toolbar included, so the
           // lower sources and the steps stay reachable on a phone. A populated list keeps its one scroller.
           {...(state.kind === 'configureSources' ? { scroll: 'page' as const } : {})}
@@ -2508,7 +2532,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             ? {}
             : {
                 search: {
-                  label: text('plugins.triage.surface.search', 'Search PRs & Issues'),
+                  label: taskAudience === undefined
+                    ? text('plugins.triage.surface.search', 'Search PRs & Issues')
+                    : text('plugins.triage.tasks.search', 'Search tasks'),
                   value: surface.search.query,
                   onValueChange: changeSearch,
                   onComposingValueChange: changeComposingSearch,
