@@ -94,4 +94,43 @@ describe('readWorktreeStatusEnrichmentForPaths', () => {
         expect(result[0]?.changeCount).toBeUndefined();
         expect(result[0]?.lastActivityAt).toBeUndefined();
     });
+
+    it('uses an explicitly configured existing local default when remote HEAD is unavailable', async () => {
+        const repoRoot = await initRepoWithCommit('git-plugin-enrich-local-default-');
+        const remote = await mkdtemp(join(tmpdir(), 'git-plugin-enrich-local-remote-'));
+        const worktree = join(repoRoot, 'feature-worktree');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }), () => rm(remote, { recursive: true, force: true }));
+        await runGit(remote, ['init', '--bare']);
+        await runGit(repoRoot, ['branch', '-m', 'release/default']);
+        await runGit(repoRoot, ['config', '--local', 'init.defaultBranch', 'release/default']);
+        await runGit(repoRoot, ['remote', 'add', 'origin', remote]);
+        await runGit(repoRoot, ['worktree', 'add', '-b', 'feature', worktree]);
+        await runGit(repoRoot, ['push', 'origin', 'release/default', 'feature']);
+        const read = async () => (await runWithRealGitScmRuntime(() => readWorktreeStatusEnrichmentForPaths({ worktreePaths: [worktree] })))[0];
+        expect(await read()).toMatchObject({ ahead: 0, upstream: null, mergedIntoDefault: true });
+
+        await writeTrackedFile(worktree, 'feature.txt', 'new feature\n');
+        await runGit(worktree, ['commit', '-m', 'unpublished feature']);
+        expect(await read()).toMatchObject({ ahead: 1, mergedIntoDefault: false });
+        await runGit(repoRoot, ['push', 'origin', 'feature']);
+        expect(await read()).toMatchObject({ ahead: 0, mergedIntoDefault: false });
+
+        // A real remote default remains authoritative over a different local default.
+        await runGit(repoRoot, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/feature']);
+        expect(await read()).toMatchObject({ mergedIntoDefault: true });
+    });
+
+    it('keeps the merge fact unknown without a verified configured local default', async () => {
+        const repoRoot = await initRepoWithCommit('git-plugin-enrich-unknown-default-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        const read = async () => (await runWithRealGitScmRuntime(() => readWorktreeStatusEnrichmentForPaths({ worktreePaths: [repoRoot] })))[0];
+        // Existing main and the checked-out branch alone are not default evidence.
+        expect((await read())?.mergedIntoDefault).toBeUndefined();
+        await runGit(repoRoot, ['config', '--local', 'init.defaultBranch', 'missing']);
+        expect((await read())?.mergedIntoDefault).toBeUndefined();
+        await runGit(repoRoot, ['config', '--local', 'init.defaultBranch', 'HEAD']);
+        expect((await read())?.mergedIntoDefault).toBeUndefined();
+        await runGit(repoRoot, ['config', '--local', 'init.defaultBranch', 'main~0']);
+        expect((await read())?.mergedIntoDefault).toBeUndefined();
+    });
 });

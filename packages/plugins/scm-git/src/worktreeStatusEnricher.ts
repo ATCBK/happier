@@ -4,7 +4,7 @@ import type { ScmWorktree, ScmWorktreeEnrichmentEntry } from '@happier-dev/plugi
 import { runScmCommand } from './runtime.js';
 import { inspectGitCheckoutIdentity } from './checkoutIdentity.js';
 import { parseGitStatusPorcelainShortZ } from './statusParser.js';
-import { resolveRemoteDefaultRef } from './statusSnapshot.js';
+import { resolveGitDefaultRef } from './statusSnapshot.js';
 import { buildScmNonInteractiveEnv } from './providers/shared/nonInteractiveEnv.js';
 
 export const DEFAULT_WORKTREE_STATUS_CONCURRENCY = 8;
@@ -82,8 +82,19 @@ async function readFacts(path: string, timeoutMs: number): Promise<ScmWorktreeEn
             ? ['rev-list', '--count', '@{upstream}..HEAD'] : ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
         if (ahead.success && /^\d+$/u.test(ahead.stdout.trim())) facts.ahead = Number(ahead.stdout.trim());
     }
-    const defaultRef = remoteHeads.success ? resolveRemoteDefaultRef({ remoteHeadRefsOutput: remoteHeads.stdout,
-        remotes: [], upstreamRef: facts.upstream }) : null;
+    const defaultInput = { remoteHeadRefsOutput: remoteHeads.stdout, remotes: [], upstreamRef: facts.upstream };
+    let defaultRef = remoteHeads.success ? resolveGitDefaultRef(defaultInput) : null;
+    if (remoteHeads.success && !defaultRef) {
+        // A repository-local choice is evidence; ambient init defaults or the main
+        // checkout's current branch do not establish this repository's default.
+        const configured = await command(['config', '--local', '--get', 'init.defaultBranch']);
+        const branch = configured.success ? configured.stdout.trim() : '';
+        if (branch) {
+            const localDefaultRef = `refs/heads/${branch}`;
+            const verified = await command(['show-ref', '--verify', '--quiet', localDefaultRef]);
+            if (verified.success) defaultRef = resolveGitDefaultRef({ ...defaultInput, localDefaultRef });
+        }
+    }
     if (defaultRef) {
         const merged = await command(['merge-base', '--is-ancestor', 'HEAD', defaultRef]);
         if (!merged.timedOut && !merged.outputLimitExceeded && (merged.exitCode === 0 || merged.exitCode === 1)) facts.mergedIntoDefault = merged.exitCode === 0;
