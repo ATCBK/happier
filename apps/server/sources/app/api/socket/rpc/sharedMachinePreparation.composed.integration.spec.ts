@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { Socket } from 'socket.io';
+import { io as connect } from 'socket.io-client';
+import { Server } from 'socket.io';
 import { join } from 'node:path';
 import { access } from 'node:fs/promises';
 import tweetnacl from 'tweetnacl';
@@ -11,6 +12,10 @@ import { computeContentPublicKeyFingerprint, sealEncryptedDataKeyEnvelopeV1, ope
 import { callSocketRpc, type SocketRpcContent } from '@happier-dev/sync-client';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { encodeBase64 as encodeCanonicalBase64 } from '@happier-dev/protocol/crypto/base64';
+import { buildMachineAgentsDetectRequest, projectMachineAgentsDetectResponse } from '@happier-dev/protocol/capabilities/machineAgentInventory';
+import { parseCapabilitiesDetectResponse } from '../../../../../../ui/sources/sync/api/capabilities/capabilitiesProtocol';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -19,11 +24,11 @@ import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { auth } from '@/app/auth/auth';
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { registerMachineAdmissionRoutes } from '@/app/api/routes/machines/registerMachineAdmissionRoutes';
-import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
-import { qualifyCurrentAccountStoredContentSocket } from '@/app/api/testkit/accountStoredContentCompatibility';
+import { currentAccountStoredContentCompatibilitySocketAuth } from '@/app/api/testkit/accountStoredContentCompatibility';
 import * as machineAccess from '@/app/machines/machineAccess';
 import { serializeAccessibleMachineRow } from '@/app/machines/machineSerialization';
-import { registerSocketRpcHandlers } from './registerSocketRpcHandlers';
+import { startSocket } from '../../socket';
+import type { Fastify as AppFastify } from '../../types';
 import { RpcHandlerManager } from '../../../../../../cli/src/api/rpc/RpcHandlerManager';
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent } from '../../../../../../cli/src/api/machine/machineRpcAuthorization';
 import { encrypt, decrypt } from '../../../../../../cli/src/api/encryption';
@@ -31,13 +36,14 @@ import { registerSessionCreationTargetPreparationRpc } from '../../../../../../c
 import { createActionOperationStore } from '../../../../../../cli/src/daemon/actionOperations/actionOperationStore';
 import { createActionOperationRunner } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
 import { createActionOperationRpcHandlers, registerActionOperationRpcHandlers } from '../../../../../../cli/src/daemon/actionOperations/actionOperationRpcHandlers';
+import { registerCapabilitiesHandlers } from '../../../../../../cli/src/rpc/handlers/capabilities';
 
 let harness: LightSqliteHarness;
 const DIRECTORY_PREFLIGHT = RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT;
-beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-shared-preflight-', initAuth: true }); }, 180_000);
+beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-shared-preflight-', initAuth: true, initEncrypt: true }); }, 180_000);
 afterAll(async () => { if (harness) await harness.close(); });
 
-it('composes requester bound-v2 client, Home relay and guest preparation/operation readers', async () => {
+it('composes requester bound-v2 client, real Home sockets and guest inventory/preparation/operation readers', async () => {
     const ownerKeys = tweetnacl.box.keyPair(), requesterKeys = tweetnacl.box.keyPair();
     const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
     const requester = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(requesterKeys.publicKey) } });
@@ -82,6 +88,7 @@ it('composes requester bound-v2 client, Home relay and guest preparation/operati
     app.setSerializerCompiler(serializerCompiler);
     enableAuthentication(app);
     registerMachineAdmissionRoutes(app);
+    startSocket(app as unknown as AppFastify);
     const origin = await app.listen({ port: 0, host: '127.0.0.1' });
     const manager = new RpcHandlerManager({ scopePrefix: machine.id, localMachineId: machine.id,
         encryptionMode: 'e2ee', encryptionKey: dataKey, encryptionVariant: 'dataKey', logger() {},
@@ -93,27 +100,31 @@ it('composes requester bound-v2 client, Home relay and guest preparation/operati
         }),
     });
     registerSessionCreationTargetPreparationRpc({ rpcHandlerManager: manager });
+    registerCapabilitiesHandlers(manager);
     const store = createActionOperationStore();
     for (const accountId of [owner.id, requester.id]) store.create({ operationId: `op-${accountId}`, actionId: 'projects.script.run',
         title: 'Run', scope: { accountId, machineId: machine.id }, cancellation: 'unsupported', inputIdentity: '{}' });
     registerActionOperationRpcHandlers(manager, createActionOperationRpcHandlers({ store,
         runner: createActionOperationRunner({ store, resolveAction: () => null }), machineId: machine.id, resolveAccountId: async () => owner.id }));
 
-    // Only Socket.IO discovery/delivery is simulated. Home access, installation-signed
-    // HTTP revalidation, encryption, registered handlers and operation storage are real.
+    // No internal owners or transport are replaced: the requester and guest
+    // connect to the actual Home; only the guest process runs in this test.
     let wrongMethod = false;
-    const target = { id: 'guest-socket', data: { clientType: 'machine-scoped', machineId: machine.id,
-        verifiedMachineInstallationId: machine.installationId },
-        timeout: () => ({ emitWithAck: async (_event: string, request: SocketRpcRequestPayload) =>
-            manager.handleRequest(wrongMethod ? { ...request, method: `${machine.id}:${ACTION_OPERATION_RPC_METHODS_V2.list}` } : request) }),
-    };
-    const io = createSocketRoomDiscoveryHarness(async room => room === target.id || room.startsWith(`rpc:${owner.id}:${machine.id}:`) ? [target] : []);
-    const caller = Object.assign(createAuthenticatedFakeSocket({ id: 'requester-socket' }), { handshake: { auth: { token: requesterToken } } });
-    qualifyCurrentAccountStoredContentSocket(caller);
-    registerSocketRpcHandlers({ userId: requester.id, socket: caller as unknown as Socket, io });
-    const relay = getSocketHandler(caller, SOCKET_RPC_EVENTS.CALL);
-    const socket = { connected: true, emit() {}, timeout: () => ({ emitWithAck: async (_event: string, payload: unknown) =>
-        new Promise<unknown>((resolve, reject) => { Promise.resolve(relay(payload, resolve)).catch(reject); }) }) };
+    const options = { path: '/v1/updates', transports: ['websocket'], autoConnect: false, reconnection: false };
+    const daemon = connect(origin, { ...options, auth: { token: daemonToken, clientType: 'machine-scoped',
+        machineId: machine.id, runtimeId: 'shared-machine-test', startupSource: 'manual', serviceManaged: false,
+        installationId: machine.installationId, installationPublicKey: encodeCanonicalBase64(installation.publicKey, 'base64url'),
+        installationProof: signMachineInstallationProof({ payload: { version: 1, machineId: machine.id,
+            installationId: machine.installationId!, accountId: owner.id }, privateKey: installation.secretKey }),
+        ...currentAccountStoredContentCompatibilitySocketAuth } });
+    const socket = connect(origin, { ...options, auth: { token: requesterToken,
+        ...currentAccountStoredContentCompatibilitySocketAuth } });
+    const connected = (client: ReturnType<typeof connect>) => new Promise<void>((resolve, reject) => {
+        client.once('connect', resolve); client.once('connect_error', reject); client.connect();
+    });
+    daemon.on(SOCKET_RPC_EVENTS.REQUEST, async (request: SocketRpcRequestPayload, acknowledge: (result: unknown) => void) => {
+        acknowledge(await manager.handleRequest(wrongMethod ? { ...request, method: `${machine.id}:${ACTION_OPERATION_RPC_METHODS_V2.list}` } : request));
+    });
     const content = (key: Uint8Array): SocketRpcContent => ({ mode: 'e2ee', cipher: {
         encryptRaw: async value => encodeBase64(encrypt(key, 'dataKey', value)),
         decryptRaw: async value => decrypt(key, 'dataKey', new Uint8Array(Buffer.from(value, 'base64'))),
@@ -122,6 +133,34 @@ it('composes requester bound-v2 client, Home relay and guest preparation/operati
         target: { kind: 'machine', id: machine.id }, method, params, content: content(key), timeoutMs: 10_000 });
     const missing = join(harness.baseDir, 'must-not-create');
     try {
+        await connected(daemon);
+        for (const method of [DIRECTORY_PREFLIGHT, RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE,
+            ACTION_OPERATION_RPC_METHODS_V2.list, RPC_METHODS.CAPABILITIES_DETECT]) {
+            const qualified = `${machine.id}:${method}`;
+            const registered = new Promise<void>((resolve, reject) => {
+                const receive = (value: { method: string }) => {
+                    if (value.method === qualified) { daemon.off(SOCKET_RPC_EVENTS.REGISTERED, receive); resolve(); }
+                };
+                daemon.on(SOCKET_RPC_EVENTS.REGISTERED, receive);
+                daemon.once(SOCKET_RPC_EVENTS.ERROR, reject);
+            });
+            daemon.emit(SOCKET_RPC_EVENTS.REGISTER, { method: qualified });
+            await registered;
+        }
+        await connected(socket);
+        const home = (app as unknown as AppFastify).machineDaemonPresence;
+        if (!(home instanceof Server)) throw new Error('Expected actual Home sockets');
+        expect(await home.in(`rpc:${owner.id}:${machine.id}:${RPC_METHODS.CAPABILITIES_DETECT}`).fetchSockets())
+            .toMatchObject([{ data: { clientType: 'machine-scoped', machineId: machine.id,
+                verifiedMachineInstallationId: machine.installationId } }]);
+        const definitions = [{ definitionId: 'shared-command', title: 'Shared command',
+            launch: { kind: 'command' as const, command: process.execPath, args: [] } }];
+        const detectRequest = buildMachineAgentsDetectRequest({ agents: [], definitions, refresh: true });
+        const detected = parseCapabilitiesDetectResponse(await call(RPC_METHODS.CAPABILITIES_DETECT, detectRequest));
+        expect(detected).not.toBeNull();
+        expect(projectMachineAgentsDetectResponse({ agents: [], definitions, response: detected! })).toMatchObject({ items: [
+            { definitionId: 'shared-command', installed: true, fit: { kind: 'can_run' } },
+        ] });
         expect(await call(DIRECTORY_PREFLIGHT, { directory: { kind: 'path', path: harness.baseDir } }))
             .toEqual({ ok: true, directory: harness.baseDir, directoryKind: 'path', directoryCreationRequired: false, checkout: null });
         expect(await call(DIRECTORY_PREFLIGHT, { directory: { kind: 'path', path: missing } }))
@@ -154,5 +193,5 @@ it('composes requester bound-v2 client, Home relay and guest preparation/operati
             principal: { kind: 'account', accountId: requester.id } }));
         await expect(call(DIRECTORY_PREFLIGHT, { directory: { kind: 'path', path: missing } }))
             .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
-    } finally { await app.close(); }
+    } finally { socket.close(); daemon.close(); await app.close(); }
 }, 30_000);
