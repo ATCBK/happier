@@ -431,7 +431,7 @@ function createPendingMessageComposerAdmissionAcceptedControl(
         outcome: 'accepted',
         settlement: {
           v: 1,
-          releaseIntents,
+          releaseIntents: [...releaseIntents],
           createdWorkspaceRelativePaths: [],
           workingDirectory: 'accepted-pending-message',
         },
@@ -460,7 +460,7 @@ function createPendingMessageComposerAdmissionAbandonedControl(
       outcome: 'definitiveFailure',
       settlement: {
         v: 1,
-        releaseIntents,
+        releaseIntents: [...releaseIntents],
         createdWorkspaceRelativePaths: [...request.sessionMediaCleanup.createdWorkspaceRelativePaths],
         workingDirectory: request.sessionMediaCleanup.workingDirectory,
       },
@@ -2409,7 +2409,7 @@ export async function runHostSessionRuntime(
   ): Promise<void> => {
     for (const event of events) {
       await commitContextOnlyHostEvent(event.localId, { type: 'worker-update', update: event.update,
-        ...(event.followMatches?.length ? { followMatches: event.followMatches } : {}),
+        ...(event.followMatches?.length ? { followMatches: [...event.followMatches] } : {}),
         ...(event.followInputLocalId ? { followInputLocalId: event.followInputLocalId } : {}),
         ...(followWakeEventLocalId ? { followWakeEventLocalId } : {}) });
     }

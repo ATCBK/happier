@@ -54,7 +54,7 @@ export function createPublicAcpPermissionHandler(params: Readonly<{
         ok: true;
         requestId: string;
         permissionContext?: Readonly<{
-          origin?: 'host_acp_fs_write';
+          origin?: AcpPermissionCallContext['origin'];
           turnId?: string;
           causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
         }>;

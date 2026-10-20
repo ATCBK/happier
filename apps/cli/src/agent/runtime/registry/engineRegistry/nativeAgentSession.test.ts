@@ -120,7 +120,6 @@ import { createMutableApiSessionClientFixture } from '@/testkit/backends/session
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { runTerminalRemoteSessionModeLoop } from '@/agent/runtime/session/loop/runTerminalRemoteSessionModeLoop';
 import { bindProcessLogger, Logger, logger } from '@/ui/logger';
-import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createRuntimeOverrideSynchronizers, createRuntimeOverrideTarget } from '@/agent/runtime/createRuntimeOverrideSynchronizers';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -13024,7 +13023,7 @@ describe('native Agent session host adapter', () => {
             'session-1', undefined, undefined, undefined, undefined, undefined, undefined, undefined, [], undefined, undefined,
             async (_witness, { signal }) => {
                 admissionSignal = signal;
-                await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+                return await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
             });
         const outcomes: unknown[] = [];
         runtime.setOnPromptDeliveryOutcome(outcome => outcomes.push(outcome));
