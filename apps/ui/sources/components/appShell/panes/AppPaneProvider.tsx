@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createContext, useContext, useMemo, useRef, useState } from 'react';
-import { useActiveServerAccountScope, useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
 import type { PaneDriver, PaneScopeId } from './types';
 import { registerSessionTerminalWorkspaceOwner, notifySessionTerminalWorkspaceChanged, retireProjectTerminalPresentationForHome } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
 import { EMPTY_TERMINAL_WORKSPACE, readSessionTerminalWorkspace } from '@/components/sessions/terminal/sessionTerminalWorkspace';
@@ -198,7 +198,6 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         () => normalizePersistedPaneScopes(persistedScopesValue),
         [persistedScopesValue],
     );
-    const [, setPersistedScopes] = useLocalSettingMutable('appPaneScopesV1');
     const [state, setState] = useState(() => createAppPaneState({
         maxScopesInMemory: 12,
         persistedScopes: persistedScopes ?? {},
@@ -315,8 +314,8 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     }, [dispatch, persistedScopes]);
 
     React.useEffect(() => {
-        setPersistedScopes(serializePersistedPaneScopes(state.scopes));
-    }, [setPersistedScopes, state.scopes]);
+        getStorage().getState().applyLocalSettings({ appPaneScopesV1: serializePersistedPaneScopes(state.scopes) }, { source: 'ui' });
+    }, [state.scopes]);
 
     const registerDriver = React.useCallback((driver: PaneDriver) => {
         driversRef.current.set(driver.scopeId, driver);

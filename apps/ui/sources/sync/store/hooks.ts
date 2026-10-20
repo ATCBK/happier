@@ -3086,7 +3086,6 @@ export function useMutateSessionCompanionPreference(): (
   updater: (stored: SessionCompanionPreferenceEntry | undefined) => SessionCompanionPreferenceEntry | null,
   serverId?: string | null,
 ) => boolean {
-  const applyLocalSettings = useApplyLocalSettings();
   const activeServer = useActiveServerSnapshot();
   return React.useCallback((sessionId, updater, serverId) => {
     const state = getStorage().getState();
@@ -3100,14 +3099,14 @@ export function useMutateSessionCompanionPreference(): (
     const current = state.localSettings.sessionCompanionPreferencesBySessionV1 ?? {};
     const next = updater(current[storageKey]);
     if (next === null) return false;
-    applyLocalSettings({
+    state.applyLocalSettings({
       sessionCompanionPreferencesBySessionV1: {
         ...current,
         [storageKey]: next,
       },
-    });
+    }, { source: 'ui' });
     return true;
-  }, [activeServer.serverId, applyLocalSettings]);
+  }, [activeServer.serverId]);
 }
 
 export function useProjectLastMobileSurface(workspaceRefId: string | null, explicitServerId?: string | null): LocalSettings['projectLastMobileSurfaceByWorkspaceRefId'][string] | null {

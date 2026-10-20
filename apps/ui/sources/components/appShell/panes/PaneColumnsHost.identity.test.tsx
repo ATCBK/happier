@@ -53,7 +53,7 @@ it('remembers dock dimensions and their viewport basis when the Settings Action 
         actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
     }) });
     const screen = await renderScreen(<PaneColumnsHost main={<div />} />);
-    const columns = screen.tree.find(node => typeof node.props.onCommitRightDockWidthPx === 'function');
+    const columns = screen.tree.find(node => typeof node.props.onCommitBottomDockHeightPx === 'function');
     await act(async () => {
         columns.props.onCommitRightDockWidthPx(330);
         columns.props.onCommitDetailsDockWidthPx(470);
