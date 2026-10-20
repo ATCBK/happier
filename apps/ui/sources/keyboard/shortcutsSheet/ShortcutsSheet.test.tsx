@@ -14,18 +14,18 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 describe('ShortcutsSheet (the ? sheet, lab KB1)', () => {
-    it('lists bound commands by group and shows the other host\'s keys from its segment', async () => {
+    it('lists bound commands by group with the keys of the host it shows', async () => {
         const { ShortcutsSheet } = await import('./ShortcutsSheet');
-        const screen = await renderScreen(<ShortcutsSheet onClose={vi.fn()} platform="macos" host="browser"
+        const render = (host: 'desktop' | 'browser') => renderScreen(<ShortcutsSheet onClose={vi.fn()} platform="macos" host={host}
             singleKeyShortcutsEnabled={true} disabledCommandIds={['panes.side.toggle']} overrides={{}} />);
-        expect(screen.findByTestId('shortcuts-sheet-group-panes')).not.toBeNull();
-        // A command with no binding here is not a shortcut, so the sheet leaves it out.
-        expect(screen.findByTestId('shortcuts-sheet-row-panes.side.toggle')).toBeNull();
-        const keysOf = () => screen.findByTestId('shortcuts-sheet-row-shell.column.toggle')
+        const keysOf = (screen: Awaited<ReturnType<typeof render>>) => screen.findByTestId('shortcuts-sheet-row-shell.column.toggle')
             ?.findAll(node => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.includes('+'))
             .map(node => node.props.accessibilityLabel as string)[0];
-        expect(keysOf()).toBe('Option+B');
-        await screen.pressByTestIdAsync('shortcuts-sheet-host:desktop');
-        expect(keysOf()).toBe('Cmd+B');
+        const browser = await render('browser');
+        expect(browser.findByTestId('shortcuts-sheet-group-panes')).not.toBeNull();
+        // A command with no binding here is not a shortcut, so the sheet leaves it out.
+        expect(browser.findByTestId('shortcuts-sheet-row-panes.side.toggle')).toBeNull();
+        expect(keysOf(browser)).toBe('Option+B');
+        expect(keysOf(await render('desktop'))).toBe('Cmd+B');
     });
 });

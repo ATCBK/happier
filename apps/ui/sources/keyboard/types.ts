@@ -157,6 +157,8 @@ export type KeyboardCommandSettingsTitleKey = Extract<
     | 'settingsKeyboard.commands.voiceToggle'
     | 'settingsKeyboard.commands.commandPaletteOpen'
     | 'settingsKeyboard.commands.searchTextInFiles'
+    | 'settingsKeyboard.commands.searchReplaceInFiles'
+    | 'settingsKeyboard.commands.searchReplaceApply'
     | 'settingsKeyboard.commands.searchFiles'
     | 'settingsKeyboard.commands.searchSymbols'
     | 'settingsKeyboard.commands.findOpen'

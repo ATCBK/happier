@@ -23,6 +23,7 @@ import { createCodeMirrorDecorations } from '@/components/ui/code/editor/bridge/
 import type { CodeEditorHandle, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import * as cmState from '@codemirror/state';
 import * as cmView from '@codemirror/view';
+import { ShortcutsSheet } from './shortcutsSheet/ShortcutsSheet';
 
 const testState = vi.hoisted(() => ({
     platformOS: 'web',
@@ -483,7 +484,7 @@ describe('KeyboardShortcutProvider', () => {
         }
     });
 
-    it('omits inactive handler labels from shortcut help', async () => {
+    it('opens the shared shortcut sheet through the registered help key', async () => {
         await renderScreen(
             <KeyboardShortcutProvider handlers={{}}>
                 <Child />
@@ -498,10 +499,8 @@ describe('KeyboardShortcutProvider', () => {
             }));
         });
 
-        expect(Modal.alertAsync).toHaveBeenCalledTimes(1);
-        const [, body] = vi.mocked(Modal.alertAsync).mock.calls[0] ?? [];
-        expect(String(body)).not.toContain('Command palette');
-        expect(String(body)).not.toContain('New session');
+        expect(Modal.show).toHaveBeenCalledWith({ component: ShortcutsSheet,
+            props: expect.objectContaining({ singleKeyShortcutsEnabled: true }) });
     });
 
     it('routes native hardware keyboard events through the central registry when the native hook is present', async () => {
@@ -605,6 +604,8 @@ describe('KeyboardShortcutProvider', () => {
         );
 
         const signatures = [
+            'F6|shift=false|ctrl=false|meta=false|alt=false',
+            'F6|shift=true|ctrl=false|meta=false|alt=false',
             'Escape|shift=true|ctrl=false|meta=false|alt=false',
             'Enter|shift=false|ctrl=false|meta=true|alt=false',
             'k|shift=false|ctrl=false|meta=true|alt=false',
@@ -625,7 +626,11 @@ describe('KeyboardShortcutProvider', () => {
 
         expect(nativeKeyboardState.enabled).toBe(true);
         expect(nativeKeyboardState.listeners.size).toBe(1);
-        expect(nativeKeyboardState.consumableSignatures).toEqual(['Enter|shift=false|ctrl=false|meta=true|alt=false']);
+        expect(nativeKeyboardState.consumableSignatures).toEqual([
+            'F6|shift=false|ctrl=false|meta=false|alt=false',
+            'F6|shift=true|ctrl=false|meta=false|alt=false',
+            'Enter|shift=false|ctrl=false|meta=true|alt=false',
+        ]);
         await screen.unmount();
 
         expect(nativeKeyboardState.listeners.size).toBe(0);
@@ -656,7 +661,7 @@ describe('KeyboardShortcutProvider', () => {
         storage.setState({ settings: {
             ...storage.getState().settings,
             keyboardSingleKeyShortcutsEnabled: false,
-            keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open'],
+            keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open', 'panes.region.next', 'panes.region.previous'],
         } });
 
         await renderScreen(

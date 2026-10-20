@@ -67,8 +67,8 @@ export type NativeHardwareKeyboardEventLike = Readonly<{
 
 function isSingleKeyRule(rule: KeybindingRule): boolean {
     const parsed = parseKeybindingRule(rule);
-    // Function keys are navigation keys, independent of single-character review shortcuts.
-    if (/^F\d+$/.test(parsed.key ?? parsed.code ?? '')) return false;
+    // Navigation keys are independent of single-character shortcuts such as j/k.
+    if (/^(?:F\d+|Arrow(?:Up|Down|Left|Right)|Enter|Escape)$/.test(parsed.key ?? parsed.code ?? '')) return false;
     return parsed.mod !== true
         && parsed.alt !== true
         && parsed.ctrl !== true

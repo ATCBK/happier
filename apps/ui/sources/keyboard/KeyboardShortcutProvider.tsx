@@ -264,9 +264,12 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         keyboardShortcutDisabledCommandIdsV1: state.settings.keyboardShortcutDisabledCommandIdsV1,
     })));
     const singleKeyShortcutsEnabled = keyboardSingleKeyShortcutsEnabled === true;
-    // Find is a surface interaction, like browser Find, not an optional global shortcut.
+    // Find and Inbox navigation are local surface interactions. Their handlers
+    // are present only while that surface owns focus; explicit per-command
+    // disablement and the letter-key preference still apply.
     const enabledWhenDisabledCommandIds = React.useMemo<readonly KeyboardCommandId[]>(() => [
         ...(props.enabledWhenDisabledCommandIds ?? []), 'find.open', 'find.next', 'find.previous',
+        'inbox.item.next', 'inbox.item.previous', 'inbox.item.open', 'inbox.item.close',
     ], [props.enabledWhenDisabledCommandIds]);
     const disabledCommandIds = keyboardShortcutDisabledCommandIdsV1 ?? [];
     const overrides = keyboardShortcutOverridesV1 ?? {};
