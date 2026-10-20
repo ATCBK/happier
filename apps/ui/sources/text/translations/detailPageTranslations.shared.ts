@@ -18,8 +18,6 @@ export type DetailPageTranslations = Readonly<{
             descriptionYou: string;
             descriptionOther: (params: Readonly<{ name: string }>) => string;
             askedBy: string;
-            writesWith: string;
-            setupOf: (params: Readonly<{ name: string }>) => string;
             anotherPerson: string;
             waitingFor: (params: Readonly<{ name: string }>) => string;
             confirmedBy: string;
@@ -29,8 +27,13 @@ export type DetailPageTranslations = Readonly<{
                 review: string;
                 decline: string;
                 waiting: (params: Readonly<{ name: string }>) => string;
-                writesWith: (params: Readonly<{ name: string }>) => string;
-                writesWithYours: string;
+                using: (params: Readonly<{ label: string }>) => string;
+                usingAccount: string;
+                usingTeam: string;
+                ownerAccount: (params: Readonly<{ name: string }>) => string;
+                ownerTeam: (params: Readonly<{ name: string }>) => string;
+                ownerTeamUnnamed: string;
+                why: string;
                 confirmedPending: (params: Readonly<{ name: string }>) => string;
                 done: (params: Readonly<{ name: string }>) => string;
                 declined: (params: Readonly<{ name: string }>) => string;
@@ -94,8 +97,6 @@ export const detailPageTranslationsEnglish = { en: {
                 descriptionYou: 'You asked for this, so you confirm it.',
                 descriptionOther: ({ name }) => `${name} asked for this, so only they can confirm it.`,
                 askedBy: 'Asked by',
-                writesWith: 'Writes with',
-                setupOf: ({ name }) => `${name}’s setup`,
                 anotherPerson: 'Another person',
                 waitingFor: ({ name }) => `Waiting for ${name} to confirm`,
                 confirmedBy: 'Confirmed by',
@@ -105,8 +106,13 @@ export const detailPageTranslationsEnglish = { en: {
                     review: 'Review and confirm…',
                     decline: 'Decline',
                     waiting: ({ name }) => `Waiting for ${name} to confirm. Only the person who asked can.`,
-                    writesWith: ({ name }) => `Writes with ${name}’s setup`,
-                    writesWithYours: 'Writes with your setup',
+                    using: ({ label }) => `Using ${label}`,
+                    usingAccount: 'Using a connected account',
+                    usingTeam: 'Using a Team setup',
+                    ownerAccount: ({ name }) => `Owned by ${name}`,
+                    ownerTeam: ({ name }) => `Owned by Team ${name}`,
+                    ownerTeamUnnamed: 'Owned by a Team',
+                    why: 'Set up for this kind of write',
                     confirmedPending: ({ name }) => `Confirmed by ${name} · waiting for the result`,
                     done: ({ name }) => `Done · confirmed by ${name}`,
                     declined: ({ name }) => `Declined by ${name} · nothing was written`,
