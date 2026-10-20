@@ -44,6 +44,24 @@ export type ShellColumnActionOwner = Readonly<{
 }>;
 
 const columnOwners = new Map<ShellColumn, () => ShellColumnActionOwner>();
+// Always-mounted chrome (the title strip's arrangement toggle) re-reads the owners when they change.
+const columnOwnerListeners = new Set<() => void>();
+let columnOwnersVersion = 0;
+
+/** An owner's readable facts changed (registration, or a fact such as `arrangementAvailable`). */
+export function notifyShellColumnActionOwnersChanged(): void {
+  columnOwnersVersion += 1;
+  for (const listener of columnOwnerListeners) listener();
+}
+
+export function subscribeShellColumnActionOwners(listener: () => void): () => void {
+  columnOwnerListeners.add(listener);
+  return () => { columnOwnerListeners.delete(listener); };
+}
+
+export function readShellColumnActionOwnersVersion(): number {
+  return columnOwnersVersion;
+}
 export type FileEditorActionOwner = Readonly<{
   tabId: string;
   serverId: string | null;
@@ -91,7 +109,12 @@ export function registerWorkflowLibraryScopeActionOwner(read: () => WorkflowLibr
 
 export function registerShellColumnActionOwner(column: ShellColumn, read: () => ShellColumnActionOwner): () => void {
   columnOwners.set(column, read);
-  return () => { if (columnOwners.get(column) === read) columnOwners.delete(column); };
+  notifyShellColumnActionOwnersChanged();
+  return () => {
+    if (columnOwners.get(column) !== read) return;
+    columnOwners.delete(column);
+    notifyShellColumnActionOwnersChanged();
+  };
 }
 
 export function readShellColumnActionOwner(column: ShellColumn): ShellColumnActionOwner | null {
