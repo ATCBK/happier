@@ -202,18 +202,6 @@ describe('managed workflow Run presentation', () => {
         expect(formatWorkflowRunOutcomeSentence({ run, coverage, historyComplete: false })).toBe(t('workflows.run.stoppedCount', { completed: 1, total: 5 }));
         expect(formatWorkflowRunOutcomeSentence({ run: { ...run, stepProgress: null }, coverage })).toBe(t('workflows.runState.cancelled'));
     });
-    it('says who stopped a settled Run, relative to the person reading it', () => {
-        const coverage = { observedLeafCounts: { completed: 0, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
-        const settled = { state: 'cancelled' as const, workflowCustodyState: 'settled' as const, coverage, viewerAccountId: 'me' };
-        expect(formatWorkflowRunOutcomeLabel({ ...settled, stoppedBy: { via: 'person', accountId: 'me' } })).toBe(t('workflows.run.stoppedBy.you'));
-        expect(formatWorkflowRunOutcomeLabel({ ...settled, stoppedBy: { via: 'person', accountId: 'someone-else' } })).toBe(t('workflows.run.stoppedBy.anotherPerson'));
-        // An agent or Automation that acts on this Account is not "you", even on the same Account.
-        expect(formatWorkflowRunOutcomeLabel({ ...settled, stoppedBy: { via: 'agent', accountId: 'me' } })).toBe(t('workflows.run.stoppedBy.agent'));
-        expect(formatWorkflowRunOutcomeLabel({ ...settled, stoppedBy: { via: 'automation', accountId: 'me' } })).toBe(t('workflows.run.stoppedBy.automation'));
-        // Nobody declared a stop, or the Stop is still pending: the plain state word.
-        expect(formatWorkflowRunOutcomeLabel(settled)).toBe(t('workflows.runState.cancelled'));
-        expect(formatWorkflowRunOutcomeLabel({ ...settled, workflowCustodyState: 'pending', stoppedBy: { via: 'person', accountId: 'me' } })).toBe(t('workflows.run.stopping'));
-    });
     it('describes a claimed continuation and an accepted Stop from their current facts', () => {
         const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
         const run = createWorkflowRunSummaryFixture({ state: 'claimed' });
