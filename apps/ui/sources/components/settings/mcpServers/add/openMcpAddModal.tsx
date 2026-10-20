@@ -47,7 +47,7 @@ export type OpenMcpAddModalParams = Readonly<{
   /** An install link to open Paste on (`?install=`): read exactly like pasted text. */
   installLink?: string;
   /** The page selects the new server (the first one added). */
-  onAdded?: (serverId: string) => void;
+  onAdded?: (serverId: string, options?: Readonly<{ afterRegistryAdd: true }>) => void;
   /** Custom: the page's draft (`/settings/mcp/new`). */
   onCustom: () => void;
 }>;
@@ -127,6 +127,7 @@ export function McpAddModal(
   const [adds, setAdds] = React.useState<ReadonlyMap<string, McpAddState>>(
     () => new Map(),
   );
+  const createdServerId = React.useRef<string | null>(null);
   const setAdd = React.useCallback(
     (key: string, state: McpAddState) =>
       setAdds((previous) => new Map(previous).set(key, state)),
@@ -185,6 +186,7 @@ export function McpAddModal(
       // The receipt names no id: the new server is the catalog entry that now carries this registry item's provenance.
       const fresh = getMcpServerCatalogSnapshot(scope);
       const serverId = findAddedMcpServer(fresh.value?.servers ?? [], row)?.id ?? null;
+      createdServerId.current = serverId;
       setAdd(key, { status: 'added', serverId });
       return serverId ?? '';
     },
@@ -420,7 +422,8 @@ export function McpAddModal(
         };
       },
       onAdded: ({ itemId }) => {
-        if (itemId) params.onAdded?.(itemId);
+        if (itemId) params.onAdded?.(itemId, createdServerId.current === itemId
+          ? { afterRegistryAdd: true } : undefined);
       },
     }),
     [

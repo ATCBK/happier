@@ -40,7 +40,9 @@ import { useMcpServerMachineTests } from '../status/useMcpServerMachineTests';
 import { McpServerToolsSection } from '../tools/McpServerToolsSection';
 import { useMcpServerTools } from '../tools/useMcpServerTools';
 import { useMcpServerSignIn } from '../signIn/useMcpServerSignIn';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
 import type { McpServerRecovery } from './mcpServerRecovery';
 import { useMcpServerUpdate } from './useMcpServerUpdate';
@@ -127,6 +129,22 @@ export function useMcpServerDetail(
   const signIn = useMcpServerSignIn(server, placeMachines);
   const startSignIn = signIn.start;
   const runTest = tests.run;
+  const { afterRegistryAdd } = useLocalSearchParams<{ afterRegistryAdd?: string }>();
+  const administration = useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers,
+    { enabled: afterRegistryAdd === '1' });
+  const registryAddHandled = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const targetKey = JSON.stringify([scope?.serverId, scope?.accountId, serverId]);
+    if (afterRegistryAdd !== '1' || registryAddHandled.current === targetKey || server.origin?.kind !== 'registry' || !updateExecution.ready) return;
+    const target = administration.resolveExecutionTarget({ accountScope: scope });
+    if (!target) return;
+    registryAddHandled.current = targetKey;
+    router.setParams({ afterRegistryAdd: undefined });
+    // This navigation follows the person's Registry Add. Ordinary opens, edits,
+    // Paste, Custom and session selection never request an administrative Test.
+    if (server.remote?.auth?.kind === 'oauth') void startSignIn();
+    else runTest([target.machine.id]);
+  }, [administration, afterRegistryAdd, router, runTest, scope, serverId, server.origin?.kind, server.remote?.auth?.kind, startSignIn, updateExecution.ready]);
   const fixes = React.useMemo(
     () => ({
       signIn: () => void startSignIn(),

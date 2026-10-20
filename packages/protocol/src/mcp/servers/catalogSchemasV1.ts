@@ -3,7 +3,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerPluginSettingsMapV1Schema,
-  McpServerToolSettingsPatchV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
+  McpServerToolSettingsPatchV1Schema, McpServerToolsSnapshotV1Schema, refineMcpServerCatalogV1 } from './settingsV1.js';
 import { ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
 import { ReachRulesChangeV1Schema, type ReachRulesChangeV1 } from '../../reach/reachRulesChangeV1.js';
 
@@ -107,6 +107,7 @@ export const McpServerCatalogMutationV1Schema = lazyZodSchema(() => z.discrimina
   z.strictObject({ kind: z.literal('server-remove'), serverId: z.string().check(z.minLength(1)), removeBindings: z._default(z.boolean(), false) }),
   z.strictObject({ kind: z.literal('rules-change'), serverIds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)), change: ReachRulesChangeV1Schema }),
   z.strictObject({ kind: z.literal('tools-change'), serverId: z.string().check(z.minLength(1)), settings: McpServerToolSettingsPatchV1Schema }),
+  z.strictObject({ kind: z.literal('tools-snapshot'), serverId: z.string().check(z.minLength(1)), snapshot: McpServerToolsSnapshotV1Schema }),
   z.strictObject({ kind: z.literal('plugin-defaults'), serverIds: z.array(z.string().check(z.minLength(1))) }),
 ]));
 
