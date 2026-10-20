@@ -56,7 +56,7 @@ export async function listQwenFiles(source: QwenSource, signal: AbortSignal): Pr
         const path = await realpath(join(root, entry.name));
         if (!isCanonicalAbsolutePathInsideRoot(source.runtimeDir, path)) throw new QwenSourceError('source_invalid', 'Qwen transcript leaves its source root.');
         const info = await lstat(path);
-        files.push({ path, relativePath: relative(source.runtimeDir, path), sessionId: entry.name.slice(0, -6), archived, updatedAtMs: info.mtimeMs });
+        files.push({ path, relativePath: relative(source.runtimeDir, path), sessionId: entry.name.slice(0, -6), archived, updatedAtMs: Math.trunc(info.mtimeMs) });
       }
     }
   }

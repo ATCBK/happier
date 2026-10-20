@@ -1,8 +1,9 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { ExternalSessionCandidateV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type { AgentExternalSessionsContribution, AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
 import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
 import { activate, PLUGIN_MANIFEST } from '../../manifest.js';
@@ -15,6 +16,8 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'happier-qwen-reader-')); roots.push(root);
   const chats = join(root, 'projects', '-repo', 'chats'); await mkdir(chats, { recursive: true });
   const path = join(chats, `${sessionId}.jsonl`); await writeFile(path, jsonl());
+  // Native stat timestamps carry sub-millisecond precision, unlike the wire.
+  await utimes(path, 1_792_488_000.12345, 1_792_488_000.12345);
   const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
   const reader = kit.registration('agents', 'qwen')?.externalSessions;
   expect(reader, 'Qwen must register its native transcript reader').toBeDefined();
@@ -50,7 +53,10 @@ describe('Qwen v0.25.3 native reader', () => {
         const page = await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm });
         expect(page).toMatchObject({ ok: true, value: { contentCoverage: 'complete', candidates: [{ remoteSessionId: sessionId,
           match: { snippet: expect.stringContaining(searchTerm), sourceItemId: expect.any(String) } }] } });
-        if (page.ok) expect(transcript.value.items[page.value.candidates[0]!.match!.messageIndex]?.id).toBe(page.value.candidates[0]!.match!.sourceItemId);
+        if (page.ok) {
+          expect(ExternalSessionCandidateV1Schema.safeParse(page.value.candidates[0]).success).toBe(true);
+          expect(transcript.value.items[page.value.candidates[0]!.match!.messageIndex]?.id).toBe(page.value.candidates[0]!.match!.sourceItemId);
+        }
       }
       for (const searchTerm of ['metadata-only topaz', 'model-only compression secret']) expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm }))
         .toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'complete' } });
@@ -127,6 +133,25 @@ describe('Qwen v0.25.3 native reader', () => {
           message: expect.any(String),
         } } } }] } });
       expect(JSON.stringify(unsupported)).not.toContain('private unparsed ruby');
+      await writeFile(f.path, jsonl([records[0], record('known', 'u1', 'assistant', {
+        daemonPromptId: 'prompt', gitBranch: 'main', usageMetadata: { totalTokenCount: 7 },
+        agentRunId: 'run', forkedFrom: { sessionId: 'parent', messageUuid: 'known' },
+        message: { role: 'model', parts: [{ text: 'known sapphire body', thoughtSignature: 'opaque' }] },
+      })]));
+      expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm: 'sapphire' }))
+        .toMatchObject({ ok: true, value: { contentCoverage: 'complete', candidates: [{ remoteSessionId: sessionId }] } });
+      for (const fields of [
+        { futureNativeMetadata: 'unparsed top-level ruby', message: { role: 'model', parts: [{ text: 'known sapphire body' }] } },
+        { message: { role: 'model', parts: [{ text: 'known sapphire body' }], futureBody: 'unparsed message ruby' } },
+        { message: { role: 'model', parts: [{ text: 'known sapphire body', futurePart: 'unparsed part ruby' }] } },
+      ]) {
+        await writeFile(f.path, jsonl([records[0], record('future', 'u1', 'assistant', fields)]));
+        expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm: 'sapphire' }))
+          .toMatchObject({ ok: true, value: { contentCoverage: 'partial', candidates: [{ remoteSessionId: sessionId }] } });
+        const future = await f.reader.pageTranscript({ ...f.request, remoteSessionId: sessionId, direction: 'older' });
+        expect(future).toMatchObject({ ok: true, value: { truncated: true } });
+        expect(JSON.stringify(future)).not.toContain('unparsed');
+      }
       await writeFile(f.path, jsonl() + '{"uuid":"torn');
       expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm: 'sapphire' }))
         .toMatchObject({ ok: true, value: { contentCoverage: 'partial', candidates: [{ remoteSessionId: sessionId }] } });

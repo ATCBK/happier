@@ -84,13 +84,11 @@ export async function listQwenCandidates(source: QwenSource, request: AgentExter
       if (scan.pending && (scan.pending.path !== file.relativePath || scan.pending.digest !== digest))
         throw new QwenSourceError('source_invalid', 'Qwen transcript changed during content search.');
       const progress = scan.pending?.progress ?? { complete: false, itemCount: 0, match: null };
-      const resumed = scan.pending !== undefined;
       scan.pending = { path: file.relativePath, digest, progress };
       try {
         const result = await searchExternalSessionContent({ query: base.query, control, pageProgress: progress,
-          // The shared prefilter is optional in non-host fixtures. Resume uses
-          // retained native progress rather than paying the same rg phase again.
-          ...(!resumed && request.ripgrep ? { paths: [file.path], ripgrep: request.ripgrep } : {}),
+          // Active-history replay already decoded this file. A raw-text
+          // prefilter cannot exclude phrases spanning parts or UUID fragments.
           decode: async (matchText, cursor) => {
             const end = cursor === undefined ? transcript.items.length : Number(cursor);
             if (!Number.isSafeInteger(end) || end < 0 || end > transcript.items.length) throw new QwenSourceError('invalid_request', 'Qwen content position is invalid.');

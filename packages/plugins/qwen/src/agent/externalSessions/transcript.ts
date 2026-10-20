@@ -16,6 +16,19 @@ const knownSystem = new Set(['chat_compression', 'slash_command', 'ui_telemetry'
   'agent_bootstrap', 'agent_launch_prompt', 'agent_retry', 'agent_session_ready', 'file_history_snapshot', 'session_source', 'session_model',
   'omni_recall', 'session_execution_engine', 'session_approval_mode', 'branch_checkpoint', 'goal_state', 'goal_runtime', 'goal_turn_end',
   'turn_result', 'turn_attempt', 'user_text_elements']);
+// ChatRecord in the pinned v0.25.3 writer. Metadata bags remain opaque: only
+// declared display bodies are projected, and newly added fields make coverage partial.
+const recordFields = new Set(['daemonPromptId', 'uuid', 'parentUuid', 'sessionId', 'timestamp', 'type', 'subtype', 'provenance',
+  'goalContext', 'backgroundTurn', 'deliveredTurn', 'cwd', 'version', 'gitBranch', 'promptId', 'message', 'usageMetadata', 'model',
+  'executionContext', 'contextWindowSize', 'toolCallResult', 'systemPayload', 'agentId', 'agentName', 'agentColor', 'isSidechain',
+  'agentRunId', 'agentRound', 'externalInputKind', 'externalRecordKey', 'forkedFrom']);
+const messageFields = new Set(['role', 'parts']);
+// @google/genai 2.6.0 Content/Part, pinned by the vendor's packages/core/package.json.
+const partFields = new Set(['mediaResolution', 'codeExecutionResult', 'executableCode', 'fileData', 'functionCall', 'functionResponse',
+  'inlineData', 'text', 'thought', 'thoughtSignature', 'videoMetadata', 'toolCall', 'toolResponse', 'partMetadata']);
+function hasUnknownFields(value: Record<string, unknown>, known: ReadonlySet<string>): boolean {
+  return Object.keys(value).some(key => !known.has(key));
+}
 export function digestItems(items: readonly AgentExternalSessionTranscriptItem[]): string {
   const hash = createHash('sha256'); for (const item of items) hash.update(JSON.stringify(item)).update('\n'); return hash.digest('base64url');
 }
@@ -34,6 +47,7 @@ function project(record: NativeRecord, parts: readonly unknown[]): Readonly<{ te
   if (projectedUser) text.push(payload.displayText as string);
   for (const part of parts) {
     if (!isRecord(part)) { unsupported = true; continue; }
+    unsupported ||= hasUnknownFields(part, partFields);
     if (typeof part.text === 'string') { if (part.thought !== true && !projectedUser) text.push(part.text); }
     else if (isRecord(part.functionResponse)) {
       const output = textOutput(part.functionResponse.response); if (output !== null) text.push(output); else unsupported = true;
@@ -60,6 +74,7 @@ export async function readQwenTranscript(file: QwenFile, signal: AbortSignal): P
       const value = line.value;
       if (!isRecord(value)) { partial = true; return; }
       if (value.version !== '0.25.3') { unsupportedVersion = true; return; }
+      partial ||= hasUnknownFields(value, recordFields) || (isRecord(value.message) && hasUnknownFields(value.message, messageFields));
       if (typeof value.uuid !== 'string' || !value.uuid || (value.parentUuid !== null && typeof value.parentUuid !== 'string')
         || value.sessionId !== file.sessionId || typeof value.timestamp !== 'string'
         || !['user', 'assistant', 'tool_result', 'system'].includes(String(value.type))) { partial = true; return; }
@@ -123,6 +138,6 @@ export async function readQwenTranscript(file: QwenFile, signal: AbortSignal): P
   const after = await stat(file.path);
   if (`${after.dev}:${after.ino}:${after.birthtimeMs}` !== identity || after.size < info.size || (after.size === info.size && after.mtimeMs !== info.mtimeMs))
     throw new QwenSourceError('source_invalid', 'Qwen transcript changed during its read.');
-  return { items, partial, identity, createdAtMs: items[0]?.createdAtMs ?? info.birthtimeMs,
+  return { items, partial, identity, createdAtMs: items[0]?.createdAtMs ?? Math.trunc(info.birthtimeMs),
     ...(chain[0]?.record.cwd ? { cwd: chain[0].record.cwd } : {}), ...(title ? { title } : {}), ...(parentSessionId ? { parentSessionId } : {}) };
 }

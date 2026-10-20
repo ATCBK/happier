@@ -70,7 +70,7 @@ describe('Qwen plugin manifest', () => {
             externalSession: {
               sources: [{
                 sourceKind: 'qwenRuntimeDir',
-                contentSearch: false,
+                contentSearch: true,
                 schema: { fields: [{ kind: 'literal', name: 'kind', value: 'qwenRuntimeDir' },
                   { kind: 'string', name: 'runtimeDir', min: 1, max: 10_000, nullish: true }] },
                 key: { segments: [{ kind: 'literal', value: 'qwenRuntimeDir' }, { kind: 'field', field: 'runtimeDir' }] },
