@@ -90,12 +90,12 @@ import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, resolveCurrentSessionMachineFromS
 import { forwardRpcCall } from "./forwardRpcCall";
 import type { RpcForwardTargetGuard } from "./_types";
 import { buildRpcMethodRoom } from "./rpcMethodRoom";
+import { RPC_REGISTERED_METHODS_SOCKET_DATA_KEY, readSocketRegisteredRpcMethods } from './rpcRegisteredMethods';
 import { getMachineSocketRoom } from "../../socketRooms";
 import { isWorkflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 import { isMountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
 
 const MAX_RPC_METHOD_NAME_LENGTH = 512;
-const RPC_REGISTERED_METHODS_SOCKET_DATA_KEY = "rpcRegisteredMethods";
 const MACHINE_VISIBLE_CLIENT_RPC_METHODS = new Set<string>([
     RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME,
     RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
@@ -718,12 +718,6 @@ function createSessionFollowSourceKeyPreparationTargetGuard(params: Readonly<{
     };
 }
 
-function readSocketRegisteredRpcMethods(socket: SocketDataCarrier): readonly string[] {
-    const registeredMethods = readSocketData(socket)[RPC_REGISTERED_METHODS_SOCKET_DATA_KEY];
-    if (!Array.isArray(registeredMethods)) return [];
-    return registeredMethods.filter((method): method is string => typeof method === "string" && method.trim().length > 0);
-}
-
 function writeSocketRegisteredRpcMethods(socket: Socket, methods: ReadonlySet<string>): void {
     ensureMutableSocketData(socket)[RPC_REGISTERED_METHODS_SOCKET_DATA_KEY] = [...methods];
 }
@@ -845,7 +839,7 @@ async function hydrateMachineScopedRpcAvailabilityForSocket(params: Readonly<{
     const sockets = await params.io.in(`user:${params.userId}`).fetchSockets();
     const methods = new Set<string>();
     for (const socket of sockets) {
-        for (const method of readSocketRegisteredRpcMethods(socket)) {
+        for (const method of readSocketRegisteredRpcMethods(socket) ?? []) {
             const parsed = parseMachineScopedRpcMethod(method);
             if (parsed?.machineId === machineId) {
                 methods.add(method);
