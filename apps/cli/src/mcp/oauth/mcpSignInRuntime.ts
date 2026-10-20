@@ -305,7 +305,11 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
         async status(context) {
             const accessToken = await context.credentials.get('accessToken');
             const expiresAt = await context.credentials.get('expiresAtMs');
-            return { status: !accessToken || (expiresAt !== null && Number(expiresAt) <= now()) ? 'reconnectRequired' : 'connected' };
+            if (!accessToken) return { status: 'reconnectRequired' };
+            if (expiresAt !== null && Number(expiresAt) <= now()) {
+                return { status: await context.credentials.get('refreshToken') ? 'expired' : 'reconnectRequired' };
+            }
+            return { status: 'connected' };
         },
         async materialize(request, context) {
             const configuration = ConfigurationSchema.parse(context.configuration.values);

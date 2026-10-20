@@ -388,6 +388,13 @@ describe('MCP server sign-in runtime', () => {
             getSecret: async (key: string) => staged.content!.secretValues?.[key] ?? null };
         const established = { account: { service, accountId: 'server-a' }, configuration,
             credentials: store, signal: context.signal, invokedAtMs: Date.now() };
+        const initialExpiry = credentials.get('expiresAtMs')!;
+        credentials.set('expiresAtMs', '0');
+        await expect(lease.runtime.status(established)).resolves.toMatchObject({ status: 'expired' });
+        credentials.delete('refreshToken');
+        await expect(lease.runtime.status(established)).resolves.toMatchObject({ status: 'reconnectRequired' });
+        credentials.set('refreshToken', 'refresh-1');
+        credentials.set('expiresAtMs', initialExpiry);
         fixture.setTokenOverrides({ refresh_token: undefined, scope: undefined });
         await expect(lease.runtime.refresh({ ...established, operation: { operationId: 'refresh-1', configurationRevision: configuration.revision }, stagedCredentials: store }))
             .resolves.toMatchObject({ status: 'connected' });
