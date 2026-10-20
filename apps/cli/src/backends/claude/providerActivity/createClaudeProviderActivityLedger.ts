@@ -420,6 +420,13 @@ export function createClaudeProviderActivityLedger() {
                     });
                     return true;
                 }
+                if (current?.awaitingChildren === true && activity.terminalStatus !== 'completed') {
+                    // A later stop/failure is final even when the Agent was already waiting.
+                    // Duplicate completed rows still describe the same interim stop.
+                    const { awaitingChildren: _settled, ...terminal } = current;
+                    tasks.set(key, terminal);
+                    return true;
+                }
                 if (!current && (activity.rememberIfUnknown === true || activity.terminalStatus !== undefined)) {
                     tasks.set(key, {
                         phase: 'terminal-before-confirmation',

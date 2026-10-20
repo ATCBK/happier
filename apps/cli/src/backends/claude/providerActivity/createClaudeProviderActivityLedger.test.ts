@@ -650,6 +650,32 @@ describe('createClaudeProviderActivityLedger', () => {
         expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'agent-1' })).toBe(false);
     });
 
+    it.each([
+        ['failed', { type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'failed' }],
+        ['stopped', { type: 'system', subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'killed' } }],
+        ['TaskStop', {
+            hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
+            tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'stopped' },
+        }],
+        ['StopFailure', { hook_event_name: 'StopFailure', agent_id: 'agent-1' }],
+    ])('retires an awaiting Agent after %s evidence', (_label, terminalRow) => {
+        const ledger = createClaudeProviderActivityLedger();
+        const apply = sdkRowApplier(ledger);
+        apply({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
+        apply({
+            subtype: 'task_started', task_id: 'bash-1', task_type: 'local_bash',
+            is_backgrounded: true, parent_task_id: 'agent-1',
+        });
+        apply({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
+        const row = { session_id: 's1', ...terminalRow };
+        const terminal = readClaudeProviderTaskActivity(row) ?? readClaudeSessionHookProviderTaskActivity(row);
+        if (!terminal) throw new Error('expected terminal evidence');
+        ledger.apply(terminal);
+        apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+        apply({ subtype: 'task_progress', task_id: 'agent-1' });
+        expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    });
+
     it('keeps an agent resumable while a nested agent it owns still waits on or resumes its own work', () => {
         const createNested = () => {
             const ledger = createClaudeProviderActivityLedger();

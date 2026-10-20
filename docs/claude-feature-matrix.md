@@ -112,7 +112,9 @@ awaiting its children (a child Agent that is itself awaiting its own children st
 counts): the children keep their own activity, and only the Agent's
 own typed SDK `task_progress` after it wakes reactivates it until its next
 terminal. Hook `SubagentStop` progress cannot reactivate an awaiting Agent, so an
-Agent that never wakes cannot hold runtime activity open. Workflow correlation folds every tool block in a message,
+Agent that never wakes cannot hold runtime activity open. A later stop or failure
+settles an awaiting Agent and prevents typed progress from reactivating it.
+Workflow correlation folds every tool block in a message,
 keeps each child's native task alias, and closes an implicit Agent activity group
 when all children settle. A successful native resume can reopen that group.
 A successful SendMessage `resumedAgentId` proves an asynchronous invocation,
