@@ -14,6 +14,7 @@ import { configuration } from '@/configuration';
 import { createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionMessageReplyCapabilityV1Schema, SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import { tmpdir } from 'node:os';
 import nacl from 'tweetnacl';
@@ -98,7 +99,7 @@ describe('production daemon retained operation target', () => {
   let releaseHome = () => {};
   afterEach(() => { releaseHome(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it.each(['exact', 'pending', 'foreign-account', 'foreign-machine', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent',
+  it.each(['exact', 'local-only', 'pending', 'foreign-account', 'foreign-machine', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent',
     'session-discovered', 'stored-session', 'stored-inputless-session', 'session-mismatch', 'lookup-unavailable',
     'pending-success', 'stored-pending-success', 'already-stopped-success', 'pending-failure', 'miswired-success', 'foreign-session-success', 'stop-unconfirmed'] as const)
   ('recovers cancelled startup from its %s original owner through fresh production recovery wiring', async match => {
@@ -154,11 +155,13 @@ describe('production daemon retained operation target', () => {
         sessions: match === 'session-discovered' || match === 'stored-session' || match === 'stored-inputless-session' || match === 'session-mismatch' ? [session] : [] });
     mocks.fetchSessionById.mockImplementation(async () => session);
     const stops: string[] = [];
+    const discardedInputs: string[] = [];
     vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async ({ machineId: targetMachine, method, request }) => {
       if (targetMachine !== machineId || method !== RPC_METHODS.STOP_SESSION
         || !request || typeof request !== 'object' || !('sessionId' in request) || request.sessionId !== session.id) {
         throw new Error('Wrong startup Session Stop wiring');
       }
+      expect(discardedInputs).toContain(localId);
       stops.push(session.id);
       if (match === 'stop-unconfirmed') return { status: 'requested' };
       if (match === 'already-stopped-success' || match === 'stored-inputless-session') return { status: 'not_found' };
@@ -185,7 +188,7 @@ describe('production daemon retained operation target', () => {
       resolveAccountId: async () => match === 'foreign-account' ? 'foreign-account' : accountId,
       generateOperationId: () => 'original-startup' });
     let finishStartup = () => {};
-    if (late || ['exact', 'pending', 'foreign-account', 'foreign-machine'].includes(match)) await operations.observeExecution({ actionId: 'session.spawn_new',
+    if (late || ['exact', 'local-only', 'pending', 'foreign-account', 'foreign-machine'].includes(match)) await operations.observeExecution({ actionId: 'session.spawn_new',
       input: { creationKey }, execute: async context => {
         if (match === 'pending' || late) {
           context.operationAcceptance?.accept({});
@@ -206,6 +209,11 @@ describe('production daemon retained operation target', () => {
     if (match !== 'cancel-requested-parent' && !late) await storage.execute({ operation: 'transition', runId,
       expectedRevision: storage.run().revision, state: match === 'cancelled-root-parent' ? 'claimed' : 'cancelled', checkpointEnvelope });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      if (new URL(String(url)).pathname === `/v2/sessions/${session.id}/pending/${encodeURIComponent(localId)}/discard`) {
+        expect(body).toEqual({ reason: 'session_input_cancelled' });
+        discardedInputs.push(localId);
+        return { status: 200, data: { ok: true } };
+      }
       if (!String(url).endsWith('/v3/automations/runs/workflow-storage') || !body || typeof body !== 'object' || !('operation' in body)) throw new Error('Unexpected Home write');
       return { status: 200, data: body.operation === 'recovery.list'
         ? { candidates: [{ run: storage.run(), parentAttempt: 0 }] }
@@ -214,6 +222,12 @@ describe('production daemon retained operation target', () => {
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (new URL(url).pathname === `/v2/sessions/${session.id}`) {
         return { status: 200, data: { session } };
+      }
+      if (new URL(url).pathname === `/v2/sessions/${session.id}/messages/by-local-id/${encodeURIComponent(localId)}/reply`) {
+        return { status: 200, data: SessionMessageReplyReadResultV1Schema.parse(match === 'stored-inputless-session'
+          ? { v: 1, status: 'none' }
+          : { v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing',
+            acceptedTurnId: 'original-turn', outcome: { kind: 'answer', result: { sessionId: session.id, messageId: 'reply' } } } }) };
       }
       if (url.includes('/messages/by-local-id/') && match === 'stored-inputless-session') return { status: 200, data: { message: null } };
       if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: {
@@ -241,6 +255,9 @@ describe('production daemon retained operation target', () => {
       throw new Error(`Recovery must not launch or replay work: ${method}`);
     };
     bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ async emitWithAck(event, payload) {
+      // A same-daemon terminal operation remains observable through its
+      // installed transport when the Home socket cannot deliver another RPC.
+      if (match === 'local-only') throw Object.assign(new Error('Home RPC unavailable'), { code: 'ECONNABORTED' });
       if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object' || !('method' in payload)
         || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Unexpected RPC');
       return { ok: true, result: await invoke(payload.method, payload.params) };
@@ -283,10 +300,10 @@ describe('production daemon retained operation target', () => {
         }
         return;
       }
-      const settled = ['exact', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent', 'session-discovered', 'stored-session', 'stored-inputless-session'].includes(match);
+      const settled = ['exact', 'local-only', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent', 'session-discovered', 'stored-session', 'stored-inputless-session'].includes(match);
       expect(storage.run().state).toBe('cancelled');
       expect(storage.run().workflowCustodyState).toBe(settled ? 'settled' : 'pending');
-      expect(storage.rowById(childId)?.index.lifecycle).toBe(match === 'exact' ? 'failed'
+      expect(storage.rowById(childId)?.index.lifecycle).toBe(match === 'exact' || match === 'local-only' ? 'failed'
         : ['absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent'].includes(match) ? 'outcome_uncertain'
         : match === 'session-discovered' || match === 'stored-session' ? 'completed'
         : match === 'stored-inputless-session' ? 'cancelled' : 'cancel_requested');
@@ -312,7 +329,7 @@ describe('production daemon retained operation target', () => {
           execution: { kind: 'session', sessionId: session.id, localInputId: localId }, result: 'original result' });
       }
     } finally { controller.abort(); finishStartup(); }
-    if (match === 'exact') {
+    if (match === 'exact' || match === 'local-only') {
       const row = storage.rowById(childId)!;
       const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
         v: 1, purpose: 'invocation_progress', accountId, runId, recordId: childId,
@@ -447,8 +464,9 @@ describe('production daemon retained operation target', () => {
       }
     } else {
       await recover('startup');
-      expect(requests).toEqual(phase === 'Stop' ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
-      : [`${machineId}:actionOperation.get.v2`]);
+      expect(new Set(requests)).toEqual(new Set(phase === 'Stop'
+        ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
+        : [`${machineId}:actionOperation.get.v2`]));
     }
     expect(storage.run().workflowCustodyState).toBe('pending');
     expect(storage.rowById(childId)?.index.lifecycle).toBe(stopping ? 'cancel_requested' : 'running');
@@ -922,6 +940,14 @@ describe('workflow actual Session reuse metadata', () => {
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: remoteSession } };
+      if (path === `/v2/sessions/${sessionId}/messages/reply-capability`) return {
+        status: 200, data: SessionMessageReplyCapabilityV1Schema.parse({ v: 1, protocolVersions: [1] }),
+      };
+      if (path === `/v2/sessions/${sessionId}/messages/by-local-id/${encodeURIComponent(admittedLocalId)}/reply`) return {
+        status: 200, data: SessionMessageReplyReadResultV1Schema.parse({ v: 1, status: 'available',
+          progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'participant-turn',
+            outcome: { kind: 'answer', result: { sessionId, messageId: 'answer' } } } }),
+      };
       if (path.includes('/messages/by-local-id/')) return { status: 200, data: { message: {
         id: 'question', seq: 1, localId: admittedLocalId, createdAt: 1, updatedAt: 1,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Give your opinion' } } },
@@ -955,7 +981,7 @@ describe('workflow actual Session reuse metadata', () => {
         expect(outcome, JSON.stringify(progress)).toMatchObject({ state: 'succeeded' });
         expect(exactMachineRpc).toHaveBeenCalled();
         expect(replacementAwareRpc).not.toHaveBeenCalled();
-        expect(admissions).toMatchObject([{ sessionId, targetMachineId: participantMachineId }]);
+        expect(admissions).toMatchObject([{ sessionId, targetMachineId: participantMachineId, reply: { mode: 'wait' } }]);
         expect(progress).toContainEqual(expect.objectContaining({ kind: 'available', content: expect.objectContaining({
           blockKind: 'step', result: 'Remote opinion', execution: expect.objectContaining({ kind: 'session', sessionId }),
           workspace: { descriptor: { machineId: participantMachineId, directory, checkoutRootPath: directory } },

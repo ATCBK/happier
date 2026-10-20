@@ -18,6 +18,7 @@ import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readWorkflowActionApprovalSettlement } from './actionApproval';
+import { readRetainedWorkflowSessionStartupFailure } from './workflowSessionStartupFailure';
 import { readWorkflowProjectSetupConsentHold } from './stepExecution';
 import { validateExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
@@ -676,6 +677,13 @@ function withAbortSignal(context: ExecutionContext, signal: AbortSignal): Execut
   return { ...context, signal: combined.signal };
 }
 
+function hasFailedSessionStartup(execution: WorkflowProgressEnvelopeV1['execution']): boolean {
+  if (execution?.kind !== 'action' || execution.actionId !== 'session.spawn_new'
+    || execution.awaitedOperations?.length !== 1 || !isWorkflowJsonObject(execution.output)) return false;
+  return readRetainedWorkflowSessionStartupFailure(execution.output.operation,
+    execution.awaitedOperations[0]!, execution.actionRequestId) !== undefined;
+}
+
 function persistedFailure(record: WorkflowCoordinatorInvocation): WorkflowLeafFailure | undefined {
   const code = record.reason ?? record.lifecycle;
   switch (record.lifecycle) {
@@ -695,7 +703,8 @@ function persistedFailure(record: WorkflowCoordinatorInvocation): WorkflowLeafFa
       // A persisted definitive leaf failure remains collectable after process
       // reconstruction. The authored parent policy decides whether that fact
       // is collected or fail-stops; the leaf row does not encode that policy.
-      return new WorkflowLeafFailure('interrupted', code, true);
+      return new WorkflowLeafFailure(record.blockKind === 'step' && hasFailedSessionStartup(record.execution)
+        ? 'failed' : 'interrupted', code, true);
     default:
       return undefined;
   }
@@ -2569,7 +2578,11 @@ async function executeStepBlock(
           ? 'cancel_requested' : current?.lifecycle ?? 'admitting', reason: execution.code });
       throw new WorkflowLeafFailure('interrupted', execution.code);
     }
-    const state = execution.kind === 'failed' || execution.kind === 'needs_attention'
+    // A failed original startup owns no Workflow input to reattach. Preserve
+    // its definitive failure through reconstruction and settle parent custody;
+    // failures of an already-admitted native input retain ordinary recovery.
+    const state = execution.kind === 'failed' && hasFailedSessionStartup(durableExecution) ? 'failed'
+      : execution.kind === 'failed' || execution.kind === 'needs_attention'
       || (execution.kind === 'outcome_uncertain' && durableExecution !== undefined)
       ? 'interrupted'
       : execution.kind;

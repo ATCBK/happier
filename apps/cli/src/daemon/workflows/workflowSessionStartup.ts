@@ -1,4 +1,4 @@
-import { ActionOperationGetV1ResponseSchema, ActionOperationSnapshotV1Schema, type ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationGetV1ResponseSchema, type ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
 import type { HostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import type { ActionOperationRpcContext } from '@/daemon/actionOperations/actionOperationRpcHandlers';
@@ -8,6 +8,7 @@ import type { WorkflowSessionStartup } from './sessionStepExecutor';
 import { WorkflowSessionCompositionError } from './workflowConversation';
 import { deriveSessionCreationTagV1, type SessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { prepareRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { readRetainedWorkflowSessionStartupFailure } from './workflowSessionStartupFailure';
 
 /** The original startup operation, rather than its Workflow observer, owns launch custody. */
 export async function prepareWorkflowSessionRequester(
@@ -29,16 +30,6 @@ export async function prepareWorkflowSessionRequester(
 /** Creation and restart discovery share the same immutable Workflow birth identity. */
 export function deriveWorkflowSessionCreationTag(serverId: string, runId: string, creationKey: string): SessionCreationTagV1 {
   return deriveSessionCreationTagV1({ callerCreationNamespace: JSON.stringify(['workflow', serverId, runId]), creationKey });
-}
-
-/** Terminal startup failure remains a fact after its process-local owner retires. */
-export function readRetainedWorkflowSessionStartupFailure(
-  snapshot: unknown, address: ActionCompletionOperation, creationKey: string,
-): ActionOperationSnapshotV1 | undefined {
-  const parsed = ActionOperationSnapshotV1Schema.safeParse(snapshot);
-  return parsed.success && parsed.data.state === 'failed' && parsed.data.operationId === address.operationId
-    && parsed.data.actionId === 'session.spawn_new' && parsed.data.scope.machineId === address.machineId
-    && parsed.data.requestId === creationKey ? parsed.data : undefined;
 }
 
 /** The installed Workflow caller supplies its actual admitted host, not Account defaults. */

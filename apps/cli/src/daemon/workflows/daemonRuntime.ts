@@ -289,14 +289,21 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
 }>) {
   const serverId = params.serverId ?? configuration.activeServerId;
   const admissionDrain = params.admissionDrain;
-  const operationRpc = async (operation: ActionCompletionOperation, kind: 'get' | 'cancel' | 'wait', signal?: AbortSignal,
+  const operationRpc = async (transport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport,
+    operation: ActionCompletionOperation, kind: 'get' | 'cancel' | 'wait', signal?: AbortSignal,
     includeSetupReview?: true) => {
     if (operation.serverId !== serverId) throw new Error('action_operation_home_mismatch');
+    const method = kind === 'cancel' ? ACTION_OPERATION_RPC_METHODS_V1.cancel : ACTION_OPERATION_RPC_METHODS_V2.get;
+    const request = { operationId: operation.operationId, ...(kind === 'wait' ? { waitForTerminal: true,
+      ...(includeSetupReview ? { includeSetupReview } : {}) } : {}) };
+    // The installed daemon already owns this operation. Observe its exact
+    // custody locally, as discovery does, without another Home RPC admission.
+    // A retained operation on a different Machine still uses its original route.
+    if (operation.machineId === transport.machineId) return await transport.invoke(method, request,
+      signal ? { signal } : undefined);
     return await callExactMachineRpc({ credentials: params.credentials, machineId: operation.machineId,
       serverUrl: resolveServerHttpBaseUrl(), authorityCeiling: 'account_automation',
-      method: kind === 'cancel' ? ACTION_OPERATION_RPC_METHODS_V1.cancel : ACTION_OPERATION_RPC_METHODS_V2.get,
-      request: { operationId: operation.operationId, ...(kind === 'wait' ? { waitForTerminal: true,
-        ...(includeSetupReview ? { includeSetupReview } : {}) } : {}) },
+      method, request,
       ...(kind === 'wait' ? { timeoutMs: null } : {}), ...(signal ? { signal } : {}),
     });
   };
@@ -481,7 +488,8 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
             executor: actionExecutor,
             buildContext: resolveWorkflowActionContext,
             observeOperation: async (operation, observation) => {
-              const observed = ActionOperationGetV1ResponseSchema.parse(await operationRpc(operation, 'wait', observation.signal, true));
+              const observed = ActionOperationGetV1ResponseSchema.parse(await operationRpc(input.machineActionDirectTargetTransport,
+                operation, 'wait', observation.signal, true));
               if (observed.kind !== 'found') throw new Error('action_operation_observation_unavailable');
               return observed.operation;
             },
@@ -586,9 +594,9 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
               if (!authorized) throw new Error('workflow_startup_discovery_unavailable');
               return session.id;
             },
-            get: async (operation, signal) => await operationRpc(operation, 'get', signal),
-            cancel: async (operation, signal) => await operationRpc(operation, 'cancel', signal),
-            wait: async (operation, signal) => await operationRpc(operation, 'wait', signal),
+            get: async (operation, signal) => await operationRpc(input.machineActionDirectTargetTransport, operation, 'get', signal),
+            cancel: async (operation, signal) => await operationRpc(input.machineActionDirectTargetTransport, operation, 'cancel', signal),
+            wait: async (operation, signal) => await operationRpc(input.machineActionDirectTargetTransport, operation, 'wait', signal),
           },
           nativeActionRuns: {
             get: async (runId, signal) => await input.machineActionDirectTargetTransport.invoke(

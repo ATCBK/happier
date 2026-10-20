@@ -39,7 +39,8 @@ import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessi
 import { isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import type { SessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
-import { deriveWorkflowSessionCreationTag, readRetainedWorkflowSessionStartupFailure } from './workflowSessionStartup';
+import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
+import { readRetainedWorkflowSessionStartupFailure } from './workflowSessionStartupFailure';
 
 type WorkflowInvocationRecoveryEvidence = Awaited<ReturnType<NonNullable<WorkflowAccountRunActionDeps['observeRecovery']>>>;
 

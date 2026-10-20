@@ -64,6 +64,7 @@ import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requ
 import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineRequestV1Schema,
   SessionPendingEnqueueByMachineResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { buildSessionTurnsProjectionV1, SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
+import { SessionMessageReplyCapabilityV1Schema, SessionMessageReplyReadResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { TranscriptRow } from '@/api/session/fetchEncryptedTranscriptWindow';
 import type { TranscriptMessageLookupResult } from '@/api/session/transcriptMessageLookup';
 import type { SessionTurnV1 } from '@happier-dev/protocol';
@@ -206,6 +207,10 @@ let freshSessionNonceBoundary: ((request: unknown) => unknown) | null = null;
 let readinessCurrentness: AvailableAutomationAccountEncryptionV1['witness'] = currentness;
 
 async function readSessionReadiness(url: string) {
+  if (url.endsWith('/messages/reply-capability')) return { status: 200,
+    data: SessionMessageReplyCapabilityV1Schema.parse({ v: 1, protocolVersions: [1] }) };
+  if (/\/messages\/by-local-id\/[^/]+\/reply$/.test(new URL(url, 'http://workflow-home.test').pathname)) return { status: 200,
+    data: SessionMessageReplyReadResultV1Schema.parse({ v: 1, status: 'none' }) };
   if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200,
     data: createAccountEncryptionCurrentnessFixture({ ...readinessCurrentness, updatedAt: 1 }) };
   const id = /\/v2\/sessions\/([^/?]+)/.exec(url)?.[1];
@@ -522,6 +527,7 @@ it.each(['ordinary', 'claim-lost-during-startup'] as const)('delivers a saved th
     if (parsed.pathname.endsWith(`/v1/artifacts/${definitionId}`)) return { status: 200, data: artifact };
     if (parsed.pathname.endsWith(`/v1/sessions/${childId}/turns`)) return { status: 200,
       data: SessionTurnsProjectionV1Schema.parse(buildSessionTurnsProjectionV1({ sessionId: childId, updatedAt: Date.now(), turns })) };
+    if (parsed.pathname.endsWith('/reply')) return await readSessionReadiness(String(url));
     if (parsed.pathname.includes('/messages/by-local-id/')) return { status: 200, data: { message:
       transcripts.find(row => row.localId === decodeURIComponent(parsed.pathname.split('/').at(-1)!)) } };
     if (parsed.pathname.endsWith(`/v1/sessions/${childId}/messages`)) return { status: 200, data: {
@@ -683,6 +689,7 @@ it.each(['missing', 'materialized'] as const)('surfaces reclaimed admission with
   const inputMessage = () => ({ id: 'observed-workflow-input', seq: 1, localId: observedInputId,
     createdAt: 1, updatedAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'first' } } } });
   vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (String(url).endsWith('/reply')) return await readSessionReadiness(String(url));
     if (String(url).includes('/messages/by-local-id/')) {
       inputReads++;
       if (evidence === 'materialized') {
@@ -893,7 +900,7 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
   }
 });
 
-it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'terminal-write-lost', 'terminal-expired', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
+it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'terminal-write-lost', 'terminal-expired', 'parent-write-lost', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414143';
   const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
@@ -947,7 +954,12 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'term
   const interrupted = new AbortController();
   let rejectCorrespondence = mode === 'lost-claim' || mode === 'lost-claim-root';
   let rejectTerminalWrite = mode === 'terminal-write-lost' || mode === 'terminal-expired';
+  let rejectParentSettlement = mode === 'parent-write-lost';
   const coordinate = workflowDaemonProcess({ storage: { ...kit, execute: async (operation, options) => {
+    if (rejectParentSettlement && operation.operation === 'transition' && operation.state === 'failed') {
+      rejectParentSettlement = false;
+      throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
+    }
     if (rejectTerminalWrite && operation.operation === 'invocations.fact' && operation.lifecycle === 'failed'
       && operation.invocationId === rowFor(kit, 'launch')?.id) {
       rejectTerminalWrite = false;
@@ -963,6 +975,12 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'term
     }
     return kit.execute(operation, options);
   } }, sessionInput, directory, sessionStartup });
+  if (mode === 'parent-write-lost') {
+    await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+      acceptedEnvelope })).rejects.toThrow('storage_unavailable');
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe('failed');
+    expect(kit.run().workflowCustodyState).toBe('pending');
+  }
   if (mode === 'terminal-write-lost' || mode === 'terminal-expired') {
     await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
       acceptedEnvelope })).rejects.toThrow('storage_unavailable');
@@ -984,7 +1002,8 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'term
     runId, attempt: 0, expectedRevision: kit.run().revision, accountCurrentness: currentness, acceptedEnvelope });
   if (mode === 'miswired') await expect(coordinating).rejects.toThrow('workflow_invocation_fact_conflict');
   else {
-    await expect(coordinating).resolves.toMatchObject({ state: 'interrupted', reason: 'ERR_BAD_REQUEST' });
+    await expect(coordinating).resolves.toMatchObject({ state: 'failed', reason: 'ERR_BAD_REQUEST' });
+    expect(kit.run()).toMatchObject({ state: 'failed', workflowCustodyState: 'settled' });
     const leaf = rowFor(kit, 'launch')!;
     expect(leaf.lifecycle).toBe('failed');
     expect(openRowProgress(kit, leaf)).toMatchObject({ reason: { code: 'ERR_BAD_REQUEST', message: refusalMessage }, execution: {
@@ -994,7 +1013,7 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'term
   }
   expect(sessionInput.enqueue).not.toHaveBeenCalled();
   expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
-  expect(launches).toBe(mode === 'fresh' || mode === 'terminal-write-lost' || mode === 'terminal-expired' ? 1 : 0);
+  expect(launches).toBe(mode === 'fresh' || mode === 'terminal-write-lost' || mode === 'terminal-expired' || mode === 'parent-write-lost' ? 1 : 0);
 });
 
 it('retains the original cold Session setup operation in durable Workflow progress until native open', async () => {
