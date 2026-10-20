@@ -22,6 +22,37 @@ import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
 const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' } } as const;
 
 describe('configured widget Actions', () => {
+  it('returns the admitted Project observation without awaiting a duplicate read and observes later edits afresh', async () => {
+    const boundary = createWorkBoardArtifactBoundary();
+    const target = { ...surface, owner: { kind: 'project', projectId: 'project' } } as const;
+    const transport = boundary.forAccount(surface.accountId);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let reads = 0;
+    let holdDuplicate = true;
+    const artifact = createWidgetSurfaceArtifactPortV1({ ...transport, read: async (...args) => {
+      // The Artifact network boundary answers admission, then withholds a redundant fetch.
+      if (holdDuplicate && ++reads > 1) await held;
+      return transport.read(...args);
+    } }, { surface: target, isCurrent: () => true });
+    const executor = createActionExecutor({ widgetAccountScope: () => surface,
+      widgetSurfaceActions: { project: createWidgetAreaActionPortV1(() => artifact) } });
+    let outcome: Awaited<ReturnType<typeof executor.execute>> | undefined;
+    const pending = executor.execute('widgets.item.list', { surface: target }, { surface: 'ui' })
+      .then(result => { outcome = result; });
+    try {
+      await expect.poll(() => outcome).toMatchObject({ ok: true, result: { state: 'missing' } });
+    } finally { holdDuplicate = false; release(); await pending; }
+    const instance: WidgetInstanceV1 = { v: 1, id: 'later', definition: { kind: 'builtin', id: 'count' }, bindings: {} };
+    await artifact.apply({ kind: 'add', instance });
+    expect(await executor.execute('widgets.item.list', { surface: target }, { surface: 'ui' }))
+      .toMatchObject({ ok: true, result: { state: 'present', instances: expect.arrayContaining([expect.objectContaining({ instance })]) } });
+    const row = [...boundary.rows.values()][0]!;
+    boundary.rows.set(row.artifactId, { ...row, access: 'view' });
+    expect(await executor.execute('widgets.item.remove', { ref: { surface: target, instanceId: instance.id } },
+      { surface: 'ui', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: 'widget_edit_denied' });
+  });
+
   it.each(['project', 'pluginArea', 'corePage'] as const)('removes a personal referenced widget directly on %s while confirming sole content, groups and explicit Ask', async kind => {
     const boundary = createWorkBoardArtifactBoundary();
     const target = { ...surface, owner: kind === 'project' ? { kind, projectId: 'project' }

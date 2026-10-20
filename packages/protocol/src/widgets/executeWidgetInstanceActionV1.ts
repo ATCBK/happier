@@ -12,7 +12,7 @@ import { SessionBoardErrorCodeSchema } from '../sessions/board/errors.js';
 import { createHomeWidgetActionPortV1 } from './homeWidgetActionPortV1.js';
 import { createWorkBoardWidgetActionPortV1 } from './workBoardWidgetActionPortV1.js';
 import { createSessionBoardWidgetActionPortV1 } from './sessionBoardWidgetActionPortV1.js';
-import { admitWidgetActionSurfaceV1, readWidgetActionAccountScopeAdmissionV1 } from './widgetActionScopeV1.js';
+import { admitWidgetActionSurfaceV1, readWidgetActionAccountScopeAdmissionV1, readWidgetActionSurfaceAdmissionV1 } from './widgetActionScopeV1.js';
 import { resolveWidgetSizeChoicesV1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetSizeV1 } from './widgetPresentationV1.js';
 import { isWidgetTargetHostableV1 } from './widgetInputAdmissionV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
@@ -179,8 +179,8 @@ export async function executeWidgetInstanceActionV1(
     return deps.widgetAreaLayoutSelect ? deps.widgetAreaLayoutSelect(surface, context, context.signal)
       : failure('widget_area_layout_owner_unavailable');
   }
-  const scopeRefusal = await admitWidgetActionSurfaceV1(deps, surface, context);
-  if (scopeRefusal) return scopeRefusal;
+  const admission = await readWidgetActionSurfaceAdmissionV1(deps, surface, context);
+  if (!admission.ok) return admission;
   if (actionId.startsWith('widgets.area.layout.')) {
     if (actionId === 'widgets.area.layout.delete' && surface.owner.kind === 'project' && !surface.owner.layoutId)
       return failure('widget_area_layout_default_protected');
@@ -234,7 +234,9 @@ export async function executeWidgetInstanceActionV1(
   }
   const port = surfacePort(deps, surface);
   if (!port) return failure('unsupported_widget_surface');
-  const read = await port.read(surface, context, context.signal);
+  // Admission already read Artifact-backed placements in this execution. No user/policy await
+  // intervenes on this path; the writer still obtains fresh access/revision for its CAS below.
+  const read = admission.read ?? await port.read(surface, context, context.signal);
   const refused = ActionExecuteFailureSchema.safeParse(read);
   if (refused.success) return refused.data;
   const parsedRead = WidgetSurfaceReadV1Schema.safeParse(read);

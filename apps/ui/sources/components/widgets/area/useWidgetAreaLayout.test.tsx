@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { act } from 'react-test-renderer';
 import { PluginUiWidgetAreaResultV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, type WidgetAreaLayoutV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
@@ -8,6 +9,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 it('keeps a connecting plugin area loading, retains authorized data, and clears it on a terminal refusal', async () => {
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-connection-pending.test', accountId: 'actor' });
@@ -177,6 +180,71 @@ it('exposes missing versus present-empty and current admitted dashboard identity
         dashboard: { name: 'Overview', ownerAccountId: 'actor', access: 'owner' } });
     expect(rows.size).toBe(1);
     await hook.unmount();
+});
+
+it('renders a committed removal from the admitted observation while duplicate Artifact reads are slow', async () => {
+    const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'actor', owner: { kind: 'project', projectId: 'removed' } };
+    const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+    const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
+    const account = boundary.forAccount(surface.accountId);
+    const reads = new Map<AbortSignal | undefined, number>();
+    let holdDuplicate = false;
+    let armOnUpdate = false;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const publish = (row: HomeHubArtifactV1) => storage.getState().updateArtifact({ id: row.artifactId,
+        title: 'Overview', isDecrypted: true, ownerAccountId: 'actor', access: 'owner', storageMode: 'plain',
+        headerVersion: row.revision.headerVersion, bodyVersion: row.revision.bodyVersion,
+        body: row.body, seq: 1, createdAt: 1, updatedAt: row.revision.bodyVersion });
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async (id, options) => {
+            if (holdDuplicate) {
+                const count = (reads.get(options?.signal) ?? 0) + 1;
+                reads.set(options?.signal, count);
+                // The network answers each observation, but its duplicate is arbitrarily slow.
+                if (count > 1) await held;
+            }
+            return account.read(id, options);
+        },
+        create: async input => {
+            const row = await account.create(input);
+            publish(row); return row;
+        },
+        update: async input => {
+            const result = await account.update(input);
+            if (result.ok) {
+                publish({ ...boundary.rows.get(input.artifactId)!, ownerAccountId: surface.accountId });
+                if (armOnUpdate) holdDuplicate = true;
+            }
+            return result;
+        },
+    };
+    const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
+    await owner.apply({ kind: 'add', instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'project_about' }, bindings: {} } });
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => surface,
+        widgetSurfaceActions: { project: createWidgetAreaActionPortV1(() => owner) } }));
+    const port: WidgetAreaPort = { execute: async (operation, signal) => {
+        const { buildWidgetAreaActionInputV1 } = await import('@happier-dev/protocol/plugins/ui');
+        return PluginUiWidgetAreaResultV1Schema.parse(await executor.execute(operation.actionId,
+            buildWidgetAreaActionInputV1(operation, surface), { surface: 'ui', bypassApprovals: true, signal }));
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().state).toMatchObject({ status: 'ready',
+            placements: expect.arrayContaining([expect.objectContaining({ instance: expect.objectContaining({ id: 'copy' }) })]) }));
+        // Arm only after the writer commits, so policy and CAS reads remain fully fresh.
+        armOnUpdate = true;
+        await act(async () => { expect(await hook.getCurrent().write({ actionId: 'widgets.item.remove', instanceId: 'copy' })).toEqual({ kind: 'applied' }); });
+        await vi.waitFor(() => {
+            const state = hook.getCurrent().state;
+            expect(state.status).toBe('ready');
+            if (state.status === 'ready') {
+                expect(state.placements.some(row => row.instance.id === 'copy')).toBe(false);
+                expect(state.isCurrent()).toBe(true);
+            }
+        });
+    } finally { holdDuplicate = false; release(); await hook.unmount(); storage.getState().deleteArtifact(artifactId); }
 });
 
 it('settles an acknowledged widget add even when its follow-up layout read is still pending', async () => {

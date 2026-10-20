@@ -94,6 +94,52 @@ it('refuses an ambiguous mounted area without changing either owner', async () =
     await hook.unmount();
 });
 
+it('projects an acknowledged Project removal into the mounted area', async () => {
+    const { storage } = await import('@/sync/domains/state/storage');
+    const scope = { serverId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'account-a' };
+    const settings = { ...storage.getState().settings,
+        actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+            'widgets.item.add': ['ui'], 'widgets.item.remove': ['ui'],
+        } }),
+    };
+    storage.getState().applySettingsForScope(scope, settings, 1);
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    const surface = { ...scope, owner: { kind: 'project' as const, projectId: 'project-anchor' } };
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
+    const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'usage_coach' },
+        bindings: { projects: { kind: 'context' as const, slot: 'projects' },
+            period: { kind: 'value' as const, value: { relative: '7days' } },
+            agents: { kind: 'value' as const, value: [] }, machines: { kind: 'value' as const, value: [] },
+            sources: { kind: 'value' as const, value: [] }, session: { kind: 'value' as const, value: null },
+            costBasis: { kind: 'value' as const, value: 'auto' } } };
+    const added = await executor.execute('widgets.item.add', { surface, instance }, context);
+    expect(added).toMatchObject({ ok: true, result: { instance } });
+    const input = { serverId, projectName: 'Project', projectRef: {
+        id: 'checkout', serverId, machineId: 'machine', rootPath: '/repo', projectKey: 'project-anchor', createdAtMs: 1,
+    } };
+    const hook = await renderHook(() => {
+        const binding = useProjectWidgetAreaBinding(input);
+        return useWidgetAreaLayout(binding.port!, binding.context);
+    });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().state).toMatchObject({ status: 'ready',
+            placements: expect.arrayContaining([expect.objectContaining({ instance: { ...instance } })]) }));
+        await act(async () => {
+            expect(await hook.getCurrent().write({ actionId: 'widgets.item.remove', instanceId: instance.id }))
+                .toEqual({ kind: 'applied' });
+        });
+        await vi.waitFor(() => {
+            const state = hook.getCurrent().state;
+            expect(state.status).toBe('ready');
+            if (state.status === 'ready') {
+                expect(state.placements.some(row => row.instance.id === instance.id)).toBe(false);
+                expect(state.isCurrent()).toBe(true);
+            }
+        });
+    } finally { await hook.unmount(); }
+});
+
 it('delivers Project selection through both reverse dispatchers using the portable Home address', async () => {
     const scope = { serverId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'account-a' };
     // Seed the Account policy at its settings producer and HTTP boundary. A

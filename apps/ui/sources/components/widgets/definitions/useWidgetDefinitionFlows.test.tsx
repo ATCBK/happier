@@ -176,6 +176,52 @@ describe('widget definition flows', () => {
         } finally { await screen.unmount(); await disconnect(); }
     });
 
+    it('settles the open Project copy when its delayed durable receipt arrives', async () => {
+        const serverId = await addDefinitionHome();
+        const disconnect = await applyDefinitionHomeConnection();
+        const React = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { WidgetCopyPanel } = await import('./WidgetCopyPanel');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { applyProjectAccountRowsFixture } = await import('@/dev/testkit/fixtures/projectAccountRows');
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const { WidgetFlowPanel } = await import('../flow/WidgetFlowPanel');
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'workspace', serverId, machineId: 'machine', rootPath: '/project',
+            label: 'Destination project', projectKey: 'destination-project', createdAtMs: 0 }] });
+        const receipt = createDeferred<void>();
+        let committed = false;
+        setRuntimeFetch(async (input, init) => {
+            const response = await harness.request(input, init);
+            const path = new URL(String(input)).pathname;
+            if (init?.method === 'POST' && /^\/v1\/artifacts\/[^/]+$/.test(path) && path !== '/v1/artifacts/read' && response.ok) {
+                committed = true;
+                await receipt.promise;
+            }
+            return response;
+        });
+        const done = vi.fn();
+        const screen = await renderScreen(React.createElement(InjectedAuthProvider, { credentials: null, children: React.createElement(WidgetCopyPanel, {
+            instance: { v: 1, id: 'source', definition: { kind: 'builtin', id: 'usage_coach' }, bindings: {
+                period: { kind: 'value', value: { relative: '7days' } }, agents: { kind: 'value', value: [] },
+                machines: { kind: 'value', value: [] }, projects: { kind: 'value', value: [] }, sources: { kind: 'value', value: [] },
+                session: { kind: 'value', value: null }, costBasis: { kind: 'value', value: 'auto' },
+            } }, current: { serverId, accountId: ACCOUNT_ID, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } },
+            destinationKey: 'project:destination-project', providedContext: {}, onClose: () => {}, onDone: done, testID: 'lateCopy',
+        }) }));
+        try {
+            await screen.pressByTestIdAsync('lateCopy.setup.submit');
+            await vi.waitFor(() => expect(committed).toBe(true));
+            expect(done).not.toHaveBeenCalled();
+            expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary?.busy).toBe(true);
+            await act(async () => { receipt.resolve(); });
+            await vi.waitFor(() => expect(done).toHaveBeenCalledOnce());
+            expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary?.busy).toBe(false);
+        } finally { receipt.resolve(); setRuntimeFetch(harness.request); await screen.unmount(); await disconnect(); }
+    });
+
     it('discovers setup metadata through the list Action without opening definition bodies', async () => {
         const serverId = await addDefinitionHome();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
