@@ -197,7 +197,6 @@ import { SESSION_BOARD_HEADER_MENU_ACTION_ID } from '@/components/sessions/board
 import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSessionBoardFeatureEnabled';
 import { createSessionBoardDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { isSessionBoardVisibleInDetails } from '@/components/sessions/board/sessionBoardDetailsVisibility';
-import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useSessionExecutionRunsSupported } from '@/hooks/server/useSessionExecutionRunsSupported';
 import { useMaterializedTemporaryComputerSessionRecovery } from '@/components/sessions/shell/useMaterializedTemporaryComputerSessionRecovery';
@@ -403,6 +402,7 @@ import {
 import * as React from 'react';
 import { AtmosphereSurfaceFrame } from '@/components/atmosphere/AtmosphereSurfaceFrame';
 import { useSessionFilePaneNavigation } from '@/components/sessions/panes/useSessionFileDetailsOpener';
+import { useWorkspaceFileOriginReturn } from '@/components/workspaces/files/useWorkspaceFileOriginReturn';
 import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -621,6 +621,8 @@ import {
     type SessionPresentationIntentApplier,
 } from '@/components/sessions/companion/presentation/SessionCompanionPresentationBridge';
 import type { SessionPresentationMutationOutcome } from '@/components/sessions/companion/presentation/sessionCompanionPresentationAdapter';
+import { createSessionCompanionPanePresentation } from '@/components/sessions/companion/presentation/sessionCompanionPanePresentation';
+import type { PaneMainColumnState } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { ComposerAuxiliaryFrame } from './view/ComposerAuxiliaryFrame';
 import { SessionComputerPresenceLine } from '@/components/computer/SessionComputerPresenceLine';
@@ -770,7 +772,7 @@ import {
 } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageSelectors';
 import { readProviderAccountUsageRecordIdsFromMetadata } from '@happier-dev/protocol/sessions/metadata/providerAccountUsageRefsV1';
 import type { ComposerAgentContinuationIntentV1, SessionAgentTransitionResultV1 } from '@happier-dev/protocol/sessions/agentTransition';
-import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 
 export { resolveSessionAuthSurfaceState } from './sessionAuthSurfaceState';
 
@@ -1991,7 +1993,6 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
     const mobileTerminalTabAvailable = deviceType === 'phone'
         && cockpitChrome?.sessionId === sessionId
         && cockpitChrome.terminalTabAvailable;
-    const paneFocusMode = usePaneFocusMode(paneScopeId);
     const sessionsRightPaneDefaultOpen = useLocalSetting('sessionsRightPaneDefaultOpen');
     const {
         mobileWorkspaceExperience,
@@ -2708,6 +2709,9 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                            authSurfaceState={authSurfaceState}
                            key={props.sessionSurfaceKey}
                            header={sessionHeader}
+                           headerTitle={headerProps.title}
+                           headerAgentId={headerProps.agentId ?? null}
+                           headerMachineId={headerMachineTarget?.machineId ?? null}
                            sessionId={sessionId}
                            sessionSurfaceKey={props.sessionSurfaceKey}
                            routeServerId={currentSessionRouteServerId}
@@ -2805,6 +2809,9 @@ function SessionViewLoaded(props: Parameters<typeof SessionViewLoadedContent>[0]
 function SessionViewLoadedContent({
     authSurfaceState,
     header,
+    headerTitle,
+    headerAgentId,
+    headerMachineId,
     sessionId,
     sessionSurfaceKey,
     routeServerId,
@@ -2855,6 +2862,9 @@ function SessionViewLoadedContent({
 }: {
     /** The session header: it opens the transcript column, so it spans the transcript's width. */
     header: React.ReactNode;
+    headerTitle: string;
+    headerAgentId: string | null;
+    headerMachineId: string | null;
     embedded: SessionViewEmbeddedPresentation | null;
     embeddedArrangement?: React.ReactNode;
     authSurfaceState: SessionAuthSurfaceState | null;
@@ -2951,9 +2961,10 @@ function SessionViewLoadedContent({
     const composerPresentationAccountLifetime = sessionAccountLifetime;
     const presentationPaneRef = React.useRef(pane);
     presentationPaneRef.current = pane;
-    const presentationPaneFocusMode = usePaneFocusMode(paneScopeId);
-    const presentationPaneFocusModeRef = React.useRef(presentationPaneFocusMode);
-    presentationPaneFocusModeRef.current = presentationPaneFocusMode;
+    const presentationMainColumnRef = React.useRef<PaneMainColumnState | null>(null);
+    const onMainColumnControlsChange = React.useCallback((controls: PaneMainColumnState | null) => {
+        presentationMainColumnRef.current = controls;
+    }, []);
     const boardPresentationUndoCurrentRef = React.useRef(false);
     boardPresentationUndoCurrentRef.current = composerPresentationMountedRef.current
         && surfaceFocused
@@ -8573,6 +8584,7 @@ function SessionViewLoadedContent({
         sessionId,
         serverId: sessionRouteServerId,
     });
+    useWorkspaceFileOriginReturn(pane.scopeId, surfaceFocused && surfacePresented);
 
     const getAutocompleteSuggestions = React.useCallback(
         (query: string, signal: AbortSignal, onUpdate: AutocompleteSuggestionUpdate) => resolveSessionComposerSuggestions(sessionId, query, {
@@ -10602,80 +10614,15 @@ function SessionViewLoadedContent({
             return { status: 'unavailable' };
         }
     }, [routeMobileSurface, routeServerId, router, sessionId]);
-    // Board/Details navigation for an admitted presentation command. Readability
-    // and view selection are resolved by the bridge from the canonical Board
-    // repository; this shell contributes only the incumbent pane operations.
-    const applyCompanionBoardTabForPresentation = React.useCallback((
-        boardTab: ReturnType<typeof createSessionBoardDetailsTab>,
-        mode: 'beside_chat' | 'focus' | 'preserve_focus',
-    ): SessionPresentationMutationOutcome => {
-        const beforeDetails = presentationPaneRef.current.scopeState?.details ?? null;
-        const beforeFocusMode = presentationPaneFocusModeRef.current.active;
-        const beforeBoardTabPresent = beforeDetails?.groups?.some(
-            (group) => group.tabs.some((tab) => tab.key === boardTab.key),
-        ) ?? beforeDetails?.tabs.some((tab) => tab.key === boardTab.key) ?? false;
-        const paneAlreadyApplied = beforeDetails?.isOpen === true
-            && beforeDetails.activeTabKey === boardTab.key;
-        const focusAlreadyApplied = mode === 'preserve_focus'
-            || (mode === 'focus' ? beforeFocusMode : !beforeFocusMode);
-        if (paneAlreadyApplied && focusAlreadyApplied) return { status: 'unchanged' as const };
-
-        presentationPaneRef.current.openDetailsTab(boardTab, { intent: 'pinned' });
-        const focusChanged = mode === 'focus'
-            ? presentationPaneFocusModeRef.current.enter()
-            : mode === 'beside_chat'
-                ? presentationPaneFocusModeRef.current.exit()
-                : false;
-        const paneChanged = !paneAlreadyApplied;
-
-        return {
-            status: 'applied' as const,
-            undo: () => {
-                if (!boardPresentationUndoCurrentRef.current) return;
-                const currentPane = presentationPaneRef.current;
-                const currentDetails = currentPane.scopeState?.details ?? null;
-                // Restore only the fields this command applied. A later human
-                // pane/focus change wins and makes the inverse a no-op.
-                if (
-                    paneChanged
-                    && currentDetails?.isOpen === true
-                    && currentDetails.activeTabKey === boardTab.key
-                ) {
-                    if (beforeDetails?.isOpen === true) {
-                        if (beforeDetails.activeTabKey) {
-                            currentPane.setActiveDetailsTab(beforeDetails.activeTabKey);
-                        }
-                        if (beforeDetails.focusedGroupId) {
-                            currentPane.focusDetailsGroup?.(beforeDetails.focusedGroupId);
-                        }
-                    } else {
-                        currentPane.closeDetails();
-                    }
-                    if (!beforeBoardTabPresent) currentPane.closeDetailsTab(boardTab.key);
-                }
-                if (focusChanged) {
-                    const expectedFocusMode = mode === 'focus';
-                    if (presentationPaneFocusModeRef.current.active !== expectedFocusMode) return;
-                    if (beforeFocusMode) presentationPaneFocusModeRef.current.enter();
-                    else presentationPaneFocusModeRef.current.exit();
-                }
-            },
-        };
-    }, []);
-    const openCompanionBoardForPresentation = React.useCallback(
-        (mode: 'beside_chat' | 'focus') => applyCompanionBoardTabForPresentation(
-            createSessionBoardDetailsTab(),
-            mode,
-        ),
-        [applyCompanionBoardTabForPresentation],
-    );
-    const revealCompanionBoardItem = React.useCallback(
-        (widgetId: string) => applyCompanionBoardTabForPresentation(
-            createSessionBoardDetailsTab({ kind: 'item', itemId: widgetId }),
-            'preserve_focus',
-        ),
-        [applyCompanionBoardTabForPresentation],
-    );
+    const {
+        openBoard: openCompanionBoardForPresentation,
+        revealBoardItem: revealCompanionBoardItem,
+        returnToChat: returnToCompanionChat,
+    } = React.useMemo(() => createSessionCompanionPanePresentation({
+        readPane: () => presentationPaneRef.current,
+        readMainColumn: () => presentationMainColumnRef.current,
+        isUndoCurrent: () => boardPresentationUndoCurrentRef.current,
+    }), []);
     const revealCompanionBoardItemThroughPresentation = React.useCallback((widgetId: string) => {
         const lifetime = sessionAccountLifetime;
         if (!lifetime?.isCurrent()) return;
@@ -10687,19 +10634,6 @@ function SessionViewLoadedContent({
             defaultSessionId: sessionId,
         }).then(requireActionSuccess).catch(error => presentSessionActionOutcome(error, lifetime));
     }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId]);
-    const returnToCompanionChat = React.useCallback(() => {
-        // Returning to Chat only exits focus mode. Existing Details/right-pane
-        // state belongs to the person and remains exactly as it was.
-        if (!presentationPaneFocusModeRef.current.exit()) return { status: 'unchanged' as const };
-        return {
-            status: 'applied' as const,
-            undo: () => {
-                if (!boardPresentationUndoCurrentRef.current) return;
-                if (presentationPaneFocusModeRef.current.active) return;
-                presentationPaneFocusModeRef.current.enter();
-            },
-        };
-    }, []);
     const companionSummaryDestinations = React.useMemo(() => createSessionSummaryDestinations({
         address: { sessionId, serverId: sessionRouteServerId },
         navigate: href => router.push(href as never),
@@ -10846,6 +10780,21 @@ function SessionViewLoadedContent({
         revealCompanionBoardItemThroughPresentation,
     ]);
 
+    const hideSessionLabel = t('panes.mainColumn.hideSession');
+    const showSessionLabel = t('panes.mainColumn.showSession');
+    const mainColumn = React.useMemo(() => ({
+        hideLabel: hideSessionLabel,
+        showLabel: showSessionLabel,
+        identity: <>
+            {headerAgentId ? <SessionAgentCatalogIdentityIcon agentId={headerAgentId}
+                machineId={headerMachineId} serverId={sessionRouteServerId}
+                color={theme.colors.text.secondary} size={ICON_SIZE.sm} /> : null}
+            <Text numberOfLines={1}>{headerTitle}</Text>
+            <Text numberOfLines={1} style={{ color: sessionStatus.statusColor }}>{sessionStatus.statusText}</Text>
+        </>,
+    }), [headerAgentId, headerMachineId, headerTitle, hideSessionLabel, showSessionLabel,
+        sessionRouteServerId, sessionStatus.statusColor, sessionStatus.statusText, theme.colors.text.secondary]);
+
     if (embedded) {
         // Embedded in another surface's pane (the peek): the Session's own providers, without its
         // pane columns — the host surface owns the columns this view sits in.
@@ -10860,10 +10809,13 @@ function SessionViewLoadedContent({
         <SessionResumeProvider onResumeSession={handleResumeSession}>
             <AppPaneScopeHost
                 scopeId={paneScopeId}
+                arrangement="honour"
+                mainColumn={mainColumn}
+                onMainColumnControlsChange={onMainColumnControlsChange}
                 wrapScopeContent={wrapPaneScopeContent}
                 onPluginSurfaceNavigationBindingChange={onAppPanePluginSurfaceNavigationBindingChange}
                 // Keep the real session tree mounted; the pane host is responsible for hiding
-                // the main region in pane focus mode so focus toggles don't accidentally
+                // the main region when hidden so visibility toggles don't accidentally
                 // render an empty placeholder region.
                 main={main}
             />

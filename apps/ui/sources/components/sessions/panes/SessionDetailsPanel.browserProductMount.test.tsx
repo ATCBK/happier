@@ -16,7 +16,8 @@ import type { MountedSessionBoardController } from '@/components/sessions/board/
 import type { SessionDetailsPanelPluginRuntimeState } from './useSessionDetailsPanelPluginRuntime';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
-import { createSessionBoardDetailsTab, createSessionCommitDetailsTab, createSessionDiscussionDetailsTab, createSessionFileDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createSessionBoardDetailsTab, createSessionCommitDetailsTab, createSessionDiscussionDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -72,7 +73,7 @@ async function renderers(overrides: Partial<Parameters<typeof import('./surfaces
     return createSessionDetailsSurfaceRenderers({
         sessionId: 's1', scopeId: 'session:s1', serverId: runtime.serverId, machineId: 'machine-1',
         requestClose: runtime.pane.closeDetails,
-        openFileTab: (path, intent) => runtime.pane.openDetailsTab(createSessionFileDetailsTab(path), { intent }),
+        openFileTab: (path, intent) => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab(path), { intent }),
         getStartEditingFileHandler: () => () => {},
         sessionScreenTestIdsEnabled: true, closeDetailsTab: runtime.pane.closeDetailsTab,
         ...overrides,
@@ -88,7 +89,7 @@ describe('SessionDetailsPanel browser product mount', () => {
         const screen = await renderScreen(<runtime.Wrapper>
             <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" />
         </runtime.Wrapper>);
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         await screen.pressByTestIdAsync('session-details-open-browser');
         const browserTabKey = createBrowserLaunchpadDetailsTab().key;
         const browserTab = runtime.pane.scopeState?.details.tabs.find(tab => tab.key === browserTabKey);
@@ -115,7 +116,7 @@ describe('SessionDetailsPanel browser product mount', () => {
         </runtime.Wrapper>);
         const commit = createSessionCommitDetailsTab('abc123');
         if (!commit) throw new Error('Expected a canonical commit tab');
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         await act(async () => runtime.pane.openDetailsTab(commit, { intent: 'pinned' }));
         const view = screen.tree.findByType(SessionCommitDetailsView);
         await act(async () => view.props.onBack());
@@ -191,7 +192,7 @@ describe('SessionDetailsPanel browser product mount', () => {
     ])('passes file context without granting interaction to a $phase projection', async ({ phase, interactionEnabled }) => {
         await renderScreen(<runtime.Wrapper />);
         const projection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 9 };
-        const input = await renderInput({ ...createSessionFileDetailsTab('README.md'), isPinned: true, isPreview: false });
+        const input = await renderInput({ ...createWorkspaceFileDetailsTab('README.md'), isPinned: true, isPreview: false });
         const renderer = (await renderers({ pluginUiProjection: projection, pluginUiProjectionPhase: phase,
             pluginUiInteractionEnabled: true, platform: 'web' })).find(candidate => candidate.id === 'session-file');
         const element = renderer?.render(input);

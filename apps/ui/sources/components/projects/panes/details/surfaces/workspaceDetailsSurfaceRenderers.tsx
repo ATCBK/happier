@@ -15,7 +15,7 @@ import {
 } from '@/components/browser/surfaces';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import { WorkspaceFileDetailsView } from '@/components/workspaces/files/details/WorkspaceFileDetailsView';
-import { readFileTargetAnchorResource } from '@/utils/url/sessionFileDeepLink';
+import { readFileTargetAnchorResource, readWorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
 import { FileFindSeedHost } from '@/components/appShell/panes/fileFindSeedHost';
 import { WorkspaceCommitDetailsView } from '@/components/projects/panes/details/views/WorkspaceCommitDetailsView';
 import { WorkspaceScmReviewDetailsView } from '@/components/projects/panes/details/views/WorkspaceScmReviewDetailsView';
@@ -174,6 +174,7 @@ export function createWorkspaceDetailsSurfaceRenderers(
                         scopeId={options.scopeId}
                         scope={options.workspaceScope}
                         filePath={filePath}
+                        initialView={readWorkspaceFileLinkView(input.tab.resource)}
                         deepLinkAnchor={readFileTargetAnchorResource(input.tab.resource)}
                         presentation={options.presentation}
                         sessionIdForAugmentation={options.sessionIdForAugmentation ?? null}

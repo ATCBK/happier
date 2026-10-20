@@ -28,7 +28,7 @@ it('returns focus to the originating control when its docked file tab closes', a
         const trigger = container.querySelector<HTMLButtonElement>('#file-origin')!;
         trigger.focus();
         await act(async () => pane!.openDetailsTab({ key: 'file:a.ts', kind: 'file', title: 'a.ts', resource: { kind: 'file', path: 'a.ts' } }));
-        context!.overlayFocusReturnOwner.getRef('session:file-origin', 'details').current = trigger;
+        context!.overlayFocusReturnOwner.recordDetailsTabOrigin('session:file-origin', 'file:a.ts', { focusReturnRef: { current: trigger } }, 'pane');
         container.querySelector<HTMLButtonElement>('#file-body')!.focus();
         await act(async () => pane!.closeDetailsTab('file:a.ts'));
         expect(document.activeElement).toBe(trigger);

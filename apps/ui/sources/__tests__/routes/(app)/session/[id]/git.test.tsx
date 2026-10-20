@@ -130,8 +130,8 @@ describe('/session/[id]/git', () => {
     it('keeps an opened details tab inside the cockpit', async () => {
         phone = true;
         storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
-        await renderRouteScreen(() => runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' }));
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+        await renderRouteScreen(() => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' }));
         expect(runtime.pane.scopeState?.details).toMatchObject({ isOpen: true, activeTabKey: 'file:README.md' });
         expect(routerPushSpy).not.toHaveBeenCalled();
     });

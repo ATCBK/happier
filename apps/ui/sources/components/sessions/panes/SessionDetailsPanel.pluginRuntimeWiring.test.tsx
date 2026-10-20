@@ -5,7 +5,7 @@ import { renderScreen } from '@/dev/testkit';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
-import { createSessionFileDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 
 installSessionDetailsPanelCommonModuleMocks();
 const runtime = installSessionPaneRuntimeTestHarness();
@@ -37,7 +37,7 @@ describe('SessionDetailsPanel plugin runtime wiring', () => {
         });
         // Exercise the registered renderer's public file-view input. An establishing projection
         // keeps its snapshot but cannot launch; a wrong Session cannot borrow the focused Home.
-        const tab = { ...createSessionFileDetailsTab('README.md'), isPinned: true, isPreview: false };
+        const tab = { ...createWorkspaceFileDetailsTab('README.md'), isPinned: true, isPreview: false };
         const descriptor = createDetailsSurfaceDescriptor({ tab, scope: host.props.scope, region: 'details' });
         const renderer = host.props.renderers.find((candidate: { id: string }) => candidate.id === 'session-file');
         expect(renderer).toBeDefined();

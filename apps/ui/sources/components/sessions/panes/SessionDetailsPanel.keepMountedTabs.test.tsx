@@ -9,7 +9,8 @@ import { SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from 
 import type { MountedSessionBoardController } from '@/components/sessions/board/SessionBoardControllerProvider';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
-import { createSessionFileDetailsTab, createSessionScmReviewDetailsTab, createSessionBoardDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createSessionScmReviewDetailsTab, createSessionBoardDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 
 installSessionDetailsPanelCommonModuleMocks();
 
@@ -28,7 +29,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
     it('shows pending details until the deep-linked Session hydrates', async () => {
         storage.setState({ sessions: {}, sessionListRowsByServerId: {}, sessionListIndexByServerId: {} });
         const screen = await mountPanel(runtime);
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         expect(screen.findHostByTestId('details-surface-fallback-pending')).not.toBeNull();
         expect(screen.findHostByTestId('details-surface-fallback-unsupported')).toBeNull();
         await act(async () => storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: runtime.serverId })]));
@@ -39,7 +40,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
         const { SessionFileDetailsView } = await import('@/components/sessions/files/views/SessionFileDetailsView');
         const { SessionScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
         const screen = await mountPanel(runtime);
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         await act(async () => runtime.pane.openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' }));
         expect(screen.tree.findAllByType(SessionFileDetailsView)).toHaveLength(1);
         expect(screen.tree.findAllByType(SessionScmReviewDetailsView)).toHaveLength(1);
@@ -58,7 +59,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
     it('publishes pin/unpin affordances that change real tab state and retain the file icon', async () => {
         const screen = await mountPanel(runtime);
         const { t } = await import('@/text');
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'preview' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'preview' }));
         const pin = screen.findHostByTestId('session-details-tab-pin-file_a.txt');
         expect(pin?.props.accessibilityLabel).toBe(`${t('session.detailsPanel.pinTabA11y')}: a.txt`);
         await screen.pressByTestIdAsync('session-details-tab-pin-file_a.txt');
@@ -72,7 +73,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
 
     it('toggles the actual right pane from the Details header in both directions', async () => {
         const screen = await mountPanel(runtime);
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         expect(runtime.pane.scopeState?.right.isOpen).toBe(false);
         await screen.pressByTestIdAsync('session-details-right-pane-toggle');
         expect(runtime.pane.scopeState?.right.isOpen).toBe(true);
@@ -127,7 +128,7 @@ describe.each([true, false])('SessionDetailsPanel exact-Home Board action (Home 
             </SessionBoardControllerProvider></runtime.Wrapper>;
         }
         const screen = await renderScreen(<Panel />);
-        await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
+        await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('a.txt'), { intent: 'pinned' }));
         await flushHookEffects({ cycles: 30 });
         expect(screen.findHostByTestId('session-details-open-board')).toBeNull();
         records = [

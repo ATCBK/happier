@@ -41,13 +41,14 @@ export function FileScreen() {
     );
 
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled');
+    const arrangement = useLocalSetting('paneArrangement');
     const deviceType = useDeviceType();
     const { width: containerWidthPx } = useWindowDimensions();
     const shouldRedirect =
         Boolean(sessionId)
         && Boolean(filePath)
         && sessionHydrated
-        && shouldRedirectDetailsRouteToPanes({ containerWidthPx, deviceType, multiPaneEnabled });
+        && shouldRedirectDetailsRouteToPanes({ containerWidthPx, deviceType, multiPaneEnabled, arrangement });
 
     const scopeId = useDestinationPaneScopeId(createSessionPaneScopeId(sessionId, routeScope.serverId));
     const pane = useAppPaneScope(scopeId);

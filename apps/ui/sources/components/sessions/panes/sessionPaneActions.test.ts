@@ -2,7 +2,8 @@ import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/deta
 import { describe, expect, it } from 'vitest';
 import { appPaneReduce, createAppPaneState, type AppPaneAction } from '@/components/appShell/panes/model/appPaneReducer';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { createSessionFileDetailsTab, SESSION_DETAILS_SCM_REVIEW_TAB_KEY } from './details/sessionDetailsTabBuilders';
+import { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } from './details/sessionDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { toggleSessionReview } from './sessionPaneActions';
 import { toggleRightSidebarTab } from '@/components/appShell/rightSidebar/rightSidebarActions';
 
@@ -39,7 +40,7 @@ describe('session pane rail actions', () => {
     it('reveals the selected right pane when Details hides it, retaining its details tabs', () => {
         const pane = paneHarness();
         pane.openRight({ tabId: 'files' });
-        pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+        pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
         toggleRightSidebarTab(pane, 'files', 'files', (id) => pane.openRight({ tabId: id }), true);
         expect(pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'files' });
         expect(pane.scopeState?.details.isOpen).toBe(false);
@@ -50,7 +51,7 @@ describe('session pane rail actions', () => {
         const pane = paneHarness();
         if (rightOpen) pane.openRight({ tabId: 'files' });
         const originalRight = pane.scopeState?.right;
-        pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+        pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
         pane.closeDetails();
         toggleSessionReview(pane);
         expect(pane.scopeState?.right).toEqual(originalRight);
@@ -60,7 +61,7 @@ describe('session pane rail actions', () => {
         expect(pane.scopeState?.details.isOpen).toBe(false);
         expect(pane.scopeState?.details.tabs).toHaveLength(2);
         expect(pane.scopeState?.right).toEqual(originalRight);
-        pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+        pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
         toggleSessionReview(pane);
         expect(pane.scopeState?.details).toMatchObject({ isOpen: true, activeTabKey: SESSION_DETAILS_SCM_REVIEW_TAB_KEY });
         expect(pane.scopeState?.details.tabs).toHaveLength(2);

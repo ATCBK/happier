@@ -42,8 +42,8 @@ describe('canonical Project Code with the real shell', () => {
     it('renders the actual details surface when a canonical file tab is already open', async () => {
         const Screen = (await import('@/app/(app)/projects/[workspaceRefId]/code')).default;
         const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
-        const { createProjectFileDetailsTab } = await import('@/components/projects/detail/projectDetailsTabBuilders');
-        const tab = createProjectFileDetailsTab('/repo/a.ts');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+        const tab = createWorkspaceFileDetailsTab('/repo/a.ts');
         const screen = await renderScreen(<runtime.Wrapper />);
         await act(async () => {
             runtime.pane.openRight({ tabId: 'git' });

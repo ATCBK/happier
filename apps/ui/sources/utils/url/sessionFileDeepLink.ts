@@ -1,6 +1,9 @@
 import type { ReviewCommentAnchor, ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { isLineContentHash } from '@/utils/text/lineContentHash';
-import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { resolveProjectCockpitRouteFromPathname, resolveProjectRoutePathForSurface } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { WorkspaceFileOpenInputSchema, type WorkspaceFileOpenInput } from '@happier-dev/protocol/actions/workspaceActionFamily';
+import { fileChangesComparisonOfScope } from '@/components/workspaces/files/file/changes/fileChangesScope';
+import { serializeScmReviewTarget } from './scmReviewTargetUrl';
 
 type ExpoLocalSearchParams = Readonly<Record<string, unknown>>;
 
@@ -21,6 +24,22 @@ function firstString(value: unknown): string | null {
     if (typeof value === 'string') return value;
     if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
     return null;
+}
+
+export type WorkspaceFileLinkView = Readonly<Pick<WorkspaceFileOpenInput, 'view' | 'blame'> & { openAs?: 'preview' | 'pinned' }>;
+
+/** URL launch fields share the Action's view validator; unknown intent stays absent. */
+export function readWorkspaceFileLinkView(params: unknown): WorkspaceFileLinkView {
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return {};
+    const record = params as ExpoLocalSearchParams;
+    const mode = WorkspaceFileOpenInputSchema.shape.view.safeParse(firstString(record.fileView) ?? undefined);
+    const blame = typeof record.blame === 'boolean' ? record.blame : firstString(record.blame);
+    const openAs = firstString(record.fileOpenAs);
+    return {
+        ...(mode.success && mode.data ? { view: mode.data } : {}),
+        ...(typeof blame === 'boolean' ? { blame } : blame === '1' || blame === '0' ? { blame: blame === '1' } : {}),
+        ...(openAs === 'preview' || openAs === 'pinned' ? { openAs } : {}),
+    };
 }
 
 function parseOptionalInt(value: string | null): number | null {
@@ -46,6 +65,29 @@ export function buildSessionFileDeepLink(params: {
     const parts = Object.entries(serializeFileTargetAnchor(params.anchor, params.source))
         .map(([key, value]) => `${key}=${encodeURIComponent(value)}`);
     return `${base}&${parts.join('&')}`;
+}
+
+/** Canonical file links address the retained File page in either workspace host. */
+export function buildWorkspaceFileLink(input: WorkspaceFileOpenInput): string {
+    const extra: Record<string, string> = {
+        ...(input.changesScope ? serializeScmReviewTarget({ comparison: fileChangesComparisonOfScope(input.changesScope) }) : {}),
+        ...(input.view ? { fileView: input.view } : {}),
+        ...(input.blame === undefined ? {} : { blame: input.blame ? '1' : '0' }),
+    };
+    const source = input.anchorSource ?? (input.anchor?.kind === 'diffLine' ? 'diff' : 'file');
+    if (input.target.kind === 'session') {
+        const legacy = buildSessionFileDeepLink({ sessionId: input.target.sessionId, serverId: input.target.serverId,
+            filePath: input.path, anchor: input.anchor, source });
+        const query = new URLSearchParams(legacy.slice(legacy.indexOf('?') + 1));
+        query.set('right', 'files');
+        query.set('details', 'file');
+        for (const [key, value] of Object.entries(extra)) query.set(key, value);
+        return `/session/${encodeURIComponent(input.target.sessionId)}?${query}`;
+    }
+    return resolveProjectRoutePathForSurface({ workspaceRefId: input.target.workspaceRefId,
+        serverId: input.target.serverId, surface: 'code', rawActiveRootPath: input.target.rootPath,
+        routeParams: { initialFile: input.path, ...(input.anchor ? serializeFileTargetAnchor(input.anchor, source) : {}), ...extra },
+    });
 }
 
 /** All file routes use the standalone file link's anchor vocabulary. */
@@ -74,10 +116,10 @@ export function parseSearchFileTarget(query: string): SearchFileTarget | null {
     if (!value) return null;
     try {
         const url = new URL(value, 'https://happier.invalid');
-        const session = /^\/session\/([^/]+)\/file$/.exec(url.pathname);
+        const session = /^\/session\/([^/]+)(?:\/file)?$/.exec(url.pathname);
         const project = resolveProjectCockpitRouteFromPathname(url.pathname);
         const path = url.searchParams.get(session ? 'path' : 'initialFile');
-        if ((session || project) && path) {
+        if (((session && (url.pathname.endsWith('/file') || url.searchParams.get('details') === 'file')) || project) && path) {
             const parsed = parseSessionFileDeepLinkAnchor({ ...Object.fromEntries(url.searchParams), path });
             const serverId = url.searchParams.get('serverId');
             return { path, ...(parsed ? { anchor: parsed.anchor } : {}),

@@ -6,8 +6,10 @@ import type { createWorkspaceNavigationAdapter } from './workspaceNavigationAdap
 import { createWorkspaceSplit } from './workspaceSplit';
 import type { FileFindSeedHandoff } from '../panes/fileFindSeedHandoff';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 
 export type WorkspaceActionOutcome = Readonly<{ ok: true }> | WorkspaceTabsListOutput | WorkspaceClosedTabsListOutput
+    | Readonly<{ ok: true; url: string }>
     | Readonly<{ ok: false; errorCode: string; error: string }>;
 type ParsedWorkspaceRequest = {
     [Id in WorkspaceActionId]: Readonly<{ actionId: Id; data: z.output<(typeof WORKSPACE_ACTION_INPUT_SCHEMAS)[Id]> }>;
@@ -77,7 +79,14 @@ export function createWorkspaceActionAdapter(input: Readonly<{
         if (!parsed.success) return workspaceActionFailure('invalid_parameters');
         // The indexed schema validated exactly this action's input; preserve that correlation for narrowing.
         const request = { actionId, data: parsed.data } as ParsedWorkspaceRequest;
-        const { actionId: parsedActionId, data } = request;
+        if (request.actionId === 'workspace.files.link.get') return { ok: true, url: buildWorkspaceFileLink(request.data) };
+        // File addressing enters the incumbent href path after strict ingress validation.
+        const normalized = request.actionId === 'workspace.tabs.open' && request.data.file
+            ? { ...request, data: { ...request.data,
+                href: `${buildWorkspaceFileLink(request.data.file)}&fileOpenAs=${request.data.mode === 'newTab' || request.data.mode?.startsWith('split') ? 'pinned' : 'preview'}`,
+            } }
+            : request;
+        const { actionId: parsedActionId, data } = normalized;
         if (input.phone && (parsedActionId === 'workspace.tabs.move' || parsedActionId.startsWith('workspace.groups.')
             || parsedActionId === 'workspace.split' || parsedActionId === 'workspace.resize'
             || (parsedActionId === 'workspace.tabs.open' && (!('href' in data) || !data.href

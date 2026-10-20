@@ -70,7 +70,7 @@ export function FilesScreenRoute() {
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
         const targetQuery = buildSessionDetailsRouteQuery(
-            buildActiveDetailsRouteParams(detailsSelection.tabs, key),
+            buildActiveDetailsRouteParams(detailsSelection.tabs, key, detailsState?.tabState),
             'browse',
         );
         router.push({
@@ -80,7 +80,7 @@ export function FilesScreenRoute() {
                 ...targetQuery,
             }),
         } as any);
-    }, [detailsSelection.tabs, routeScope, router, sessionId]);
+    }, [detailsSelection.tabs, detailsState?.tabState, routeScope, router, sessionId]);
 
     useFullscreenDetailsRouteAutoRedirect({
         resetKey: sessionId,

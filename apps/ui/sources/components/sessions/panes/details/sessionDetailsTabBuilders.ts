@@ -58,8 +58,6 @@ export function createSessionBoardDetailsTab(focusTarget?: SessionBoardDetailsFo
     };
 }
 
-export { createWorkspaceFileDetailsTab as createSessionFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
-
 export function createSessionCommitDetailsTab(sha: string) {
     const safeSha = sha.trim().split(/\s+/)[0] ?? '';
     if (!safeSha) {

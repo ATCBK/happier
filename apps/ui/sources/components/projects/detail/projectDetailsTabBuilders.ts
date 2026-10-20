@@ -1,7 +1,5 @@
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 
-export { createWorkspaceFileDetailsTab as createProjectFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
-
 export function createProjectCommitDetailsTab(sha: string): DetailsTab | null {
     const safeSha = sha.trim().split(/\s+/)[0] ?? '';
     if (!safeSha) return null;

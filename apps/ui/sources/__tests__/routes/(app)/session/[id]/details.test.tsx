@@ -79,7 +79,8 @@ const runtime = installSessionPaneRuntimeTestHarness({
     },
 });
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { createSessionFileDetailsTab, createSessionCommitDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+const { createSessionCommitDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
 const { SessionDetailsPanel } = await import('@/components/sessions/panes/SessionDetailsPanel');
 const { SessionCockpitShell } = await import('@/components/workspaceCockpit/session/SessionCockpitShell');
 const Screen = (await import('@/app/(app)/session/[id]/details')).default;
@@ -103,7 +104,7 @@ async function renderScreen(seed?: () => void | Promise<void>) {
     await screen.update(<Screen />);
     return screen;
 }
-async function openReadme() { await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' })); }
+async function openReadme() { await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' })); }
 function panel(screen: ScreenResult) { return screen.findByType(detailsPanelType); }
 async function splitAndFocusEmptyGroup() {
     await openReadme();
@@ -141,7 +142,7 @@ describe('/session/[id]/details', () => {
     it('still restores the URL-selected details tab when split groups already exist', async () => {
         mockDetailsParam = 'file'; mockPathParam = 'README.md';
         await renderScreen(async () => {
-            await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('OTHER.md'), { intent: 'pinned' }));
+            await act(async () => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('OTHER.md'), { intent: 'pinned' }));
             await act(async () => runtime.pane.splitDetailsGroup?.({ axis: 'horizontal' }));
             const empty = runtime.pane.scopeState?.details.groups?.find(group => !group.tabs.length);
             if (!empty || !runtime.pane.focusDetailsGroup) throw new Error('Expected an actual empty details group');

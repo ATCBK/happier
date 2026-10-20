@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSessionFileDeepLink, buildWorkspaceFileLink, parseSearchFileTarget, parseSessionFileDeepLinkAnchor } from './sessionFileDeepLink';
+import { buildSessionFileDeepLink, buildWorkspaceFileLink, readWorkspaceFileLinkView, parseSearchFileTarget, parseSessionFileDeepLinkAnchor } from './sessionFileDeepLink';
 
 describe('sessionFileDeepLink', () => {
+    it('reads file-view launch intent without accepting unknown modes or changing anchor vocabulary', () => {
+        expect(readWorkspaceFileLinkView({ fileView: 'changes', blame: '1', fileOpenAs: 'preview' }))
+            .toEqual({ view: 'changes', blame: true, openAs: 'preview' });
+        expect(readWorkspaceFileLinkView({ fileView: ['edit'], blame: '0', fileOpenAs: 'pinned' }))
+            .toEqual({ view: 'edit', blame: false, openAs: 'pinned' });
+        expect(readWorkspaceFileLinkView({ fileView: 'unknown', blame: 'unknown', fileOpenAs: 'unknown' })).toEqual({});
+    });
     it('shares one file-link builder across Session and Project targets with anchor and view intent', () => {
         for (const target of [
             { kind: 'session' as const, sessionId: 's1', serverId: 'home-a' },
@@ -10,13 +17,16 @@ describe('sessionFileDeepLink', () => {
         ]) {
             const path = 'src/has space.ts';
             const anchor = { kind: 'range' as const, filePath: path, startLine: 9, endLine: 12 };
-            const href = buildWorkspaceFileLink({ target, path, anchor, view: 'changes', blame: true });
+            const href = buildWorkspaceFileLink({ target, path, anchor, view: 'changes', blame: true,
+                changesScope: { kind: 'turn', turnId: 'turn-a' } });
             const parsed = parseSearchFileTarget(href);
             expect(parsed).toMatchObject({ path, anchor, serverId: 'home-a' });
             expect(parsed).toMatchObject(target.kind === 'session' ? { sessionId: 's1' } : { workspaceRefId: 'project-a' });
             const url = new URL(href, 'https://happier.test');
             expect(url.searchParams.get('fileView')).toBe('changes');
             expect(url.searchParams.get('blame')).toBe('1');
+            expect(url.searchParams.get('comparison')).toBe('turnCheckpoint');
+            expect(url.searchParams.get('turnId')).toBe('turn-a');
             if (target.kind === 'project') expect(url.searchParams.get('activeRootPath')).toBe('/repo/checkout');
         }
     });

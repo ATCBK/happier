@@ -138,11 +138,6 @@ vi.mock('@/utils/code/fileLanguage', () => ({
     getFileLanguageFromPath: () => 'plaintext',
 }));
 
-vi.mock('@/scm/utils/filePresentation', () => ({
-    isBinaryContent: () => false,
-    isKnownBinaryPath: () => false,
-}));
-
 vi.mock('@/scm/utils/filePathParam', () => ({
     decodeSessionFilePathParam: (value: string) => value,
 }));

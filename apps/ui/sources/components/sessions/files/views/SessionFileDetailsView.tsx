@@ -7,6 +7,7 @@ import {
 
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import type { WorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
 
 export type SessionFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
@@ -18,6 +19,7 @@ export type SessionFileDetailsViewProps = Readonly<{
     serverId?: string | null;
     scopeId: string;
     filePath: string;
+    initialView?: WorkspaceFileLinkView;
     deepLinkAnchor?: SessionFileDeepLinkAnchor | null;
     findSeed?: FileFindSeed | null;
     onFindSeedConsumed?: () => void;
@@ -38,6 +40,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
             scopeId={props.scopeId}
             scope={scope}
             filePath={props.filePath}
+            initialView={props.initialView}
             deepLinkAnchor={props.deepLinkAnchor ?? null}
             findSeed={props.findSeed}
             onFindSeedConsumed={props.onFindSeedConsumed}

@@ -87,7 +87,7 @@ export function TerminalScreenRoute() {
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
         const targetQuery = buildSessionDetailsRouteQuery(
-            buildActiveDetailsRouteParams(detailsSelection.tabs, key),
+            buildActiveDetailsRouteParams(detailsSelection.tabs, key, detailsState?.tabState),
             'terminal',
         );
         router.push({
@@ -97,7 +97,7 @@ export function TerminalScreenRoute() {
                 ...targetQuery,
             }),
         } as any);
-    }, [detailsSelection.tabs, routeScope, router, sessionId]);
+    }, [detailsSelection.tabs, detailsState?.tabState, routeScope, router, sessionId]);
 
     useFullscreenDetailsRouteAutoRedirect({
         resetKey: sessionId,

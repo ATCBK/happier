@@ -293,18 +293,18 @@ describe('/session/[id]/terminal', () => {
 
     it('keeps details in the cockpit instead of pushing another fullscreen route', async () => {
         storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
-        await renderRouteScreen(() => runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' }));
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+        await renderRouteScreen(() => runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' }));
         expect(runtime.pane.scopeState?.details).toMatchObject({ isOpen: true, activeTabKey: 'file:README.md' });
         expect(routerPushSpy).not.toHaveBeenCalled();
     });
 
     it('opens the same details resource anew after changing Session identity', async () => {
         storage.getState().applySessions([createSessionFixture({ id: 'session-2', serverId: runtime.serverId })]);
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
         const route = await renderRouteScreen(() => {
-            runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
-            secondPane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+            runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
+            secondPane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
         });
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
         expect(routerPushSpy).toHaveBeenLastCalledWith({ pathname: '/session/[id]/details', params: {

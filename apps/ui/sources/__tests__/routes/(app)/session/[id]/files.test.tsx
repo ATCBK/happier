@@ -109,8 +109,8 @@ async function renderRouteScreen(preparePane?: () => void) {
 }
 
 async function openFile(pane: AppPaneScopeApi = runtime.pane) {
-    const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
-    await act(async () => pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' }));
+    const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+    await act(async () => pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' }));
 }
 function expectFileDetailsRoute(sessionId = 'session-1') {
     expect(routerPushSpy).toHaveBeenLastCalledWith({ pathname: '/session/[id]/details', params: {
@@ -208,9 +208,9 @@ describe('/session/[id]/files', () => {
     });
 
     it('does not navigate for retained tabs while Details is closed', async () => {
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
         await renderRouteScreen(() => {
-            runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+            runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
             runtime.pane.closeDetails();
         });
         expect(runtime.pane.scopeState?.details).toMatchObject({ isOpen: false, activeTabKey: 'file:README.md' });
@@ -252,10 +252,10 @@ describe('/session/[id]/files', () => {
 
     it('opens the same details resource anew after changing Session identity', async () => {
         storage.getState().applySessions([createSessionFixture({ id: 'session-2', serverId: runtime.serverId })]);
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
         const route = await renderRouteScreen(() => {
-            runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
-            secondPane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+            runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
+            secondPane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
         });
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
         expectFileDetailsRoute();
@@ -266,9 +266,9 @@ describe('/session/[id]/files', () => {
     });
 
     it('selects a retained resource when the focused split group is empty', async () => {
-        const { createSessionFileDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
         await renderRouteScreen(() => {
-            runtime.pane.openDetailsTab(createSessionFileDetailsTab('README.md'), { intent: 'pinned' });
+            runtime.pane.openDetailsTab(createWorkspaceFileDetailsTab('README.md'), { intent: 'pinned' });
             if (!runtime.pane.splitDetailsGroup) throw new Error('Expected canonical split action');
             runtime.pane.splitDetailsGroup({ axis: 'horizontal' });
         });

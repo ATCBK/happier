@@ -44,13 +44,14 @@ export function CommitScreen() {
     useDestinationPageTitle(sha.slice(0, 7));
 
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled');
+    const arrangement = useLocalSetting('paneArrangement');
     const deviceType = useDeviceType();
     const { width: containerWidthPx } = useWindowDimensions();
     const shouldRedirect =
         Boolean(sessionId)
         && Boolean(sha)
         && sessionHydrated
-        && shouldRedirectDetailsRouteToPanes({ containerWidthPx, deviceType, multiPaneEnabled });
+        && shouldRedirectDetailsRouteToPanes({ containerWidthPx, deviceType, multiPaneEnabled, arrangement });
 
     const pane = useAppPaneScope(useDestinationPaneScopeId(createSessionPaneScopeId(sessionId, routeScope.serverId)));
     const shouldUseDetailsScreen = Platform.OS !== 'web';

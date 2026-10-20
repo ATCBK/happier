@@ -19,7 +19,7 @@ import {
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
-import { readFileTargetAnchorResource } from '@/utils/url/sessionFileDeepLink';
+import { readFileTargetAnchorResource, readWorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
 import { SessionInteractiveExecutionRunDraftView } from '@/components/sessions/runs/launcher/SessionInteractiveExecutionRunDraftView';
 import { isSessionPeekDetailsResource } from '@/components/sessions/work/createSessionPeekDetailsTab';
 import { SessionPeekDetailsView } from '@/components/sessions/work/SessionPeekDetailsView';
@@ -389,6 +389,7 @@ export function createSessionDetailsSurfaceRenderers(
                         serverId={options.serverId}
                         filePath={input.tab.resource.path}
                         deepLinkAnchor={readFileTargetAnchorResource(input.tab.resource)}
+                        initialView={readWorkspaceFileLinkView(input.tab.resource)}
                         presentation="panel"
                         scopeId={options.scopeId}
                         openableContentViewer={{
