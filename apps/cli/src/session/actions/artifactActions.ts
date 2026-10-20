@@ -1,19 +1,22 @@
-import { ArtifactActionInputSchemasV1, projectArtifactHeaderV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { ArtifactActionInputSchemasV1, projectArtifactHeaderV1, type ArtifactActionInputV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { artifactSavedByFromActionContextV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { getArtifactKindPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import type { ActionExecutorContext, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
 import { DocEditAcceptHostInputV1Schema, DocEditDeclineInputV1Schema, type ArtifactHostActionInvocationV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import type { createAccountArtifactStore, ArtifactRequestAuthorizationHeaders } from '@/api/artifacts/accountArtifactStore';
-import { publishArtifactFromWorkspaceFile, readArtifactWorkspaceFile, writeArtifactWorkspaceFile } from './publishArtifactFromWorkspaceFile';
+import { publishArtifactFromWorkspaceFile, readArtifactWorkspaceFile, writeArtifactWorkspaceFile,
+  type ArtifactWorkspaceCaller } from './publishArtifactFromWorkspaceFile';
 
-type ArtifactPublishCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string }>;
+type WorkspaceSource = NonNullable<ArtifactActionInputV1<'artifact.publish_from_file'>['workspace']>;
 
 /** Account content stays in the existing Artifact store; only the host resolves publication authority. */
 export function createCliArtifactActions(params: Readonly<{
   store: ReturnType<typeof createAccountArtifactStore>;
   beforeDelete: (input: Readonly<{ artifactId: string; signal?: AbortSignal }>) => Promise<void>;
-  resolvePublishCaller: (context: ActionExecutorContext) => Promise<ArtifactPublishCaller | null>;
+  resolvePublishCaller: (context: ActionExecutorContext, workspace?: WorkspaceSource) => Promise<ArtifactWorkspaceCaller | null>;
+  forwardWorkspacePublication?: (input: ArtifactActionInputV1<'artifact.publish_from_file'> & Readonly<{ workspace: WorkspaceSource }>,
+    context: ActionExecutorContext, signal?: AbortSignal) => Promise<unknown>;
   onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>;
   authorizationHeaders?: (context: ActionExecutorContext, effectActionId: string) => ArtifactRequestAuthorizationHeaders;
 }>) {
@@ -66,7 +69,7 @@ export function createCliArtifactActions(params: Readonly<{
         case 'artifact.export': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
           const caller = await params.resolvePublishCaller(args.context);
-          if (!caller) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
+          if (!caller?.sessionId) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
           const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false });
           if (!artifact) throw Object.assign(new Error('not_found'), { code: 'not_found' });
           if (!getArtifactKindPolicyV1(artifact.header.kind).browserListed) {
@@ -100,10 +103,9 @@ export function createCliArtifactActions(params: Readonly<{
         }
         case 'artifact.publish_from_file': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
-          // This host owns only its authenticated Session workspace. A requested
-          // Machine workspace must not silently read that ambient Session instead.
-          if (input.workspace) return { ok: false, errorCode: 'artifact_source_unavailable', error: 'artifact_source_unavailable' };
-          const caller = await params.resolvePublishCaller(args.context);
+          const caller = await params.resolvePublishCaller(args.context, input.workspace);
+          if (!caller && input.workspace && params.forwardWorkspacePublication)
+            return await params.forwardWorkspacePublication({ ...input, workspace: input.workspace }, args.context, signal);
           if (!caller) return { ok: false, errorCode: 'artifact_source_unavailable', error: 'artifact_source_unavailable' };
           return await publishArtifactFromWorkspaceFile({ store: params.store, caller, input, savedBy, ...(signal ? { signal } : {}) });
         }

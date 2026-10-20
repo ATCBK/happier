@@ -14,11 +14,13 @@ import { resolveWorkspaceFileDownloadSource } from '@/transfers/targets/resolveW
 import { resolveWorkspaceFileUploadTarget } from '@/transfers/targets/resolveWorkspaceFileUploadTarget';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 
-export type ArtifactWorkspaceCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string }>;
+export type ArtifactSessionWorkspaceCaller = Readonly<{ sessionId: string; machineId: string; directory: string; runId?: string; rootPath?: never }>;
+export type ArtifactWorkspaceCaller = ArtifactSessionWorkspaceCaller
+  | Readonly<{ rootPath: string; machineId: string; directory: string; sessionId?: never; runId?: never }>;
 
 /** Account bytes use the incumbent confined upload target and transfer finalizer. */
 export async function writeArtifactWorkspaceFile(params: Readonly<{
-  caller: ArtifactWorkspaceCaller;
+  caller: ArtifactSessionWorkspaceCaller;
   path: string;
   overwrite?: boolean;
   bytes: Uint8Array;
@@ -65,7 +67,7 @@ export async function readArtifactWorkspaceFile(params: Readonly<{
   signal?: AbortSignal;
 }>) {
   params.signal?.throwIfAborted();
-  if (!params.caller.sessionId || !params.caller.machineId || !isAbsolute(params.caller.directory)) {
+  if ((!params.caller.sessionId && !params.caller.rootPath) || !params.caller.machineId || !isAbsolute(params.caller.directory)) {
     throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
   }
   const forbidden = () => Object.assign(new Error('artifact_source_forbidden'), { code: 'artifact_source_forbidden' });

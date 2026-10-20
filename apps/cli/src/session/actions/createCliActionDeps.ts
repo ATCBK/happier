@@ -3993,7 +3993,28 @@ export function createCliActionDeps(params: Readonly<{
               assertCurrent();
               return typeof artifact?.header.kind === 'string' ? artifact.header.kind : undefined;
             } });
-        }, resolvePublishCaller: resolveWorkspacePublishCaller });
+        }, resolvePublishCaller: async (context, workspace) => {
+          if (!workspace) return await resolveWorkspacePublishCaller(context);
+          if (!(await requireLocalPromptActionMachine(workspace.machineId)).ok) return null;
+          return { machineId: workspace.machineId, rootPath: workspace.rootPath, directory: workspace.rootPath };
+        },
+        forwardWorkspacePublication: async (input, context, signal) => {
+          // The existing Machine Action owns acquisition and publication. Never
+          // copy from the invoking Session or create another Account publisher.
+          if (params.machineActionDirectTargetTransport?.machineId === input.workspace.machineId
+            || context.externalActionExecutionAuthorization?.binding.machineId === input.workspace.machineId)
+            return { ok: false, errorCode: 'artifact_source_unavailable', error: 'artifact_source_unavailable' };
+          const target = { kind: 'machine' as const, machineId: input.workspace.machineId };
+          const method = getActionSpec('artifact.publish_from_file').bindings?.rpcMethod;
+          if (!method) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          return await callMachineAction({ machineId: input.workspace.machineId,
+            serverId: context.serverId ?? params.serverId, method,
+            request: createTargetedActionRpcRequestV1(input, target, context),
+            context: { ...context, externalActionTarget: target },
+            authority: context.authority, authorization: context.rpcSessionAuthorization,
+            effectActionId: 'artifact.publish_from_file', exactMachine: true,
+            ...(signal ? { signal } : {}), timeoutMs: null });
+        } });
       return params.serverHttpBaseUrl
         ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => execute({ ...args, context: artifactCallerContext(args.context) }))
         : execute({ ...args, context: artifactCallerContext(args.context) });
