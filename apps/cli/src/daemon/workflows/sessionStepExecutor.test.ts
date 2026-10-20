@@ -1763,9 +1763,9 @@ describe('workflow Session step executor', () => {
     const launch = {
       executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
       directory: { kind: 'path' as const, path: '/review' }, agentTarget, modelSelection,
-      profileId: 'chosen-profile', permissionMode: 'read-only', agentModeId: 'plan',
+      profileId: 'chosen-profile', permissionMode: 'read-only' as const, agentModeId: 'plan',
       configuration: { mode: { value: 'plan', updatedAtMs: 9 }, model: { value: 'chosen-model', updatedAtMs: 12 },
-        permissionIntent: { value: 'read-only', updatedAtMs: 10 }, workspaceWrites: 'deny',
+        permissionIntent: { value: 'read-only' as const, updatedAtMs: 10 }, workspaceWrites: 'deny' as const,
         options: { reasoning_effort: { value: 'high', updatedAtMs: 11 } } },
       connectedServices: { v: 2 as const, bindingsByServiceId: {} },
       organizationPlacement: { folderId: null, tagIds: [] }, memoryEnabled: false,

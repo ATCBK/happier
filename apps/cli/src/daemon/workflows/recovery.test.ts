@@ -610,7 +610,7 @@ describe('workflow Run startup/reconnect recovery', () => {
       let signalCompletion: (() => void) | undefined;
       const socketBoundary = vi.spyOn(sessionSockets, 'createSessionScopedSocketConnection').mockImplementation(() => {
         const boundary = Object.assign(new EventEmitter(), { connected: true, connect() {}, disconnect() {}, close() {} }) as unknown as ReturnType<typeof sessionSockets.createSessionScopedSocketConnection>['socket'];
-        signalCompletion = () => { boundary.emit('connect'); };
+        signalCompletion = () => { EventEmitter.prototype.emit.call(boundary, 'connect'); };
         return { socket: boundary, transport: createSocketTransportAdapter(boundary) };
       });
       const controller = new AbortController();

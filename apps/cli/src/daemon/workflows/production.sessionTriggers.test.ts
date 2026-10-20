@@ -60,7 +60,7 @@ function admissionHarness(prepareWorkspace: typeof prepareWorkflowAcceptedWorksp
       effects: { resolveTargetAvailability: async () => true,
         resolveSessionTarget: async (value) => typeof value === 'string'
           ? { address: { serverId: 'server-1', sessionId: value }, machineId }
-          : value && typeof value === 'object' && !Array.isArray(value) && typeof value.sessionId === 'string' && value.serverId === 'server-1'
+          : value && typeof value === 'object' && 'sessionId' in value && 'serverId' in value && typeof value.sessionId === 'string' && value.serverId === 'server-1'
             ? { address: { serverId: value.serverId, sessionId: value.sessionId }, machineId } : null },
       admitLeaf: async (leaf, facts) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { kind: 'workflow_run_leaf', leaf }, {
         caller: { kind: 'originless', runId: id, runDepth: workDepth }, baseline: { machineId, directory },

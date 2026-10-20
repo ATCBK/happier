@@ -117,7 +117,7 @@ describe('exact Workflow recovery observation', () => {
         resolveTargetAvailability: async () => true,
         // Authenticated Home Session read: the qualifier must survive the input
         // boundary even when another Home has the same Session identifier.
-        resolveSessionTarget: async value => value && typeof value === 'object' && !Array.isArray(value)
+        resolveSessionTarget: async value => value && typeof value === 'object' && 'serverId' in value && 'sessionId' in value
           && value.serverId === 'home-b' && value.sessionId === sessionId
           ? { address: { serverId: 'home-b', sessionId }, machineId } : null,
       } }),
@@ -168,7 +168,9 @@ describe('exact Workflow recovery observation', () => {
       // Session/Machine projection replacing the producer under test.
       const prepared = await owner.prepare(request);
       expect(prepared.existing).toMatchObject({ sessionId, machineId, directory });
-      const ready = owner.materialize(prepared, { ...request, workspace: { machineId, directory, checkoutRootPath: directory } });
+      const ready = owner.materialize(prepared, { ...request, input: 'Give an opinion',
+        beforeInputAdmission: async () => {}, onInputAccepted: async () => { throw new Error('Materialization must not accept input'); },
+        workspace: { machineId, directory, checkoutRootPath: directory } });
       if (scenario === 'current') {
         const result = await ready.catch(error => ({ error }));
         expect(result, JSON.stringify({ httpPaths, rpcMethods })).toMatchObject({ sessionId, machineId });
