@@ -7,7 +7,10 @@ export async function waitForInitialCredentials<TDaemonLockHandle>(opts: {
   acquireDaemonLock: () => Promise<TDaemonLockHandle | null>;
   releaseDaemonLock: (handle: TDaemonLockHandle) => Promise<void>;
   resolvesWhenShutdownRequested: Promise<unknown>;
-  logger: { debug: (message: string, details?: unknown) => void };
+  logger: {
+    debug: (message: string, details?: unknown) => void;
+    warn: (message: string) => void;
+  };
   daemonLockHandle: TDaemonLockHandle | null;
   sleepMs?: number;
 }): Promise<
@@ -25,8 +28,7 @@ export async function waitForInitialCredentials<TDaemonLockHandle>(opts: {
   }
 
   if (!opts.waitForAuthEnabled) {
-    opts.logger.debug('[AUTH] No credentials found');
-    opts.logger.debug('[DAEMON RUN] Non-interactive mode: refusing to start auth UI. Run: happier auth login');
+    opts.logger.warn('[daemon_authentication_required] No credentials for the selected Home. Run: happier auth login using the same Home and HAPPIER_HOME_DIR, then retry daemon start.');
     return { action: 'exit', exitCode: 1, daemonLockHandle: opts.daemonLockHandle };
   }
 

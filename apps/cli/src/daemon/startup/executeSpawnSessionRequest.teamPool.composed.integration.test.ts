@@ -1,16 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import tweetnacl from 'tweetnacl';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, FeaturesResponseSchema,
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderTeamCredentialBrokerEligibilityRequestV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGatewayRegistry.testkit';
@@ -35,6 +36,7 @@ import { createCurrentSessionPresentationHost } from '@/session/presentation/cur
 import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
 
 // Only process creation is replaced. Production daemon preparation creates
@@ -56,14 +58,17 @@ vi.mock('node:child_process', async importOriginal => {
   } };
 });
 
-// The source resolver handles cross-package aliases relative to their owner.
+// The source integration resolver handles cross-package aliases relative to their owner.
 const server = '../../../../server/sources/';
 const { createLightSqliteHarness }: typeof import('../../../../server/sources/testkit/lightSqliteHarness') = await import(server + 'testkit/lightSqliteHarness');
 const { createAuthenticatedTestApp }: typeof import('../../../../server/sources/app/api/testkit/sqliteFastify') = await import(server + 'app/api/testkit/sqliteFastify');
 const { registerSessionCreateOrLoadRoute }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionCreateOrLoadRoute') = await import(server + 'app/api/routes/session/registerSessionCreateOrLoadRoute');
 const { registerSessionListingRoutes }: typeof import('../../../../server/sources/app/api/routes/session/registerSessionListingRoutes') = await import(server + 'app/api/routes/session/registerSessionListingRoutes');
+const { accessKeysRoutes }: typeof import('../../../../server/sources/app/api/routes/accessKeys/accessKeysRoutes') = await import(server + 'app/api/routes/accessKeys/accessKeysRoutes');
 const { db }: typeof import('../../../../server/sources/storage/db') = await import(server + 'storage/db');
 const { registerTeamRoutes }: typeof import('../../../../server/sources/app/teams/registerTeamRoutes') = await import(server + 'app/teams/registerTeamRoutes');
+const { resolveServerFeaturesForGating }: typeof import('../../../../server/sources/app/features/catalog/serverFeatureGate') = await import(server + 'app/features/catalog/serverFeatureGate');
+const { createSessionPublisherPresence }: typeof import('../../../../server/sources/app/presence/sessionPublisherPresence') = await import(server + 'app/presence/sessionPublisherPresence');
 const { openTeamCredentialProviderBroker }: typeof import('../../../../server/sources/app/teams/credentials/providerBrokerAdmission') = await import(server + 'app/teams/credentials/providerBrokerAdmission');
 const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAccountGroupDigest,
   createQualifiedConnectedAccountIdentityDigest, createServiceAccountTokenIdentityFields }: typeof import('../../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/identity') = await import(server + 'app/api/routes/connect/qualifiedConnectedAccounts/identity');
@@ -71,25 +76,41 @@ const { createQualifiedConnectedAccountServiceDigest, createQualifiedConnectedAc
 afterEach(() => { os.runner = null; resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks(); });
 
 describe('Team Pool Session launch through Action/CLI and an external Agent', () => {
-  it.each(['cli', 'rpc'] as const)('runs gpt-5.5 from the recipient confirmation through %s ingress and protected attach', async surface => {
-    const directory = await mkdtemp(join(tmpdir(), 'happier-team-pool-journey-'));
-    const env = createEnvKeyScope(['HAPPIER_HOME_DIR']);
-    const harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-team-pool-journey-db-', env: {
+  let harness: Awaited<ReturnType<typeof createLightSqliteHarness>>;
+  // Reuse the broker-admission suite's SQLite setup lifecycle and budget;
+  // migration/setup must not consume each ordinary Session launch's budget.
+  beforeAll(async () => {
+    harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-team-pool-journey-db-', env: {
       HAPPIER_FEATURE_TEAMS__ENABLED: '1', HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: '1',
+      HAPPIER_FEATURE_PROVIDERS__ENABLED: '1',
       HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_E2EE__KEYLESS_ACCOUNTS_ENABLED: '1',
     } });
-    env.patch({ HAPPIER_HOME_DIR: join(directory, 'worker') }); reloadConfiguration();
-    const service = { pluginId: 'acme.shared-registry', localId: 'accounts' };
+  }, 180_000);
+  afterAll(async () => { await harness?.close(); });
+
+  it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach', async () => {
+    const surface = 'shared';
+    const directory = await mkdtemp(join(tmpdir(), 'happier-team-pool-journey-'));
+    // The native CLI is an OS boundary: install the same version-only shim
+    // used by the managed-gateway composition; no native credential is supplied.
+    const nativeCli = writeExecutableShimSync({ dir: directory, fileName: process.platform === 'win32' ? 'managed-run-agent.cmd' : 'managed-run-agent',
+      contents: process.platform === 'win32' ? '@echo off\r\necho 1.0.0\r\n' : '#!/bin/sh\necho 1.0.0\n' });
+    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
+    env.patch({ HAPPIER_HOME_DIR: join(directory, 'worker'), PATH: `${directory}${delimiter}${process.env.PATH ?? ''}` }); reloadConfiguration();
+    // Use the pinned broker's real upstream family/model registry. The
+    // independent external Agent is installed only on the worker.
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const worker = await createManagedRunLaunchFixture({ directory: join(directory, 'agent'), happyHomeDir: configuration.happyHomeDir,
-      controller: pluginReloadController, physicalGateway: true,
+      controller: pluginReloadController, physicalGateway: true, signedOutAgentCli: true, readUpstreamAnswer: true,
+      includeBundledDeclarations: true,
       connectedAccounts: [{ purpose: 'primary', service, required: false, credentialKinds: ['oauth'], materializationKinds: ['httpHeaders'] }] });
     const source = createSharedGatewayRegistryTestkit({ directory: join(directory, 'source'),
-      catalog: { source: 'static', manualModelPolicy: 'catalog-only', staticModels: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] },
-      compatibilityOverrides: [{ agentTargetKey: worker.agentTargetKey, protocol: 'openai-responses', status: 'experimental', reason: 'Controlled source contract' }],
+      includeBundledDeclarations: true,
       resolveAccountTarget: async (_target, signal) => { signal.throwIfAborted(); return {
         account: { service, accountId: 'synthetic-pool-member' }, displayName: 'Pool', group: { groupId: 'pool', generation: 1 } };
       } });
     const requests: unknown[] = [];
+    const sourceRpcFailures: unknown[] = [];
     const carrier = createServer(async (request, response) => {
       if (request.url === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
         response.writeHead(204, { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' }).end(); return;
@@ -104,16 +125,22 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
     if (!carrierAddress || typeof carrierAddress === 'string') throw new Error('Missing controlled carrier');
     const app = createAuthenticatedTestApp();
     const authentication = { env: process.env, authority: 'present_user', authenticationEvidence: [], tokenEpoch: 0 } as const;
+    let releaseSource: (() => Promise<void>) | undefined;
     try {
+      const agentEntry = await worker.lease.registry.acquireAgentCatalogEntry?.(worker.agentId);
+      const auth = await agentEntry?.getCliAuthSpec?.();
+      expect(await auth?.detectAuthStatus?.({ resolvedPath: nativeCli, processEnv: { ...process.env, RUN_NATIVE_API_KEY: '' } }))
+        .toMatchObject({ state: 'logged_out' });
       await source.install(source.pluginId, '1.0.0', true);
       const sourceLease = await source.controller.acquireRuntimeRegistry({ resolveRuntimeRegistry: () => source.createRegistry(new Set()) });
+      releaseSource = async () => { await sourceLease.release(); };
       expect(sourceLease.registry.contributes.agentDefinitionsById.has(worker.agentId)).toBe(false);
       const recipient = await db.account.create({ data: { encryptionMode: 'plain' } });
       const custodian = await db.account.create({ data: { encryptionMode: 'plain' } });
       const team = await db.team.create({ data: { name: 'Pool journey' } });
       const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: recipient.id, role: 'member' } });
       await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: 'owner' } });
-      const broker = await db.machine.create({ data: { id: 'broker', accountId: custodian.id, metadata: '{}', kind: 'persistent', active: true,
+      const broker = await db.machine.create({ data: { id: `broker-${surface}`, accountId: custodian.id, metadata: '{}', kind: 'persistent', active: true,
         operationProtocolCapabilities: { providerBrokerIngress: { protocolVersions: [1] }, irohMachineEndpoint: { protocolVersions: [1], endpointId: 'b'.repeat(64) } }, operationProtocolCapabilitiesRevision: 1 } });
       await db.machine.create({ data: { id: worker.machineId, accountId: recipient.id, metadata: '{}', kind: 'persistent', active: true,
         operationProtocolCapabilities: { irohMachineEndpoint: { protocolVersions: [1], endpointId: 'a'.repeat(64) } }, operationProtocolCapabilitiesRevision: 1 } });
@@ -152,17 +179,18 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       // RPC is the cross-Machine boundary; retain the real Home route and
       // source runtime beneath it, including their strict request consumers.
       app.decorate('forwardRpcForUser', async (request: Readonly<{ method: string; params: unknown }>) => {
+        try {
         if (request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`)) return {
           ok: true, result: await sourceRuntime.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request.params)) };
         if (request.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_TEAM_CREDENTIAL_BROKER_ELIGIBILITY}`)) return {
           ok: true, result: await sourceRuntime.resolveTeamCredentialBrokerEligibility(DaemonProviderTeamCredentialBrokerEligibilityRequestV1Schema.parse(request.params)) };
         throw new Error(`Unexpected source RPC ${request.method}`);
+        } catch (error) { sourceRpcFailures.push(error); throw error; }
       });
-      registerSessionCreateOrLoadRoute(app); registerSessionListingRoutes(app);
+      registerSessionCreateOrLoadRoute(app); registerSessionListingRoutes(app); accessKeysRoutes(app);
       registerTeamRoutes(app);
-      app.get('/v1/features', async () => FeaturesResponseSchema.parse({ features: { providers: { enabled: true },
-        teams: { enabled: true, credentialResources: { enabled: true } } },
-        capabilities: { encryption: { storagePolicy: 'optional' } } }));
+      app.get('/v1/features', async () => resolveServerFeaturesForGating(process.env));
+      app.get('/v1/account/profile', async () => AccountProfileResponseSchema.parse({ id: recipient.id }));
       app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
       app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
       app.post('/v2/sessions/lookup-by-tags', async () => ({ sessions: [] }));
@@ -175,7 +203,10 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const applications = projectAgentProviderBrokerApplications({ registry: worker.lease.registry.contributes,
           agentTargetKey: worker.agentTargetKey, acceptedProtocols: readLeasedAgentProviderRequirements({ lease: worker.lease, agentId: worker.agentId })!.acceptsProtocols });
         const resources = await readSessionTeamCredentialResourceCatalog({ homeDomainAction, applications, teamIds: [team.id] });
+        expect(applications.length).toBeGreaterThan(0);
+        expect(sourceRpcFailures).toEqual([]);
         const offered = resources.flatMap(row => row.providerModels).find(row => row.descriptor.id === 'gpt-5.5');
+        expect(offered, JSON.stringify(resources)).toBeDefined();
         if (!offered) throw new Error('Home did not offer the source gpt-5.5 row');
         const recipientRuntime = createRuntimeProviderModelManagementServices({ machineId: worker.machineId, happyHomeDir: worker.happyHomeDir,
           featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => recipientSnapshot,
@@ -195,6 +226,10 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           compatibilityFingerprint: compatibility.compatibilityFingerprint }), {})).toMatchObject({ ok: true });
         setActiveAccountSettingsSnapshot(recipientSnapshot);
         const api = await ApiClient.create(credentials);
+        api.setLocalMachineId(worker.machineId);
+        // One process owns its applied registry for both independent ingress cases.
+        for (const surface of ['cli', 'rpc'] as const) {
+        const requestStart = requests.length;
         const tracked = new Map<number, import('../types').TrackedSession>();
         const resolvers = new Map<number, (result: import('@/session/shared/spawnSessionContract').SpawnSessionResult) => void>();
         const timeouts = new Map<number, NodeJS.Timeout>();
@@ -207,6 +242,15 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           const index = args.indexOf('--existing-session'); sessionId = args[index + 1]!;
           const attachPath = environment.HAPPIER_SESSION_ATTACH_FILE;
           if (!attachPath) throw new Error('Real daemon omitted protected attach');
+          // Replace socket delivery only: the real Home presence owner admits
+          // this process before its native runtime opens the Team broker.
+          const presence = createSessionPublisherPresence();
+          const publisherSocket = {};
+          const registered = await presence.registerPublisher({ socket: publisherSocket,
+            binding: { accountId: recipient.id, machineId: worker.machineId, sessionId },
+            completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
+          expect(registered, JSON.stringify(registered, (_key, value) => typeof value === 'bigint' ? String(value) : value))
+            .toMatchObject({ status: 'registered' });
           const plan = await new SessionHostBridge().createSessionRuntime(worker.agentId, {
             credentials, directory, happyHomeDir: worker.happyHomeDir, existingSessionId: sessionId, sessionAttachFilePath: attachPath,
             backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
@@ -238,10 +282,19 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           if (!runtime) throw new Error('External runtime unavailable');
           const operations = (runtime as Readonly<{ operations: Readonly<{
             sendTurnPrompt(text: string, input: Readonly<{ turnId: string; localId: string; userMessageSeq: number }>): Promise<void>;
+            subscribeRuntimeEvents(listener: (event: unknown) => void): (() => void) | void;
             resetOrDisposeRuntime(): Promise<void>;
           }> }>).operations;
-          await operations.sendTurnPrompt('TEAM_POOL_NATIVE_SENTINEL', { turnId: 'team-turn', localId: 'team-input', userMessageSeq: 1 });
-          await operations.resetOrDisposeRuntime();
+          const events: unknown[] = [];
+          const unsubscribe = operations.subscribeRuntimeEvents(event => events.push(event));
+          try {
+            await operations.sendTurnPrompt('TEAM_POOL_NATIVE_PROMPT', { turnId: 'team-turn', localId: 'team-input', userMessageSeq: 1 });
+            expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', channel: 'assistant', text: 'TEAM_POOL_NATIVE_SENTINEL' }));
+          } finally {
+            unsubscribe?.();
+            await operations.resetOrDisposeRuntime();
+            await presence.closePublisher({ socket: publisherSocket });
+          }
           await expect(readFile(attachPath)).rejects.toMatchObject({ code: 'ENOENT' });
           const timer = timeouts.get(os.pid); if (timer) clearTimeout(timer);
           resolvers.get(os.pid)?.({ type: 'success', sessionId });
@@ -251,12 +304,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         }); };
         const handler = createSpawnNewSessionLifecycleActionHandler({ serverId: configuration.activeServerId,
           spawnSession: options => executeSpawnSessionRequest({ options, credentials, api,
+            activatePurposeBindings: worker.gateway!.purposeBindingOwner.activatePurposeBindings,
+            activateSessionPurposeBindings: worker.gateway!.purposeBindingOwner.activateSessionPurposeBindings,
             connectedServicesMaterializationBaseDir: join(directory, 'connected-services'), connectedServiceRefreshCoordinator: null,
             connectedServiceQuotasCoordinator: null, connectedServiceRuntimeRegistry: { registerTarget() {} },
             pidToTrackedSession: tracked, pidToAwaiter: new Map(), pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
             spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
             resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '', onChildExited() {},
-            processEnv: { ...process.env, HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true }) });
+            processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true }) });
         try {
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
@@ -270,17 +325,18 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           }, { surface, authority: 'present_user', actionCaller: { kind: 'host' } });
           await runner;
           expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'success' } });
-          expect(requests).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_SENTINEL' }]);
+          expect(requests.slice(requestStart)).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
           expect(await db.sessionTeamCredentialBinding.findMany({ where: { sessionId } })).toEqual(expect.arrayContaining([
             expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id }),
           ]));
         } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); }
+        }
       });
-      await sourceLease.release();
     } finally {
       await app.close(); await new Promise<void>(resolve => carrier.close(() => resolve()));
+      await releaseSource?.();
       await source.controller.shutdown(); source.disposeCredentialBoundary(); await worker.cleanup();
-      await harness.close(); env.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
+      env.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
     }
   });
 });

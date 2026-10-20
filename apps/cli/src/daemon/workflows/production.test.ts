@@ -254,7 +254,8 @@ describe('production workflow coordinator', () => {
     const reads: { throughSeq?: number; beforeSeq?: number }[] = [];
     const transportRequests: string[] = [];
     const features = FeaturesResponseSchema.parse({ features: { sessions: { enabled: true,
-      conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {} });
+      conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+      capabilities: { serverIdentity: { serverIdentityId: 'srv_workflow_home' } } });
     vi.stubGlobal('fetch', async () => Response.json(features));
     const settings = accountSettingsParse({});
     setActiveAccountSettingsSnapshot({ settings, source: 'network', rawSettings: {}, settingsVersion: 1,

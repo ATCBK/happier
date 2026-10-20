@@ -15,7 +15,7 @@ describe('waitForInitialCredentials', () => {
       acquireDaemonLock: async () => null,
       releaseDaemonLock: async () => {},
       resolvesWhenShutdownRequested: new Promise(() => {}),
-      logger: { debug: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn() },
       daemonLockHandle: null,
       sleepMs: 0,
     });
@@ -24,7 +24,27 @@ describe('waitForInitialCredentials', () => {
     expect(readCredentials).not.toHaveBeenCalled();
   });
 
+  it('continues without a refusal when non-interactive credentials are available', async () => {
+    const warn = vi.fn();
+    const result = await waitForInitialCredentials({
+      isInteractive: false,
+      waitForAuthEnabled: false,
+      waitForAuthTimeoutMs: 0,
+      credentialsPath: '/tmp/creds',
+      readCredentials: async () => ({ token: 'fixture' }),
+      acquireDaemonLock: async () => null,
+      releaseDaemonLock: async () => {},
+      resolvesWhenShutdownRequested: new Promise(() => {}),
+      logger: { debug: vi.fn(), warn },
+      daemonLockHandle: null,
+    });
+
+    expect(result).toEqual({ action: 'continue', daemonLockHandle: null });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('exits with code 1 when non-interactive and auth wait is disabled', async () => {
+    const warn = vi.fn();
     const result = await waitForInitialCredentials({
       isInteractive: false,
       waitForAuthEnabled: false,
@@ -34,12 +54,13 @@ describe('waitForInitialCredentials', () => {
       acquireDaemonLock: async () => 'lock',
       releaseDaemonLock: async () => {},
       resolvesWhenShutdownRequested: new Promise(() => {}),
-      logger: { debug: vi.fn() },
+      logger: { debug: vi.fn(), warn },
       daemonLockHandle: null,
       sleepMs: 0,
     });
 
     expect(result).toEqual({ action: 'exit', exitCode: 1, daemonLockHandle: null });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[daemon_authentication_required]'));
   });
 
   it('exits with code 0 when another waiting daemon already holds the lock', async () => {
@@ -52,7 +73,7 @@ describe('waitForInitialCredentials', () => {
       acquireDaemonLock: async () => null,
       releaseDaemonLock: async () => {},
       resolvesWhenShutdownRequested: new Promise(() => {}),
-      logger: { debug: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn() },
       daemonLockHandle: null,
       sleepMs: 0,
     });
@@ -76,7 +97,7 @@ describe('waitForInitialCredentials', () => {
       acquireDaemonLock: async () => 'lock-1',
       releaseDaemonLock: async () => {},
       resolvesWhenShutdownRequested: new Promise(() => {}),
-      logger: { debug: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn() },
       daemonLockHandle: null,
       sleepMs: 0,
     });
@@ -107,7 +128,7 @@ describe('waitForInitialCredentials', () => {
       acquireDaemonLock: async () => 'lock-1',
       releaseDaemonLock,
       resolvesWhenShutdownRequested,
-      logger: { debug: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn() },
       daemonLockHandle: null,
       sleepMs: 0,
     });

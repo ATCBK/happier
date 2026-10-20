@@ -738,7 +738,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         read: async () => stored,
         update: async ({ request }) => {
           stored = TargetActionApprovalRequestV1Schema.parse(request);
-          if (outcome === 'receipt_unknown') throw new Error('Receipt acknowledgement lost');
+          if (outcome === 'receipt_unknown' && request.execution !== undefined) throw new Error('Receipt acknowledgement lost');
           return { ok: true };
         },
       }),

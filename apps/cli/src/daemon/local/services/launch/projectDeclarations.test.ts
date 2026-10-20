@@ -87,6 +87,8 @@ import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/acc
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { inspectProjectSetup } from '@/workspaces/projectSetup/projectSetupPreparation';
+import { resolveProjectSetupAcceptedWorkspace } from '@/workspaces/projectSetup/projectSetupAcceptedWorkspace';
 import { WorkspaceExecutionConfigMutationRequestV1Schema, type WorkspaceExecutionConfigContentV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import type { LocalServicesRuntimeActionRoutes } from '../actions/runtimeActionExecutor';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
@@ -181,10 +183,22 @@ describe('accepted Project Service declaration starter', () => {
         let workerStatusTransport: ((envelope: ExternalActionRequestEnvelopeV1, signal?: AbortSignal) => Promise<unknown>) | undefined;
         const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
             const path = new URL(String(url)).pathname;
-            if (path === '/v1/actions/projects.worker.status') {
+            if (path === bindExternalActionExecutionAuthorizationHttpPathV1('projects.worker.status') || path === '/v1/actions/projects.worker.status') {
                 expect(options?.headers).toMatchObject({ Authorization: `Bearer ${credentials.token}` });
-                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
                 expect(envelope.target).toEqual({ kind: 'machine', machineId: targetWorkspace.machineId });
+                const machine = machines.find(machine => machine.id === targetWorkspace.machineId)!;
+                expect(request.machineId).toBe(machine.id);
+                const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({
+                    v: 1, token: 'home-issued-worker-status', binding: { accountId: 'owner', custodianAccountId: 'owner',
+                        authentication: { kind: 'terminal', tokenEpoch: 1 }, accountEncryptionMode: 'plain', serverIdentityId,
+                        machineId: machine.id, installationId: machine.installationId, actionId: 'projects.worker.status',
+                        requestId: envelope.requestId, target: envelope.target,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) },
+                });
+                if (path !== '/v1/actions/projects.worker.status') return { status: 200, data: authorization };
+                expect(request.executionAuthorization).toEqual(authorization);
                 if (!workerStatusTransport) throw new Error('Destination worker Status transport is not registered');
                 const output = await workerStatusTransport(envelope, options?.signal instanceof AbortSignal ? options.signal : undefined);
                 assertActionOutputContract('projects.worker.status', output);
@@ -195,21 +209,22 @@ describe('accepted Project Service declaration starter', () => {
                 expect(options?.headers).toMatchObject({ Authorization: `Bearer ${credentials.token}` });
                 const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
-                const sourceMachine = machines[0]!;
-                expect(request.machineId).toBe(sourceMachine.id);
-                expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: sourceMachine.id }, input: { workspace: {
-                    serverId: homeId, workspaceId: workspace.id, machineId: workspace.machineId, rootPath: root,
+                const inspected = [workspace, targetWorkspace].find(value => value.machineId === request.machineId);
+                if (!inspected) throw new Error('Inspection requires an installed fixture Machine');
+                const machine = machines.find(value => value.id === inspected.machineId)!;
+                expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: machine.id }, input: { workspace: {
+                    serverId: homeId, workspaceId: inspected.id, machineId: inspected.machineId, rootPath: inspected.rootPath,
                 } } });
                 if (path !== '/v1/actions/projects.inspect') return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({
                     v: 1, token: 'home-issued-source-inspection', binding: { accountId: 'owner', custodianAccountId: 'owner',
                         authentication: { kind: 'terminal', tokenEpoch: mintedEpoch }, accountEncryptionMode: 'plain', serverIdentityId,
-                        machineId: sourceMachine.id, installationId: sourceMachine.installationId, actionId: 'projects.inspect',
+                        machineId: machine.id, installationId: machine.installationId, actionId: 'projects.inspect',
                         requestId: envelope.requestId, target: envelope.target,
                         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) },
                 }) };
                 expect(request.executionAuthorization?.binding).toMatchObject({ authentication: { kind: 'terminal', tokenEpoch: 1 },
-                    machineId: sourceMachine.id, installationId: sourceMachine.installationId, actionId: 'projects.inspect', requestId: envelope.requestId });
-                const handler = sourceHandlers.get(getActionSpec('projects.inspect').bindings!.rpcMethod!);
+                    machineId: machine.id, installationId: machine.installationId, actionId: 'projects.inspect', requestId: envelope.requestId });
+                const handler = sourceHandlers.get(`${machine.id}:${getActionSpec('projects.inspect').bindings!.rpcMethod!}`);
                 if (!handler) throw new Error('SOURCE inspection handler is not registered');
                 const output = await handler(envelope.input, { signal: options?.signal instanceof AbortSignal ? options.signal : ingress.signal,
                     callerAuthority: 'account_automation', transportRequestId: envelope.requestId });
@@ -280,13 +295,25 @@ describe('accepted Project Service declaration starter', () => {
             ...(workerExecution ? createWorkspaceSyncWorkerPreparation({ serverId: profileId, serverHttpBaseUrl: 'https://home.example',
                 targetMachineId: targetWorkspace.machineId, credentials, isCurrent: async () => true,
                 prepareBetween }) : {}) };
+        function projectDefinitionActionFor(ref: typeof workspace) {
+            const nativeIo = { resolveTool: async () => nativeTool };
+            return createProjectDefinitionAction({ serverId: profileId, machineId: ref.machineId,
+                workingDirectory: ref.rootPath, accessPolicy: { kind: 'restrictedRoots', roots: [ref.rootPath] }, nativeIo,
+                inspectSetup: async ({ workspace: address, context, reviewSetupConsent }) => {
+                    const requester = { credentials, serverHttpBaseUrl: 'https://home.example' };
+                    const association = await resolveProjectSetupAcceptedWorkspace({ ...requester, address, serverId: profileId, signal: context.signal });
+                    return inspectProjectSetup({ workspace: association.workspace, projectAssociation: association, requester,
+                        purpose: 'setup', approvalContext: context, platform: { os: 'linux', arch: 'x64' }, nativeIo,
+                        successHomeDir: join(ref.rootPath, 'inspection-success'), signal: context.signal },
+                        reviewSetupConsent ? { reviewConsent: true } : undefined);
+                } });
+        }
         if (workerExecution) {
-            registerProjectDefinitionHandlers({ machineId: workspace.machineId,
-                rpcHandlerManager: { registerHandler: (method, handler) => { sourceHandlers.set(method, handler); } },
+            for (const ref of [workspace, targetWorkspace]) registerProjectDefinitionHandlers({ machineId: ref.machineId,
+                rpcHandlerManager: { registerHandler: (method, handler) => { sourceHandlers.set(`${ref.machineId}:${method}`, handler); } },
                 actionExecutor: createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
                     serverId: profileId, serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
-                    projectDefinitionAction: createProjectDefinitionAction({ serverId: profileId,
-                        machineId: workspace.machineId, workingDirectory: root, accessPolicy: { kind: 'restrictedRoots', roots: [root] } }) })) });
+                    projectDefinitionAction: projectDefinitionActionFor(ref) })) });
             const inspectSourceProjectManifest = createProjectFiniteSourceManifestInspector({ api: await ApiClient.create(credentials),
                 credentials, serverId: profileId, serverHttpBaseUrl: 'https://home.example', accountId: 'owner', ingress, isCurrent: async () => true });
             Object.assign(runtime, { inspectSourceProjectManifest });
@@ -306,7 +333,7 @@ describe('accepted Project Service declaration starter', () => {
             projectManagedServices: owner,
             runTargets: () => discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [targetWorkspace] }) });
         const routes = createLocalServiceLauncherRoutes({ feed, history, ...starter });
-        return { root, workspace, targetRoot, targetWorkspace, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, runtime, admissionDrain, prepareBetween,
+        return { root, workspace, targetRoot, targetWorkspace, serverIdentityId, projectDefinitionActionFor, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, runtime, admissionDrain, prepareBetween,
             async createRuntimeActionExecutor(relocateService?: LocalServicesRuntimeActionRoutes['relocateService'], actionRoutes?: LocalServicesRuntimeActionRoutes['actionRoutes'], launcherRoutes = routes, runtimeIngress = ingress) {
                 const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
                     features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true },
@@ -348,6 +375,9 @@ describe('accepted Project Service declaration starter', () => {
     // Establish native custody through its real owner. SOURCE inspection is an independent
     // Start seam; this composition measures Move over an already running worker occurrence.
     async function seedWorkerService(f: Awaited<ReturnType<typeof fixture>>, workspace = f.targetWorkspace) {
+        // A retained worker copy already has the reviewed files before Move;
+        // the coordinator must still invoke its own clean preparation after Stop.
+        if (f.root !== f.targetRoot) await cp(f.root, f.targetRoot, { recursive: true });
         let phase: 'running' | 'stopped' = 'running';
         const handle = await f.owner.superviseProject({ workspace,
             declaration: { workspaceRefId: workspace.id, selection: { kind: 'manifest', name: 'worker' } },
@@ -441,6 +471,7 @@ describe('accepted Project Service declaration starter', () => {
         const executor = createCliActionExecutor({ token: f.runtime.credentials!.token, credentials: f.runtime.credentials!,
             serverId: 'home', serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
             runtimeActionMachineId: f.workspace.machineId,
+            projectDefinitionAction: f.projectDefinitionActionFor(f.workspace),
             projectWorkerAction: serviceWorkerAction(f, f.workspace.machineId),
             accountServerActionDeps: createAccountServerActionDeps({ token: f.runtime.credentials!.token, credentials: f.runtime.credentials!,
                 serverId: 'home', serverHttpBaseUrl: 'https://home.example' }),
@@ -467,7 +498,7 @@ describe('accepted Project Service declaration starter', () => {
                 } } }),
         });
         const settled = await operations.runner.waitForTerminal({ accountId: 'owner', machineId: f.workspace.machineId }, 'move-progress');
-        expect(old.snapshot().state).toBe('stopped');
+        expect(old.snapshot().state, JSON.stringify(settled)).toBe('stopped');
         expect(phases).toEqual(['stopping', 'stopped']);
         expect(settled).toMatchObject({ state: 'cancelled', progress: { phase: 'stopped' }, domainRef: {
             kind: 'projectService', purpose: 'relocation', currentTarget: started.currentTarget,
@@ -487,7 +518,7 @@ describe('accepted Project Service declaration starter', () => {
             admission: createProjectWorkerAdmission({ machineId, admissionDrain: createDaemonAdmissionDrain(),
                 readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: null }, source: 'stored', metadataVersion: 1 }) }),
             isFiniteExecutionLive: () => true, isServiceExecutionLive: () => true });
-        const common = { token: f.runtime.credentials!.token, credentials: f.runtime.credentials!, serverId: 'home',
+        const common = { token: f.runtime.credentials!.token, credentials: f.runtime.credentials!, serverId: 'home', serverIdentityId: f.serverIdentityId,
             serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain' as const, ctx: null,
             pluginActionExecutionOwner: 'current_process' as const };
         const worker = createCliActionExecutor({ ...common, runtimeActionMachineId: f.targetWorkspace.machineId,
@@ -625,6 +656,10 @@ describe('accepted Project Service declaration starter', () => {
         }) });
         const sourceRuntime = await f.createRuntimeActionExecutor(relocate, undefined, sourceLauncher);
         const sourceRpc = new RpcHandlerManager({ scopePrefix: f.workspace.machineId, localMachineId: f.workspace.machineId, encryptionMode: 'plain' });
+        registerProjectDefinitionHandlers({ rpcHandlerManager: sourceRpc, machineId: f.workspace.machineId,
+            actionExecutor: createActionExecutor(createCliActionDeps({ token: f.runtime.credentials!.token, credentials: f.runtime.credentials!,
+                serverId: 'home', serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
+                projectDefinitionAction: f.projectDefinitionActionFor(f.workspace) })) });
         const executor = createCliActionExecutor({ token: f.runtime.credentials!.token, credentials: f.runtime.credentials!,
             serverId: 'home', serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
             runtimeActionMachineId: f.workspace.machineId,
@@ -1698,7 +1733,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             expect(old.snapshot().state).toBe('stopped');
             if (outcome === 'refused_start') Object.assign(h.runtime, { isCurrent: async () => false });
         });
-        const common = { token: h.runtime.credentials!.token, credentials: h.runtime.credentials!, serverId: 'home',
+        const common = { token: h.runtime.credentials!.token, credentials: h.runtime.credentials!, serverId: 'home', serverIdentityId: h.serverIdentityId,
             serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain' as const, ctx: null,
             pluginActionExecutionOwner: 'current_process' as const };
         const worker = createCliActionExecutor({ ...common, runtimeActionMachineId: h.targetWorkspace.machineId,
@@ -1786,8 +1821,9 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             return;
         }
         if (outcome === 'refused_start') {
-            expect(operation, JSON.stringify(operation)).toMatchObject({ state: 'failed', progress: { phase: 'starting' },
+            expect(operation, JSON.stringify(operation)).toMatchObject({ state: 'failed', progress: { phase: 'stopped' },
                 error: { errorCode: 'project_requester_credentials_unavailable' } });
+            expect(phases).toEqual(['stopping', 'stopped', 'copying', 'starting', 'stopped']);
             expect(operation).not.toHaveProperty('observation');
             expect(old.snapshot().state).toBe('stopped');
             expect(h.owner.listProjectServices()).toHaveLength(0);
@@ -2138,13 +2174,9 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             runtimeActionExecute: execute,
             isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId,
                 settings, context),
-            // Artifact persistence and the human decision are genuine external boundaries.
-            approvalsCreate: async ({ request }) => { approvals.push(request.actionId); return { artifactId: 'restart-start-review' }; },
-            approvalsUpdate: async () => ({ ok: true }),
-            approvalsWaitForDecision: async ({ request }) => {
-                expect(original.snapshot().state).toBe('running');
-                return { decision: 'reject' as const, request, decisionAuthority: 'present_user' as const };
-            } });
+            // Artifact persistence is external; an unreviewable declared Start
+            // must refuse before this publication boundary is reached.
+            approvalsCreate: async ({ request }) => { approvals.push(request.actionId); return { artifactId: 'restart-start-review' }; } });
         const request = { requestId: 'restart-service', action: 'restart_managed' as const, force: false,
             expectedEffectDigest: review.reviewedEffectDigest,
             target: { kind: 'managed_service' as const, machineId: 'machine', managedServiceId: original.instanceId,
@@ -2164,8 +2196,10 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             context: { ...h.context, actionRequestId: request.requestId, surface, actionsSettings: settings } });
         if (surface === 'agent' && policy !== 'waived-agent') {
             expect(original.snapshot().state).toBe('running');
-            expect(result).toMatchObject({ status: 'denied', reasonCode: 'approval_rejected' });
-            expect(approvals).toEqual(['localServices.launcher.start']);
+            // Declared Starts deliberately refuse generic approval preparation
+            // until native review custody is available. Restart cannot waive it.
+            expect(result).toMatchObject({ status: 'denied', reasonCode: 'approval_context_unavailable' });
+            expect(approvals).toEqual([]);
             expect(h.owner.listProjectServices()).toEqual([original]);
         } else {
             expect(original.snapshot().state).toBe('stopped');

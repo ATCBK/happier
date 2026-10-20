@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs';
 
 import { projectPath } from '@/projectPath';
 import { waitForCondition } from '@/testkit/async/waitFor';
@@ -70,13 +70,19 @@ describe.sequential('daemon start-sync auth gating', () => {
       HAPPIER_WEBAPP_URL: 'http://127.0.0.1:9',
       // Make the test hermetic even if the developer environment enables daemon auth wait.
       HAPPIER_DAEMON_WAIT_FOR_AUTH: '0',
-      DEBUG: '1',
+      DEBUG: '',
+      HAPPIER_LOG_LEVEL: 'info',
     };
 
     try {
       const res = await runNode(['--import', 'tsx', entry, 'daemon', 'start-sync'], env, DAEMON_START_SYNC_CHILD_TIMEOUT_MS);
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(1);
+      expect(res.stdout + res.stderr).toContain('[daemon_authentication_required]');
       expect(findDaemonLockFiles(home)).toHaveLength(0);
+      const logs = readdirSync(join(home, 'logs')).filter((file) => file.endsWith('-daemon.log'));
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs.map((file) => readFileSync(join(home, 'logs', file), 'utf8')).join('\n'))
+        .toContain('[daemon_authentication_required]');
     } finally {
       await removeTempDir(home);
     }

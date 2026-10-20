@@ -469,6 +469,7 @@ export async function startDaemon(
       daemonLockHandle,
     });
     if (credentialsGate.action === 'exit') {
+      logger.flushSync();
       process.exit(credentialsGate.exitCode);
     }
     if (credentialsGate.action === 'shutdown') {

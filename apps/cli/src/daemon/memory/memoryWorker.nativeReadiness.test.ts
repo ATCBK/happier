@@ -8,10 +8,14 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 
 const disk = vi.hoisted(() => ({ project: '', armOnWatch: '', armed: false, opens: 0, blockAt: 2,
+  expiredPath: '', expiredOpens: 0,
   entered: () => {}, wait: Promise.resolve(), afterSettingsRead: null as (() => void) | null, settingsFile: '' }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readFile: async (...args: Parameters<typeof actual.readFile>) => {
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    if (String(args[0]) === disk.expiredPath) disk.expiredOpens++;
+    return actual.open(...args);
+  }, readFile: async (...args: Parameters<typeof actual.readFile>) => {
     const result = await actual.readFile(...args);
     if (String(args[0]) === disk.settingsFile && disk.afterSettingsRead) {
       const release = disk.afterSettingsRead;
@@ -75,6 +79,22 @@ describe('memory worker native source readiness', () => {
         sessionId: id, timestamp: new Date(timestamp).toISOString(), message: { role: 'user', content: text } }) + '\n';
       const firstPath = join(project, 'first.jsonl');
       await writeFile(firstPath, row('first', 'quartz initial native message'));
+      // The one-day policy must exclude old native bodies before title
+      // enrichment, rather than decoding them and discarding the candidate.
+      disk.expiredPath = join(project, 'expired.jsonl');
+      disk.expiredOpens = 0;
+      const expiredTime = new Date(nowMs - 30 * 86_400_000);
+      await writeFile(disk.expiredPath, row('expired', 'expired native history', expiredTime.getTime())
+        + (JSON.stringify({ type: 'progress', data: 'x'.repeat(16_000) }) + '\n').repeat(256));
+      await utimes(disk.expiredPath, expiredTime, expiredTime);
+      // More expired conversations than one native candidate page must not
+      // delay the one eligible transcript behind whole-history pagination.
+      const oldTimeBeyondWidenedWindow = new Date(nowMs - 30 * 86_400_000);
+      for (let index = 0; index < 61; index++) {
+        const path = join(project, `expired-${index}.jsonl`);
+        await writeFile(path, row(`expired-${index}`, 'out-of-window history', oldTimeBeyondWidenedWindow.getTime()));
+        await utimes(path, oldTimeBeyondWidenedWindow, oldTimeBeyondWidenedWindow);
+      }
       const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
       const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
       const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
@@ -98,7 +118,7 @@ describe('memory worker native source readiness', () => {
       const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
       await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: {
-          enabled: true, agents: ['claude'], historyDays: 7, includeToolOutput: false,
+          enabled: true, agents: ['claude'], historyDays: 1, includeToolOutput: false,
         } } });
       const { startMemoryWorker } = await import('./memoryWorker');
       worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine' });
@@ -116,6 +136,7 @@ describe('memory worker native source readiness', () => {
         finally { db.close(); }
       };
       expect(search('quartz')).toHaveLength(1);
+      expect(disk.expiredOpens, 'expired transcript must not be opened for candidate titles').toBe(0);
       // An append to an admitted file must reach its incremental transcript
       // reader without waiting for a fresh whole-source file-set discovery.
       disk.project = project;
@@ -158,14 +179,18 @@ describe('memory worker native source readiness', () => {
 
       // Widening the history window must rediscover sources excluded by the
       // completed inventory, without waiting for a native filesystem change.
-      const sevenDaySettings = worker.getSettings();
-      await writeMemorySettingsToDisk({ ...sevenDaySettings, conversationSearch: { ...sevenDaySettings.conversationSearch,
-        indexExternal: { ...sevenDaySettings.conversationSearch.indexExternal, historyDays: 14 } } });
+      const oneDaySettings = worker.getSettings();
+      await writeMemorySettingsToDisk({ ...oneDaySettings, conversationSearch: { ...oneDaySettings.conversationSearch,
+        indexExternal: { ...oneDaySettings.conversationSearch.indexExternal, historyDays: 14 } } });
       await worker.reloadSettings();
-      await worker.ensureUpToDate();
+      // Widening selects three conversations. Their native directory order is
+      // opaque; drain the existing worker allowance, not an assumed first slot.
+      for (let index = 0; index < Math.ceil(3 / worker.getSettings().worker.maxSessionsPerTick); index++) {
+        await worker.ensureUpToDate();
+      }
       expect.soft(search('obsolete')).toHaveLength(1);
       expect.soft(indexedNativeIds()).toContain('old');
-      await writeMemorySettingsToDisk(sevenDaySettings);
+      await writeMemorySettingsToDisk(oneDaySettings);
       await worker.reloadSettings();
       await worker.ensureUpToDate();
       expect(search('obsolete')).toEqual([]);
