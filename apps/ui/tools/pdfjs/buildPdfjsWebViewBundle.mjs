@@ -19,6 +19,7 @@ export async function createPdfjsWebViewBundleSource({ expoAppDir }) {
         alias: {
             '@happier-dev/plugin-ui/presentation': path.resolve(expoAppDir, '../../packages/plugin-ui/src/presentation/find/matchFindText.ts'),
             '@/scm/utils/filePresentation': path.resolve(expoAppDir, 'sources/scm/utils/filePresentation.ts'),
+            '@happier-dev/protocol/crypto/base64': path.resolve(expoAppDir, '../../packages/protocol/src/crypto/base64.ts'),
         },
     });
     const js = result.outputFiles[0]?.text;

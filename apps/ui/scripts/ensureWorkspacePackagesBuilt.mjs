@@ -257,6 +257,12 @@ export async function ensureUiWorkspacePackagesBuilt({
         outputs: [resolve(uiPackageDir, 'sources/components/markdown/mermaidWebViewBundle.generated.ts')],
         build: () => buildMermaidWebViewBundle({ expoAppDir: uiPackageDir }) });
     }
+    if (tasks.includes('vendor-pdfjs-webview-bundle')) {
+      const { buildPdfjsWebViewBundle } = await import('../tools/pdfjs/buildPdfjsWebViewBundle.mjs');
+      await buildUiSourceAsset({ retainLastGreen,
+        outputs: [resolve(uiPackageDir, 'sources/components/ui/media/pdf/pdfjsWebViewBundle.generated.ts')],
+        build: () => buildPdfjsWebViewBundle({ expoAppDir: uiPackageDir }) });
+    }
     return await prepareUiSourcePluginInventory({ uiPackageDir, env });
   }
   const result = await ensureWorkspacePackagesBuiltForComponent(uiPackageDir, {
