@@ -163,7 +163,10 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
     } finally { await driver.close(); }
   });
 
-  it.each([false, true])('excludes display/window overlap through the registry in either selection order (display first: %s)', async displayFirst => {
+  it.each([
+    { displayFirst: false, windowDisplayId: ':73' }, { displayFirst: true, windowDisplayId: ':73' },
+    { displayFirst: false, windowDisplayId: ':73.0' }, { displayFirst: true, windowDisplayId: ':73.0' },
+  ])('excludes display/window overlap through the registry (display first: $displayFirst, window: $windowDisplayId)', async ({ displayFirst, windowDisplayId }) => {
     native.call.mockImplementation(async ({ name }) => name === 'list_windows'
       ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
       : name === 'get_screen_size' ? { structuredContent: { width: 200, height: 100, scale_factor: 1 } }
@@ -171,8 +174,9 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
     const registry = createMachineLiveStreamCaptureRegistry();
     const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
     const display = { kind: 'display', displayId: target.displayId } as const;
-    const first = displayFirst ? display : target;
-    const second = displayFirst ? target : display;
+    const window = { ...target, displayId: windowDisplayId };
+    const first = displayFirst ? display : window;
+    const second = displayFirst ? window : display;
     const context = (sessionId: string) => ({ authority: 'account_automation' as const, defaultSessionId: sessionId, bypassApprovals: true });
     try {
       expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: first }, context('a')))
@@ -191,7 +195,7 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
   });
 
   it('keeps independent background windows available to separate controllers', async () => {
-    const neighbor = { ...target, windowId: target.windowId + 1 };
+    const neighbor = { ...target, displayId: ':73.0', windowId: target.windowId + 1 };
     native.call.mockImplementation(async ({ name }) => name === 'list_windows'
       ? { structuredContent: { windows: [target, neighbor].map(window => ({ pid: window.pid, window_id: window.windowId, title: 'Editor' })) } }
       : captureResult());
@@ -199,6 +203,11 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
     const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });
     try {
       for (const [index, selected] of [target, neighbor].entries()) {
+        if (index === 1) {
+          expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: { ...target, displayId: ':73.0' } },
+            { authority: 'present_user', defaultSessionId: `independent-${index}` }))
+            .toMatchObject({ ok: false, errorCode: 'computer_target_in_use' });
+        }
         expect(await routes.dispatch('computer.target.select', { machineId: 'machine', target: selected },
           { authority: 'present_user', defaultSessionId: `independent-${index}` })).toMatchObject({ selectedTarget: selected });
       }
@@ -227,6 +236,7 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
     native.call.mockImplementation(async ({ name }) => name === 'list_windows'
       ? { structuredContent: { windows: [{ pid: target.pid, window_id: target.windowId, title: 'Editor' }] } }
       : name === 'check_permissions' ? { structuredContent: { x11: captureGranted, xsend_event: true } }
+        : name === 'get_screen_size' ? { structuredContent: { width: 200, height: 100, scale_factor: 1 } }
         : (() => { throw new Error('Status must not capture thumbnails'); })());
     const registry = createMachineLiveStreamCaptureRegistry();
     const routes = createComputerRoutes({ machineId: 'machine', registry, executablePath: '/managed/native-driver' });

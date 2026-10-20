@@ -126,9 +126,10 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
     function applySelection(selection: ComputerSelectedTargetResponseV1, invalidate = true): void {
         if (!client.isCurrent()) return;
         if (invalidate && flight) invalidated = true;
-        const admitted = snapshot.grants && snapshot.grants.capture !== 'granted' ? null : selection;
-        publish({ ...snapshot, selection: admitted, status: admitted?.sourceId === snapshot.status?.sourceId ? snapshot.status : null,
-            failure: admitted === null || (!invalidate && admitted?.sourceId === snapshot.selection?.sourceId && captureRequired()) ? snapshot.failure : null });
+        // OS permission controls viewing, not whether the daemon still owns a share.
+        // Only the owner's selection answer can remove its release affordance.
+        publish({ ...snapshot, selection, status: selection.sourceId === snapshot.status?.sourceId ? snapshot.status : null,
+            failure: !invalidate && selection.sourceId === snapshot.selection?.sourceId && captureRequired() ? snapshot.failure : null });
     }
     function captureRequired(): boolean {
         return snapshot.failure !== null && resolveComputerRecovery({ kind: 'failed', code: snapshot.failure }, 'use')?.action === 'capture';
@@ -143,23 +144,32 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
     }
     function applyFailure(code: string): void {
         if (!client.isCurrent()) return;
-        const cause = resolveComputerRecovery({ kind: 'failed', code }, 'use')?.cause;
+        const recovery = resolveComputerRecovery({ kind: 'failed', code }, 'use');
+        const cause = recovery?.cause;
         // An unreadable observation does not establish that sharing stopped.
         // Retain its release affordance, but withdraw stale control/input facts.
-        const selection = cause === 'failed' || cause === 'offline' ? snapshot.selection : null;
-        publish({ ...snapshot, selection, status: null, failure: code });
+        const selection = cause === 'access_removed' || cause === 'source_lost' ? null : snapshot.selection;
+        const grants = recovery?.permission && (cause === 'permission_denied' || cause === 'permission_unknown')
+            ? { capture: 'unknown' as const, input: 'unknown' as const, ...snapshot.grants,
+                [recovery.permission]: cause === 'permission_denied' ? 'denied' as const : 'unknown' as const }
+            : snapshot.grants;
+        publish({ ...snapshot, selection, grants, status: null, failure: code });
+    }
+    function readinessPatch(grants: ComputerTargetsListResponseV1['grants']) {
+        return { grants, failure: grants.capture !== 'granted'
+            ? grants.capture === 'denied' ? 'capture_permission_denied' : 'capture_permission_unknown'
+            : captureRequired() ? snapshot.failure : null };
     }
     function applyReadiness(targets: ComputerTargetsListResponseV1): void {
         if (!client.isCurrent()) return;
-        const readable = targets.grants.capture === 'granted';
-        publish({ ...snapshot, grants: targets.grants,
-            ...(!readable ? { selection: null, status: null, failure: targets.grants.capture === 'denied' ? 'capture_permission_denied' : 'capture_permission_unknown' }
-                : { failure: captureRequired() ? snapshot.failure : null }) });
+        publish({ ...snapshot, ...readinessPatch(targets.grants) });
     }
     function applyStatus(status: ComputerControlStatusResponseV1): void {
         if (!client.isCurrent()) return;
         if (status.sourceId !== snapshot.selection?.sourceId) return;
-        publish({ ...snapshot, status });
+        // Metadata carries control only; native status reads additionally refresh OS grants.
+        const { grants, ...control } = status;
+        publish({ ...snapshot, status: control, ...(grants ? readinessPatch(grants) : {}) });
     }
     function refresh(invalidate = false): Promise<void> {
         if (!hasDemand()) return Promise.resolve();
@@ -176,21 +186,11 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
                 if (invalidated) continue;
                 if (!selection.ok) { applyFailure(selection.code); continue; }
                 const previousStatus = selection.value.sourceId === snapshot.selection?.sourceId ? snapshot.status : null;
-                // Grant discovery and control observation are independent reads.
-                // Start both together, but keep capture permission as the picture's admission gate.
-                const statusRead = selection.value.sourceId ? client.status() : null;
-                // OS grants can change while a viewer is parked or Settings is open.
-                // Re-observe them at this existing refresh boundary before restoring a source.
-                if (selection.value.sourceId) {
-                    const targets = await client.listTargets();
-                    if (!hasDemand()) break;
-                    if (invalidated) continue;
-                    if (!targets.ok) { applyFailure(targets.code); continue; }
-                    applyReadiness(targets.value);
-                }
+                // Retain the release affordance while status is pending. The retained
+                // source reads grants directly; refreshing never needs picker thumbnails.
                 applySelection(selection.value, false);
-                if (!statusRead || !snapshot.selection?.sourceId || !hasDemand()) continue;
-                const status = await statusRead;
+                if (!selection.value.sourceId || !hasDemand()) continue;
+                const status = await client.status();
                 if (!hasDemand()) break;
                 if (invalidated) continue;
                 // A stream transition delivered during the read is fresher than that read's answer.

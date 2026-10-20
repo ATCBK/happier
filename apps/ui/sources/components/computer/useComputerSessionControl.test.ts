@@ -28,6 +28,7 @@ const selection = {
 } satisfies ComputerSelectedTargetResponseV1;
 const status = (controller: 'agent' | 'human' | 'idle', extra: Partial<{ stopping: boolean; uncertain: boolean; controlEpoch: number }> = {}) => ({
     ...identity, controller, controlEpoch: extra.controlEpoch ?? 1, stopping: extra.stopping ?? false, uncertain: extra.uncertain ?? false,
+    grants: targetList.grants,
 });
 const capture = {
     ...identity, status: 'captured', captureId: 'capture_2',
@@ -434,7 +435,7 @@ describe('useComputerSessionControl', () => {
             if (actionId === 'computer.targets.list') return { targets: [{ target }], grants };
             if (actionId === 'computer.permissions.openSettings') return { status: 'dispatched' };
             if (actionId === 'computer.target.select') return selection;
-            return actionId === 'computer.target.get' ? selection : status('human');
+            return actionId === 'computer.target.get' ? selection : { ...status('human'), grants };
         };
         const executor = executorWith(machine);
         const scope = { sessionId: 'native-grants', machineId: 'ordinary-machine' };
@@ -490,7 +491,7 @@ describe('useComputerSessionControl', () => {
     it('rechecks OS grants on viewer refresh while retaining the owner-confirmed share for release', async () => {
         let grants: ComputerTargetsListResponseV1['grants'] = { capture: 'granted', input: 'granted' };
         const machine: ComputerMachineRpc = async ({ actionId }) => actionId === 'computer.targets.list'
-            ? { targets: [{ target }], grants } : actionId === 'computer.target.get' ? selection : status('human');
+            ? { targets: [{ target }], grants } : actionId === 'computer.target.get' ? selection : { ...status('human'), grants };
         const hook = await renderControl(machine);
         expect(hook.getCurrent().canInput).toBe(true);
         grants = { capture: 'denied', input: 'granted' };
