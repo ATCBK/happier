@@ -65,7 +65,8 @@ it('keeps the same refusal when the browser ends the drag over the still-checkin
     source.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
     document.body.append(source);
     try {
-        await act(async () => { drag.ref(source); });
+        // Web DOM boundary: on web the drag ref receives the host element React Native Web renders for a View.
+        await act(async () => { drag.ref(source as unknown as Parameters<typeof drag.ref>[0]); });
         const dragEvent = (type: string) => Object.assign(new Event(type, { bubbles: true, cancelable: true }), { clientX: 50, clientY: 50 });
         await act(async () => { source.dispatchEvent(dragEvent('dragstart')); });
         expect(drag.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'widget_admission_pending' } });

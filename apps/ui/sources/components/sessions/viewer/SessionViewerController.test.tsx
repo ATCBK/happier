@@ -219,7 +219,7 @@ describe('SessionViewerController', () => {
         .getCurrent()
         .controller.port.apply({ kind: 'viewer.open', source: 'browser' });
     });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480 } });
+    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     await act(async () => {
       hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
     });

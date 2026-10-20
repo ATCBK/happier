@@ -81,9 +81,13 @@ describe('widget definition flows', () => {
         resetRuntimeFetch();
     });
 
-    it.each(['home', 'project'] as const)('copies resolved page inputs to %s through the shared menu and the existing Add Action approval path', async destinationKind => {
+    it.each([
+        { destinationKind: 'home', approval: true },
+        { destinationKind: 'project', approval: true },
+        { destinationKind: 'project', approval: false },
+    ] as const)('copies resolved page inputs to $destinationKind through the shared menu and Add Action (approval=$approval)', async ({ destinationKind, approval }) => {
         const serverId = await addDefinitionHome();
-        await harness.requireUiApproval(serverId, 'widgets.item.add');
+        if (approval) await harness.requireUiApproval(serverId, 'widgets.item.add');
         const disconnect = await applyDefinitionHomeConnection();
         const React = await import('react');
         const { View } = await import('react-native');
@@ -141,10 +145,28 @@ describe('widget definition flows', () => {
             await act(async () => { await expect(setup.submit(setup.initial)).resolves.toMatchObject({ ok: false }); });
             expect(harness.artifacts(serverId).list()).toHaveLength(before.size);
             uuid.mockRestore();
-            await act(async () => { expect(await setup.submit(setup.initial)).toEqual({ ok: true, approvalPending: true }); });
-            const approval = harness.artifacts(serverId).list().find(row => !before.has(row.id));
-            expect(approval).toBeDefined();
-            const body = JSON.parse(harness.artifacts(serverId).readPlainBody(approval!.id)!);
+            const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+            const inventory = createDeferred<void>();
+            // Unrelated Account inventory is a network boundary, not a prerequisite
+            // for acknowledging this known builtin's exact copy.
+            harness.answer(serverId, 'GET /v1/artifacts', { respondAfter: inventory.promise, body: { artifacts: [], nextCursor: null } });
+            let outcome: Awaited<ReturnType<typeof setup.submit>> | undefined;
+            const submission = setup.submit(setup.initial).then(result => { outcome = result; });
+            try {
+                await act(async () => { await expect.poll(() => outcome).toEqual(approval ? { ok: true, approvalPending: true } : { ok: true }); });
+            } finally { inventory.resolve(); await submission; }
+            const created = harness.artifacts(serverId).list().find(row => !before.has(row.id));
+            expect(created).toBeDefined();
+            if (!approval) {
+                const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                const read = await createDefaultActionExecutor().execute('widgets.item.list', { surface: { serverId, accountId: ACCOUNT_ID,
+                    owner: { kind: 'project', projectId: 'destination-project' } } }, { serverId, surface: 'ui', authority: 'present_user' });
+                expect(read).toMatchObject({ ok: true, result: { instances: expect.arrayContaining([expect.objectContaining({ instance: expect.objectContaining({
+                    definition: source.definition, bindings: setup.initial.bindings,
+                }) })]) } });
+                return;
+            }
+            const body = JSON.parse(harness.artifacts(serverId).readPlainBody(created!.id)!);
             expect(body).toMatchObject({ actionId: 'widgets.item.add', actionArgs: { surface: { serverId, accountId: ACCOUNT_ID,
                 owner: destinationKind === 'home' ? { kind: 'home' } : { kind: 'project', projectId: 'destination-project' } },
                 instance: { definition: source.definition, bindings: setup.initial.bindings } } });

@@ -64,6 +64,14 @@ function renderPage(element: React.ReactElement, options?: Parameters<typeof ren
 let accountFixture: Awaited<ReturnType<typeof activateStorageAccountScope>> | undefined;
 afterEach(() => { standardCleanup(); accountFixture?.dispose(); accountFixture = undefined; });
 
+/** A Home switch changes the real Account lifetime, not only the editor's target props. */
+async function switchFixtureHome(serverId: string) {
+    await act(async () => {
+        accountFixture?.dispose();
+        accountFixture = await activateStorageAccountScope({ serverId, accountId: 'follow-account' });
+    });
+}
+
 /** The shared editor's preset segment (the pressable radio) of a source's policy editor. */
 function sourcePresetSegment(screen: Awaited<ReturnType<typeof renderSettingsView>>, sourceSessionId: string, preset: string) {
     return screen.tree.root.findAll((node) => node.props.testID === `session-follow-source-${sourceSessionId}-policy.preset.${preset}`
@@ -848,6 +856,7 @@ describe('SessionFollowSourcesEditor', () => {
             destinationMachineId={null}
         />);
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={secondDestination}
             serverId="home-b"
@@ -926,6 +935,7 @@ describe('SessionFollowSourcesEditor', () => {
             await Promise.resolve();
         });
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-b' })}
             serverId="home-b"
@@ -1021,6 +1031,7 @@ describe('SessionFollowSourcesEditor', () => {
             await Promise.resolve();
         });
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-b' })}
             serverId="home-b"
