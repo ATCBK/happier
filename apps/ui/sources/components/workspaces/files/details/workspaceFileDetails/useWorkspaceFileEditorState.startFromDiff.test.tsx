@@ -1,510 +1,118 @@
-import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { renderScreen } from '@/dev/testkit';
-import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { installWorkspaceFileDetailsCommonModuleMocks } from './workspaceFileDetailsTestHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import {
+    cleanupWorkspaceFileDetailsActionBoundary,
+    getWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsActionBoundary,
+    installWorkspaceFileDetailsCommonModuleMocks,
+    prepareWorkspaceFileDetailsActionBoundary,
+} from './workspaceFileDetailsTestHelpers';
+import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from './workspaceFileEditorDraft';
+import { applyMoveDetailsTabToGroup, applyOpenDetailsTab, applySetDetailsTabState, applySplitDetailsGroup, createEmptyPaneDetailsState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceReducer';
+import { migrateLegacyDetailsWorkspaceState, serializeDetailsWorkspaceState } from '@/components/appShell/panes/details/workspace/migrateLegacyDetailsWorkspaceState';
 
-import type { WorkspaceFileEditorState } from './useWorkspaceFileEditorState';
+installWorkspaceFileDetailsCommonModuleMocks();
+installWorkspaceFileDetailsActionBoundary();
+const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
+const actionBoundary = getWorkspaceFileDetailsActionBoundary();
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).__DEV__ = false;
-
-installWorkspaceFileDetailsCommonModuleMocks({
-    modal: async () =>
-        createModalModuleMock({
-            spies: {
-                alert: (title, message, buttons) => modalAlertSpy(title, message, buttons),
-            },
-        }).module,
-});
-
-type WorkspaceWriteFileFn = typeof import('@/sync/domains/workspaces/files/workspaceFileReadWrite').workspaceWriteFile;
-const workspaceWriteFileSpy = vi.hoisted(() => vi.fn<WorkspaceWriteFileFn>(async () => ({ success: true, hash: 'saved-hash' })));
-const showDaemonUnavailableAlertSpy = vi.hoisted(() => vi.fn());
-const modalAlertSpy = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/domains/workspaces/files/workspaceFileReadWrite', () => ({
-    WORKSPACE_WRITE_FILE_TOO_LARGE_ERROR: 'File exceeds the inline file write size limit',
-    workspaceWriteFile: (params: any) => workspaceWriteFileSpy(params),
-}));
-
-vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
-    showDaemonUnavailableAlert: (params: unknown) => showDaemonUnavailableAlertSpy(params),
-    tryShowDaemonUnavailableAlertForRpcError: () => false,
-}));
-
-type HarnessProps = Readonly<{
+type Inputs = Readonly<{
     displayMode: 'file' | 'diff';
     fileText: string | null;
-    fileHash?: string | null;
-    persistedDraft?: Parameters<typeof import('./useWorkspaceFileEditorState').useWorkspaceFileEditorState>[0]['persistedDraft'];
+    fileHash: string | null;
+    persistedDraft?: WorkspaceFileEditorDraft | null;
 }>;
+let serverId = 'srv1';
+async function harness(initial: Inputs, onPersist?: (draft: WorkspaceFileEditorDraft | null) => void) {
+    const persistDraft = vi.fn(onPersist);
+    const refreshAll = vi.fn(async () => undefined);
+    const mountedRef = { current: true };
+    const setFileWriteSupported = vi.fn();
+    return renderHook((props: Inputs) => useWorkspaceFileEditorState({
+        accountId: 'alice', scope: { serverId, machineId: 'm1', rootPath: '/repo' }, filePath: 'src/a.ts',
+        ...props, fileWriteSupported: true, setFileWriteSupported,
+        fileEditorFeatureEnabled: true, filesEditorWebMonacoEnabled: true, filesEditorNativeCodeMirrorEnabled: true,
+        filesEditorAutoSave: false, filesEditorChangeDebounceMs: 10,
+        mountedRef, refreshAll, persistDraft,
+    }), { initialProps: initial });
+}
 
-describe('useWorkspaceFileEditorState (start from diff)', () => {
+describe('file editor entry and persisted restoration', () => {
+    beforeEach(async () => {
+        serverId = await prepareWorkspaceFileDetailsActionBoundary();
+        actionBoundary.read.mockReset().mockResolvedValue({ success: true, hash: 'saved' });
+    });
+    afterEach(async () => {
+        await standardCleanup();
+        await cleanupWorkspaceFileDetailsActionBoundary();
+    });
+
     it.each([
-        { displayMode: 'diff' as const, fileText: 'console.log(1);' },
-        { displayMode: 'file' as const, fileText: null },
-    ])('enters edit mode once requested file content is available ($displayMode)', async (initial) => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: `src/start-${initial.displayMode}.ts`,
-                displayMode: props.displayMode,
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: null,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        const tree = await renderScreen(<Harness displayMode={initial.displayMode} fileText={initial.fileText} />);
-
-        expect(latest).not.toBeNull();
-
-        await act(async () => {
-            readLatest().startEditingFile();
-        });
-
-        expect(readLatest().isEditingFile).toBe(false);
-
-        await act(async () => {
-            await tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
-        });
-
-        expect(readLatest().isEditingFile).toBe(true);
+        { displayMode: 'diff' as const, fileText: 'base', fileHash: 'base-hash' },
+        { displayMode: 'file' as const, fileText: null, fileHash: null },
+    ])('opens the requested editor once complete content is available ($displayMode)', async (initial) => {
+        const hook = await harness(initial);
+        await act(async () => hook.getCurrent().startEditingFile());
+        expect(hook.getCurrent().isEditingFile).toBe(false);
+        await hook.rerender({ displayMode: 'file', fileText: 'base', fileHash: 'base-hash' });
+        expect(hook.getCurrent().isEditingFile).toBe(true);
     });
 
-    it('keeps save callback stable across equivalent input rerenders', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-
-        let latest: WorkspaceFileEditorState | null = null;
-        const mountedRef = { current: true };
-        const setFileWriteSupported = vi.fn();
-        const refreshAll = vi.fn(async () => undefined);
-        const persistDraft = vi.fn();
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/a.ts',
-                displayMode: props.displayMode,
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported,
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef,
-                refreshAll,
-                persistedDraft: null,
-                persistDraft,
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        const tree = await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />);
-        await act(async () => {});
-
-        const firstSaveFileEdits = readLatest().saveFileEdits;
-
-        await act(async () => {
-            await tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
-        });
-
-        expect(readLatest().saveFileEdits).toBe(firstSaveFileEdits);
+    it('keeps the save callback stable across equivalent disk rerenders', async () => {
+        const inputs: Inputs = { displayMode: 'file', fileText: 'base', fileHash: 'hash' };
+        const hook = await harness(inputs);
+        const save = hook.getCurrent().saveFileEdits;
+        await hook.rerender({ ...inputs });
+        expect(hook.getCurrent().saveFileEdits).toBe(save);
     });
 
-    it('does not reset the editor while editing when fileText refreshes before dirty state changes', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/a.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: null,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        const tree = await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} fileHash="hash-1" />);
-
-        await act(async () => {
-            readLatest().startEditingFile();
-        });
-
-        const resetKeyBeforeRefresh = readLatest().editorResetKey;
-        const seedBeforeRefresh = readLatest().editorSeedText;
-
-        await act(async () => {
-            await tree.update(<Harness displayMode="file" fileText={'console.log(1);\n// refreshed'} fileHash="hash-2" />);
-        });
-
-        expect(readLatest().editorResetKey).toBe(resetKeyBeforeRefresh);
-        expect(readLatest().editorSeedText).toBe(seedBeforeRefresh);
-        expect(readLatest().getEditorText()).toBe(seedBeforeRefresh);
-        expect(readLatest().fileChangedExternally).toBe(true);
+    it('adopts external content while the editor is clean', async () => {
+        const hook = await harness({ displayMode: 'file', fileText: 'base', fileHash: 'base-hash' });
+        await act(async () => hook.getCurrent().startEditingFile());
+        await hook.rerender({ displayMode: 'file', fileText: 'disk', fileHash: 'disk-hash' });
+        expect(hook.getCurrent().getEditorText()).toBe('disk');
+        expect(hook.getCurrent().conflict).toBeNull();
+        expect(hook.getCurrent().editorDirty).toBe(false);
     });
 
-    it('guards saves with the hash from the loaded file content', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/a.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: null,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
+    it('restores persisted draft bytes and derives a conflict against changed disk without original text', async () => {
+        const draft: WorkspaceFileEditorDraft = {
+            accountId: 'alice', isEditingFile: true, editorOriginalHash: 'base-hash', editorText: 'unfinished draft',
         };
-
-        workspaceWriteFileSpy.mockClear();
-        await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} fileHash="loaded-hash" />);
-
-        await act(async () => {
-            readLatest().startEditingFile();
-        });
-
-        await act(async () => {
-            readLatest().onEditorChange('console.log(2);');
-        });
-
-        await act(async () => {
-            readLatest().saveFileEdits();
-        });
-
-        expect(workspaceWriteFileSpy).toHaveBeenCalledWith(expect.objectContaining({
-            scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-            path: 'src/a.ts',
-            content: 'console.log(2);',
-            expectedHash: 'loaded-hash',
-        }));
+        const hook = await harness({ displayMode: 'file', fileText: 'disk', fileHash: 'disk-hash', persistedDraft: draft });
+        expect(hook.getCurrent().isEditingFile).toBe(true);
+        expect(hook.getCurrent().getEditorText()).toBe('unfinished draft');
+        expect(hook.getCurrent().conflict).toEqual({ theirsText: 'disk', theirsHash: 'disk-hash' });
     });
 
-    it('restores an editing draft without letting the initial file refresh overwrite it', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-        const { workspaceFileEditorDraftCache } = await import('./workspaceFileEditorDraftCache');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/draft-restore.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: props.persistedDraft,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: 'alice',
-            workspaceCacheKey: 'srv1:m1:/repo',
-            filePath: 'src/draft-restore.ts',
-            draft: null,
+    it('flushes the last edit through persisted tab state before a group move and editor remount', async () => {
+        let details = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
+            tab: { key: 'file:src/a.ts', kind: 'file', title: 'a.ts', resource: { path: 'src/a.ts' } }, openAs: 'pinned',
         });
-        await renderScreen(
-            <Harness
-                displayMode="file"
-                fileText={'console.log("disk");'}
-                fileHash="disk-hash"
-                persistedDraft={{
-                    accountId: 'alice',
-                    isEditingFile: true,
-                    editorOriginalText: 'console.log("base");',
-                    editorOriginalHash: 'base-hash',
-                    editorText: 'console.log("draft");',
-                }}
-            />,
-        );
-
-        expect(readLatest().isEditingFile).toBe(true);
-        expect(readLatest().getEditorText()).toBe('console.log("draft");');
-        expect(readLatest().editorOriginalText).toBe('console.log("base");');
-        expect(readLatest().fileChangedExternally).toBe(true);
+        const disk: Inputs = { displayMode: 'file', fileText: 'base', fileHash: 'base-hash' };
+        const hook = await harness(disk, draft => { details = applySetDetailsTabState(details, 'file:src/a.ts', draft); });
+        await act(async () => {
+            hook.getCurrent().startEditingFile();
+            hook.getCurrent().onEditorChange('last unsaved edit');
+        });
+        await hook.unmount();
+        details = applySplitDetailsGroup(details, { axis: 'horizontal', groupId: 'group:1' });
+        details = applyMoveDetailsTabToGroup(details, { tabKey: 'file:src/a.ts', targetGroupId: 'group:2' });
+        const remounted = migrateLegacyDetailsWorkspaceState(JSON.parse(JSON.stringify(serializeDetailsWorkspaceState(details))));
+        const persistedDraft = readWorkspaceFileEditorDraft(remounted.tabState['file:src/a.ts'], 'alice');
+        expect(persistedDraft).toEqual({ accountId: 'alice', isEditingFile: true, editorOriginalHash: 'base-hash', editorText: 'last unsaved edit' });
+        const restored = await harness({ ...disk, persistedDraft });
+        expect(restored.getCurrent().getEditorText()).toBe('last unsaved edit');
+        expect(restored.getCurrent().editorDirty).toBe(true);
     });
 
-    it('treats legacy editing drafts without a stored hash as externally changed when the loaded file differs', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-        const { workspaceFileEditorDraftCache } = await import('./workspaceFileEditorDraftCache');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/legacy-draft.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: props.persistedDraft,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: 'alice',
-            workspaceCacheKey: 'srv1:m1:/repo',
-            filePath: 'src/legacy-draft.ts',
-            draft: null,
+    it('ignores a dev-intermediate draft without its original hash', async () => {
+        const oldDraft = { accountId: 'alice', isEditingFile: true, editorOriginalText: 'old', editorText: 'draft' };
+        const hook = await harness({
+            displayMode: 'file', fileText: 'disk', fileHash: 'disk-hash',
+            persistedDraft: readWorkspaceFileEditorDraft(oldDraft, 'alice'),
         });
-        await renderScreen(
-            <Harness
-                displayMode="file"
-                fileText={'console.log("disk");'}
-                fileHash="disk-hash"
-                persistedDraft={{
-                    accountId: 'alice',
-                    isEditingFile: true,
-                    editorOriginalText: 'console.log("base");',
-                    editorText: 'console.log("draft");',
-                }}
-            />,
-        );
-
-        expect(readLatest().editorOriginalHash).toBeNull();
-        expect(readLatest().fileChangedExternally).toBe(true);
-    });
-
-    it('does not save over an externally changed file when the original hash is unavailable', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-        const { workspaceFileEditorDraftCache } = await import('./workspaceFileEditorDraftCache');
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/legacy-save.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: props.persistedDraft,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        workspaceWriteFileSpy.mockClear();
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: 'alice',
-            workspaceCacheKey: 'srv1:m1:/repo',
-            filePath: 'src/legacy-save.ts',
-            draft: null,
-        });
-        await renderScreen(
-            <Harness
-                displayMode="file"
-                fileText={'console.log("disk");'}
-                fileHash="disk-hash"
-                persistedDraft={{
-                    accountId: 'alice',
-                    isEditingFile: true,
-                    editorOriginalText: 'console.log("base");',
-                    editorText: 'console.log("draft");',
-                }}
-            />,
-        );
-
-        await act(async () => {
-            readLatest().saveFileEdits();
-        });
-
-        expect(workspaceWriteFileSpy).not.toHaveBeenCalled();
-    });
-
-    it('does not show daemon unavailable or mark external change for guarded inline-size failures', async () => {
-        const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
-
-        workspaceWriteFileSpy.mockResolvedValueOnce({
-            success: false,
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
-            error: 'File exceeds the inline file write size limit',
-        });
-        showDaemonUnavailableAlertSpy.mockClear();
-        modalAlertSpy.mockClear();
-
-        let latest: WorkspaceFileEditorState | null = null;
-
-        function Harness(props: HarnessProps) {
-            latest = useWorkspaceFileEditorState({
-                accountId: 'alice',
-                scope: { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' },
-                filePath: 'src/size-limit.ts',
-                displayMode: 'file',
-                fileText: props.fileText,
-                fileHash: props.fileHash ?? null,
-                fileWriteSupported: true,
-                setFileWriteSupported: vi.fn(),
-                fileEditorFeatureEnabled: true,
-                filesEditorWebMonacoEnabled: true,
-                filesEditorNativeCodeMirrorEnabled: true,
-                filesEditorAutoSave: false,
-                filesEditorChangeDebounceMs: 10,
-                filesEditorMaxFileBytes: 10_000,
-                filesEditorBridgeMaxChunkBytes: 10_000,
-                mountedRef: { current: true },
-                refreshAll: vi.fn(async () => undefined),
-                persistedDraft: null,
-                persistDraft: vi.fn(),
-            });
-            return null;
-        }
-        const readLatest = () => {
-            const state = latest;
-            if (!state) throw new Error('Expected editor state to be captured');
-            return state;
-        };
-
-        await renderScreen(<Harness displayMode="file" fileText="hello" fileHash="loaded-hash" />);
-
-        await act(async () => {
-            readLatest().startEditingFile();
-            readLatest().onEditorChange('hello changed');
-        });
-
-        await act(async () => {
-            readLatest().saveFileEdits();
-        });
-
-        expect(showDaemonUnavailableAlertSpy).not.toHaveBeenCalled();
-        expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'File exceeds the inline file write size limit', undefined);
-        expect(readLatest().fileChangedExternally).toBe(false);
-        expect(readLatest().isEditingFile).toBe(true);
+        expect(hook.getCurrent().isEditingFile).toBe(false);
     });
 });
