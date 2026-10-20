@@ -141,6 +141,13 @@ their existing feature-policy owners. The incumbent `automations` bit is not a p
 and capabilities, Action presence, route probing, or local environment checks must not replace the
 canonical decision. The gate controls availability only; existing authorization, Account mode,
 machine assignment, definition validation, runtime currentness, and permission checks still apply.
+
+Workflow Actions keep a failed feature observation distinct from unreadable saved content.
+A failed or missing live observation refuses execution with `storage_unavailable`; it does not
+grant availability or report `content_unavailable`. A settled disabled/unsupported decision
+still fails closed. Currentness HTTP failures likewise retain their host-local cause for the
+Workflow failure classifier; invalid content and unavailable encryption material remain separate.
+
 The shared V3 Automation API remains available for one-shot recipes; its canonical Run admission
 and claim owners reject/filter Workflow-v2 recipes when `workflows` is disabled, including Run Now,
 without hiding or poisoning claim pagination for ordinary Automation work.
