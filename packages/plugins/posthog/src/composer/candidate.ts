@@ -16,6 +16,7 @@ import type {
 import { isTriageSourceConnectedAccountInstanceV1 } from '@happier-dev/triage-protocol/v1';
 import type { TriageEvidenceCandidateV1 } from '@happier-dev/triage-sources/ui';
 
+import { isPosthogEnvironmentIncluded } from '../source/instance.js';
 import {
     isPosthogIssueEventsInclude,
     POSTHOG_ISSUE_EVENTS_INCLUDE,
@@ -233,15 +234,12 @@ export function createPosthogEvidenceCandidate(
     }
     const localScope = parsePosthogCollisionScope(input.localRef.collisionScope);
     if (localScope === null || localScope.origin !== (scope.origin as string)) return null;
-    const environment = scope.configuration.environments.find((candidate) => (
-        candidate.teamUuid === localScope.teamUuid
-    ));
-    if (environment === undefined) return null;
+    if (!isPosthogEnvironmentIncluded(scope.configuration, localScope.teamUuid)) return null;
 
     const id = encodeCandidate({
         sourceInstanceId: input.instance.instance.sourceInstanceId,
         instanceDigest: deriveTriageConfiguredSourceInstanceDigestV1(input.instance),
-        teamUuid: environment.teamUuid,
+        teamUuid: localScope.teamUuid,
         entryId: input.localRef.entryId,
         from: input.frozenRequest.from,
         to: input.frozenRequest.to,

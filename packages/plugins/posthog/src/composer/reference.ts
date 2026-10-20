@@ -6,6 +6,7 @@
  * Composer, sees its origin ref, or mutates a draft; Triage retains all of that custody.
  */
 
+import { isPosthogEnvironmentIncluded } from '../source/instance.js';
 import {
     PluginError,
     type ComposerReferenceCandidatePageV1,
@@ -161,11 +162,8 @@ export async function resolvePosthogEvidenceReference(
     if (current.kind === 'changed') throw unavailableEvidence('configured-source-changed');
     const scope = resolvePosthogInvocationScope(current.instance);
     if (!scope.ok) throw unavailableEvidence('configured-source-invalid');
-    const environment = scope.configuration.environments.find((entry) => (
-        entry.teamUuid === candidate.teamUuid
-    ));
-    if (environment === undefined) throw unavailableEvidence('configured-source-invalid');
-    const collisionScope = buildPosthogCollisionScope(scope.origin, environment.teamUuid);
+    if (!isPosthogEnvironmentIncluded(scope.configuration, candidate.teamUuid)) throw unavailableEvidence('configured-source-invalid');
+    const collisionScope = buildPosthogCollisionScope(scope.origin, candidate.teamUuid);
     if (!collisionScope.ok) throw unavailableEvidence('configured-source-invalid');
     const continuation = encodePosthogSampledEventsContinuation({
         v: 1,

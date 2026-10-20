@@ -46,6 +46,10 @@ import {
     type TriageSourceEntryLocalRefV1,
     decodeTriagePagingTokenV1,
     encodeTriagePagingTokenV1,
+    TriageListScopeUnitsConnectedAccountInputV1Schema,
+    type TriageListScopeUnitsInputV1,
+    type TriageListScopeUnitsResultV1,
+    type TriageSourceScopeUnitV1,
 } from '@happier-dev/triage-protocol/v1';
 import { fitActionResultTextV1 } from '@happier-dev/triage-sources/projection/actionResultText';
 import {
@@ -104,6 +108,7 @@ import { getPosthogIssue, readPosthogIssueCrud, type PosthogGetOutcome } from '.
 import { PosthogIssueAssignInputV1Schema, PosthogIssueWriteInputV1Schema } from './writeContracts.js';
 import {
     buildPosthogLocalInstanceKey,
+    buildPosthogCollisionScope,
     parsePosthogCollisionScope,
 } from './identity.js';
 import {
@@ -111,6 +116,7 @@ import {
     resolvePosthogWindowPolicy,
     type PosthogConfigurationToken,
     type PosthogConfiguredEnvironment,
+    readPosthogEnvironmentSelection,
 } from './instance.js';
 import { createPosthogInvocationClient } from '../api/invocationClient.js';
 import { runPosthogBoundedInvocation } from './invocationDeadline.js';
@@ -468,6 +474,50 @@ export function createPosthogConfigurationDirectoryReader(
 export const readPosthogConfigurationDirectory: PosthogConfigurationDirectoryReader
     = createPosthogConfigurationDirectoryReader();
 
+function configuredScopeUnits(configuration: PosthogConfigurationToken, origin: PosthogApiOrigin): readonly TriageSourceScopeUnitV1[] {
+    const selection = readPosthogEnvironmentSelection(configuration);
+    if (selection?.kind !== 'selected') return [];
+    return selection.unitIds.map((id) => {
+        const environment = configuration.environments.find((entry) => entry.teamUuid === id);
+        const retained = configuration.scopeUnits?.find((entry) => entry.id === id);
+        const collision = buildPosthogCollisionScope(origin, id);
+        return { id, label: retained?.label ?? environment?.displayName ?? id,
+            ...(collision.ok ? { collisionScope: collision.value } : {}) };
+    });
+}
+
+/** The shared control and agents use this same provider-authorized directory owner. */
+export async function readPosthogScopeUnits(input: unknown, context: PluginInvocationContext): Promise<TriageListScopeUnitsResultV1> {
+    const parsed = TriageListScopeUnitsConnectedAccountInputV1Schema.parse(input);
+    const scope = resolvePosthogInvocationScope(parsed.draft);
+    const failed = (code: string): TriageListScopeUnitsResultV1 => ({ kind: 'failed', failure: sourceFailure('unsupportedContract', code) });
+    if (!scope.ok) return failed(POSTHOG_FAILURE_CODES.configurationUndecodable);
+    const selection = readPosthogEnvironmentSelection(scope.configuration);
+    if (selection === null) return failed(POSTHOG_FAILURE_CODES.configurationUndecodable);
+    if (parsed.mode === 'configured') return { kind: 'page', status: 'complete', selection, units: configuredScopeUnits(scope.configuration, scope.origin) };
+    const query = parsed.query ?? '';
+    const cursor = parsed.cursor === undefined ? null : decodeTriagePagingTokenV1(parsed.cursor.token);
+    if (parsed.cursor !== undefined && (cursor === null || cursor['query'] !== query || typeof cursor['next'] !== 'string'
+        || cursor['organizationUuid'] !== scope.organizationUuid)) return failed(POSTHOG_FAILURE_CODES.continuationUnreadable);
+    const result = await readPosthogConfigurationDirectory({
+        v: 1, kind: 'environments', binding: parsed.draft.binding, organizationUuid: scope.organizationUuid,
+        page: cursor === null ? { kind: 'initial' } : { kind: 'continuation', next: cursor['next'] },
+    }, context);
+    if (result.kind === 'unavailable') return { kind: 'failed', failure: result.failure };
+    if (result.kind !== 'environments') return failed(POSTHOG_FAILURE_CODES.responseUnreadable);
+    const units = result.rows.filter((row) => row.displayName.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map((row) => {
+        const collision = buildPosthogCollisionScope(scope.origin, row.teamUuid);
+        return { id: row.teamUuid, label: row.displayName, ...(collision.ok ? { collisionScope: collision.value } : {}) };
+    });
+    const nextCursor = result.next === undefined ? null : encodeTriagePagingTokenV1({ query, next: result.next, organizationUuid: scope.organizationUuid });
+    return result.incomplete || result.next !== undefined
+        ? { kind: 'page', status: 'partial', selection, units,
+            ...(nextCursor === null ? {} : { nextCursor: { v: 1, token: nextCursor } }),
+            ...(result.incomplete || (result.next !== undefined && nextCursor === null)
+                ? { failure: sourceFailure('unsupportedContract', POSTHOG_FAILURE_CODES.malformedRows) } : {}) }
+        : { kind: 'page', status: 'complete', selection, units };
+}
+
 /**
  * Automatic discovery of non-durable Settings candidates.
  *
@@ -813,9 +863,12 @@ export async function scanPosthogSource(
         return failed(sourceFailure('unsupportedContract', 'unsupported-credential-source'));
     }
 
-    const routed = resolveInvokedInstance(parsed.instance);
+    const routed = await resolveInvokedInstance(parsed.instance, context);
     if (!routed.ok) return failed(routed.failure);
     const { origin, configuration } = routed;
+    if (configuration.environments.length === 0) return routed.incomplete
+        ? failed(sourceFailure('unsupportedContract', POSTHOG_FAILURE_CODES.malformedRows))
+        : { kind: 'complete', observations: [], evidence: { kind: 'walkFinished' } };
     const sourceInstanceDigest = deriveTriageConfiguredSourceInstanceDigestV1(parsed.instance);
 
     const geometry = parsed.page.kind === 'initial'
@@ -829,7 +882,7 @@ export async function scanPosthogSource(
                 from: window.from,
                 to: window.to,
                 nativeLimit: resolvePosthogNativeLimit(parsed.page.limit),
-                walkHealth: [],
+                walkHealth: routed.incomplete ? [POSTHOG_FAILURE_CODES.malformedRows] : [],
             };
         })()
         : decodeScanGeometry(
@@ -900,6 +953,7 @@ export async function scanPosthogSource(
     // union travels on. A stuck environment is exactly the case: the walk moves
     // to the next one and would otherwise report the pass as clean.
     const walkHealth = new Set<PosthogScanStickyReasonV1>(geometry.walkHealth);
+    if (routed.incomplete) walkHealth.add(POSTHOG_FAILURE_CODES.malformedRows);
     if (page.malformedRowCount > 0) walkHealth.add(POSTHOG_FAILURE_CODES.malformedRows);
     if (nonAdvancing) walkHealth.add(POSTHOG_FAILURE_CODES.paginationNonAdvancing);
     const carried: PosthogScanGeometry = { ...geometry, walkHealth: [...walkHealth] };
@@ -997,6 +1051,7 @@ type InvokedInstance =
         origin: PosthogApiOrigin;
         organizationUuid: string;
         configuration: PosthogConfigurationToken;
+        incomplete?: boolean;
     }>
     | Readonly<{ ok: false; failure: TriageSourceFailureV1 }>;
 
@@ -1008,12 +1063,10 @@ type InvokedInstance =
  * trusted as a credential authority: the account binding stays the host's, and the
  * origin is revalidated as a canonical HTTPS origin before it can route anything.
  */
-function resolveInvokedInstance(
-    instance: Readonly<{
-        localInstanceKey: string;
-        configuration: Readonly<{ v: 1; token: string }>;
-    }>,
-): InvokedInstance {
+async function resolveInvokedInstance(
+    instance: TriageListScopeUnitsInputV1['draft'],
+    context: PluginInvocationContext,
+): Promise<InvokedInstance> {
     const scope = resolvePosthogInvocationScope(instance);
     if (!scope.ok) {
         const code = scope.reason === 'instanceKeyUnreadable'
@@ -1028,11 +1081,33 @@ function resolveInvokedInstance(
             failure: sourceFailure('unsupportedContract', code),
         });
     }
+    const selection = readPosthogEnvironmentSelection(scope.configuration);
+    if (selection === null) return { ok: false, failure: sourceFailure('unsupportedContract', POSTHOG_FAILURE_CODES.configurationUndecodable) };
+    if (selection.kind === 'selected' && selection.unitIds.every((id) => scope.configuration.environments.some((entry) => entry.teamUuid === id))) {
+        return { ok: true, origin: scope.origin, organizationUuid: scope.organizationUuid,
+            configuration: { ...scope.configuration, environments: scope.configuration.environments.filter((entry) => selection.unitIds.includes(entry.teamUuid)) } };
+    }
+    if (!isTriageSourceConnectedAccountInstanceV1(instance)) return { ok: false, failure: sourceFailure('unsupportedContract', 'unsupported-credential-source') };
+    const environments = new Map((selection.kind === 'all' ? [] : scope.configuration.environments
+        .filter((entry) => selection.unitIds.includes(entry.teamUuid))).map((entry) => [entry.teamUuid, entry]));
+    let next: string | undefined;
+    let incomplete = false;
+    do {
+        const page = await readPosthogConfigurationDirectory({ v: 1, kind: 'environments', binding: instance.binding,
+            organizationUuid: scope.organizationUuid, page: next === undefined ? { kind: 'initial' } : { kind: 'continuation', next } }, context);
+        if (page.kind === 'unavailable') return { ok: false, failure: page.failure };
+        if (page.kind !== 'environments') return { ok: false, failure: sourceFailure('unsupportedContract', POSTHOG_FAILURE_CODES.responseUnreadable) };
+        for (const row of page.rows) if (selection.kind === 'all' || selection.unitIds.includes(row.teamUuid)) environments.set(row.teamUuid, row);
+        incomplete ||= page.incomplete === true;
+        next = page.next;
+    } while (next !== undefined);
+    if (selection.kind === 'selected' && !selection.unitIds.every((id) => environments.has(id))) return { ok: false, failure: sourceFailure('unsupportedContract', POSTHOG_FAILURE_CODES.environmentNotConfigured) };
     return Object.freeze({
         ok: true as const,
         origin: scope.origin,
         organizationUuid: scope.organizationUuid,
-        configuration: scope.configuration,
+        configuration: { ...scope.configuration, environments: [...environments.values()] },
+        incomplete,
     });
 }
 
@@ -1071,7 +1146,7 @@ async function readPosthogSourceEntry(
     // Exact get and every source-native detail plane share one admission owner. A ref
     // from another deployment/environment is refused before a request is built, never
     // re-scoped onto the invoked instance.
-    const scope = resolvePosthogIssueScope(parsed.instance, parsed.localRef);
+    const scope = await resolvePosthogIssueScope(parsed.instance, parsed.localRef, { ...context, signal });
     if (!scope.ok) return unresolved(scope.failure);
     const { origin, configuration, environment } = scope;
 
@@ -1227,14 +1302,12 @@ type PosthogIssueScope =
     | Readonly<{ ok: false; failure: TriageSourceFailureV1 }>;
 
 /** One scope admission owner for aggregate get and every source-native exact-issue read. */
-function resolvePosthogIssueScope(
-    instance: Readonly<{
-        localInstanceKey: string;
-        configuration: Readonly<{ v: 1; token: string }>;
-    }>,
+async function resolvePosthogIssueScope(
+    instance: TriageListScopeUnitsInputV1['draft'],
     localRef: Readonly<{ kindId: string; collisionScope: string; entryId: string }>,
-): PosthogIssueScope {
-    const routed = resolveInvokedInstance(instance);
+    context: PluginInvocationContext,
+): Promise<PosthogIssueScope> {
+    const routed = await resolveInvokedInstance(instance, context);
     if (!routed.ok) return routed;
     const scope = parsePosthogCollisionScope(localRef.collisionScope);
     if (
@@ -1311,7 +1384,7 @@ export function createPosthogCodeVariablesReader(
                 kind: 'unavailable',
                 failure,
             });
-            const scope = resolvePosthogIssueScope(parsed.instance, parsed.localRef);
+            const scope = await resolvePosthogIssueScope(parsed.instance, parsed.localRef, { ...context, signal });
             if (!scope.ok) return unavailable(scope.failure);
             if (
                 parsed.frozenRequest.issueId !== parsed.localRef.entryId
@@ -1383,7 +1456,7 @@ export function createPosthogSampledEventsReader(
             failure: TriageSourceFailureV1,
         ): PosthogSampledEventsResultV1 => Object.freeze({ kind: 'unavailable' as const, failure });
 
-        const scope = resolvePosthogIssueScope(parsed.instance, parsed.localRef);
+        const scope = await resolvePosthogIssueScope(parsed.instance, parsed.localRef, { ...context, signal });
         if (!scope.ok) return unavailable(scope.failure);
         const { origin, configuration, environment } = scope;
 
@@ -1496,7 +1569,7 @@ export function createPosthogIssueActivityReader(
             failure,
         });
 
-        const scope = resolvePosthogIssueScope(parsed.instance, parsed.localRef);
+        const scope = await resolvePosthogIssueScope(parsed.instance, parsed.localRef, { ...context, signal });
         if (!scope.ok) return unavailable(scope.failure);
         const { origin, environment } = scope;
 
@@ -1563,7 +1636,7 @@ async function writePosthogIssue(
     change: Readonly<{ status: 'resolved' | 'suppressed' | 'active' }> | Readonly<{ assignee: PosthogWriteAssignee }>,
     context: PluginInvocationContext,
 ): Promise<TriageTaskWriteResultV1> {
-    const scope = resolvePosthogIssueScope(target.instance, target.localRef);
+    const scope = await resolvePosthogIssueScope(target.instance, target.localRef, context);
     if (!scope.ok) return { kind: 'failed', failure: scope.failure };
     const route = resolvePosthogTeamRouteId(scope.environment.teamPathId);
     if (!route.ok) return { kind: 'failed', failure: toTriageSourceFailure({ kind: 'requestInvalid', at: 'teamRouteId' }) };

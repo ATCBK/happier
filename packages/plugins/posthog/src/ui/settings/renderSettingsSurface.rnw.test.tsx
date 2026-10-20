@@ -228,7 +228,7 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
       }));
     });
 
-    await expect(page.getByText('Choose PostHog environments')).resolves.toBeDefined();
+    await expect(page.getByRole('radio', { name: 'All' })).resolves.toBeDefined();
     expect(recorded.some((entry) => (
       (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1'
     ))).toBe(false);
@@ -241,7 +241,7 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
         name: 'Add Example organization to PRs & Issues',
       }));
     });
-    const save = await page.findByRole('button', { name: 'Save PostHog configuration' });
+    const save = await page.findByRole('button', { name: 'Save selection' });
     await act(async () => { await page.press(save); });
 
     const actionIds = recorded.map((entry) => (
@@ -279,7 +279,7 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
     })).resolves.toBeDefined();
 
     await act(async () => {
-      await page.press(await page.findByRole('button', { name: 'Save PostHog configuration' }));
+      await page.press(await page.findByRole('button', { name: 'Save selection' }));
     });
     const administration = recorded.find((entry) => (
       (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1'
@@ -318,14 +318,10 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
     }));
   });
 
-  it('keeps a new organization current when its predecessor environment page settles late', async () => {
+  it('changes the organization boundary without retaining selected environments from its predecessor', async () => {
     const organizationA = '00000000-0000-4000-8000-0000000000a1';
     const organizationB = '00000000-0000-4000-8000-0000000000a2';
-    let resolveB!: (value: JsonValue) => void;
-    let observeB!: () => void;
-    const startedB = new Promise<void>((resolve) => { observeB = resolve; });
-    let staleSignal!: AbortSignal;
-    configurationResult = async ({ request, signal }) => {
+    configurationResult = async ({ request }) => {
       if (request.kind === 'organizations') {
         return {
           kind: 'organizations',
@@ -342,11 +338,6 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
             },
           ],
         };
-      }
-      if (request.organizationUuid === organizationB) {
-        staleSignal = signal;
-        observeB();
-        return await new Promise<JsonValue>((resolve) => { resolveB = resolve; });
       }
       return {
         kind: 'environments',
@@ -369,74 +360,11 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
     const organizationBControl = await page.findByRole('radio', { name: 'Organization B' });
     expect(organizationBControl.state?.disabled).not.toBe(true);
     await act(async () => { await page.press(organizationBControl); });
-    await startedB;
-
-    await act(async () => {
-      await page.press(await page.getByRole('radio', { name: 'Organization A' }));
-    });
-    expect(staleSignal.aborted).toBe(true);
-
-    await act(async () => {
-      resolveB({
-        kind: 'environments',
-        organizationUuid: organizationB,
-        rows: [{
-          teamPathId: 4822,
-          teamUuid: '00000000-0000-4000-8000-0000000000d2',
-          parentProjectId: 4820,
-          displayName: 'Environment B',
-        }],
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await expect(page.queryByRole('checkbox', { name: 'Environment B' })).resolves.toBeUndefined();
-  });
-
-  it('cancels an in-flight environment page when the editor unmounts', async () => {
-    const organizationA = '00000000-0000-4000-8000-0000000000a1';
-    const organizationB = '00000000-0000-4000-8000-0000000000a2';
-    let environmentSignal!: AbortSignal;
-    let observeEnvironment!: () => void;
-    const environmentStarted = new Promise<void>((resolve) => { observeEnvironment = resolve; });
-    configurationResult = async ({ request, signal }) => {
-      if (request.kind === 'organizations') {
-        return {
-          kind: 'organizations',
-          rows: [{
-            organizationUuid: organizationA,
-            displayName: 'Example organization',
-            localInstanceKey: `posthog-org:https://eu.posthog.com:${organizationA}`,
-          }, {
-            organizationUuid: organizationB,
-            displayName: 'Organization B',
-            localInstanceKey: `posthog-org:https://eu.posthog.com:${organizationB}`,
-          }],
-        };
-      }
-      environmentSignal = signal;
-      observeEnvironment();
-      return await new Promise<JsonValue>(() => {
-        // The provider boundary deliberately ignores abort; mounted currentness still
-        // must withdraw the request and make its late settlement inert.
-      });
-    };
-
-    const page = await mountSettings();
-    await act(async () => {
-      await page.press(await page.getByRole('button', {
-        name: 'Add Example organization to PRs & Issues',
-      }));
-    });
-    await act(async () => {
-      await page.press(await page.findByRole('radio', { name: 'Organization B' }));
-    });
-    await environmentStarted;
-
-    await act(async () => {
-      await page.press(await page.getByRole('button', { name: 'Cancel' }));
-    });
-    expect(environmentSignal.aborted).toBe(true);
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Save selection' })); });
+    const write = recorded.find((entry) => (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1');
+    const draft = (write?.input as Readonly<{ draft: Readonly<{ localInstanceKey: string; configuration: Readonly<{ token: string }> }> }>).draft;
+    expect(draft.localInstanceKey).toContain(organizationB);
+    expect(JSON.parse(draft.configuration.token)).toMatchObject({ organizationUuid: organizationB, include: { kind: 'all' }, environments: [] });
   });
 
   it('cancels an in-flight organization page when the editor unmounts', async () => {
@@ -469,34 +397,25 @@ describe('the mounted PostHog PRs & Issues settings page', () => {
     expect(organizationSignal.aborted).toBe(true);
   });
 
-  it('keeps Save disabled until every concurrently mounted directory read settles', async () => {
-    let observeOrganization!: () => void;
-    const organizationStarted = new Promise<void>((resolve) => { observeOrganization = resolve; });
-    configurationResult = async ({ request }) => {
-      if (request.kind === 'organizations') {
-        observeOrganization();
-        return await new Promise<JsonValue>(() => {
-          // Keep the organization read pending after the selected-environment read settles.
-        });
-      }
-      return {
-        kind: 'environments',
-        organizationUuid: request.organizationUuid ?? '00000000-0000-4000-8000-0000000000a1',
-        rows: [],
-      };
-    };
-
+  it('refuses shared Save while a source-owned window is invalid and permits repair', async () => {
     const page = await mountSettings();
     await act(async () => {
       await page.press(await page.getByRole('button', {
         name: 'Add Example organization to PRs & Issues',
       }));
     });
-    await organizationStarted;
-    await act(async () => { await Promise.resolve(); });
-
-    const save = await page.findByRole('button', { name: 'Save PostHog configuration' });
-    expect(save.state?.disabled).toBe(true);
+    const field = document.querySelector('input[aria-label="Scan window (days)"]');
+    if (!(field instanceof HTMLInputElement)) throw new Error('Scan window input was not mounted');
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (!setValue) throw new Error('Browser input value setter missing');
+    await act(async () => { setValue.call(field, '0'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+    expect((await page.getByRole('button', { name: 'Save selection' })).state?.disabled).toBe(true);
+    expect(recorded.some((entry) => (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1')).toBe(false);
+    await act(async () => { setValue.call(field, '14'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Save selection' })); });
+    const write = recorded.find((entry) => (entry.action as Readonly<{ localId?: string }>).localId === 'sources/administer-v1');
+    const result = write?.input as Readonly<{ draft: Readonly<{ configuration: Readonly<{ token: string }> }> }>;
+    expect(JSON.parse(result.draft.configuration.token)).toMatchObject({ scanWindowPolicy: { kind: 'relative', durationMs: 14 * 86_400_000 } });
   });
 
   it('does not let a successful environment read erase an organization failure', async () => {

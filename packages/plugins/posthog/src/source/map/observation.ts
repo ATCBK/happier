@@ -23,6 +23,7 @@ import {
 
 import { POSTHOG_ENTRY_KIND, type PosthogEntrySnapshot } from './entrySnapshot.js';
 import type { PosthogFact } from './facts.js';
+import { parsePosthogCollisionScope } from '../identity.js';
 
 type TriageRowFactImportance = TriageRowFactV1['importance'];
 
@@ -88,6 +89,7 @@ export function buildPosthogPresentObservation(
     input: PosthogObservationInput,
 ): Extract<TriageSourceObservationV1, Readonly<{ kind: 'present' }>> {
     const { snapshot } = input;
+    const scope = parsePosthogCollisionScope(snapshot.locator.collisionScope);
     const nativeLabel = projectTriageDisplayTextV1(
         snapshot.state.nativeLabel,
         MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
@@ -118,6 +120,7 @@ export function buildPosthogPresentObservation(
             title: snapshot.title,
             ...(snapshot.description === undefined ? {} : { summary: snapshot.description }),
             scopeLabel: snapshot.scopeLabel,
+            ...(scope === null ? {} : { scopeUnitId: scope.teamUuid }),
             state: {
                 presentation: snapshot.state.presentation,
                 // PostHog declares `status` as a bare string, so an unrecognized value

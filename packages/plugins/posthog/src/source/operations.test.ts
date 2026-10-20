@@ -69,7 +69,7 @@ type MaterializeStub = (
 ) => Promise<unknown>;
 
 type RequestStub = (
-    input: Readonly<{ url: string }>,
+    input: Readonly<{ url: string; method?: string }>,
     options: Readonly<{ signal: AbortSignal }>,
 ) => Promise<unknown>;
 
@@ -108,7 +108,7 @@ function context(
     });
     const materializeListedAccount = vi.fn(options.materialize ?? defaultMaterialize);
     const request = vi.fn(async (
-        input: Readonly<{ url: string }>,
+        input: Readonly<{ url: string; method?: string }>,
         requestOptions: Readonly<{ signal: AbortSignal }>,
     ) => {
         if (options.request !== undefined) {
@@ -174,6 +174,15 @@ function configuredInstance() {
 }
 
 describe('PostHog Triage source operations', () => {
+    it('projects the immutable environment UUID as the scope unit without changing entry identity', async () => {
+        const result = await scanPosthogSource({ v: 1, instance: configuredInstance(), page: { kind: 'initial', limit: 3 } }, context([queryIssuesPage1]).value);
+        expect(result.kind).toBe('page');
+        if (result.kind === 'failed') return;
+        expect(result.observations[0]).toMatchObject({
+            localRef: { collisionScope: 'posthog:https://eu.posthog.com:00000000-0000-4000-8000-0000000000d1' },
+            snapshot: { scopeUnitId: '00000000-0000-4000-8000-0000000000d1' },
+        });
+    });
     function allEnvironmentsInstance() {
         const instance = configuredInstance();
         return {
@@ -193,16 +202,16 @@ describe('PostHog Triage source operations', () => {
             next: continuation,
             results: [{ ...projectsPage.results[index], organization }],
         });
-        const host = context([directory(0, next), directory(1, null), { results: [], hasMore: false }]);
+        const host = context([directory(0, next), directory(1, null), { results: [], hasMore: false, limit: 10, offset: 0 }]);
         const register = vi.fn();
         await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
         const handler = register.mock.calls.find(([id]) => id === POSTHOG_ACTION_IDS.scan)?.[1];
         const first = TriageScanResultV1Schema.parse(await handler({
             v: 1, instance: allEnvironmentsInstance(), page: { kind: 'initial', limit: 10 },
         }, host.value));
-        expect(first.kind).toBe('page');
+        expect(first.kind, JSON.stringify(first)).toBe('page');
         if (first.kind !== 'page') return;
-        const secondHost = context([directory(0, next), directory(1, null), { results: [], hasMore: false }]);
+        const secondHost = context([directory(0, next), directory(1, null), { results: [], hasMore: false, limit: 10, offset: 0 }]);
         const second = TriageScanResultV1Schema.parse(await handler({
             v: 1, instance: allEnvironmentsInstance(),
             page: { kind: 'continuation', continuation: first.continuation },
@@ -222,7 +231,7 @@ describe('PostHog Triage source operations', () => {
     it('retains readable environments from an incomplete All directory with explicit partial scan evidence', async () => {
         const host = context([{ next: null, results: [{
             ...projectsPage.results[0], organization: '00000000-0000-4000-8000-0000000000a1',
-        }, { invalid: true }] }, { results: [], hasMore: false }]);
+        }, { invalid: true }] }, { results: [], hasMore: false, limit: 10, offset: 0 }]);
         const result = await scanPosthogSource({
             v: 1, instance: allEnvironmentsInstance(), page: { kind: 'initial', limit: 10 },
         }, host.value);
@@ -257,6 +266,21 @@ describe('PostHog Triage source operations', () => {
             .toMatchObject({ dangerLevel: 'safe', surfaces: expect.arrayContaining(['ui', 'agent', 'mcp', 'cli']) });
     });
 
+    it('projects a retained renamed environment label without changing its known numeric route', async () => {
+        const register = vi.fn();
+        await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+        const handler = register.mock.calls.find(([id]) => id === POSTHOG_ACTION_IDS.listScopeUnits)?.[1];
+        const { instance: _instance, ...original } = configuredInstance();
+        const draft = { ...original, configuration: { v: 1, token: JSON.stringify({
+            ...JSON.parse(original.configuration.token),
+            scopeUnits: [{ id: '00000000-0000-4000-8000-0000000000d1', label: 'Renamed production' }],
+        }) } };
+        const host = context([]);
+        expect(TriageListScopeUnitsResultV1Schema.parse(await handler({ v: 1, draft, mode: 'configured' }, host.value)))
+            .toMatchObject({ kind: 'page', status: 'complete', units: [{ label: 'Renamed production' }] });
+        expect(host.request).not.toHaveBeenCalled();
+    });
+
     it('routes an All write by live immutable environment identity inside its organization', async () => {
         const host = context([
             { next: null, results: [{
@@ -275,6 +299,24 @@ describe('PostHog Triage source operations', () => {
             (request as Readonly<{ method?: string }>).method === 'PATCH'
         ));
         expect(patch?.[0].url).toContain('/api/projects/9999/error_tracking/issues/');
+    });
+
+    it('resolves new Selected UUID routing from the directory and never writes when that UUID is absent', async () => {
+        const original = configuredInstance();
+        const instance = { ...original, configuration: { v: 1 as const, token: JSON.stringify({
+            ...JSON.parse(original.configuration.token), environments: [],
+        }) } };
+        const directory = { next: null, results: [{ ...projectsPage.results[0],
+            organization: '00000000-0000-4000-8000-0000000000a1', id: 9999,
+        }] };
+        const host = context([directory, crudIssueRead, { success: true }, { ...crudIssueRead, status: 'resolved' }]);
+        expect(await write(POSTHOG_ACTION_IDS.resolve, host, { instance })).toMatchObject({ kind: 'applied' });
+        expect(host.request.mock.calls.find(([request]) => request.method === 'PATCH')?.[0].url)
+            .toContain('/api/projects/9999/error_tracking/issues/');
+        const absent = context([{ next: null, results: [] }]);
+        expect(await write(POSTHOG_ACTION_IDS.resolve, absent, { instance }))
+            .toMatchObject({ kind: 'failed', failure: { code: POSTHOG_FAILURE_CODES.environmentNotConfigured } });
+        expect(absent.request.mock.calls.some(([request]) => request.method === 'PATCH')).toBe(false);
     });
 
     async function write(action: string, host: ReturnType<typeof context>, extra: object = {}) {

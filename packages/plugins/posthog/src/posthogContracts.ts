@@ -69,6 +69,7 @@ export const POSTHOG_TRIAGE_SETTINGS_ARTIFACT_ID = 'posthog-triage-sources-nativ
 export const POSTHOG_ACTION_IDS = {
     configuration: 'posthog/configuration',
     listInstances: 'posthog/list-instances',
+    listScopeUnits: 'posthog/list-scope-units',
     scan: 'posthog/scan',
     get: 'posthog/get',
     resolve: 'posthog/resolve-issue',

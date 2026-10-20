@@ -17,21 +17,16 @@
 import * as React from 'react';
 import {
   isTriageSourceConnectedAccountInstanceV1,
-  type TriageSourceConnectedAccountBindingV1,
-  type TriageSourceInstanceDraftV1,
 } from '@happier-dev/triage-protocol/v1';
 import {
   createTriageSourceSettingsSurface,
-  type TriageSourceSettingsDraftEditorPropsV1,
+  type TriageSourceSettingsDraftFieldsPropsV1,
 } from '@happier-dev/triage-sources/ui';
 import {
   Banner,
   Button,
   Form,
-  Heading,
-  Row,
   Stack,
-  Text,
   useExecutePluginAction,
   usePluginTranslation,
 } from '@happier-dev/plugin-ui';
@@ -44,20 +39,16 @@ import {
 } from '../../posthogContracts.js';
 import {
   PosthogConfigurationDirectoryResultV1Schema,
-  type PosthogConfigurationDirectoryInputV1,
   type PosthogConfigurationDirectoryResultV1,
 } from '../../connect/configurationContract.js';
 import {
   decodePosthogConfiguration,
   encodePosthogConfiguration,
-  type PosthogConfiguredEnvironment,
+  readPosthogEnvironmentSelection,
   type PosthogWindowPolicy,
 } from '../../source/instance.js';
-import { preflightPosthogEnvironmentSelection } from '../../connect/configuration.js';
 
 type Organization = Extract<PosthogConfigurationDirectoryResultV1, { kind: 'organizations' }>['rows'][number];
-type Environment = Extract<PosthogConfigurationDirectoryResultV1, { kind: 'environments' }>['rows'][number];
-type FormSelectValue = Parameters<React.ComponentProps<typeof Form.Select>['onChange']>[0];
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1_000;
 
@@ -151,344 +142,84 @@ function WindowPolicyEditor(props: Readonly<{
   );
 }
 
-function mergeEnvironments(
-  first: readonly Environment[],
-  second: readonly Environment[],
-): readonly Environment[] {
-  const byUuid = new Map(first.map((environment) => [environment.teamUuid, environment]));
-  for (const environment of second) byUuid.set(environment.teamUuid, environment);
-  return [...byUuid.values()];
-}
-
-function PosthogDraftEditor(props: TriageSourceSettingsDraftEditorPropsV1): React.ReactElement {
+/** Organization and window policy remain source-owned; Include and Save are shared. */
+function PosthogDraftFields({ draft, busy, onChange }: TriageSourceSettingsDraftFieldsPropsV1): React.ReactElement {
   const text = usePluginTranslation();
-  if (!isTriageSourceConnectedAccountInstanceV1(props.draft)) {
-    return (
-      <Stack gap="medium">
-        <Banner
-          tone="warning"
-          title="Configuration needs attention"
-          titleKey="plugins.posthog.ui.settings.attention"
-          description={text('plugins.posthog.ui.settings.readFailed', 'PostHog could not read this configuration page.')}
-        />
-        <Button title="Cancel" titleKey="plugins.posthog.ui.settings.cancel" variant="secondary" disabled={props.busy} onPress={props.onCancel} />
-      </Stack>
-    );
-  }
-  return <PosthogAccountDraftEditor {...props} draft={props.draft} />;
-}
-
-type PosthogAccountDraftEditorProps = TriageSourceSettingsDraftEditorPropsV1 & Readonly<{
-  draft: TriageSourceInstanceDraftV1 & Readonly<{ binding: TriageSourceConnectedAccountBindingV1 }>;
-}>;
-
-function PosthogAccountDraftEditor({
-  draft,
-  busy,
-  onSubmit,
-  onCancel,
-}: PosthogAccountDraftEditorProps): React.ReactElement {
-  const text = usePluginTranslation();
-  const action = React.useMemo(() => ({
-    pluginId: POSTHOG_PLUGIN_ID,
-    localId: POSTHOG_ACTION_IDS.configuration,
-  }), []);
-  const directory = useExecutePluginAction(action);
-  const decoded = React.useMemo(() => decodePosthogConfiguration(draft.configuration), [draft]);
+  const decoded = decodePosthogConfiguration(draft.configuration);
+  const lastValid = React.useRef(decoded);
+  if (decoded !== null) lastValid.current = decoded;
+  const configuration = lastValid.current;
+  const [scanWindow, setScanWindow] = React.useState(() => windowDraft(configuration?.scanWindowPolicy));
+  const [detailWindow, setDetailWindow] = React.useState(() => windowDraft(configuration?.detailWindowPolicy));
   const [organizations, setOrganizations] = React.useState<readonly Organization[]>([]);
-  const [organizationNext, setOrganizationNext] = React.useState<string | null>(null);
-  const [organizationUuid, setOrganizationUuid] = React.useState(decoded?.organizationUuid ?? '');
-  const [environments, setEnvironments] = React.useState<readonly Environment[]>(
-    decoded?.environments ?? [],
-  );
-  const [environmentNext, setEnvironmentNext] = React.useState<string | null>(null);
-  const [selected, setSelected] = React.useState<readonly string[]>(
-    decoded?.environments.map((environment) => environment.teamUuid) ?? [],
-  );
-  const [scanWindow, setScanWindow] = React.useState(() => windowDraft(decoded?.scanWindowPolicy));
-  const [detailWindow, setDetailWindow] = React.useState(() => windowDraft(decoded?.detailWindowPolicy));
+  const [next, setNext] = React.useState<string | undefined>();
   const [message, setMessage] = React.useState<string | null>(null);
-  const [directoryMessages, setDirectoryMessages] = React.useState<Readonly<Record<
-    PosthogConfigurationDirectoryInputV1['kind'],
-    string | null
-  >>>({ organizations: null, environments: null });
   const [loading, setLoading] = React.useState(false);
-  const mountedGeneration = React.useRef(0);
-  const pendingOrganizationDirectory = React.useRef<AbortController | null>(null);
-  const environmentDirectoryGeneration = React.useRef(0);
-  const pendingEnvironmentDirectory = React.useRef<AbortController | null>(null);
-
-  React.useEffect(() => {
-    mountedGeneration.current += 1;
-    return () => {
-      mountedGeneration.current += 1;
-      pendingOrganizationDirectory.current?.abort();
-      pendingOrganizationDirectory.current = null;
-      environmentDirectoryGeneration.current += 1;
-      pendingEnvironmentDirectory.current?.abort();
-      pendingEnvironmentDirectory.current = null;
-    };
-  }, []);
-
-  const execute = directory.execute;
-  const readPage = React.useCallback(async (
-    input: PosthogConfigurationDirectoryInputV1,
-    current: Readonly<{
-      signal: AbortSignal;
-      isCurrent: () => boolean;
-    }>,
-  ): Promise<PosthogConfigurationDirectoryResultV1 | null> => {
-    const setDirectoryMessage = (value: string | null): void => {
-      setDirectoryMessages((previous) => ({ ...previous, [input.kind]: value }));
-    };
-    const execution = await execute(input, { signal: current.signal });
-    if (!current.isCurrent()) return null;
-    if (execution.status !== 'success') {
-      setDirectoryMessage(text('plugins.posthog.ui.settings.readFailed', 'PostHog could not read this configuration page.'));
-      return null;
-    }
-    const parsed = PosthogConfigurationDirectoryResultV1Schema.safeParse(execution.result);
-    if (!parsed.success || parsed.data.kind === 'unavailable') {
-      setDirectoryMessage(text('plugins.posthog.ui.settings.readFailed', 'PostHog could not read this configuration page.'));
-      return null;
-    }
-    setDirectoryMessage(parsed.data.incomplete === true
-      ? text('plugins.posthog.ui.settings.partial', 'Some provider rows or paging information could not be read; the visible choices remain usable.')
-      : null);
-    return parsed.data;
-  }, [execute, text]);
-
-  const loadOrganizations = React.useCallback(async (next: string | null) => {
-    pendingOrganizationDirectory.current?.abort();
+  const pending = React.useRef<AbortController | null>(null);
+  const action = React.useMemo(() => ({ pluginId: POSTHOG_PLUGIN_ID, localId: POSTHOG_ACTION_IDS.configuration }), []);
+  const { execute } = useExecutePluginAction(action);
+  const binding = draft.binding;
+  const loadOrganizations = React.useCallback(async (cursor?: string) => {
+    pending.current?.abort();
     const controller = new AbortController();
-    pendingOrganizationDirectory.current = controller;
-    const mountGeneration = mountedGeneration.current;
-    const isCurrent = () => (
-      !controller.signal.aborted
-      && pendingOrganizationDirectory.current === controller
-      && mountedGeneration.current === mountGeneration
-    );
+    pending.current = controller;
     setLoading(true);
     try {
-      const result = await readPage({
-        v: 1,
-        kind: 'organizations',
-        binding: draft.binding,
-        page: next === null ? { kind: 'initial' } : { kind: 'continuation', next },
-      }, { signal: controller.signal, isCurrent });
-      if (!isCurrent() || result?.kind !== 'organizations') return;
-      setOrganizations((previous) => next === null ? result.rows : [...previous, ...result.rows]);
-      setOrganizationNext(result.next ?? null);
-    } finally {
-      if (pendingOrganizationDirectory.current === controller) {
-        pendingOrganizationDirectory.current = null;
-        if (mountedGeneration.current === mountGeneration) {
-          setLoading(pendingEnvironmentDirectory.current !== null);
-        }
+      const execution = await execute({ v: 1, kind: 'organizations', binding,
+        page: cursor === undefined ? { kind: 'initial' } : { kind: 'continuation', next: cursor },
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const parsed = execution.status === 'success' ? PosthogConfigurationDirectoryResultV1Schema.safeParse(execution.result) : null;
+      if (!parsed?.success || parsed.data.kind !== 'organizations') {
+        setMessage(text('plugins.posthog.ui.settings.readFailed', 'PostHog could not read this configuration page.'));
+        return;
       }
-    }
-  }, [draft.binding, readPage]);
-
-  const loadEnvironments = React.useCallback(async (uuid: string, next: string | null) => {
-    if (uuid.length === 0) return;
-    pendingEnvironmentDirectory.current?.abort();
-    const controller = new AbortController();
-    pendingEnvironmentDirectory.current = controller;
-    const mountGeneration = mountedGeneration.current;
-    const generation = environmentDirectoryGeneration.current;
-    const isCurrent = () => (
-      !controller.signal.aborted
-      && pendingEnvironmentDirectory.current === controller
-      && mountedGeneration.current === mountGeneration
-      && environmentDirectoryGeneration.current === generation
-    );
-    setLoading(true);
-    try {
-      const result = await readPage({
-        v: 1,
-        kind: 'environments',
-        binding: draft.binding,
-        organizationUuid: uuid,
-        page: next === null ? { kind: 'initial' } : { kind: 'continuation', next },
-      }, { signal: controller.signal, isCurrent });
-      if (!isCurrent() || result?.kind !== 'environments' || result.organizationUuid !== uuid) return;
-      setEnvironments((previous) => mergeEnvironments(previous, result.rows));
-      setEnvironmentNext(result.next ?? null);
+      const page = parsed.data;
+      setOrganizations((previous) => cursor === undefined ? page.rows : [...previous, ...page.rows]);
+      setNext(page.next);
+      setMessage(page.incomplete ? text('plugins.posthog.ui.settings.partial', 'Some provider rows or paging information could not be read; the visible choices remain usable.') : null);
     } finally {
-      if (pendingEnvironmentDirectory.current === controller) {
-        pendingEnvironmentDirectory.current = null;
-        if (mountedGeneration.current === mountGeneration) {
-          setLoading(pendingOrganizationDirectory.current !== null);
-        }
-      }
+      if (pending.current === controller) { pending.current = null; setLoading(false); }
     }
-  }, [draft.binding, readPage]);
-
-  React.useEffect(() => {
-    void loadOrganizations(null);
-  }, [loadOrganizations]);
-
-  React.useEffect(() => {
-    if (organizationUuid.length > 0) void loadEnvironments(organizationUuid, null);
-  }, [loadEnvironments, organizationUuid]);
-
-  const selectedEnvironments = React.useMemo(() => environments
-    .filter((environment) => selected.includes(environment.teamUuid))
-    .map((environment): PosthogConfiguredEnvironment => ({
-      teamPathId: environment.teamPathId,
-      teamUuid: environment.teamUuid,
-      ...(environment.parentProjectId === undefined ? {} : { parentProjectId: environment.parentProjectId }),
-      displayName: environment.displayName,
-    })), [environments, selected]);
-
-  const encodeDraft = React.useCallback((environmentSet: readonly PosthogConfiguredEnvironment[]) => {
-    const scanWindowPolicy = readWindowPolicy(scanWindow);
-    const detailWindowPolicy = readWindowPolicy(detailWindow);
-    if (scanWindowPolicy === null || detailWindowPolicy === null) {
-      return { ok: false as const, message: text('plugins.posthog.ui.settings.invalidWindow', 'Use positive whole days or valid ISO 8601 exact window endpoints.') };
-    }
-    const organization = organizations.find((entry) => entry.organizationUuid === organizationUuid);
-    if (organization === undefined) {
-      return { ok: false as const, message: text('plugins.posthog.ui.settings.chooseOrganization', 'Choose a PostHog organization.') };
-    }
-    const encoded = encodePosthogConfiguration({
-      v: 1,
-      organizationUuid,
-      environments: environmentSet,
-      scanWindowPolicy,
-      detailWindowPolicy,
+  }, [binding, execute, text]);
+  React.useEffect(() => { void loadOrganizations(); return () => { pending.current?.abort(); pending.current = null; }; }, [loadOrganizations]);
+  if (!isTriageSourceConnectedAccountInstanceV1(draft) || configuration === null) {
+    return <Banner tone="warning" title={text('plugins.posthog.ui.settings.attention', 'Configuration needs attention')}
+      description={text('plugins.posthog.ui.settings.readFailed', 'PostHog could not read this configuration page.')} />;
+  }
+  const changeWindows = (scan: WindowDraft, detail: WindowDraft) => {
+    setScanWindow(scan); setDetailWindow(detail);
+    const scanPolicy = readWindowPolicy(scan);
+    const detailPolicy = readWindowPolicy(detail);
+    // An invalid field remains editable, but the source adapter refuses shared Save.
+    const encoded = scanPolicy === null || detailPolicy === null ? null : encodePosthogConfiguration({
+      ...configuration, scanWindowPolicy: scanPolicy, detailWindowPolicy: detailPolicy,
     });
-    if (!encoded.ok) {
-      return {
-        ok: false as const,
-        message: encoded.reason === 'tokenTooLarge'
-          ? text('plugins.posthog.ui.settings.selectionTooLarge', 'This environment selection needs {bytes} UTF-8 bytes and cannot fit one source configuration.', { bytes: encoded.utf8Bytes })
-          : text('plugins.posthog.ui.settings.chooseEnvironment', 'Choose at least one valid PostHog environment.'),
-      };
-    }
-    return {
-      ok: true as const,
-      draft: {
-        ...draft,
-        localInstanceKey: organization.localInstanceKey,
-        configuration: { v: 1 as const, token: encoded.token },
-        locator: { v: 1 as const, displayLabel: organization.displayName },
-      } satisfies TriageSourceInstanceDraftV1,
-    };
-  }, [detailWindow, draft, organizationUuid, organizations, scanWindow, text]);
-
-  const changeSelection = React.useCallback((value: FormSelectValue) => {
-    const values = typeof value === 'string' ? [value] : Array.isArray(value) ? value : [];
-    const nextIds = values.filter((item): item is string => typeof item === 'string');
-    const nextRows = environments.filter((environment) => nextIds.includes(environment.teamUuid));
-    const proposedRows = nextRows.map((environment) => ({
-      teamPathId: environment.teamPathId,
-      teamUuid: environment.teamUuid,
-      ...(environment.parentProjectId === undefined ? {} : { parentProjectId: environment.parentProjectId }),
-      displayName: environment.displayName,
-    }));
-    const scanWindowPolicy = readWindowPolicy(scanWindow);
-    const detailWindowPolicy = readWindowPolicy(detailWindow);
-    if (scanWindowPolicy === null || detailWindowPolicy === null) {
-      setMessage(text('plugins.posthog.ui.settings.invalidWindow', 'Use positive whole days or valid ISO 8601 exact window endpoints.'));
-      return;
-    }
-    const preflight = preflightPosthogEnvironmentSelection(selectedEnvironments, proposedRows, {
-      organizationUuid,
-      scanWindowPolicy,
-      detailWindowPolicy,
-    });
-    if (!preflight.encoding.ok && preflight.encoding.reason === 'tokenTooLarge') {
-      setMessage(text('plugins.posthog.ui.settings.selectionTooLarge', 'This environment selection needs {bytes} UTF-8 bytes and cannot fit one source configuration.', { bytes: preflight.encoding.utf8Bytes }));
-      return;
-    }
-    setSelected(nextIds);
-    setMessage(null);
-  }, [detailWindow, environments, organizationUuid, scanWindow, selectedEnvironments, text]);
-
-  const visibleMessage = message
-    ?? directoryMessages.organizations
-    ?? directoryMessages.environments;
-
-  return (
-    <Stack gap="medium">
-      <Heading level={3} valueKey="plugins.posthog.ui.settings.heading" fallback="Choose PostHog environments" />
-      <Text valueKey="plugins.posthog.ui.settings.description" fallback="Choose an organization, any non-empty subset of its environments, and the scan and detail windows." />
-      {visibleMessage === null ? null : <Banner tone="warning" title="Configuration needs attention" titleKey="plugins.posthog.ui.settings.attention" description={visibleMessage} />}
-      <Form.Select
-        label={text('plugins.posthog.ui.settings.organization', 'Organization')}
-        options={organizations.map((organization) => ({
-          value: organization.organizationUuid,
-          label: organization.displayName,
-        }))}
-        value={organizationUuid}
-        onChange={(value) => {
-          if (typeof value !== 'string') return;
-          if (value === organizationUuid) return;
-          environmentDirectoryGeneration.current += 1;
-          pendingEnvironmentDirectory.current?.abort();
-          pendingEnvironmentDirectory.current = null;
-          setOrganizationUuid(value);
-          setSelected([]);
-          setEnvironments([]);
-          setEnvironmentNext(null);
-        }}
-        disabled={busy}
-      />
-      {organizationNext === null ? null : (
-        <Button
-          title="Load more organizations"
-          titleKey="plugins.posthog.ui.settings.loadMoreOrganizations"
-          variant="secondary"
-          busy={loading}
-          disabled={busy || loading}
-          onPress={() => { void loadOrganizations(organizationNext); }}
-        />
-      )}
-      <Form.Select
-        label={text('plugins.posthog.ui.settings.environments', 'Environments')}
-        multiple
-        minimumSelections={1}
-        options={environments.map((environment) => ({
-          value: environment.teamUuid,
-          label: environment.displayName,
-        }))}
-        value={selected}
-        onChange={changeSelection}
-        disabled={busy || loading}
-      />
-      {environmentNext === null ? null : (
-        <Button
-          title="Load more environments"
-          titleKey="plugins.posthog.ui.settings.loadMoreEnvironments"
-          variant="secondary"
-          busy={loading}
-          disabled={busy || loading}
-          onPress={() => { void loadEnvironments(organizationUuid, environmentNext); }}
-        />
-      )}
-      <WindowPolicyEditor name={text('plugins.posthog.ui.settings.scan', 'Scan')} value={scanWindow} onChange={setScanWindow} disabled={busy} />
-      <WindowPolicyEditor name={text('plugins.posthog.ui.settings.detail', 'Detail')} value={detailWindow} onChange={setDetailWindow} disabled={busy} />
-      <Row gap="small">
-        <Button
-          title="Save PostHog configuration"
-          titleKey="plugins.posthog.ui.settings.save"
-          variant="primary"
-          busy={busy}
-          disabled={busy || loading}
-          onPress={() => {
-            const prospective = encodeDraft(selectedEnvironments);
-            if (!prospective.ok) {
-              setMessage(prospective.message);
-              return;
-            }
-            void onSubmit(prospective.draft);
-          }}
-        />
-        <Button title="Cancel" titleKey="plugins.posthog.ui.settings.cancel" variant="secondary" disabled={busy} onPress={onCancel} />
-      </Row>
-    </Stack>
-  );
+    onChange({ ...draft, configuration: { v: 1, token: encoded?.ok ? encoded.token : '' } });
+  };
+  const options = organizations.some((row) => row.organizationUuid === configuration.organizationUuid)
+    ? organizations : [{ organizationUuid: configuration.organizationUuid, displayName: draft.locator?.displayLabel ?? configuration.organizationUuid,
+      localInstanceKey: draft.localInstanceKey }, ...organizations];
+  return <Stack gap="medium">
+    {message === null ? null : <Banner tone="warning" title={text('plugins.posthog.ui.settings.attention', 'Configuration needs attention')} description={message} />}
+    <Form.Select label={text('plugins.posthog.ui.settings.organization', 'Organization')}
+      options={options.map((row) => ({ value: row.organizationUuid, label: row.displayName }))}
+      value={configuration.organizationUuid} disabled={busy}
+      onChange={(value) => {
+        const organization = organizations.find((row) => row.organizationUuid === value);
+        if (organization === undefined || organization.organizationUuid === configuration.organizationUuid) return;
+        const encoded = encodePosthogConfiguration({ ...configuration, organizationUuid: organization.organizationUuid,
+          include: { kind: 'all' }, environments: [], scopeUnits: [] });
+        if (encoded.ok) onChange({ ...draft, localInstanceKey: organization.localInstanceKey,
+          configuration: { v: 1, token: encoded.token }, locator: { v: 1, displayLabel: organization.displayName } });
+      }} />
+    {next === undefined ? null : <Button title="Load more organizations" titleKey="plugins.posthog.ui.settings.loadMoreOrganizations"
+      variant="secondary" disabled={busy || loading} busy={loading} onPress={() => { void loadOrganizations(next); }} />}
+    <WindowPolicyEditor name={text('plugins.posthog.ui.settings.scan', 'Scan')} value={scanWindow}
+      onChange={(value) => changeWindows(value, detailWindow)} disabled={busy} />
+    <WindowPolicyEditor name={text('plugins.posthog.ui.settings.detail', 'Detail')} value={detailWindow}
+      onChange={(value) => changeWindows(scanWindow, value)} disabled={busy} />
+  </Stack>;
 }
 
 export const renderSurface = createTriageSourceSettingsSurface({
@@ -497,5 +228,23 @@ export const renderSurface = createTriageSourceSettingsSurface({
   connectedAccountServiceLocalId: POSTHOG_CONNECTED_ACCOUNT_PURPOSE,
   connectedAccountPurpose: POSTHOG_CONNECTED_ACCOUNT_PURPOSE,
   sourceDisplayName: POSTHOG_SOURCE_DISPLAY_NAME,
-  DraftEditor: PosthogDraftEditor,
+  scopeSelection: {
+    unitLabel: 'Environments',
+    listScopeUnitsLocalActionId: POSTHOG_ACTION_IDS.listScopeUnits,
+    readSelection: (draft) => {
+      if (!isTriageSourceConnectedAccountInstanceV1(draft)) return null;
+      const configuration = decodePosthogConfiguration(draft.configuration);
+      return configuration === null ? null : readPosthogEnvironmentSelection(configuration);
+    },
+    writeSelection: (draft, include, units) => {
+      const configuration = decodePosthogConfiguration(draft.configuration);
+      if (configuration === null) return null;
+      const encoded = encodePosthogConfiguration({ ...configuration, include,
+        environments: include.kind === 'all' ? [] : configuration.environments.filter((row) => include.unitIds.includes(row.teamUuid)),
+        scopeUnits: include.kind === 'all' ? [] : units,
+      });
+      return encoded.ok ? { ...draft, configuration: { v: 1, token: encoded.token } } : null;
+    },
+  },
+  DraftFields: PosthogDraftFields,
 });

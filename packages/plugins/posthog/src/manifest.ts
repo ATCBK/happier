@@ -22,6 +22,7 @@ import {
     TriageSourcesContributionProtocolV1,
     TriageSourceConnectedAccountInputsV1,
     TriageTaskWriteResultV1Schema,
+    TriageListScopeUnitsResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { posthogConnectedAccountRuntime } from './connect/account.js';
@@ -69,6 +70,7 @@ import {
     listPosthogInstances,
     readPosthogActivity,
     readPosthogConfigurationDirectory,
+    readPosthogScopeUnits,
     readPosthogCodeVariablesForIssue,
     readPosthogSampledEvents,
     scanPosthogSource,
@@ -148,6 +150,7 @@ const POSTHOG_SOURCE_DESCRIPTOR = {
     // qualifies it with the contributor identity the host already admitted.
     settingsPageId: POSTHOG_TRIAGE_SETTINGS_PAGE_ID,
     displayName: POSTHOG_SOURCE_DISPLAY_NAME,
+    scopeUnit: { singularLabel: 'Environment', pluralLabel: 'Environments' },
     kinds: [{
         id: POSTHOG_ENTRY_KIND,
         workflowSubject: 'errorIssue' as const,
@@ -376,6 +379,17 @@ export const POSTHOG_PLUGIN = definePlugin({
             connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
             run: assignPosthogIssue,
         },
+        [POSTHOG_ACTION_IDS.listScopeUnits]: {
+            title: 'List PostHog environments',
+            description: 'Lists selectable environments or the retained configured selection.',
+            surfaces: sources.operations.listScopeUnits.declaration.surfaces,
+            dangerLevel: 'safe', placementBindings: [],
+            inputSchema: TriageSourceConnectedAccountInputsV1.listScopeUnits.jsonSchema,
+            resultSchema: TriageListScopeUnitsResultV1Schema.jsonSchema,
+            hostAccess: READ_HOST_ACCESS,
+            connectedAccountPurposeBindings: [{ path: 'draft.binding.account', purpose: POSTHOG_CONNECTED_ACCOUNT_PURPOSE }],
+            run: readPosthogScopeUnits,
+        },
         [POSTHOG_ACTION_IDS.configuration]: {
             title: 'Configure PostHog error issues',
             description: 'Reads one user-requested page of PostHog organizations or environments.',
@@ -530,6 +544,7 @@ export const POSTHOG_PLUGIN = definePlugin({
                     operations: {
                         listInstances: sources.operations.listInstances
                             .bind(POSTHOG_ACTION_IDS.listInstances),
+                        listScopeUnits: sources.operations.listScopeUnits.bind(POSTHOG_ACTION_IDS.listScopeUnits),
                         scan: sources.operations.scan.bind(POSTHOG_ACTION_IDS.scan),
                         get: sources.operations.get.bind(POSTHOG_ACTION_IDS.get),
                     },

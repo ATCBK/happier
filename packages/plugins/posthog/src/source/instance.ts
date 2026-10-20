@@ -3,11 +3,12 @@
  * configured-instance token.
  *
  * The target persists this token opaquely and never parses it, so this module is the
- * only place that knows what its bytes mean. It deliberately carries no account ref and
- * no origin: the exact Connected Account binding is a separate member of the host
+ * only place that knows what its bytes mean. It deliberately carries no account ref or
+ * routing origin: the exact Connected Account binding is a separate member of the host
  * matching tuple, and the materialized connection is the only origin authority. A token
- * that could name an origin would become a second deployment authority that a
- * reconfiguration could silently disagree with.
+ * that could select an origin would become a second deployment authority that a
+ * reconfiguration could silently disagree with. Retained unit metadata is presentation
+ * only; its optional collision join key never selects a route.
  *
  * Byte measurement lives here for the same reason. `connect/configuration.ts` asks this
  * codec what a prospective environment set would cost before it changes a selection, so
@@ -15,7 +16,7 @@
  * administration Action rejects a save.
  */
 
-import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
+import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1, TriageSourceScopeSelectionV1Schema, TriageSourceScopeUnitV1Schema, type TriageSourceScopeSelectionV1, type TriageSourceScopeUnitV1 } from '@happier-dev/triage-protocol/v1';
 import {
     createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolNumber,
     defineProtocolObject, defineProtocolString, defineProtocolUnion,
@@ -50,7 +51,10 @@ export type PosthogConfiguredEnvironment = Readonly<{
 export type PosthogConfigurationToken = Readonly<{
     v: 1;
     organizationUuid: string;
-    /** Non-empty; `teamUuid` unique. */
+    /** Omission is accepted only for historical environment-set callers. */
+    include?: TriageSourceScopeSelectionV1;
+    scopeUnits?: readonly TriageSourceScopeUnitV1[];
+    /** Known source-owned routing metadata, not selection authority. */
     environments: readonly PosthogConfiguredEnvironment[];
     scanWindowPolicy: PosthogWindowPolicy;
     detailWindowPolicy: PosthogWindowPolicy;
@@ -70,6 +74,8 @@ const PosthogWindowPolicySchema = defineProtocolUnion([
 ]);
 const PosthogConfigurationTokenV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1), organizationUuid: defineProtocolString(),
+    include: TriageSourceScopeSelectionV1Schema.optional(),
+    scopeUnits: defineProtocolArray(TriageSourceScopeUnitV1Schema).optional(),
     environments: defineProtocolArray(defineProtocolObject({
         teamPathId: defineProtocolNumber(), teamUuid: defineProtocolString(),
         parentProjectId: defineProtocolNumber().optional(), displayName: defineProtocolString(),
@@ -171,9 +177,11 @@ function validate(
     if (!isUuid(configuration.organizationUuid)) {
         return 'invalidOrganizationUuid';
     }
-    if (configuration.environments.length === 0) {
+    const selection = readPosthogEnvironmentSelection(configuration);
+    if (selection === null) {
         return 'noEnvironments';
     }
+    if (configuration.scopeUnits?.some((unit) => !TriageSourceScopeUnitV1Schema.safeParse(unit).success)) return 'invalidEnvironment';
     const seen = new Set<string>();
     for (const environment of configuration.environments) {
         if (readEnvironment(environment) === null) {
@@ -189,6 +197,20 @@ function validate(
         return 'invalidWindowPolicy';
     }
     return null;
+}
+
+export function readPosthogEnvironmentSelection(configuration: PosthogConfigurationToken): TriageSourceScopeSelectionV1 | null {
+    const parsed = TriageSourceScopeSelectionV1Schema.safeParse(configuration.include ?? {
+        kind: 'selected', unitIds: configuration.environments.map((environment) => environment.teamUuid),
+    });
+    if (!parsed.success || (parsed.data.kind === 'selected' && !parsed.data.unitIds.every(isUuid))) return null;
+    return parsed.data;
+}
+
+/** Candidate disclosure needs membership only; authoritative reads resolve live routing. */
+export function isPosthogEnvironmentIncluded(configuration: PosthogConfigurationToken, teamUuid: string): boolean {
+    const selection = readPosthogEnvironmentSelection(configuration);
+    return isUuid(teamUuid) && (selection?.kind === 'all' || (selection?.kind === 'selected' && selection.unitIds.includes(teamUuid)));
 }
 
 /**
@@ -212,6 +234,8 @@ export function encodePosthogConfiguration(
     const token = JSON.stringify({
         v: 1,
         organizationUuid: configuration.organizationUuid,
+        include: readPosthogEnvironmentSelection(configuration),
+        ...(configuration.scopeUnits === undefined ? {} : { scopeUnits: configuration.scopeUnits }),
         environments: configuration.environments.map((environment) => ({
             teamPathId: environment.teamPathId,
             teamUuid: environment.teamUuid,
@@ -255,7 +279,7 @@ export function decodePosthogConfiguration(
     const raw = result.data;
     if (!isUuid(raw.organizationUuid)) return null;
     const rawEnvironments = raw['environments'];
-    if (!Array.isArray(rawEnvironments) || rawEnvironments.length === 0) {
+    if (!Array.isArray(rawEnvironments)) {
         return null;
     }
     const environments: PosthogConfiguredEnvironment[] = [];
@@ -273,13 +297,17 @@ export function decodePosthogConfiguration(
     if (!isValidWindowPolicy(scanWindowPolicy) || !isValidWindowPolicy(detailWindowPolicy)) {
         return null;
     }
-    return {
+    const normalized = {
         v: 1,
         organizationUuid: raw['organizationUuid'],
+        ...(raw.include === undefined ? {} : { include: raw.include }),
+        ...(raw.scopeUnits === undefined ? {} : { scopeUnits: raw.scopeUnits }),
         environments,
         scanWindowPolicy,
         detailWindowPolicy,
-    };
+    } satisfies PosthogConfigurationToken;
+    const include = readPosthogEnvironmentSelection(normalized);
+    return include === null ? null : { ...normalized, include };
 }
 
 /**
