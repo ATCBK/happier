@@ -322,7 +322,7 @@ export async function requestSessionStop(params: Readonly<{
   idOrPrefix: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof recordSessionExplicitStopIntent>[0]['resolveAuthorizationHeaders'];
 }>): Promise<
   | (Readonly<{ ok: true }> & SessionStopCommandResult)
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] }>

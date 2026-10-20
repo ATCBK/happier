@@ -211,7 +211,7 @@ function resolveProbeAgentId(params: Readonly<{
   agentId: string;
   backendTarget: BackendTargetRefV2 | null;
 }>): string {
-  if (params.backendTarget?.sourceKind === 'configured' || Boolean(params.backendTarget?.configuredBackendId)) {
+  if (params.backendTarget && (params.backendTarget.sourceKind === 'configured' || Boolean(params.backendTarget.configuredBackendId))) {
     const target = parseBackendTargetKeyV2(buildBackendTargetKeyV2(params.backendTarget));
     return target.kind === 'agent' ? resolveSessionCreationAgentTarget(target)?.agentId ?? '' : '';
   }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createPluginActionPresentUserGate, projectPluginActionFailureCode, projectPluginActionUnavailableOutcomeCode, type PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
 import { ActionOperationCredentialUseV1Schema, type ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
-import type { ApprovalExecutionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import type { ApprovalExecutionV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ApprovalExecutionOriginV1, ApprovalRequesterConfirmationV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
@@ -135,7 +135,7 @@ export type TargetActionCurrentIntentResult = Readonly<
     /** Captured host writer; raw input and handler output never enter this receipt. */
     settleExecution?: (args: Readonly<{
       artifactId: string;
-      execution: Pick<ApprovalExecutionV1, 'ok' | 'effectAttempted' | 'errorCode' | 'operationCredentialUses'>;
+      execution: Pick<ApprovalExecutionV2, 'ok' | 'effectAttempted' | 'errorCode' | 'operationCredentialUses'>;
     }>) => Promise<void>;
   }
   | { status: 'deferred'; artifactId: string }

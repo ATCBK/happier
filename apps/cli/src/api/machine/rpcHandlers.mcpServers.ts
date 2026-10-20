@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';

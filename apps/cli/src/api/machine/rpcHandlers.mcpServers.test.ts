@@ -164,7 +164,7 @@ describe('Machine MCP Test pipeline', () => {
       const done = new Promise<void>((resolve, reject) => {
         const subscription = session.watch(event => {
           events.push(event);
-          if (event.turnId !== turnId) return;
+          if (!('turnId' in event) || event.turnId !== turnId) return;
           if (event.kind === 'turn-complete') { subscription.dispose(); resolve(); }
           if (event.kind === 'turn-failed' || event.kind === 'turn-cancelled') {
             subscription.dispose(); reject(new Error('Native fixture turn failed'));

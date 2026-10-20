@@ -70,6 +70,7 @@ import {
   createResolvedProviderProbeRunner,
   createProviderSavedModelsRpcHandler,
   createProviderSavedProbeRpcHandler,
+  ProviderProbeRpcResolutionError,
   type ProviderProbeWaiterLifetime,
   type ProviderSavedModelsRpcResult,
   type ResolvedProviderProbeRpcRequest,
@@ -661,7 +662,7 @@ export function createRuntimeProviderServices(input: Readonly<{
 
   async function resolveSavedFromConnectionContext(
     identity: Readonly<{ connectionId: string; machineId: string }>,
-    context: Extract<Awaited<ReturnType<typeof resolveConnectionContext>>, { ok: true }>['value'],
+    context: Omit<Extract<Awaited<ReturnType<typeof resolveConnectionContext>>, { ok: true }>['value'], 'readSnapshot'>,
     mode: SavedProbeMode,
     savedSecretResources = context.savedSecretResources,
   ): Promise<SavedResolutionResult> {

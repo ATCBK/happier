@@ -1312,7 +1312,7 @@ export function createCliActionDeps(params: Readonly<{
           bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking' }))).settings : null));
       let appliedChildSelection: import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection | undefined;
       if (!scopeOnly && session.sessionId === params.sessionId && params.getCurrentAppliedChildSelection) {
-        try { appliedChildSelection = await runWithoutRequesterSessionCurrentnessCheckpoint(() => params.getCurrentAppliedChildSelection!()); }
+        try { appliedChildSelection = await runWithoutRequesterSessionCurrentnessCheckpoint(async () => params.getCurrentAppliedChildSelection!()); }
         catch { appliedChildSelection = { status: 'unavailable' }; }
       }
       const availableAgents = scopeOnly ? undefined : await measureActionStartPhaseV1(context, 'agent_inventory',
@@ -8262,8 +8262,10 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) {
         return { ok: false, code: 'not_authenticated' };
       }
-      const denied = await projectHomeAdmission(serverId ?? undefined, context);
-      if (denied) return denied;
+      // A Session read is addressed by the captured Home identity, exactly as the widget Session validator
+      // decides it; the saved profile's exact binding still proves a Home id this process was not given.
+      const sessionHome = async (id?: string | null) => !id || isSameActionHomeId(id) || await isServerProfileHomeIdentity(projectHomeId, id.trim());
+      if (!await sessionHome(serverId) || !await sessionHome(context?.serverId)) return executionRunActionFailure('server_scope_mismatch');
       const credentials = params.credentials;
       const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
       const read = () => getSessionStatus({ credentials, idOrPrefix: sessionId, live: live === true,

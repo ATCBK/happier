@@ -1,6 +1,6 @@
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildActionExecuteResultFromRecordedApprovalExecution, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { isActionEnabledByActionsSettings, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { isActionEnabledByActionsSettings, normalizeActionsSettingsV1, type ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
 import { isActionEnabledWithSessionMemory } from '@happier-dev/protocol/actions/actionSurfaceAvailability';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
@@ -33,7 +33,7 @@ type ApprovalUpdateArgs = Parameters<NonNullable<ActionExecutorDeps['approvalsUp
 type ApprovalCreateArgs = Parameters<NonNullable<ActionExecutorDeps['approvalsCreate']>>[0];
 
 /** Admission can defer Ask only when the receiving Account policy retains it. */
-export function isOriginalCliApprovalPreservedAtAccount(actionId: string, input: unknown,
+export function isOriginalCliApprovalPreservedAtAccount(actionId: ActionSettingsActionId, input: unknown,
   context: ActionExecutorContext, provider: RuntimeActionSettingsProvider): boolean {
   const accountSettings = provider.getAccountSettings?.();
   return Boolean(accountSettings && isApprovalRequiredByActionsSettings(actionId,
