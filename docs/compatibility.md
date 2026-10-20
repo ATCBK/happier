@@ -194,6 +194,15 @@ forward stored-data admission, not a legacy writer or a parallel catalog. The
 [skill content contract](plugin-platform.md) owns the detailed behavior; real
 predecessor writer captures live in `packages/protocol/fixtures/`.
 
+New repository and multi-skill upload imports retain an optional `sourceFolderName`
+in the encrypted Artifact header's `skillLock`. The current content reader carries
+that single directory segment to the Session materializer; edits preserve it.
+Headers and Session manifests without it keep declared-name delivery, with no
+migration. This is an unreleased 0.3 extension of the closed lock and daemon
+materialization request, not a new plaintext Artifact field or an SDK change.
+The one-way upgrade does not support old 0.3 development daemons reading the new
+request; reload the runner and daemon together before replaying it.
+
 ### Account trigger deletion receipts (0.3 development)
 
 The current Automation deletion transaction returns the removed definition's
@@ -297,7 +306,19 @@ the operation unavailable instead of silently ignoring the proof. Ordinary
 requests without retained context retain the existing revision 2–4 ingress.
 The server verifies the same-Session claimed rows, informational admission and
 current publisher before excluding them from rejoin/claim selection. It does not
-resolve those rows or infer native acceptance. No persisted format changes.
+resolve those rows or infer native acceptance. The materialization proof adds no
+persisted format.
+
+File review notes extend the existing unreleased 0.3 admission operand and
+receipt with optional `nextTurnNote: 'file_review_note.v1'`. Authenticated Pending
+admission stamps this content-free intent; the action and paths remain inside
+the ordinary Session content envelope. The runtime requires both this receipt
+and a valid note payload before retaining the input for the next actual turn.
+The retained-context owner recognizes that same receipt, so an informational
+note cannot block the following ordinary input or acquire its permission
+identity. Existing 0.2-created inputs without the marker keep their ordinary
+semantics. This evolves the undeployed 0.3 contract in place; the approved
+one-way upgrade does not support sending new notes to a 0.2 Home.
 
 The inspected moving 0.2 predecessor at
 `89868c98f0cddc0a42fc3a97b2b3e311363756ed` advertises revision 2 and ignores
@@ -732,20 +753,28 @@ The canonical `scm.diffSummary.reviewed.mark` and `.unmark` Actions retain the
 implicit V1 saved-result selector (`cwd`, `resultId`, `changeRefs`). Files-only
 reviews also use a closed V2 selector (`v: 2`, `cwd`, `comparisonId`, `source`,
 optional Session namespace, and `changeRefs`); they do not require a generated
-or saved narration. The selected Home/Machine/root authority reads the retained
-comparison before the existing Account reviewed-marks owner can write. Caller
-comparison bytes are not authority. Session and turn sources additionally retain
-their Session admission. Both selectors use the same reviewed-marks Record V1
-and persistence key; this adds no parallel store or RPC.
+or saved narration. V2 also accepts the explicit live selector `source` plus
+`changeKeys` without a comparison id. That Action validates the keys against
+the current working-tree diff, without capturing it. The selected
+Home/Machine/root authority reads retained comparisons for occurrence selectors;
+caller comparison bytes are not authority. Session and turn sources additionally
+retain their Session admission. All selectors use the same content-keyed Record
+V1 `{ v: 1, scopeId, reviewedChangeKeys }` and
+`workspace:scm-reviewed:scope:<encoded scopeId>` key. There is no parallel store
+or RPC. Native UI Keep writes the keys of displayed evidence through the same
+Account-mode-admitted KV port, independently of Machine reachability.
 
 V2 is an explicit operation epoch because the captured selector is an
 authority-bearing input, not an ignorable optional field. A terminal supporting
 only the strict saved-result form rejects V2 before an Account write; unaffected
 operations and V1 remain usable. This is a development contract, not a claim
 that a released terminal advertises V2. The inspected `../0.2` predecessor at
-`e087d15a2f0cce1de6de8ef0895d9c8bcc035056` had no reviewed-marks producer in the
-relevant protocol/CLI SCM paths, which were clean. Released-artifact support at
-this seam has not been established.
+`715e6bbfdabdd7c24b18ceb8904ab2e80370cb05` had no reviewed-marks producer or
+reader in the Protocol, CLI SCM and UI Session Files paths, which were clean.
+The earlier comparison-keyed 0.3 record was unreleased and is replaced in place;
+it has no retained-data migration. Released-artifact support at this seam has
+not been established. The released review-comment anchor union is unchanged:
+terminal and transcript Ask use fenced composer text rather than a new anchor kind.
 
 ### Plugin projection invalidation (development)
 
