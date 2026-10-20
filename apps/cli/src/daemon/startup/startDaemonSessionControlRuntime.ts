@@ -12758,6 +12758,13 @@ export async function startDaemonSessionControlRuntime(
           readCredentials: async () =>
             await readStoredCredentialsForServerId(params.serverId),
           resolveServerFeaturesSnapshot,
+          prepareLocalServiceStartApproval: async ({ input, context, executeCanonicalAction }) => {
+            const prepare = localServicesRuntime.launcherRoutes.prepareStartApproval;
+            if (!prepare || !localServicesActionFeatureGate.isEnabled('localServices.launcher')) return {
+              ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable',
+            };
+            return prepare(input, ingress, context, executeCanonicalAction);
+          },
           runtimeActionExecute: createLocalServicesDaemonRuntimeActionExecutor({
             routes: localServicesRuntimeActionRoutes,
             ingress,
@@ -15905,6 +15912,15 @@ export async function startDaemonSessionControlRuntime(
               })(request);
             } }
           : {}),
+        prepareLocalServiceStartApproval: async ({ input, context, executeCanonicalAction }) => {
+          const ingress = resolveRequesterIngress(context);
+          await localServicesActionFeatureGate.refresh();
+          const prepare = localServicesRuntime.launcherRoutes.prepareStartApproval;
+          if (!ingress || !prepare || !localServicesActionFeatureGate.isEnabled('localServices.launcher')) return {
+            ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable',
+          };
+          return prepare(input, ingress, context, executeCanonicalAction);
+        },
         machineGuardAction: async request => {
           const apiMachine = params.getApiMachineForSessions();
           return apiMachine ? apiMachine.executeMachineGuardAction(request)

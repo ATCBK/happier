@@ -20,6 +20,7 @@ import { handleActionsCommand } from '@/cli/commands/actions';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { admitTargetActionApprovalTransition } from '@happier-dev/protocol/approvals/targetActionApprovalRequestTransition';
 
 const externalActionTargetResolverMocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -684,12 +685,13 @@ describe('createDaemonExternalActionContributedInvoker', () => {
   });
 
   it.each([
-    { liveOnly: false, outcome: 'executed' },
-    { liveOnly: true, outcome: 'executed' },
-    { liveOnly: true, outcome: 'failed' },
-    { liveOnly: true, outcome: 'uncertain' },
-    { liveOnly: true, outcome: 'receipt_unknown' },
-  ] as const)('settles a shared contributed approval with the credential admitted through its real Plugin service (liveOnly=$liveOnly, outcome=$outcome)', async ({ liveOnly, outcome }) => {
+    { liveOnly: false, outcome: 'executed', lostDecisionRead: false },
+    { liveOnly: false, outcome: 'executed', lostDecisionRead: true },
+    { liveOnly: true, outcome: 'executed', lostDecisionRead: false },
+    { liveOnly: true, outcome: 'failed', lostDecisionRead: false },
+    { liveOnly: true, outcome: 'uncertain', lostDecisionRead: false },
+    { liveOnly: true, outcome: 'receipt_unknown', lostDecisionRead: false },
+  ] as const)('settles a shared contributed approval with the credential admitted through its real Plugin service (liveOnly=$liveOnly, outcome=$outcome, lostDecisionRead=$lostDecisionRead)', async ({ liveOnly, outcome, lostDecisionRead }) => {
     const source = createSharedBotContributedContext('session');
     const service = { pluginId: 'acme.external', localId: 'credentials' };
     const purpose = { consumer: { pluginId: 'acme.external', localId: 'inspect' }, purpose: 'release' };
@@ -752,19 +754,39 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       if (liveOnly) await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount('credential-write')).toBe(1));
       else expect(await pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'credential-write' } });
       expect(materializations).toBe(0);
+      let readUnavailable = lostDecisionRead;
+      let decisionWrites = 0;
       const replay = createDaemonExternalActionContributedApprovalReplay({
         readInstallationIdentity: source.readInstallationIdentity,
         credentials: { token: 'alice-token', encryption: null } as never,
         isApprovalExecutionOriginCurrent: source.isApprovalExecutionOriginCurrent,
         acquireRuntimeRegistryLease: async () => lease,
         targetActionApprovals: {
-          targetActionApprovalsGet: async () => stored,
-          targetActionApprovalsUpdate: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
+          targetActionApprovalsGet: async () => {
+            if (readUnavailable && stored?.status === 'approved') throw new Error('Artifact storage temporarily unavailable');
+            return stored;
+          },
+          targetActionApprovalsUpdate: async ({ request }) => {
+            if (request.status === 'approved') decisionWrites++;
+            const transition = stored && admitTargetActionApprovalTransition(stored, request);
+            if (transition && !transition.ok) return transition;
+            stored = TargetActionApprovalRequestV1Schema.parse(request);
+            return { ok: true };
+          },
         },
       });
       const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice',
         requesterApprovalDecision: { sessionId: 'bot-session',
           actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true } };
+      if (lostDecisionRead) {
+        await expect(replay({ artifactId: 'credential-write', decision: 'approve', context }))
+          .resolves.toMatchObject({ ok: false, errorCode: 'approval_context_unavailable' });
+        expect(stored).toMatchObject({ status: 'approved', decision: { kind: 'approve' } });
+        expect(TargetActionApprovalRequestV1Schema.parse(stored).execution).toBeUndefined();
+        expect(effects).toBe(0);
+        expect(materializations).toBe(0);
+        readUnavailable = false;
+      }
       const result = await replay({ artifactId: 'credential-write', decision: 'approve', context });
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: liveOnly ? 'approved' : 'executed' } });
       if (liveOnly) expect(await pending).toMatchObject(outcome === 'executed' ? { ok: true }
@@ -788,8 +810,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         execution: { ok: executed, operationCredentialUses } } } });
       if (!liveOnly) expect(result).toMatchObject({ result: { execution: { operationCredentialUses } } });
       const repeated = await replay({ artifactId: 'credential-write', decision: 'approve', context });
-      expect(repeated).toMatchObject(liveOnly ? { ok: false, errorCode: 'approval_stale' }
-        : { result: { execution: { operationCredentialUses } } });
+      expect(repeated).toMatchObject({ ok: true, result: { status: executed ? 'executed' : 'failed',
+        execution: { operationCredentialUses } } });
       expect(materializations).toBe(1);
       expect(effects).toBe(1);
       for (const privateValue of [secret, 'private-release-token', 'private-connected-profile']) {
@@ -797,6 +819,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         expect(JSON.stringify(result)).not.toContain(privateValue);
         expect(JSON.stringify(receipt)).not.toContain(privateValue);
       }
+      if (lostDecisionRead) expect(decisionWrites).toBe(1);
     } finally {
       await owners.dispose();
     }
@@ -1317,8 +1340,10 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       expect(stored).toMatchObject({ status: 'executed', execution: { ok: true } });
       expect(JSON.stringify(stored)).not.toContain(secret);
       expect(acquire).toHaveBeenCalledTimes(1);
-      // No second invocation can reconstruct this input from approval history.
-      await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
+      // Terminal history returns its receipt without reconstructing confidential input.
+      await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({
+        ok: true, result: { status: 'executed', execution: { ok: true } },
+      });
       expect(acquire).toHaveBeenCalledTimes(1);
     } finally {
       controller.abort();

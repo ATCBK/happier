@@ -1205,7 +1205,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       await currentnessChannel?.push('account', { mode: 'plain', version: encryptionVersion, updatedAt: encryptionVersion,
         signingKeyFingerprint: null, contentKeyFingerprint: null });
     }; },
-    async changeRequesterWorkerRootBeforePreparation() {
+    async changeRequesterWorkerRoot(timing: 'immediate' | 'beforePreparation' = 'immediate') {
       const otherRoot = join(directory, 'other-account-worker');
       await mkdir(otherRoot);
       const index = rows.findIndex(row => row.key.kind === 'workspace-ref' && row.key.id === workerRef.id);
@@ -1214,9 +1214,11 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       const replacement = ProjectAccountRowV1Schema.parse({ key: row.key, revision: row.revision + 1,
         content: { t: 'plain', v: { key: row.key, value: { ...workerRef, rootPath: otherRoot } } } });
       // A pre-request same-Account row update may legitimately refresh the
-      // installed projection during passive inspection. Move Home's root only
-      // after acceptance so the real preparation guard observes the mismatch.
-      changeRequesterRowsBeforePreparation = () => { rows[index] = replacement; };
+      // installed projection during passive inspection. The preparation-refusal
+      // case moves Home's root after acceptance so the guard sees a mismatch;
+      // output-reader cases change the already-running workspace immediately.
+      if (timing === 'beforePreparation') changeRequesterRowsBeforePreparation = () => { rows[index] = replacement; };
+      else rows[index] = replacement;
     },
     disconnectInstalledMachine: () => installedSocket?.disconnect(),
     source: () => source, hasApproval: () => artifact !== undefined,

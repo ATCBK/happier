@@ -146,15 +146,20 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await h.close();
     }
   });
-  it('does not publish an original Account CLI declared-Service Ask without native compound review despite a UI waiver', async () => {
+  it('reviews original Account CLI declared-Service Ask before publication despite a UI waiver', async () => {
     const h = await createHarness('localServices.launcher.start', 'ask', false, 'srv_n2', undefined, false, false,
       { authentication: 'account', askWithUiWaiver: true });
     try {
       const input = await h.serviceInput();
-      expect(await h.runOriginalCli(input, 'localServices.launcher.start')).toMatchObject({ ok: false,
-        errorCode: 'approval_context_unavailable' });
-      expect(h.hasApproval()).toBe(false);
+      expect(await h.runOriginalCli(input, 'localServices.launcher.start')).toMatchObject({ ok: true,
+        result: { kind: 'approval_request_created' } });
+      expect(await h.approval()).toMatchObject({ actionArgs: input, preview: { serviceStartReview: {
+        request: input, target: { machineId: input.machineId, rootPath: h.rootPath }, reviewedEffectDigest: expect.any(String),
+      } } });
       expect(h.serviceInstances()).toHaveLength(0);
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      expect((await h.approval()).execution).toMatchObject({ ok: true, result: { status: 'succeeded' } });
+      expect(h.serviceInstances()).toHaveLength(1);
     } finally {
       await Promise.all(h.serviceInstances().map(service => service.stop()));
       await h.close();
@@ -994,7 +999,7 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
   it('does not lend the installed Account relationship when the requester target root changes before preparation', async () => {
     const h = await createHarness('projects.script.run', 'allowed', false, 'srv_portableHome', undefined, true);
     try {
-      await h.changeRequesterWorkerRootBeforePreparation();
+      await h.changeRequesterWorkerRoot('beforePreparation');
       const result = await h.run({ workspace: { serverId: h.ref.serverId, workspaceId: h.ref.id, machineId: h.ref.machineId, rootPath: h.rootPath },
         selection: { kind: 'named', name: 'lint' }, choice: { kind: 'workers', destination: { kind: 'machine', machineId: h.workerRef.machineId } } },
         'ui', false, 'present_user');
@@ -1124,22 +1129,44 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       await h.close();
     }
   });
-  it.each([false, true])('refuses declared Machine Service approval publication without native compound review (setup=%s)', async setup => {
+  it.each([false, true])('reviews declared Machine Service before Artifact publication and replays the approved effect (setup=%s)', async setup => {
     const h = await createHarness('localServices.launcher.start', 'ask', setup);
     try {
       const input = await h.serviceInput();
       const proposal = await h.run(input, 'ui', 'unsigned-ui', 'present_user');
-      // Main71/B8's compound target/setup/Start subject is not yet produced.
-      // Input-only approval must not grant execution of this native declaration.
-      expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: false, errorCode: 'approval_context_unavailable' });
-      expect(h.hasApproval()).toBe(false);
-      expect(h.finiteIngress).toEqual([]);
+      expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const approval = await h.approval();
+      expect(approval).toMatchObject({ actionArgs: input, preview: { serviceStartReview: {
+        request: input, target: { machineId: input.machineId, rootPath: h.rootPath }, reviewedEffectDigest: expect.any(String),
+      } } });
       expect(h.spawned).toEqual([]);
       expect(h.serviceInstances()).toEqual([]);
+      const decided = h.decide('approve');
+      if (setup) (await h.waitForSpawn(0)).exit(0);
+      expect(await decided).toMatchObject({ ok: true });
+      expect((await h.approval()).execution).toMatchObject({ ok: true, result: { status: 'succeeded' } });
+      expect(h.serviceInstances()).toHaveLength(1);
     } finally {
+      await Promise.all(h.serviceInstances().map(service => service.stop()));
       await h.close();
       expect(h.serviceInstances()).toEqual([]);
     }
+  });
+  it('refuses changed Service bytes when replaying the CLI native review Artifact', async () => {
+    const h = await createHarness('localServices.launcher.start', 'ask');
+    try {
+      expect(await h.runOriginalCli(await h.serviceInput(), 'localServices.launcher.start')).toMatchObject({ ok: true,
+        result: { kind: 'approval_request_created' } });
+      const file = join(h.rootPath, '.happier/project.json');
+      const manifest = JSON.parse(await readFile(file, 'utf8'));
+      manifest.services.checked.source.command = 'echo changed';
+      await writeFile(file, JSON.stringify(manifest));
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      expect((await h.approval()).execution).toMatchObject({ ok: true,
+        result: { status: 'denied', reasonCode: 'project_service_effect_changed' } });
+      expect(h.spawned).toEqual([]);
+      expect(h.serviceInstances()).toEqual([]);
+    } finally { await h.close(); }
   });
   it.each(['denied', 'Home admission unavailable'] as const)('refuses original CLI Project Run before Ask or native execution: %s', async refusal => {
     const h = await createHarness('projects.script.run', refusal === 'denied' ? 'denied' : 'ask');

@@ -43,7 +43,7 @@ export function createTargetActionApprovalDecision(deps: Readonly<{
     signal?.throwIfAborted();
     let existing: TargetActionApprovalRequestV1 | null;
     try { existing = await deps.read(artifactId); }
-    catch { return failure('approval_unavailable'); }
+    catch { return failure('approval_context_unavailable'); }
     // Ordinary approval Artifacts remain with the generic Action owner.
     if (!existing) return null;
     const originalInvocation = projectTargetActionApprovalInvocationV1(existing);
@@ -123,7 +123,9 @@ export function createTargetActionApprovalDecision(deps: Readonly<{
         decision: { kind: 'approve', decidedAtMs: approvedAtMs, ...requesterDecision } });
       let persisted: TargetActionApprovalRequestV1 | null;
       try { persisted = await deps.read(artifactId); }
-      catch { return failure('approval_unavailable'); }
+      // Consent may already be committed. Keep the Artifact recoverable; a
+      // later replay reuses this decision and claims execution before effects.
+      catch { return failure('approval_context_unavailable'); }
       if (!persisted) return persistenceFailure ?? failure('approval_not_found');
       // Account change delivery can resume the original invocation before the
       // decision write returns. Its claim confirms consent without replay.
