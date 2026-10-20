@@ -124,6 +124,15 @@ export function createEndOwnerRemainder(input: Readonly<{
                     // A reowned member protects only its own tree, never the
                     // other captured targets. Preserve descendants-first order.
                     for (const target of [...targets].reverse()) {
+                        const observed = view.snapshot.rows.find(row => row.pid === target.pid);
+                        if ((!observed && !view.snapshot.partial?.some(row => row.pid === target.pid))
+                            || observed?.state === 'zombie' && equalProcessStart(observed.start, target.start)) {
+                            // This fresh census already proves the captured generation
+                            // departed. Re-reading the entire machine for each dead
+                            // child delays both Stop and the waiting replacement.
+                            results.push({ status: 'complete', outcomes: [{ pid: target.pid, outcome: 'gone_before' }] });
+                            continue;
+                        }
                         results.push(await terminate({ targets: [{ pid: target.pid, start: target.start }], tree: false,
                             async authorizeSignal() {
                                 const current = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });

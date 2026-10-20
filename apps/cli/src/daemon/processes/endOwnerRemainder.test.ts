@@ -14,6 +14,44 @@ import type { TrackedSession } from '../types';
 import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
 import { spawn } from 'node:child_process';
 
+it.each(['absent', 'zombie', 'unreadable'] as const)('settles a departed captured tree using its native evidence (%s)', async state => {
+    const owner = { kind: 'session', sessionId: 'departed-tree' } as const;
+    let censusReads = 0;
+    const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
+        async readdir() { censusReads++; return [String(process.pid), ...(state === 'absent' ? [] : ['5100'])]; },
+        async readlink() { return '/fixture'; },
+        async readFile(path) {
+            const pid = Number(path.split('/')[2]);
+            if (pid === 5100 && state === 'unreadable') throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+            if (path.endsWith('/status')) return 'Uid:\t1000\n';
+            if (path.endsWith('/stat')) return pid + ' (fixture) ' + [pid === 5100 ? 'Z' : 'S', '1', '5000', '1', '0', '0',
+                ...Array(13).fill('0'), pid === 5100 ? '110' : '10', '0', '0'].join(' ');
+            return '';
+        },
+    } };
+    const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: '123456789abc',
+        censusDependencies, listRoots: () => [] });
+    const signals: number[] = [];
+    const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
+        daemonScopeKey: '123456789abc', firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
+            kill(pid) { signals.push(pid); return true; } } });
+    const roots = Array.from({ length: 70 }, (_, index): HappierProcessRoot => ({ owner, pid: 5100 + index,
+        start: { startTimeMs: 1100 + index }, live: true, ownerCreatedAtMs: 0 }));
+    const result = await remainder.end(owner, { scope: 'subtree', ownership: [], roots });
+    expect(result.outcomes).toHaveLength(roots.length);
+    expect(signals).toEqual([]);
+    if (state === 'unreadable') {
+        expect(result.status).toBe('incomplete');
+        expect(result.outcomes).toContainEqual({ pid: 5100, outcome: 'refused', reason: 'identity_unavailable' });
+        return;
+    }
+    expect(result.status).toBe('complete');
+    expect(result.outcomes.every(outcome => outcome.outcome === 'gone_before')).toBe(true);
+    // A fresh complete census already proves all captured generations absent.
+    // Repeating whole-machine reads per departed PID delays the owning respawn.
+    expect(censusReads).toBe(1);
+});
+
 it('protects a captured generation reowned during the final native identity read while retiring other targets', async () => {
     const owner = { kind: 'session', sessionId: 'departed' } as const;
     const root: HappierProcessRoot = { owner: { kind: 'session', sessionId: 'resumed' },
