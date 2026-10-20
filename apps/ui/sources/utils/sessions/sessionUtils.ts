@@ -15,7 +15,7 @@ import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCata
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionListRenderableSourceMetadata, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
     projectUiSessionRuntimeAwareness,
     isFreshTimestamp,
@@ -109,6 +109,8 @@ type SessionStatusColors = Readonly<{
 export type SessionWorkingTextMode = 'animated' | 'static';
 type GetSessionStatusOptions = Readonly<{
     includeTitle?: boolean;
+    /** Work rows already carry an age, while Session-list rows can retain Last seen. */
+    disconnectedTextMode?: 'lastSeen' | 'offline';
     vibingIndex?: number;
     workingTextMode?: SessionWorkingTextMode;
     statusColors?: SessionStatusColors;
@@ -405,6 +407,9 @@ export function presentSessionAwarenessV1(
     options?: Readonly<{
         /** `activeAt` for the "last seen" wording; omit it for a plain disconnected label. */
         lastSeenAtMs?: number | null;
+        disconnectedTextMode?: 'lastSeen' | 'offline';
+        /** Existing process-terminal metadata; unknown values never imply a stop. */
+        lifecycleState?: string;
         /** The caller's already-chosen working wording; omitted callers get the static one. */
         workingLabel?: string;
     }>,
@@ -428,9 +433,13 @@ export function presentSessionAwarenessV1(
         const lastSeenAtMs = options?.lastSeenAtMs;
         return {
             state: 'disconnected',
-            statusText: typeof lastSeenAtMs === 'number'
-                ? t('status.lastSeen', { time: formatLastSeen(lastSeenAtMs, false) })
-                : t('status.disconnected'),
+            statusText: options?.lifecycleState === 'stopped'
+                ? t('sessionWork.states.stopped')
+                : options?.disconnectedTextMode === 'offline'
+                    ? t('status.offline')
+                    : typeof lastSeenAtMs === 'number'
+                        ? t('status.lastSeen', { time: formatLastSeen(lastSeenAtMs, false) })
+                        : t('status.disconnected'),
             quiet: false,
         };
     }
@@ -455,6 +464,14 @@ export function presentSessionAwarenessV1(
     }
 }
 
+/** The authorized metadata view carrying the process fact, for every status-word presenter. */
+export function readSessionStatusLifecycleState(session: SessionStatusSource): string | undefined {
+    if ('metadataUnavailable' in session && session.metadataUnavailable === true) return undefined;
+    const metadata = 'agentState' in session ? readSessionListRenderableSourceMetadata(session) : session.metadata;
+    const lifecycleState = metadata?.lifecycleState;
+    return typeof lifecycleState === 'string' ? lifecycleState : undefined;
+}
+
 export function getSessionStatus(session: SessionStatusSource, nowMs: number = Date.now(), options?: GetSessionStatusOptionsInput): SessionStatus {
     const resolvedOptions = resolveGetSessionStatusOptions(options);
     const { vibingIndex, workingTextMode = 'animated', statusColors = DEFAULT_SESSION_STATUS_COLORS } = resolvedOptions;
@@ -470,6 +487,8 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     const idx = typeof vibingIndex === 'number' ? vibingIndex : Math.floor(Math.random() * vibingMessages.length);
     const presented = presentSessionAwarenessV1(awareness, {
         lastSeenAtMs: session.activeAt,
+        disconnectedTextMode: resolvedOptions.disconnectedTextMode,
+        lifecycleState: readSessionStatusLifecycleState(session),
         ...(workingTextMode === 'static'
             ? {}
             : { workingLabel: vibingMessages[idx % vibingMessages.length].toLowerCase() + '…' }),

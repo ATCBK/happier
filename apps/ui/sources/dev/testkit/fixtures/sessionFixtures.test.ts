@@ -27,6 +27,8 @@ it('preserves Session runtime facts without disclosing recipient owner metadata'
         ...session, access: createSessionFixture({ accessLevel: 'edit' }).access,
     })).session;
     expect(recipient.ownerMetadata).toBeUndefined();
+    expect(recipient.agentState).toBeNull();
+    expect(recipient.agentStateVersion).toBe(session.agentStateVersion);
     expect(JSON.parse(recipient.metadata)).not.toHaveProperty('profileId');
     expect(recipient.effectiveAccess?.level).toBe('edit');
     expect(() => createPlainSessionByIdResponseFixture({ ...session, encryptionMode: 'e2ee' })).toThrow();
