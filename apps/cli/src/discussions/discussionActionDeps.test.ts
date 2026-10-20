@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
-import { createActionExecutor, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { createActionExecutor, FeaturesResponseSchema, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema, DiscussionAgentPostRequestV1Schema } from '@happier-dev/protocol/discussions/api';
-import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
+import { DiscussionSummaryV1Schema, type DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
 import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
@@ -26,6 +26,7 @@ import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/res
 import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
 import { openSessionStoredContent, sealSessionStoredContent, type SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionStoredContentCodec';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 
 const credentials = { token: 'token-1', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } };
 const keyless = { token: 'token-1', encryption: null };
@@ -52,7 +53,7 @@ function wireMessage(crypto: SessionStoredContentCryptoContext = plain) {
     authorAccountId: 'account-1', accountActor: { v: 1, accountId: 'account-1', profile: null },
     producerV1: null, content: sealSessionStoredContent({ ...crypto, payload: content }),
     mentionedAccountIds: [], createdAt: 1,
-  };
+  } satisfies DiscussionMessageV1;
 }
 
 function wireSummary(crypto: SessionStoredContentCryptoContext = plain, envelope: string | null = null) {
@@ -73,6 +74,15 @@ function action(options: Partial<Parameters<typeof createDiscussionActionDeps>[0
     credentials: keyless, serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test',
     resolveServerFeaturesSnapshot: () => features, ...options,
   }).discussionAction!;
+}
+
+function discussionExecutor(deps: Pick<ActionExecutorDeps, 'discussionAction'> & Partial<ActionExecutorDeps>) {
+  return createActionExecutor({
+    ...createCliActionDeps({ token: keyless.token, credentials: keyless, sessionId: 'cli-global',
+      mode: 'plain', ctx: null, serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test',
+      resolveServerFeaturesSnapshot: () => features }),
+    ...deps,
+  });
 }
 
 describe('Home Discussion resource transport', () => {
@@ -116,7 +126,7 @@ describe('Home Discussion resource transport', () => {
           answerPolicy: 'when_addressed', createdAt: 1 }] } };
     });
     const received: string[] = [];
-    const executor = createActionExecutor({ discussionAction: action(),
+    const executor = discussionExecutor({ discussionAction: action(),
       sessionSendMessage: async ({ sessionId }) => { received.push(sessionId); return { status: 'accepted', localId: 'input-1' }; },
       isActionApprovalRequired: () => false,
     });
@@ -142,7 +152,7 @@ describe('Home Discussion resource transport', () => {
       } };
       return original(request);
     });
-    const executor = createActionExecutor({ discussionAction: action() });
+    const executor = discussionExecutor({ discussionAction: action() });
     const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
     expect(await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context))
       .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
@@ -170,7 +180,7 @@ describe('Home Discussion resource transport', () => {
     const profiles = ['account-1', 'candidate'].map(id => ({ id, name: id, username: id, firstName: id,
       lastName: null, avatar: null, bio: null, badges: [], status: 'none', publicKey: null }));
     axiosRequest.mockResolvedValue({ status: 200, data: { users: profiles, nextCursor: 'next-people' } });
-    const executor = createActionExecutor({ discussionAction: action({ credentials: { token, encryption: null } }) });
+    const executor = discussionExecutor({ discussionAction: action({ credentials: { token, encryption: null } }) });
     expect(await executor.execute('discussion.candidates.list', { source: 'people', query: 'candidate', cursor: 'previous' }, context))
       .toMatchObject({ ok: true, result: { source: 'people', serverId: 'server-1',
         candidates: [{ kind: 'account', participant: { kind: 'account', accountId: 'candidate' } }], nextCursor: 'next-people' } });
@@ -318,7 +328,7 @@ describe('Home Discussion resource transport', () => {
     } });
     const reader = action({ credentials: mode === 'plain' ? keyless : credentials });
     const protectedContext = { ...context, surface: 'mcp' as const,
-      actionCaller: { kind: 'session' as const, sessionId: 'receiver' }, defaultSessionId: 'receiver',
+      actionCaller: { kind: 'session' as const, sessionId: 'receiver', starterDepth: 0, turnDepth: 0 }, defaultSessionId: 'receiver',
       sessionInputSource: { sourceSessionId: 'receiver', sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' as const,
         discussionAddressing: { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 2, participantSessionId: 'receiver' } },
     };
@@ -385,7 +395,7 @@ describe('Home Discussion resource transport', () => {
       }
       throw new Error('Unexpected Doc transport request');
     });
-    const executor = createActionExecutor({ discussionAction: action({ credentials: mode === 'plain' ? keyless : credentials }) });
+    const executor = discussionExecutor({ discussionAction: action({ credentials: mode === 'plain' ? keyless : credentials }) });
     const docContext = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
       'doc.comment.reply': ['cli'], 'doc.edit.propose': ['cli'],
     } }) };
@@ -412,7 +422,7 @@ describe('Home Discussion resource transport', () => {
         docEditProposalDispositionV1: { state: 'open' },
         producerV1: { v: 1, kind: 'agent', sessionId: 'agent-session' } }, messageSeq: 3 } };
     };
-    const agent = createActionExecutor({ discussionAction: action({ credentials: mode === 'plain' ? keyless : credentials, postAgentMessage }) });
+    const agent = discussionExecutor({ discussionAction: action({ credentials: mode === 'plain' ? keyless : credentials, postAgentMessage }) });
     expect(await agent.execute('doc.edit.propose', { ...proposalInput, localId: 'agent-proposal' }, {
       ...context, surface: 'agent', authority: 'account_automation', defaultSessionId: 'agent-session',
       actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'doc.edit.propose': ['agent'] } }),
@@ -787,8 +797,8 @@ describe('Home Discussion resource transport', () => {
   });
 
   it('uses admitted participant provenance when its Session is different from the optional anchor', async () => {
-    const postAgentMessage = vi.fn(async (request) => ({ v: 1 as const, ok: true as const, value: {
-      message: { ...wireMessage(), content: request.request.content,
+    const postAgentMessage = vi.fn<NonNullable<Parameters<typeof createDiscussionActionDeps>[0]['postAgentMessage']>>(async (request) => ({ v: 1 as const, ok: true as const, value: {
+      message: { ...wireMessage(), content: DiscussionAgentPostRequestV1Schema.parse(request).request.content,
         producerV1: { v: 1 as const, kind: 'agent' as const, sessionId: 'participant-session', runId: 'run-1', toolCallId: 'tool-1' } }, messageSeq: 1,
     } }));
     const result = await action({ postAgentMessage })({ actionId: 'discussion.post',

@@ -133,7 +133,7 @@ it('routes a source-only Account change through the installed private rule cache
       await Promise.all([...changedFollows].map(listener => listener({ full: false, workflowRunIds: [workflowIds[0]!] })));
       expect(runRouteReads).toEqual([{ v: 1, source: { kind: 'workflow_run', runId: workflowIds[0] } }]);
       runRouteReads.length = 0;
-      await Promise.all([...changedFollows].map(listener => listener({ full: false, discussionIds: [discussionId] })));
+      await Promise.all([...changedFollows].map(listener => listener({ full: false, workflowRunIds: [], discussionIds: [discussionId] })));
       expect(runRouteReads).toEqual([{ v: 1, source: { kind: 'discussion', discussionId } }]);
       runRouteReads.length = 0;
       await connectOptions?.onConnect?.();

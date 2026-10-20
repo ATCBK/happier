@@ -45,7 +45,7 @@ const resumeNetwork = vi.hoisted(() => ({ io: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: resumeNetwork.io }));
 
 function callerSessionFixture(callerDirectory = '/caller/repo', currentStarterDepth = 2, active = true,
-  rawOverrides: Parameters<typeof createSessionRecordFixture>[0] = {}, questionAnswersEnabled = false,
+  rawOverrides: Partial<Parameters<typeof createSessionRecordFixture>[0]> = {}, questionAnswersEnabled = false,
   otherSessions: readonly ReturnType<typeof createSessionRecordFixture>[] = []) {
     const sessionId = 'c111111111111111111111111';
     const metadata = { path: callerDirectory, machineId: 'caller-machine', flavor: 'codex',
@@ -413,7 +413,7 @@ describe('daemon Account Action Session caller context', () => {
       actionCaller: caller, defaultSessionId: fixture.sessionId, actionRequestId: 'answer-action',
       sessionInputSource: { sourceSessionId: fixture.sessionId, sourceTurnId: 'turn-one', via: 'action' } };
     try {
-      for (const response of [{ answers: [{ question: 'Branch?', values: ['dev'] }] }, { disposition: 'pass_up' }]) {
+      for (const response of [{ answers: [{ question: 'Branch?', values: ['dev'] }] }, { disposition: 'pass_up' as const }]) {
         expect(await deps.sessionUserActionAnswer?.({
           sessionId: fixture.sessionId, requestId: 'question-one', answers: [], ...response, context,
         })).toMatchObject({ ok: true });

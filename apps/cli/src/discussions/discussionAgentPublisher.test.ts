@@ -11,6 +11,7 @@ import { DurableWorkflowCoordinatorStore } from '@/daemon/workflows/production';
 import { workflowInvocationKey } from '@/daemon/workflows/coordinator';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { WorkflowInvocationGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 
 vi.mock('axios', () => ({ default: { get: vi.fn() } }));
 
@@ -116,7 +117,7 @@ describe('trusted Discussion reply publisher', () => {
       serverId: 'home', serverUrl: 'https://home.test', readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
       isApprovalExecutionOriginCurrent: async () => false,
       executeSourceAction: async (actionId, input, context) => actionId === 'workflow.run.invocations.get'
-        ? { ok: true, result: await owner.execute({ actionId, input, context }) }
+        ? { ok: true, result: await owner.execute({ actionId, input: WorkflowInvocationGetRequestV1Schema.parse(input), context }) }
         : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' },
       session: { sessionId: 'receiver', postAgentDiscussionMessage: async request => {
         posts.push(request); committed = true; return { v: 1, ok: false, error: 'discussion_post_denied' };

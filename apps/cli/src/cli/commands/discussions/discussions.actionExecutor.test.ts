@@ -23,8 +23,10 @@ async function invoke(argv: readonly string[]) {
     deps: {
       readCredentialsFn: async () => credentials,
       createExecutorFn: (params) => {
+        const { serverId, serverApiUrl, ...actionParams } = params;
+        const home = serverId === undefined ? {} : { serverId, serverHttpBaseUrl: serverApiUrl };
         const deps = createCliActionDeps({
-          ...params, token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
+          ...actionParams, ...home, token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null,
           resolveServerFeaturesSnapshot: () => features,
         });
         return {
