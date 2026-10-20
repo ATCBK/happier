@@ -8706,11 +8706,40 @@ export function createCliActionDeps(params: Readonly<{
         return rejectUnavailable('canceled');
       }
 
-      // The existing current-session binding is the only live owner lookup.
-      // Do not fall back to the Action deps' construction session, a registry,
-      // or a Session RPC: a remote decision must reach the exact active owner.
+      // Mediator decisions stay bound to their exact current local owner.
+      // Account grant administration can reach that same owner from a separate
+      // CLI/daemon process through the already-registered Session RPC.
       const binding = resolveCurrentSessionCapabilityBinding(args.input.sessionId);
       if (!binding) {
+        if ((args.actionId === 'session.permission.remote.grants.list' || args.actionId === 'session.permission.remote.grants.revoke')
+          && args.caller.kind !== 'plugin' && args.context && args.context.surface !== 'rpc'
+          && !args.context.rpcSessionAuthorization && params.credentials) {
+          const context = args.context;
+          const credentials = params.credentials;
+          const externalRequest = Boolean(context.externalActionCredential || context.externalActionExecutionAuthorization);
+          if (externalRequest && (!params.externalActionMachineRequestPrivateKey || !params.externalActionMachineInstallationId)) {
+            return rejectUnavailable('ownerMachineUnavailable');
+          }
+          return await withProjectHome(async () => {
+            const transport = await resolveTransportForSession(args.input.sessionId, args.signal, { context, actionId: args.actionId });
+            if (!transport.ok) return { ok: false, errorCode: transport.code, error: transport.code };
+            try {
+              return await callSessionRpc({ ...transport, token: credentials.token, sessionId: transport.sessionId,
+                method: `${transport.sessionId}:${args.actionId}`, request: args.input,
+                ...(context.authority !== 'present_user' ? { authorityCeiling: 'account_automation' as const } : {}),
+                ...(externalRequest && params.externalActionMachineRequestPrivateKey && params.externalActionMachineInstallationId ? {
+                  externalAction: { context, effectActionId: args.actionId, installationId: params.externalActionMachineInstallationId,
+                    privateKey: params.externalActionMachineRequestPrivateKey },
+                } : {}),
+                ...(args.signal ? { signal: args.signal } : {}),
+              });
+            } catch (error) {
+              const errorCode = readRpcErrorCode(error) ?? (readRpcRequestDisposition(error) === 'outcomeUnknown'
+                ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : 'ownerMachineUnavailable');
+              return { ok: false, errorCode, error: errorCode };
+            }
+          });
+        }
         return rejectUnavailable('ownerMachineUnavailable');
       }
       const bindingIsStillCurrent = (): boolean => {
@@ -8826,12 +8855,9 @@ export function createCliActionDeps(params: Readonly<{
 
       const viewer = args.caller.kind === 'plugin'
         ? { kind: 'mediatorPlugin' as const, pluginId: args.caller.pluginId }
-        : args.caller.kind === 'host'
-          ? { kind: 'host' as const }
-          : null;
-      if (!viewer) {
-        return rejectUnavailable('mediationStateUnavailable');
-      }
+        // The admitted Account Action owns non-plugin callers. A Session
+        // caller does not manufacture mediator identity or another grant owner.
+        : { kind: 'host' as const };
 
       if (args.actionId === 'session.permission.remote.grants.list') {
         const listGrants = permissionHandler.listMediatedPermissionGrants;

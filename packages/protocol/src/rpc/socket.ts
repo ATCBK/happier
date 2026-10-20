@@ -564,10 +564,11 @@ const ADDITIONAL_SESSION_RPC_AUTHORIZATION_ROWS = [
   { method: RPC_METHODS.SESSION_PERMISSION_RESPOND, authority: 'approveRuntimePermissions', actionId: 'session.permission.respond', routeToSessionOwnerDaemon: true, serverMintedContext: 'session.permission.respond' },
   { method: 'permission', authority: 'approveRuntimePermissions', actionId: 'session.permission.respond', routeToSessionOwnerDaemon: true, serverMintedContext: 'session.permission.respond' },
   { method: RPC_METHODS.APPROVAL_REQUEST_DECIDE, authority: 'submitAgentInput', actionId: 'approval.request.decide', machineScope: true, routeToSessionOwnerDaemon: true, serverMintedContext: 'session.permission.respond' },
-  { method: 'session.permission.remote.grants.list', authority: 'submitAgentInput', routeToSessionOwnerDaemon: true },
-  { method: 'session.permission.remote.grants.revoke', authority: 'submitAgentInput', routeToSessionOwnerDaemon: true },
+  { method: 'session.permission.remote.grants.list', authority: 'submitAgentInput', actionId: 'session.permission.remote.grants.list', routeToSessionOwnerDaemon: true },
+  { method: 'session.permission.remote.grants.revoke', authority: 'submitAgentInput', actionId: 'session.permission.remote.grants.revoke', routeToSessionOwnerDaemon: true },
   { method: 'session.user_action.answer', authority: 'submitAgentInput', actionId: 'session.user_action.answer', routeToSessionOwnerDaemon: true, serverMintedContext: 'session.permission.respond' },
   { method: 'abort', authority: 'submitAgentInput', actionId: 'session.turn.cancel', routeToSessionOwnerDaemon: true },
+  { method: 'switch', authority: 'submitAgentInput', actionId: 'session.control.switch', routeToSessionOwnerDaemon: true },
   { method: 'skills.read', authority: 'readTranscript', actionId: 'skills.read', routeToSessionOwnerDaemon: true },
   { method: 'session.update.post', authority: 'submitAgentInput', actionId: 'session.update.post', routeToSessionOwnerDaemon: true },
 ] as const satisfies readonly SocketRpcSessionWriteClassificationV1[];
