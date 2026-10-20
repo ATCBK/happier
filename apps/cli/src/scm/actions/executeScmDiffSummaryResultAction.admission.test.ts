@@ -14,6 +14,7 @@ import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/compari
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { ScmDiffFileResponseSchema } from '@happier-dev/protocol/scm';
+import { createTestGitScmBackendRegistry } from '@/scm/rpc/__tests__/testRpcHarness';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -29,11 +30,13 @@ describe('saved SCM producer admission', () => {
       const port = createScmReviewedMarksRecordPort('id' in evidence ? { comparison: evidence, transport } : { source: evidence, transport });
       return 'changeKeys' in request ? port.setReviewedKeys(request.changeKeys, reviewed) : port.setReviewed(request.changeRefs, reviewed);
     };
-    const base = { workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots' as const, roots: [cwd] }, executeReviewedMarks };
+    const base = { workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots' as const, roots: [cwd] },
+      registry: createTestGitScmBackendRegistry(), executeReviewedMarks };
     try {
       await writeFile(join(cwd, fixture.trackedPath), 'Live change without a capture\n');
+      await writeFile(join(cwd, 'untracked.txt'), 'Another live file\n');
       const diff = ScmDiffFileResponseSchema.parse(await executeScmActionOperation({ ...base, actionId: 'scm.diff.file', input: { cwd, path: fixture.trackedPath, area: 'both' } }));
-      expect(diff.success).toBe(true);
+      expect(diff.success, JSON.stringify(diff)).toBe(true);
       const changeKeys = buildReviewUnits(fixture.trackedPath, 'combined', diff.diff ?? '').map(unit => unit.key);
       expect(changeKeys.length).toBeGreaterThan(0);
       const input = { v: 2, cwd, source: { kind: 'workingTree' }, changeKeys };

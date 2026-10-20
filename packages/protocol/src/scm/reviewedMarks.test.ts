@@ -22,6 +22,27 @@ const comparison = capture('first');
 const marked = () => applyScmReviewedMarkIntent(comparison, null, ['first:0'], true);
 
 describe('scope personal marks owner', () => {
+  it('retains PR content marks across endpoint and source Action witness refreshes', async () => {
+    const pullRequest = (id: string): ScmComparison => ({ ...capture(id), source: { kind: 'pullRequest', locator: {
+      providerId: 'github', repository: 'owner/repo', number: 42, baseOid: `base-${id}`, headOid: `head-${id}`,
+      sourceAction: { action: { pluginId: 'happier.scm.github', localId: 'comparison' }, input: { headOid: `head-${id}` } },
+    } } });
+    const first = pullRequest('first');
+    let value: unknown = null;
+    const transport: ScmReviewedMarksJsonTransport = { read: async () => ({ value, version: value === null ? -1 : 1 }),
+      compareAndSet: async next => { value = next; return { success: true, version: 1 }; } };
+    await createScmReviewedMarksRecordPort({ comparison: first, transport }).setReviewed(['first:0'], true);
+    const refreshed = pullRequest('refresh');
+    const read = await createScmReviewedMarksRecordPort({ comparison: refreshed, transport }).read();
+    expect(isScmSelectionReviewed(read.record, refreshed, ['refresh:0'])).toBe(true);
+    const source = refreshed.source;
+    if (source.kind !== 'pullRequest') throw new Error('Expected a PR comparison');
+    for (const locator of [{ ...source.locator, number: 43 },
+      { ...source.locator, sourceAction: { action: { pluginId: 'happier.scm.github', localId: 'other' } } }]) {
+      const other = { ...refreshed, source: { kind: 'pullRequest' as const, locator } };
+      expect(isScmSelectionReviewed(read.record, other, ['refresh:0'])).toBe(false);
+    }
+  });
   it('retains reviewed content when a session comparison is recaptured with shifted lines', async () => {
     let value: unknown = null;
     const transport: ScmReviewedMarksJsonTransport = { read: async () => ({ value, version: value === null ? -1 : 1 }),

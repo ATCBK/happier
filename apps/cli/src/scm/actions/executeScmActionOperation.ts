@@ -512,7 +512,8 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                         if (!headNoteEvidence.changedPaths.some(changedPath => scmPathMatchesScopePath({ changedPath, scopePath: entry.path }))) continue;
                     }
                     const restore = entry.kind === 'comparison' && !entry.changeKeys && !entry.changeRefs;
-                    const count = entry.kind === 'comparison' ? (entry.changeKeys?.length ?? entry.changeRefs?.length) : undefined;
+                    // Captured refs select Git hunks, which may contain several review runs.
+                    const count = entry.kind === 'comparison' ? entry.changeKeys?.length : undefined;
                     const turnId = source?.kind === 'turnCheckpoint' ? source.turnId : undefined;
                     const operations = bySession.get(sessionId) ?? [];
                     const action = restore ? 'restore' : 'discard';

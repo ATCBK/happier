@@ -114,7 +114,7 @@ describe('Session-control RPC write classification', () => {
       });
       expect(resolveSocketRpcSessionWriteAuthorization(`machine-1:${method}`)).toBeNull();
     }
-    for (const method of [RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE, RPC_METHODS.SCM_DIFF_SUMMARY_REFINE,
+    for (const method of [RPC_METHODS.SCM_CHANGE_DISCARD, RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE, RPC_METHODS.SCM_DIFF_SUMMARY_REFINE,
       RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS, RPC_METHODS.SCM_DIFF_SUMMARY_ADD_OUTPUTS,
     ]) {
       expect(resolveSocketRpcSessionAuthorization(`machine-1:${method}`)).toEqual({

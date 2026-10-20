@@ -1069,7 +1069,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             return { method, socket, effect, ownerEffect, fetchSockets };
         }
 
-        it.each([RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ, RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE])(
+        it.each([RPC_METHODS.SCM_CHANGE_DISCARD, RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ, RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE])(
             "keeps workspace %s without proof and never promotes its input sessionId", async (rpcMethod) => {
                 sessionFindUniqueMock.mockResolvedValue(null);
                 const { method, socket, effect } = createScmSessionProofFixture(rpcMethod);
@@ -1121,7 +1121,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             expect(effect).not.toHaveBeenCalled();
         });
 
-        it.each([RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE, RPC_METHODS.SCM_DIFF_SUMMARY_REFINE,
+        it.each([RPC_METHODS.SCM_CHANGE_DISCARD, RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE, RPC_METHODS.SCM_DIFF_SUMMARY_REFINE,
             RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS, RPC_METHODS.SCM_DIFF_SUMMARY_ADD_OUTPUTS,
         ])("requires Session input authority for %s", async (rpcMethod) => {
             sessionShareFindUniqueMock.mockResolvedValue({ id: "share-1", sharedWithUserId: "user-1",
@@ -1152,10 +1152,10 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             expect(effect).not.toHaveBeenCalled();
         });
 
-        it("does not let valid Session proof bypass Machine availability", async () => {
+        it.each([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE, RPC_METHODS.SCM_CHANGE_DISCARD])("does not let valid Session proof bypass Machine availability: %s", async (rpcMethod) => {
             sessionFindUniqueMock.mockResolvedValue(createOwnedSessionAccessRow("private-session"));
             machineFindFirstMock.mockResolvedValue({ revokedAt: new Date(1), replacedByMachineId: null });
-            const { method, socket, effect } = createScmSessionProofFixture();
+            const { method, socket, effect } = createScmSessionProofFixture(rpcMethod);
             const ack = vi.fn();
             await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, {
                 method, params: "sealed-scm-input", authorization: { kind: "session.write", sessionId: "private-session" },

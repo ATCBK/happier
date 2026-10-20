@@ -17,8 +17,10 @@ import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints/refs';
 import { gitCheckpointAdapter } from '@/scm/checkpoints/gitCheckpointAdapter';
 import { retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessionEvidence';
 import { createTestGitRpcManager } from '@/scm/rpc/__tests__/testRpcHarness';
-import { prepareScmFileBytesExport } from '../deliverScmFileAtRevision';
+import { prepareScmFileBytesExport, type ScmFileBytesExportInput } from '../deliverScmFileAtRevision';
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
+import { commitGuardedFileReplace } from '@/rpc/handlers/fileSystem/commitGuardedFileReplace';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
@@ -115,6 +117,33 @@ describe('comparison discard through the SCM Action executor', () => {
     expect(notes).toEqual([{ action: 'discard', sessionId: 'review-session', paths: [fixture.trackedPath], changeCount: 2 }]);
     expect(await executeScmActionOperation(params)).toMatchObject({ success: false, errorCode: 'FILE_CHANGED' });
     expect(notes).toHaveLength(1);
+  });
+
+  it('omits a run count for one captured Git hunk containing two review runs', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-ref-note-' });
+    roots.push(fixture.rootPath);
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    const before = Array.from({ length: 15 }, (_, index) => `line ${index + 1}\n`).join('');
+    await writeFile(file, before);
+    runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'ref note base']);
+    const after = before.replace('line 3\n', 'first change\n').replace('line 7\n', 'second change\n');
+    const captured = await captureTurn(fixture.rootPath, async () => { await writeFile(file, after); });
+    try {
+      const evidence = captured.comparison.inventory.files.find(value => value.path === fixture.trackedPath)!;
+      expect(evidence.occurrences).toHaveLength(1);
+      expect(buildReviewUnits(evidence.path, 'combined', evidence.evidence.unifiedDiff!)).toHaveLength(2);
+      const notes: (FileReviewNoteV1 & { sessionId: string })[] = [];
+      const response = await executeScmActionOperation({ actionId: 'scm.change.discard', registry, workingDirectory: fixture.rootPath,
+        sessionId: captured.sessionId, authorizeSession: async id => id === captured.sessionId,
+        emitFileReviewNote: async note => { notes.push(note); },
+        input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
+          against: { source: captured.comparison.source, comparisonId: captured.comparison.id }, changeRefs: [evidence.occurrences[0]!.id] }] },
+      });
+      expect(response).toMatchObject({ success: true });
+      expect(await readFile(file, 'utf8')).toBe(before);
+      expect(notes).toEqual([{ action: 'discard', sessionId: captured.sessionId, paths: [fixture.trackedPath], turnId: captured.turnId }]);
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId }); }
   });
 
   it('refuses staged selections and invalid UTF-8 without changing bytes or the index', async () => {
@@ -253,7 +282,7 @@ describe('comparison discard through the SCM Action executor', () => {
     }
   });
 
-  it('refuses before mutation when unit Undo cannot fit the routed response budget', async () => {
+  it.each(['available', 'unavailable'] as const)('exports oversized unit Undo before mutation and roundtrips exact bytes (%s publisher)', async publisher => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-large-unit-' });
     roots.push(fixture.rootPath);
     const file = join(fixture.rootPath, fixture.trackedPath);
@@ -265,12 +294,47 @@ describe('comparison discard through the SCM Action executor', () => {
     await writeFile(file, after);
     const diff = runScmExecutable(fixture.rootPath, 'git', ['diff', '--no-color', '-U3', 'HEAD', '--', fixture.trackedPath]);
     const keys = buildReviewUnits(fixture.trackedPath, 'combined', diff).map(unit => unit.key);
+    const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
+    try {
     const response = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', registry,
       workingDirectory: fixture.rootPath, sessionId: 'review-session', authorizeSession: async () => true,
+      ...(publisher === 'available' ? { prepareFileBytesExport: async (input: ScmFileBytesExportInput) => {
+        expect(await readFile(file, 'utf8')).toBe(after);
+        return await prepareScmFileBytesExport({ ...input, lifecycle });
+      } } : {}),
       input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
         against: { source: { kind: 'workingTree' } }, changeKeys: keys, includeUndo: true }] } }));
-    expect(response).toMatchObject({ success: false, errorCode: 'COMPARISON_UNAVAILABLE' });
-    expect(await readFile(file, 'utf8')).toBe(after);
+    if (publisher === 'unavailable') {
+      expect(response).toMatchObject({ success: false, errorCode: 'COMPARISON_UNAVAILABLE' });
+      expect(await readFile(file, 'utf8')).toBe(after);
+      return;
+    }
+    expect(response.success).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe(before);
     expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES);
+    const entry = response.entries![0]!;
+    expect(entry.inverseEdits).toBeUndefined();
+    if (!entry.previous || !('export' in entry.previous)) throw new Error('Oversized inverse must use its exact preimage export');
+    const prepared = entry.previous.export;
+    const downloaded = await lifecycle.requestPayloadFile({ transferId: prepared.transferId, endpointCandidates: prepared.endpointCandidates,
+      destinationPath: join(fixture.rootPath, 'downloaded-undo'), expectedSizeBytes: prepared.sizeBytes, expectedManifestHash: prepared.manifestHash,
+      // Adapt only HTTP transport into the existing prepared-RPC boundary. The
+      // capability, encryption, manifest and actual export byte reader stay real.
+      fetchFn: async (input, init) => {
+        const endpoint = prepared.endpointCandidates[0];
+        if (!endpoint?.authorizationToken) throw new Error('Prepared transfer authority is unavailable');
+        const response = await lifecycle.requestPreparedTransfer({ t: 'prepared_machine_transfer_v1',
+          authorizationToken: endpoint.authorizationToken,
+          recipientPublicKeyBase64: new Headers(init?.headers).get('x-happier-transfer-recipient-public-key')!,
+          path: new URL(String(input)).pathname, httpMethod: init?.method === 'GET' ? 'GET' : 'POST',
+          ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as unknown } : {}) });
+        return new Response(response.body, { status: response.status, headers: { 'content-type': 'application/json' } });
+      } });
+    const bytes = await readFile(downloaded.destinationPath);
+    expect(bytes).toEqual(Buffer.from(after));
+    expect(await commitGuardedFileReplace({ destPath: file, expectation: entry.hashAfter, source: { kind: 'bytes', bytes } }))
+      .toMatchObject({ success: true, hash: hash(Buffer.from(after)) });
+    expect(await readFile(file, 'utf8')).toBe(after);
+    } finally { await lifecycle.stop(); }
   });
 });

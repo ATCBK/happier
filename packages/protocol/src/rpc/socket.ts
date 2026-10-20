@@ -601,6 +601,7 @@ const SOCKET_RPC_SESSION_WRITE_AUTHORIZATION: ReadonlyMap<string, SocketRpcSessi
       'scm.diffSummary.commitPlan.recover',
     ].map((method) => ({ method, authority: 'readTranscript' as const, optionalSessionScope: true as const, routeToSessionOwnerDaemon: false })),
     ...[
+      RPC_METHODS.SCM_CHANGE_DISCARD,
       RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE,
       RPC_METHODS.SCM_DIFF_SUMMARY_REFINE,
       RPC_METHODS.SCM_DIFF_SUMMARY_DISCUSS,

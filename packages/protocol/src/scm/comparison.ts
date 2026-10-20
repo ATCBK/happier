@@ -136,11 +136,11 @@ export function buildScmComparisonIdentity(input: Readonly<{
 
 /** Shared selector projection; model/output choices are deliberately excluded. */
 export function buildScmComparisonSourceKey(input: Readonly<{
-  cwd: string; source: ScmComparisonSource; turnId?: string; checkpointReceiptId?: string; turnEvidenceMode?: string;
+  cwd: string; source: ScmComparisonSource; sessionId?: string; turnId?: string; checkpointReceiptId?: string; turnEvidenceMode?: string;
 }>): string {
   const source = ScmComparisonSourceSchema.parse(input.source);
   switch (source.kind) {
-    case 'turnCheckpoint': return JSON.stringify([source.kind, source.sessionId ?? null, source.turnId ?? input.turnId ?? null, source.checkpointReceiptId ?? input.checkpointReceiptId ?? null, source.evidenceMode ?? input.turnEvidenceMode ?? 'reconciled']);
+    case 'turnCheckpoint': return JSON.stringify([source.kind, source.sessionId ?? input.sessionId ?? null, source.turnId ?? input.turnId ?? null, source.checkpointReceiptId ?? input.checkpointReceiptId ?? null, source.evidenceMode ?? input.turnEvidenceMode ?? 'reconciled']);
     case 'session': return JSON.stringify([source.kind, source.sessionId]);
     case 'workingTree': return JSON.stringify([source.kind, input.cwd]);
     case 'branch': return JSON.stringify([source.kind, input.cwd, source.head, source.base]);
