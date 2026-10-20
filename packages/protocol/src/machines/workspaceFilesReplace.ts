@@ -48,9 +48,9 @@ export function computeFileReplacement(
   if (decoded.kind === 'skip') return decoded;
   const { text } = decoded;
   const excluded = new Set(excludedMatches.map(({ line, column16 }) => `${line}:${column16}`));
-  // Retain each actual terminator, including mixed CR/LF files. Matching stays
-  // within the content of a line, so an edit never normalizes adjacent bytes.
-  const pieces = text.split(/(\r\n|\r|\n)/u);
+  // File/search anchors count LF-delimited lines. Preserve CRLF terminators,
+  // and keep a bare CR in its existing line so columns share that owner.
+  const pieces = text.split(/(\r\n|\n)/u);
   const lines = pieces.filter((_piece, index) => index % 2 === 0);
   const matches: ReplaceMatch[] = [];
   const edits: InverseEdit[] = [];

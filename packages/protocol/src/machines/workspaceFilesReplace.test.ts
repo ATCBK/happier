@@ -47,6 +47,16 @@ describe('computeFileReplacement', () => {
     ]);
   });
 
+  it('uses the existing file/search LF line coordinates when content contains a bare CR', () => {
+    const result = computeFileReplacement(encode('old\rold\nold'), literal);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.matches.map(({ line, column16 }) => ({ line, column16 }))).toEqual([
+      { line: 1, column16: 1 }, { line: 1, column16: 5 }, { line: 2, column16: 1 },
+    ]);
+    expect(decode(result.newBytes)).toBe('new\rnew\nnew');
+  });
+
   it.each([
     [new Uint8Array([0xff, 0xfe, 0x61, 0]), 'utf16'],
     [new Uint8Array([0xfe, 0xff, 0, 0x61]), 'utf16'],
