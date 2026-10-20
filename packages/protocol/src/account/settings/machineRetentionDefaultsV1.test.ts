@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as owner from './accountSettings.js';
 import { applyAccountSettingMutationV1 } from './accountSettingMutationV1.js';
-import { isMachineRetentionPolicySupportedV1, resolveMachineRetentionPolicyV1 as resolve } from '../../machines/managed/resolveMachineRetentionPolicyV1.js';
+import { isMachineRetentionPolicySupportedV1, resolveMachineRetentionNativeIntentV1, resolveMachineRetentionPolicyV1 as resolve, supportedMachineRetentionEffectsV1 } from '../../machines/managed/resolveMachineRetentionPolicyV1.js';
 import { MACHINE_RETENTION_CATEGORIES_V1, MachineRetentionPolicyV1Schema, updateMachineRetentionCategoryPreferenceV1 } from './machineRetentionDefaultsV1.js';
 
 const unused = { kind: 'unused', afterMs: 3_600_000, effect: 'stop' } as const;
@@ -112,6 +112,22 @@ describe('managed machine category preference through Account settings', () => {
       nativeCapabilities: { supportedIntents: ['start', 'stop', 'delete'] } }))
       .toMatchObject({ retention: { ...unused, effect: 'delete' }, wakeOnAcceptedMessage: false });
     expect(isMachineRetentionPolicySupportedV1(destructionWake, { supportedIntents: ['start', 'stop', 'delete'] })).toBe(false);
+  });
+
+  it('parks a suspend-only provisioner with Suspend instead of rewriting unused Stop to Delete', () => {
+    const local = { location: 'local', stoppedBilling: 'unknown' } as const;
+    const suspendOnly = { supportedIntents: ['start', 'suspend', 'resume', 'delete'] } as const;
+    expect(resolve({ billing: local, nativeCapabilities: suspendOnly }))
+      .toMatchObject({ retention: unused, wakeOnAcceptedMessage: true });
+    expect(isMachineRetentionPolicySupportedV1({ retention: unused, wakeOnAcceptedMessage: true }, suspendOnly)).toBe(true);
+    expect(supportedMachineRetentionEffectsV1(suspendOnly.supportedIntents)).toEqual(['stop', 'delete']);
+    expect(resolveMachineRetentionNativeIntentV1('stop', suspendOnly.supportedIntents)).toBe('suspend');
+    expect(resolveMachineRetentionNativeIntentV1('stop', ['stop', 'suspend', 'delete'])).toBe('stop');
+    expect(resolveMachineRetentionNativeIntentV1('delete', suspendOnly.supportedIntents)).toBe('delete');
+    expect(resolveMachineRetentionNativeIntentV1('stop', ['delete'])).toBeNull();
+    // finiteOnly still converts to Delete: the resource cannot be retained.
+    expect(resolve({ billing: local, nativeCapabilities: { ...suspendOnly, finiteOnly: true } }).retention)
+      .toMatchObject({ kind: 'unused', effect: 'delete' });
   });
 
   it('does not silently change an explicitly selected deadline Stop into Delete', () => {
