@@ -10,6 +10,20 @@ import { DiscussionMessageRefV1Schema } from '../discussions/references.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '../discussions/replyTargets.js';
 import { DocEditProposalDispositionV1Schema } from '../discussions/docEditProposalDispositionV1.js';
 import { SessionQuestionContextV1Schema } from '../sessions/permissions/questionV1.js';
+import type { ActionExecutorContext } from './executor/types.js';
+
+/** One host-only admission for private notice consumption, including headless Inbox reads. */
+export function readNoticeInboxAccountIdV1(context: ActionExecutorContext): string | null {
+  const accountId = context.expectedAccountId ?? context.runtimeAccountId;
+  if (!accountId || context.externalActionCredential || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
+    || context.runtimeAccountId && context.runtimeAccountId !== accountId) return null;
+  const host = context.actionCaller === undefined || context.actionCaller.kind === 'host';
+  if (host && (context.surface === 'ui' && context.authority === 'present_user'
+    || context.surface === 'voice' && context.authority === 'account_automation')) return accountId;
+  return (context.surface === 'cli' || context.surface === 'agent' || context.surface === 'mcp')
+    && (context.authority === 'account_automation' || context.authority === 'present_user')
+    && context.runtimeAccountId === accountId && (host || context.actionCaller?.kind === 'session') ? accountId : null;
+}
 
 export const APP_SHELL_ACTION_IDS = ['session.work.get', 'inbox.get', 'inbox.mark_all_read', 'session.draft.open', 'session.draft.delete', 'session.draft.directory.set', 'session.draft.append'] as const;
 export type AppShellActionId = typeof APP_SHELL_ACTION_IDS[number];
@@ -73,6 +87,17 @@ const InboxCanonicalItemSchema = lazyZodSchema(() => z.strictObject({
     seq: z.number().check(z.int(), z.nonnegative()), anchor: z.nullable(DiscussionAnchorV1Schema),
     replyTarget: z.optional(DiscussionReplyTargetV1Schema), proposalDisposition: z.optional(DocEditProposalDispositionV1Schema) })),
 }));
+
+/** Both mounted and headless readers serialize the same admitted transient items. */
+export function projectInboxReadItemV1(item: z.infer<typeof InboxCanonicalItemSchema>): z.infer<typeof InboxCanonicalItemSchema> {
+  return InboxCanonicalItemSchema.parse({ key: item.key, producer: item.producer, type: item.type, view: item.view,
+    title: item.title, context: item.context, createdAt: item.createdAt, read: item.read, focus: item.focus,
+    pageRoute: item.pageRoute,
+    source: { kind: item.source.kind, id: item.source.id, serverId: item.source.serverId,
+      ...(item.source.displayName === undefined ? {} : { displayName: item.source.displayName }) },
+    ...(item.question ? { question: item.question } : {}), ...(item.discussion ? { discussion: item.discussion } : {}),
+  });
+}
 export const AppShellActionInputSchemas = {
   'session.work.get': z.strictObject({ sessionId: z.string().check(z.minLength(1)) }),
   'inbox.get': z.strictObject({}),
@@ -92,9 +117,11 @@ export const AppShellActionOutputSchemas = {
     managedRuns: z.strictObject({ phase: z.enum(['idle', 'loading', 'loaded', 'failed']), refreshFailed: z.boolean() }),
   })]),
   'inbox.get': z.discriminatedUnion('status', [ReadUnavailableSchema, ReadLoadingSchema, z.strictObject({
-    status: z.literal('ready'), groups: z.array(InboxReadGroupSchema),
+    status: z.enum(['ready', 'partial']), groups: z.array(InboxReadGroupSchema),
     items: z.array(InboxCanonicalItemSchema),
-    coverage: z.strictObject({ discussions: z.enum(['complete', 'partial', 'unavailable']) }),
+    coverage: z.strictObject({ discussions: z.enum(['complete', 'partial', 'unavailable']),
+      sources: z.optional(z.array(z.strictObject({ source: z.enum(['notices', 'live_items', 'action_operations', 'friend_requests']),
+        status: z.enum(['complete', 'partial', 'unavailable']), reason: z.optional(z.enum(['requires_app_projection', 'device_local', 'content_unavailable'])) }))) }),
     approvalIds: z.array(z.string()), usageNoticeIds: z.array(z.string()), accountNoticeIds: z.optional(z.array(z.string())), friendRequestIds: z.array(z.string()),
     automationRunIds: z.array(z.string()),
     readySessions: z.array(InboxTargetSchema),
@@ -153,8 +180,8 @@ export const APP_SHELL_ACTION_SPECS = [
   },
   {
     id: 'inbox.get', approval: {result: 'required'}, title: 'Read Inbox',
-    description: 'Read the answering client’s open canonical Inbox for the exact invoking Home and Account. Unavailable without its mounted owner; never opens or loads Inbox.',
-    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
+    description: 'Read the canonical Inbox for the invoking Home and own Account. Without a mounted app, reads owned notices and reports unavailable source projections as partial; never opens Inbox.',
+    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account',
     placements: [], bindings: { mcpToolName: 'inbox_get', voiceClientToolName: 'inbox_get' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'get'], visibility: 'canonical' }] },

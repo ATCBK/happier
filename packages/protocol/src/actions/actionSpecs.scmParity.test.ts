@@ -16,7 +16,7 @@ import { resolveBuiltinWorkflowDefinitionV1 } from '../workflows/builtins/catalo
 
 const reads = [
   'scm.backend.describe', 'scm.status.snapshot', 'scm.worktrees.enrichment',
-  'scm.diff.file', 'scm.diff.commit', 'scm.log.list', 'scm.history.entries', 'scm.branch.list',
+  'scm.file.read', 'scm.diff.file', 'scm.diff.commit', 'scm.log.list', 'scm.history.entries', 'scm.branch.list',
   'scm.stash.list', 'scm.stash.show', 'scm.pullRequest.list', 'scm.pullRequest.get',
   'scm.pullRequest.openCompose', 'scm.hostingRepository.describePublishTargets',
 ] as const;
@@ -37,6 +37,38 @@ const mutations = [
 ] as const;
 
 describe('SCM Action parity', () => {
+  it('dispatches blame as a safe machine read through the canonical SCM Action owner', async () => {
+    const id = ActionIdSchema.parse('scm.blame.get');
+    const spec = getActionSpec(id);
+    expect(spec.bindings?.rpcMethod).toBe('scm.blame.file');
+    expect(spec.executionPlacement).toBe('machine');
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: true });
+    for (const surface of ['agent', 'mcp', 'cli', 'ui'] as const) {
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface, authority: 'account_automation' } }).required).toBe(false);
+    }
+    type Deps = import('./executor/types.js').ActionExecutorDeps;
+    const input = { cwd: '/repo', path: 'file', expectedHash: '1'.repeat(64) };
+    const output = { success: true, ranges: [{ startLine: 1, lineCount: 1, commitIndex: null }], commits: [] };
+    const executor = createActionExecutor({
+      // The Machine transport is the boundary; shared Action parsing/admission/dispatch stay real.
+      scmActionExecute: async (request: Parameters<NonNullable<Deps['scmActionExecute']>>[0]) => {
+        expect(request.actionId).toBe(id);
+        expect(request.input).toEqual(input);
+        return output;
+      },
+    } as unknown as Deps);
+    expect(await executor.execute(id, input, { surface: 'ui', externalActionTarget: { kind: 'machine', machineId: 'machine' } }))
+      .toMatchObject({ ok: true, result: output });
+  });
+
+  it('keeps the revision read safe without confusing result custody with approval', () => {
+    const id = ActionIdSchema.parse('scm.file.read');
+    const spec = getActionSpec(id);
+    expect(spec.approval.result).toBe('required');
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface, authority: 'account_automation' } }).required).toBe(false);
+    }
+  });
   it('admits no-Session UI and Voice change selection through the real typed Action and retains policy refusal', async () => {
     type Deps = import('./executor/types.js').ActionExecutorDeps;
     const calls: unknown[] = [];

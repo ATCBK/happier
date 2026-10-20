@@ -3,8 +3,10 @@ import { z } from 'zod/mini';
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from './actionSpecs.js';
 import { FindOptionsSchema } from './findActionSpecs.js';
 import { WorkspaceAnchorV1Schema } from '../workspace/anchors/v1.js';
+import { FileChangesScopeSchema } from '../scm/fileChangesScope.js';
 
 export const WORKSPACE_ACTION_IDS = [
+  'workspace.files.link.get',
   'workspace.tabs.list', 'workspace.tabs.open', 'workspace.tabs.activate', 'workspace.tabs.close',
   'workspace.tabs.close_others', 'workspace.tabs.close_left', 'workspace.tabs.close_right', 'workspace.tabs.close_all',
   'workspace.tabs.closed.list', 'workspace.tabs.reopen',
@@ -14,6 +16,31 @@ export const WORKSPACE_ACTION_IDS = [
 export type WorkspaceActionId = typeof WORKSPACE_ACTION_IDS[number];
 
 const id = z.string().check(z.trim(), z.minLength(1));
+
+/** Root-relative file addressing is shared by Action ingress and pane URL readers. */
+export function isSafeWorkspaceFilePath(path: string): boolean {
+  return path.length > 0 && !path.includes('\0') && !path.includes('\\')
+    && !path.startsWith('/') && !path.startsWith('~') && !/^[A-Za-z]:/.test(path)
+    && !path.includes('//') && !path.split('/').some(segment => segment === '.' || segment === '..');
+}
+
+export const WorkspaceFileTargetSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ kind: z.literal('session'), sessionId: id, serverId: z.optional(id) }),
+  z.strictObject({ kind: z.literal('project'), workspaceRefId: id, serverId: id,
+    machineId: z.optional(id), rootPath: z.optional(z.string().check(z.minLength(1))),
+  }),
+]));
+export const WorkspaceFileOpenInputSchema = lazyZodSchema(() => z.strictObject({
+  target: WorkspaceFileTargetSchema,
+  path: z.string().check(z.refine(isSafeWorkspaceFilePath, { message: 'A workspace-relative file path is required' })),
+  anchor: z.optional(WorkspaceAnchorV1Schema),
+  anchorSource: z.optional(z.enum(['file', 'diff'])),
+  view: z.optional(z.enum(['view', 'changes', 'edit'])),
+  blame: z.optional(z.boolean()),
+  changesScope: z.optional(FileChangesScopeSchema),
+}));
+export type WorkspaceFileTarget = z.infer<typeof WorkspaceFileTargetSchema>;
+export type WorkspaceFileOpenInput = z.infer<typeof WorkspaceFileOpenInputSchema>;
 /** Private chat launch input, consumed by the existing pane handoff; never a URL or tab field. */
 export const WorkspaceChatFindSeedSchema = lazyZodSchema(() => z.strictObject({
   query: z.string().check(z.minLength(1)), options: z.optional(FindOptionsSchema),
@@ -31,15 +58,19 @@ export const WorkspaceFindSeedSchema = lazyZodSchema(() => z.union([
   WorkspaceChatFindSeedSchema, WorkspaceProjectFileFindSeedSchema,
 ]));
 export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
+  'workspace.files.link.get': WorkspaceFileOpenInputSchema,
   'workspace.tabs.list': z.strictObject({}),
   'workspace.tabs.open': z.strictObject({ href: z.optional(id), tabId: z.optional(id), groupId: z.optional(id),
+    file: z.optional(WorkspaceFileOpenInputSchema),
     find: z.optional(WorkspaceFindSeedSchema),
     beforeTabId: z.optional(z.nullable(id)), reuseExisting: z.optional(z.boolean()),
     mode: z.optional(z.enum(['preview', 'newTab', 'splitLeft', 'splitRight', 'splitUp', 'splitDown'])),
-  }).check(z.refine(data => !data.mode?.startsWith('split') || (data.href !== undefined && data.tabId === undefined), {
-    message: 'A destination split requires href and cannot replace an existing tab',
-  }), z.refine(data => !data.find || data.href !== undefined, {
-    message: 'Find launch input requires an addressed Session href',
+  }).check(z.refine(data => !(data.href !== undefined && data.file !== undefined), {
+    message: 'Address a destination with either href or file',
+  }), z.refine(data => !data.mode?.startsWith('split') || ((data.href !== undefined || data.file !== undefined) && data.tabId === undefined), {
+    message: 'A destination split requires href or file and cannot replace an existing tab',
+  }), z.refine(data => !data.find || data.href !== undefined || data.file !== undefined, {
+    message: 'Find launch input requires an addressed destination',
   })),
   'workspace.tabs.activate': z.strictObject({ tabId: id }),
   'workspace.tabs.close': z.strictObject({ tabId: id }),
@@ -82,6 +113,7 @@ export const WorkspaceClosedTabsListOutputSchema = lazyZodSchema(() => z.strictO
 }));
 const MutationOutputSchema = lazyZodSchema(() => z.strictObject({ ok: z.literal(true) }));
 export const WORKSPACE_ACTION_OUTPUT_SCHEMAS = {
+  'workspace.files.link.get': lazyZodSchema(() => z.strictObject({ ok: z.literal(true), url: id })),
   'workspace.tabs.list': WorkspaceTabsListOutputSchema,
   'workspace.tabs.open': MutationOutputSchema,
   'workspace.tabs.activate': MutationOutputSchema,
@@ -109,9 +141,14 @@ const groupIdHint = { path: 'groupId', title: 'Pane id', widget: 'text', require
 const beforeTabHint = { path: 'beforeTabId', title: 'Insert before tab', widget: 'text',
   description: 'The current tab anchor; null appends after the last tab.' } satisfies ActionInputFieldHint;
 const inputFields = {
+  'workspace.files.link.get': [{ path: 'target', title: 'File destination', widget: 'json', required: true },
+    { path: 'path', title: 'Workspace-relative path', widget: 'text', required: true },
+    { path: 'anchor', title: 'Line or range', widget: 'json' },
+    { path: 'changesScope', title: 'Changes scope', widget: 'json' }],
   'workspace.tabs.list': [],
   'workspace.tabs.open': [
     { path: 'href', title: 'Destination', widget: 'text' }, { ...tabIdHint, required: false },
+    { path: 'file', title: 'Workspace file', widget: 'json', description: 'Session or Project target, workspace-relative path, optional anchor, view, blame and Changes scope. Exclusive with href.' },
     { path: 'find', title: 'Find target', widget: 'json', description: 'Query/options and an exact Session message or Project file target. Private launch input; not persisted in the URL or tab.' },
     { ...groupIdHint, required: false }, beforeTabHint,
     { path: 'reuseExisting', title: 'Go to an existing tab', widget: 'boolean' },
@@ -146,6 +183,7 @@ const inputFields = {
 } satisfies Record<WorkspaceActionId, readonly ActionInputFieldHint[]>;
 
 const voiceExamples = {
+  'workspace.files.link.get': '{"target":{"kind":"session","sessionId":"{{sessionId}}"},"path":"src/index.ts"}',
   'workspace.tabs.list': '{}',
   'workspace.tabs.open': '{"href":"/session/{{sessionId}}","groupId":"pane-main","beforeTabId":"tab-next","mode":"newTab"}',
   'workspace.tabs.activate': '{"tabId":"tab-main"}',
@@ -172,7 +210,7 @@ function row<const TId extends WorkspaceActionId>(actionId: TId, title: string,
     id: actionId, approval: { result: 'required' }, title,
     ...(actionId === 'workspace.tabs.open' ? { toolExposure: { agent: 'direct' as const } } : {}),
     description,
-    safety: 'safe', sideEffectClass: actionId === 'workspace.tabs.list' || actionId === 'workspace.tabs.closed.list' ? 'read' : 'external',
+    safety: 'safe', sideEffectClass: actionId === 'workspace.tabs.list' || actionId === 'workspace.tabs.closed.list' || actionId === 'workspace.files.link.get' ? 'read' : 'external',
     executionPlacement: 'client', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     cli: { acceptsServerId: true, commands: [] },
@@ -184,6 +222,7 @@ function row<const TId extends WorkspaceActionId>(actionId: TId, title: string,
 }
 
 export const WORKSPACE_ACTION_SPECS = [
+  row('workspace.files.link.get', 'Get workspace file link'),
   row('workspace.tabs.list', 'List workspace tabs'), row('workspace.tabs.open', 'Open workspace tab'),
   row('workspace.tabs.activate', 'Activate workspace tab'), row('workspace.tabs.close', 'Close workspace tab'),
   row('workspace.tabs.close_others', 'Close other workspace tabs', 'Close unpinned tabs in the named tab\'s pane, keeping that tab and respecting unsaved-draft guards.'),

@@ -10,7 +10,8 @@ const definitionId = '11111111-1111-4111-8111-111111111111';
 const definition = { version: 1 as const, inputs: [], defaults: {}, blocks: [{ kind: 'wait' as const, id: 'wait',
   document: { text: 'Continue', references: [], attachments: [] } }] };
 
-function executor(invalidStoredHeader = false, readFailure?: unknown) {
+function executor(invalidStoredHeader = false, readFailure?: unknown,
+  isWorkflowFeatureEnabled: () => boolean | Promise<boolean> = () => true) {
   const unexpected = (): never => { throw new Error('unexpected_effect'); };
   // Artifact and Run persistence are the only boundaries; all family, reader,
   // validation and admission logic stays real.
@@ -30,10 +31,24 @@ function executor(invalidStoredHeader = false, readFailure?: unknown) {
     resolveAccountId: async () => 'account', resolveEncryption: async () => ({ kind: 'available',
       witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
     normalizeAbsolutePath: unexpected, randomBytes: unexpected });
-  return createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, definitions, runs });
+  return createWorkflowActionExecutor({ isWorkflowFeatureEnabled, definitions, runs });
 }
 
 describe('workflow Action refusal classification', () => {
+  it('keeps a failed feature observation retryable through the real Action failure consumer', async () => {
+    const workflowAction = executor(false, undefined, async () => {
+      throw Object.assign(new Error('Feature request timed out'), { code: 'ECONNABORTED' });
+    });
+    const actions = createActionExecutor({ workflowAction } as unknown as ActionExecutorDeps);
+    const result = await actions.execute('workflow.run.start', {
+      runId: definitionId, source: { kind: 'inline', definition },
+    }, { surface: 'ui' });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+    // The same consumer must still reject an actual unreadable Artifact as content.
+    await expect(createActionExecutor({ workflowAction: executor(true) } as unknown as ActionExecutorDeps)
+      .execute('workflow.definition.get', { definitionId }, { surface: 'ui' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
   it('retains a closed HTTP refusal through the family and outer Action boundary', async () => {
     const details = { status: 400, code: 'FST_ERR_VALIDATION' };
     const error = Object.assign(new Error('Workflow request failed (HTTP 400; FST_ERR_VALIDATION)'), {

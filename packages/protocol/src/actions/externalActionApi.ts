@@ -107,6 +107,7 @@ const EXTERNAL_ACTION_HTTP_ERROR_CODES_V1 = [
   ...UNEXPECTED_ACTION_FAILURE_CODES_V1,
   'database_transaction_conflict_exhausted',
   'database_connection_unavailable',
+  'storage_unavailable',
   'invalid_encrypted_envelope',
   'encrypted_action_unsupported',
 ] as const;
@@ -242,7 +243,8 @@ function externalActionHttpErrorStatus(code: ExternalActionHttpErrorCode): 400 |
   if (code === 'credential_scope_denied') return 403;
   if (code === 'invalid_token') return 401;
   if (code === 'auth_unavailable' || code === 'server_unavailable'
-    || code === 'database_transaction_conflict_exhausted' || code === 'database_connection_unavailable') return 503;
+    || code === 'database_transaction_conflict_exhausted' || code === 'database_connection_unavailable'
+    || code === 'storage_unavailable') return 503;
   if (code === 'request_too_large') return 413;
   if (code === 'internal_error' || UNEXPECTED_ACTION_FAILURE_CODES_V1.some(value => value === code)) return 500;
   if (

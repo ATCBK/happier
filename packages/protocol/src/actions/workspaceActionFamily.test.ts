@@ -6,6 +6,23 @@ import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('workspace client actions', () => {
+  it('opens root-relative files through one addressed file arm, including splits and private Find', () => {
+    const open = WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.tabs.open'];
+    const file = { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' }, path: 'src/a.ts',
+      anchor: { kind: 'range', filePath: 'src/a.ts', startLine: 3, endLine: 8 }, view: 'changes', blame: true,
+      changesScope: { kind: 'turn', turnId: 'turn-a' } };
+    expect(open.safeParse({ file, mode: 'preview' }).success).toBe(true);
+    expect(open.safeParse({ file, mode: 'splitRight' }).success).toBe(true);
+    expect(open.safeParse({ file, href: '/session/other' }).success).toBe(false);
+    expect(open.safeParse({ file, mode: 'splitRight', tabId: 'replace' }).success).toBe(false);
+    for (const path of ['/etc/passwd', '../outside.ts', 'src/../../outside', 'C:\\outside.ts', '~/.ssh/id', 'src\\a.ts']) {
+      expect(open.safeParse({ file: { ...file, path } }).success).toBe(false);
+    }
+    const project = { target: { kind: 'project', workspaceRefId: 'workspace-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, path: 'src/a.ts' };
+    const find = { query: 'needle', target: { ...project.target, kind: 'project-file', path: project.path } };
+    expect(open.safeParse({ file: project, find }).success).toBe(true);
+    expect(WORKSPACE_ACTION_SPECS.find(spec => spec.id === 'workspace.tabs.open')).toMatchObject({ safety: 'safe', approval: { result: 'required' } });
+  });
   it('discovers strict pane-scoped bulk closes with user-configurable approval', () => {
     for (const name of ['workspace.tabs.close_others', 'workspace.tabs.close_left', 'workspace.tabs.close_right', 'workspace.tabs.close_all']) {
       const actionId = ActionIdSchema.parse(name);

@@ -133,12 +133,9 @@ export function createWorkflowActionExecutor(deps: Readonly<{
   resolveTargetValidation?: (args: WorkflowActionExecuteArgs<'workflow.validate'>) => Promise<WorkflowTargetValidation>;
 }>): WorkflowActionExecute {
   const execute: WorkflowActionExecute = async (rawArgs) => {
-    let featureEnabled = false;
-    try {
-      featureEnabled = await deps.isWorkflowFeatureEnabled();
-    } catch {
-      featureEnabled = false;
-    }
+    // A failed observation reaches the shared failure classifier. It grants
+    // no availability, but is distinct from a settled disabled decision.
+    const featureEnabled = await deps.isWorkflowFeatureEnabled();
     if (!featureEnabled) {
       return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
     }

@@ -13,15 +13,15 @@ describe('app shell Actions', () => {
       items: [{ kind: 'automation_run', key: 'automation-run:run-a', runId: 'run-a' },
         { kind: 'approval', key: 'approval:approval-a', artifactId: 'approval-a' }] }],
       approvalIds: ['approval-a'], automationRunIds: ['run-a'], usageNoticeIds: [], friendRequestIds: [],
-      readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false };
+      readySessions: [], actionOperations: [], items: [], coverage: { discussions: 'complete' }, isLoading: false, refreshFailed: false };
     const schema = AppShellActionOutputSchemas['inbox.get'];
     expect(schema.parse(snapshot)).toEqual(snapshot);
     expect(schema.safeParse({ ...snapshot, groups: [{ ...snapshot.groups[0],
       items: [{ kind: 'approval', key: 'approval:approval-a', artifactId: 'approval-a', body: 'private' }] }] }).success).toBe(false);
   });
-  it.each(['session.work.get', 'inbox.get'] as const)('exposes %s as a strict client read with explicit availability', (actionId) => {
+  it.each(['session.work.get', 'inbox.get'] as const)('exposes %s as a strict read with explicit availability', (actionId) => {
     const spec = getActionSpec(actionId);
-    expect(spec.executionPlacement).toBe('client');
+    expect(spec.executionPlacement).toBe(actionId === 'inbox.get' ? 'account' : 'client');
     expect(spec.sideEffectClass).toBe('read');
     expect(spec.requiredAuthority).toBe('account_automation');
     expect(spec.surfaces.agent).toBe(true);

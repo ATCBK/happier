@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { CODE_INTELLIGENCE_ACTION_IDS } from './codeIntelligenceActionFamily.js';
 import { z } from 'zod/mini';
 import { MACHINE_ADD_SSH_ACTION_IDS, MACHINE_PAGE_ACTION_IDS } from './specs/machineConnection.js';
 import { LOCAL_DAEMON_SERVICE_ACTION_IDS } from './specs/localDaemonService.js';
@@ -149,7 +150,8 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   list_reorder: ['session.pending.reorder', 'tasks.internal.reorder'],
   todo_session_link: ['tasks.internal.session.link'],
   internal_tasks: ['tasks.internal.list', 'tasks.internal.create', 'tasks.internal.edit', 'tasks.internal.transition'],
-  workspace_file_search: ['workspace.files.search'],
+  workspace_file_search: ['workspace.files.search', 'workspace.files.replace.preview', 'workspace.files.replace'],
+  code_intelligence: CODE_INTELLIGENCE_ACTION_IDS,
   workflow_event_catalog: ['workflow.events.list'],
   filesystem: FILESYSTEM_ACTION_IDS,
   scope: SCOPE_ACTION_IDS,
@@ -726,10 +728,12 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'automation.conversation.admit',
   ],
   scm_git: [
+    'scm.file.read',
     'scm.backend.describe',
     'scm.status.snapshot',
     'scm.worktrees.enrichment',
     'scm.diff.file',
+    'scm.blame.get',
     'scm.diff.commit',
     'scm.change.include',
     'scm.change.exclude',

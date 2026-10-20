@@ -34,6 +34,21 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('keeps comparison Discard direct only for a present UI user and confirms HEAD/mixed/automation requests', () => {
+    const actionId = 'scm.change.discard';
+    const spec = getActionSpec(actionId);
+    const comparison = { path: 'src/app.ts', kind: 'comparison', against: { source: { kind: 'workingTree' } }, changeKeys: ['key'], includeUndo: true };
+    const head = { path: 'a', kind: 'modified' };
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      for (const entry of [comparison, head]) {
+        expect(resolveActionApprovalRouting({ actionId, spec, input: { entries: [entry] }, context: { surface, authority: 'account_automation' } }).required).toBe(true);
+      }
+    }
+    for (const [entries, required] of [[[comparison], false], [[head], true], [[comparison, head], true]] as const) {
+      expect(resolveActionApprovalRouting({ actionId, spec, input: { entries }, context: { surface: 'ui', authority: 'present_user' } }).required).toBe(required);
+    }
+    expect(resolveActionApprovalRouting({ actionId, spec, input: { entries: [comparison] }, context: { surface: 'rpc', authority: 'account_automation' } }).required).toBe(false);
+  });
   it('keeps publication claim approval on the awaiting plugin invocation', () => {
     const actionId = 'reviews.comments.claimPublicationDispatch';
     const spec = getActionSpec(actionId);
@@ -77,6 +92,8 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'session.checkpoint', 'session.connected_services_auth.set', 'session.pending.action.set', 'prompt_doc.create',
     'roles.create', 'roles.update', 'roles.override.set',
     'daemon.filesystem.createDirectory',
+    'daemon.filesystem.rename',
+    'daemon.filesystem.writeFile',
     'settings.set', 'settings.reset',
     'ui.voice_global.start', 'ui.voice_global.recover', 'ui.voice_global.set_muted',
     'ui.voice_global.hold_begin', 'ui.voice_global.brief.request', 'ui.voice_global.brief.retry',

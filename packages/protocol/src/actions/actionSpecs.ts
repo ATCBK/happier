@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { CODE_INTELLIGENCE_ACTION_SPECS } from './codeIntelligenceActionFamily.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
 import { PetChooseInputV1Schema, PetChooseResultV1Schema } from '../pets/selection.js';
 import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
@@ -144,6 +145,20 @@ import {
 } from '../daemon/agentSignIn.js';
 import { MachinesAgentsListInputSchema, MachinesAgentsListOutputSchema } from '../capabilities/machineAgentInventory.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
+import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WorkspaceFileReplaceMatcherSchema, WorkspaceFileReplaceSelectionSchema } from '../machines/workspaceFiles.js';
+
+export const WorkspaceFilesReplacePreviewActionInputSchema = lazyZodSchema(() => z.strictObject({
+  ...DaemonWorkspaceFileReplacePreviewRequestSchema.shape,
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+}));
+export const WorkspaceFilesReplaceActionInputSchema = lazyZodSchema(() => z.strictObject({
+  ...WorkspaceFileReplaceMatcherSchema.shape,
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  rootPath: z.string().check(z.trim(), z.minLength(1)),
+  files: z.array(WorkspaceFileReplaceSelectionSchema),
+}));
+export type WorkspaceFilesReplacePreviewActionInput = z.infer<typeof WorkspaceFilesReplacePreviewActionInputSchema>;
+export type WorkspaceFilesReplaceActionInput = z.infer<typeof WorkspaceFilesReplaceActionInputSchema>;
 
 export const WorkspaceFilesSearchActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonWorkspaceFileSearchRequestSchema, {
   machineId: z.string().check(z.trim(), z.minLength(1)),
@@ -5298,6 +5313,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineAc
   ...APP_UPDATE_ACTION_SPECS,
   ...UPDATES_ACTION_SPECS,
   ...CLIPBOARD_ACTION_SPECS,
+  ...CODE_INTELLIGENCE_ACTION_SPECS,
   ...VOICE_CONVERSATION_ACTION_SPECS,
   ...SCOPE_ACTION_SPECS,
   ...DIAGNOSTICS_ACTION_SPECS,
@@ -8329,6 +8345,38 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     ] },
     inputSchema: WorkspaceFilesSearchActionInputSchema,
     outputSchema: DaemonWorkspaceFileSearchResponseSchema,
+  },
+  {
+    id: 'workspace.files.replace.preview', approval: { result: 'required' },
+    title: 'Preview replacement in workspace files',
+    description: 'Review matching text and raw file hashes before applying a single-line replacement. Continue with the returned cursor when hasMore is true.',
+    sideEffectClass: 'read', safety: 'safe', placements: [],
+    bindings: { mcpToolName: 'workspace_files_replace_preview' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: WorkspaceFilesReplacePreviewActionInputSchema,
+    outputSchema: DaemonWorkspaceFileReplacePreviewResponseSchema,
+    inputHints: { fields: [
+      { path: 'machineId', title: 'Machine id', widget: 'text' },
+      { path: 'rootPath', title: 'Workspace root', widget: 'text' },
+      { path: 'query', title: 'Search text', widget: 'text' },
+      { path: 'replacement', title: 'Replacement text', widget: 'text' },
+    ] },
+  },
+  {
+    id: 'workspace.files.replace', approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'direct' },
+    title: 'Replace text in workspace files',
+    description: 'Apply the reviewed replacement only to selected files and matches whose raw file hashes still match the preview.',
+    sideEffectClass: 'danger', safety: 'danger', placements: [],
+    bindings: { mcpToolName: 'workspace_files_replace', sdkMethod: 'workspace.files.replace.apply' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: WorkspaceFilesReplaceActionInputSchema,
+    outputSchema: DaemonWorkspaceFileReplaceApplyResponseSchema,
+    inputHints: { fields: [
+      { path: 'machineId', title: 'Machine id', widget: 'text' },
+      { path: 'rootPath', title: 'Workspace root', widget: 'text' },
+      { path: 'query', title: 'Search text', widget: 'text' },
+      { path: 'replacement', title: 'Replacement text', widget: 'text' },
+    ] },
   },
   {
     id: 'machines.agents.signIn.start', approval: {result: 'none'}, approvalPolicy: { uiConfirmation: 'direct' },
@@ -12270,7 +12318,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   {
     id: 'daemon.filesystem.readFile', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'required'},
     title: 'Read file',
-    description: 'Read a bounded file under the explicitly admitted workspace root.',
+    description: 'Read a bounded file or byte range under the explicitly admitted workspace root. A range length uses the daemon inline-read ceiling; its offset defaults to zero.',
     safety: 'safe',
     placements: [],
     bindings: { rpcMethod: 'daemon.filesystem.readFile', rpcMethodAliases: [RPC_METHODS.READ_FILE], mcpToolName: 'daemon_filesystem_read_file', voiceClientToolName: 'daemonFilesystemReadFile' },
@@ -12281,10 +12329,12 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     inputHints: { fields: [
       { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
       { path: 'path', title: 'File path', widget: 'text', required: true },
+      { path: 'offset', title: 'Offset', widget: 'text' },
+      { path: 'length', title: 'Length', widget: 'text' },
     ] },
   },
   {
-    id: 'daemon.filesystem.writeFile', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'daemon.filesystem.writeFile', approvalPolicy: { rpcConfirmation: true, uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Write file',
     description: 'Write a bounded file under the explicitly admitted workspace root.',
@@ -12322,7 +12372,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     ] },
   },
   {
-    id: 'daemon.filesystem.rename', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'daemon.filesystem.rename', approvalPolicy: { rpcConfirmation: true, uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
     title: 'Rename path',
     description: 'Rename a path under the explicitly admitted workspace root.',
     safety: 'danger',
@@ -13000,7 +13050,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
       voice: false,
       agent: true,
       mcp: true,
-      cli: false,
+      cli: true,
       rpc: true,
     },
     sideEffectClass: 'write',
@@ -13647,6 +13697,9 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     'machines.agents.list',
     ...ACTION_ID_FAMILIES_V1.workflow_event_catalog,
     'workspace.files.search',
+    ...ACTION_ID_FAMILIES_V1.code_intelligence,
+    'workspace.files.replace.preview',
+    'workspace.files.replace',
     ...ACTION_ID_FAMILIES_V1.machine_agent_sign_in,
     'agents.models.list',
     'agents.config_options.list',
@@ -13804,6 +13857,7 @@ type LiteralActionSpecTupleDefinition<TSpecs extends readonly PreNormalizedActio
 }[number];
 
 type DirectActionSpecDefinition =
+  | LiteralActionSpecTupleDefinition<typeof CODE_INTELLIGENCE_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof CLIPBOARD_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof SESSION_ORGANIZATION_MOVE_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof LIST_REORDER_ACTION_SPECS>

@@ -1,4 +1,5 @@
 export * from './invocationAuthority.js';
+export { FILESYSTEM_WRITE_GUARD_ERROR_CODES, isFilesystemWriteGuardErrorCode, type FilesystemWriteGuardErrorCode } from './filesystemActionFamily.js';
 export * from './actionRequestAttributionV1.js';
 export * from './specs/machineResources.js';
 export * from './specs/storage.js';
