@@ -612,6 +612,19 @@ describe('FreshnessLine: stale content told in one line', () => {
     mount.unmount();
   });
 
+  it('keeps the time and the reason as two clauses, the dot riding the first, so a narrow line stacks without a dangling dot', () => {
+    const asOf = new Date(2026, 8, 29, 10, 42).getTime();
+    const reason = "MacBook Pro isn't answering";
+    const mount = mountSurface(<FreshnessLine testID="fresh" asOf={asOf} now={new Date(2026, 8, 29, 11, 0).getTime()} reason={reason} />);
+    const line = mount.container.querySelector<HTMLElement>('[data-testid="fresh"]');
+    const texts = [...(line?.querySelectorAll('*') ?? [])].filter((node) => node.children.length === 0).map((node) => node.textContent);
+    // The reason is its own run; it never begins with the separator, which belongs to the time's run.
+    expect(texts).toContain(reason);
+    expect(texts.some((text) => text?.trim() === '·')).toBe(true);
+    expect(texts.some((text) => text?.startsWith('·') && text.includes(reason))).toBe(false);
+    mount.unmount();
+  });
+
   it('shows a reconnect in flight with the reason alone and no stale time', () => {
     const mount = mountSurface(<FreshnessLine testID="fresh" reason="Reconnecting…" busy />);
     const line = mount.container.querySelector<HTMLElement>('[data-testid="fresh"]');
