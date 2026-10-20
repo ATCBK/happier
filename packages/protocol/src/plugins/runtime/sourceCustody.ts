@@ -7,6 +7,7 @@ import {
   defineProtocolUnion,
 } from '../actions/protocolComposableSchema.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
+import { PluginIdSchema } from '../pluginId.js';
 
 const Identity = defineProtocolString({ minLength: 1, pattern: '.*\\S.*' });
 const InstallSource = defineProtocolUnion([
@@ -28,9 +29,20 @@ const PinnedRunnerSnapshot = defineProtocolObject({
   kind: defineProtocolLiteral('pinned_runner_snapshot'),
   snapshotId: Identity,
 }, { policy: 'closed' });
+const AppBundle = defineProtocolObject({
+  kind: defineProtocolLiteral('app_bundle'),
+  bundleId: Identity,
+}, { policy: 'closed' });
+const BundledSourceDeclaration = defineProtocolObject({
+  kind: defineProtocolLiteral('source_declaration'),
+  packageName: Identity,
+  declarationDigest: defineProtocolString({ pattern: '^sha256:[a-f0-9]{64}$' }),
+}, { policy: 'closed' });
 export const BundledPackagedRuntimeCustodyV1ProtocolSchema = defineProtocolUnion([
   CliVersionRoot,
   PinnedRunnerSnapshot,
+  AppBundle,
+  BundledSourceDeclaration,
 ]);
 export const BundledFirstPartyPluginSourceCustodyV1ProtocolSchema = defineProtocolObject({
   kind: defineProtocolLiteral('bundled_first_party'),
@@ -40,12 +52,19 @@ export const DevelopmentPluginSourceCustodyV1ProtocolSchema = defineProtocolObje
   kind: defineProtocolLiteral('development'),
   registeredRootId: Identity,
 }, { policy: 'closed' });
+export const AccountReleasePluginSourceCustodyV1ProtocolSchema = defineProtocolObject({
+  kind: defineProtocolLiteral('account_release'),
+  pluginId: PluginIdSchema,
+  version: Identity,
+  archiveDigestSha256: defineProtocolString({ pattern: '^sha256:[a-f0-9]{64}$' }),
+}, { policy: 'closed' });
 
 /** Canonical validator-neutral durable source-custody contract. */
 export const PluginSourceCustodyV1ProtocolSchema = defineProtocolUnion([
   ManagedPluginSourceCustodyV1ProtocolSchema,
   BundledFirstPartyPluginSourceCustodyV1ProtocolSchema,
   DevelopmentPluginSourceCustodyV1ProtocolSchema,
+  AccountReleasePluginSourceCustodyV1ProtocolSchema,
 ]);
 
 function trimIdentity(value: unknown): unknown {
@@ -61,6 +80,10 @@ function trimCustodyIdentityStrings(input: unknown): unknown {
   if (value.kind === 'development') {
     return { ...value, registeredRootId: trimIdentity(value.registeredRootId) };
   }
+  if (value.kind === 'account_release') return { ...value,
+    pluginId: trimIdentity(value.pluginId), version: trimIdentity(value.version),
+    archiveDigestSha256: trimIdentity(value.archiveDigestSha256),
+  };
   if (value.kind !== 'bundled_first_party' || !value.packagedRuntime
     || typeof value.packagedRuntime !== 'object' || Array.isArray(value.packagedRuntime)) return input;
   const packaged = value.packagedRuntime as Readonly<Record<string, unknown>>;
@@ -68,6 +91,10 @@ function trimCustodyIdentityStrings(input: unknown): unknown {
     ...value,
     packagedRuntime: packaged.kind === 'cli_version_root'
       ? { ...packaged, versionRootId: trimIdentity(packaged.versionRootId) }
+      : packaged.kind === 'app_bundle' ? { ...packaged, bundleId: trimIdentity(packaged.bundleId) }
+      : packaged.kind === 'source_declaration' ? { ...packaged,
+          packageName: trimIdentity(packaged.packageName), declarationDigest: trimIdentity(packaged.declarationDigest),
+        }
       : { ...packaged, snapshotId: trimIdentity(packaged.snapshotId) },
   };
 }
@@ -87,6 +114,8 @@ export const DevelopmentPluginSourceCustodyV1Schema = asProtocolZod(
 export const PluginSourceCustodyV1Schema = asProtocolZod(
   PluginSourceCustodyV1ProtocolSchema,
 );
+export const AccountReleasePluginSourceCustodyV1Schema = asProtocolZod(AccountReleasePluginSourceCustodyV1ProtocolSchema);
+export type AccountReleasePluginSourceCustodyV1 = z.infer<typeof AccountReleasePluginSourceCustodyV1Schema>;
 
 export type ManagedPluginSourceCustodyV1 = z.infer<typeof ManagedPluginSourceCustodyV1Schema>;
 export type BundledPackagedRuntimeCustodyV1 = z.infer<typeof BundledPackagedRuntimeCustodyV1Schema>;
@@ -109,9 +138,18 @@ export function pluginSourceCustodyV1Equal(left: PluginSourceCustodyV1, right: P
   if (left.kind === 'development' && right.kind === 'development') {
     return left.registeredRootId === right.registeredRootId;
   }
+  if (left.kind === 'account_release' && right.kind === 'account_release') {
+    return left.pluginId === right.pluginId && left.version === right.version
+      && left.archiveDigestSha256 === right.archiveDigestSha256;
+  }
   if (left.kind !== 'bundled_first_party' || right.kind !== 'bundled_first_party') return false;
   if (left.packagedRuntime.kind !== right.packagedRuntime.kind) return false;
-  return left.packagedRuntime.kind === 'cli_version_root' && right.packagedRuntime.kind === 'cli_version_root'
+  return left.packagedRuntime.kind === 'app_bundle' && right.packagedRuntime.kind === 'app_bundle'
+    ? left.packagedRuntime.bundleId === right.packagedRuntime.bundleId
+    : left.packagedRuntime.kind === 'source_declaration' && right.packagedRuntime.kind === 'source_declaration'
+      ? left.packagedRuntime.packageName === right.packagedRuntime.packageName
+        && left.packagedRuntime.declarationDigest === right.packagedRuntime.declarationDigest
+    : left.packagedRuntime.kind === 'cli_version_root' && right.packagedRuntime.kind === 'cli_version_root'
     ? left.packagedRuntime.versionRootId === right.packagedRuntime.versionRootId
     : left.packagedRuntime.kind === 'pinned_runner_snapshot'
       && right.packagedRuntime.kind === 'pinned_runner_snapshot'

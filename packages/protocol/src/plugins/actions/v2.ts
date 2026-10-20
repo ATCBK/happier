@@ -95,6 +95,10 @@ export const PluginActionExecutionV2Schema = lazyZodSchema(() => z.discriminated
     target: z.literal('daemon'),
   }),
   z.strictObject({
+    target: z.literal('account'),
+    account: PluginClientExecutionReferenceV1Schema,
+  }),
+  z.strictObject({
     target: z.literal('client'),
     client: PluginClientExecutionReferenceV1Schema,
     platforms: PluginClientExecutionPlatformsV1Schema,

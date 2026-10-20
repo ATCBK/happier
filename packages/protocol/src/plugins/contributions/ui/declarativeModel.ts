@@ -1,35 +1,32 @@
-import { createPluginContributionIdentity } from '../../contributionIdentity.js';
+import { createPluginContributionIdentity, type PluginContributionIdentityV1 } from '../../contributionIdentity.js';
 import {
   PluginDeclarativeDocumentNormalizationErrorV1,
   normalizePluginDeclarativeDocumentV1,
   type PluginDeclarativeQualifiedReferenceV1,
+  type PluginDeclarativeCollectionRowCommandV1,
+  type PluginDeclarativeNormalizedNodeV1,
+  type PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1,
 } from './declarativeDocument.js';
 import { PluginDeclarativeProjectedModelV1Schema } from './declarativeProjectedModelV1.js';
 import { PluginIdSchema } from '../../pluginId.js';
-import { PluginUiRendererV2Schema } from './v2.js';
+import {
+  PluginUiRendererV2Schema,
+  type PluginDeclarativeActionVariantV2,
+  type PluginDeclarativeComposerApplyEffectV1,
+  type PluginDeclarativeCollectionListProjectionV1,
+  type PluginDeclarativeControlV2,
+  type PluginDeclarativeMetadataEntryV2,
+  type PluginDeclarativeStateV2,
+  type PluginDeclarativeToneV2,
+  type PluginUiRendererV2,
+} from './v2.js';
 import { buildQualifiedPluginContributionKey } from '../../contributionIdentity.js';
-import type {
-  ActionId,
-  PluginContributionIdentityV1,
-  PluginDeclarativeActionVariantV2,
-  PluginDeclarativeComposerApplyEffectV1,
-  PluginDeclarativeCollectionRowCommandV1,
-  PluginDeclarativeCollectionListProjectionV1,
-  PluginDeclarativeControlV2,
-  PluginDeclarativeMetadataEntryV2,
-  PluginDeclarativeNormalizedNodeV1,
-  PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1,
-  PluginDeclarativeStateV2,
-  PluginDeclarativeToneV2,
-  PluginJsonValueV2,
-  PluginJsonSchemaV2,
-  PluginLocalizedStringV2,
-  NormalizedPluginCollectionUiQueryDescriptorV1,
-  PluginCollectionUiQueryRequestV1,
-  PluginUiIconTokenV1,
-  PluginUiRendererV2,
-  PluginUiTargetedContributionSurfaceV1,
-} from '../../../index.js';
+import type { ActionId } from '../../../actions/actionIds.js';
+import type { PluginJsonValueV2, PluginJsonSchemaV2 } from '../jsonSchema.js';
+import type { PluginLocalizedStringV2 } from '../publicTypes.js';
+import type { NormalizedPluginCollectionUiQueryDescriptorV1, PluginCollectionUiQueryRequestV1 } from '../../data/collectionUiQueryWireV1.js';
+import type { PluginUiIconTokenV1 } from './tokens.js';
+import type { PluginUiTargetedContributionSurfaceV1 } from '../../ui/targetedContributions.js';
 import type { PluginUiHostMethodV1 } from '../../ui/client.js';
 import { cloneStrictPluginJsonValue } from '../../actions/protocolComposableSchema.js';
 import { PluginUiDeclarationProjectionErrorV1, type StablePluginSettingsField, type StablePluginSettingsModel } from './settingsDescriptors.js';

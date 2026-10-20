@@ -60,6 +60,7 @@ export type PluginContributionReferenceCandidateV2 = Readonly<{
 export type PluginContributionClientPlatform = PluginClientExecutionPlatformV1;
 export type PluginContributionRegistrationTarget =
   | Readonly<{ realm: 'daemon' }>
+  | Readonly<{ realm: 'account'; artifactId: string; exportName: string }>
   | Readonly<{
       realm: 'client';
       artifactId: string;
@@ -117,8 +118,8 @@ export type PluginContributionCatalogEntryV2 = Readonly<{
   activationDemand: 'none' | 'declarative' | 'registration' | 'conditional';
   projectionFamily: string | null;
   allowedRuntimeRegistration: string | null;
-  registrationHost: 'daemon' | 'client' | 'discriminated' | null;
-  runtimeRegistrationHost(value: Readonly<Record<string, unknown>>): 'daemon' | 'client' | null;
+  registrationHost: 'daemon' | 'client' | 'account' | 'discriminated' | null;
+  runtimeRegistrationHost(value: Readonly<Record<string, unknown>>): 'daemon' | 'client' | 'account' | null;
   runtimeRegistrationTarget(value: Readonly<Record<string, unknown>>): PluginContributionRegistrationTarget | null;
   references: readonly PluginContributionReferenceRuleV2[];
   extractReferences(value: Readonly<Record<string, unknown>>): readonly PluginContributionReferenceCandidateV2[];
@@ -924,7 +925,7 @@ type PluginContributionCatalogEntryDefinitionV2 = Omit<PluginContributionCatalog
   'registrationHost' | 'runtimeRegistrationHost' | 'runtimeRegistrationTarget' | 'runtimeRegistrationFamily' | 'lifecycleStages' | 'readEntries' | 'canonicalize' | 'projectJsonSchema' | 'conflictKey' | 'merge' | 'projectIntrospection'> &
   Readonly<{
     registrationHost?: Exclude<PluginContributionCatalogEntryV2['registrationHost'], null>;
-    runtimeRegistrationHost?: (value: Readonly<Record<string, unknown>>) => 'daemon' | 'client' | null;
+    runtimeRegistrationHost?: (value: Readonly<Record<string, unknown>>) => 'daemon' | 'client' | 'account' | null;
     runtimeRegistrationTarget?: (value: Readonly<Record<string, unknown>>) => PluginContributionRegistrationTarget | null;
     runtimeRegistrationFamily?: (value: Readonly<Record<string, unknown>>) => string;
     projectPlatforms?: (value: Readonly<Record<string, unknown>>) => PluginContributionCatalogEntryV2['platforms'];
@@ -976,6 +977,7 @@ export const PLUGIN_CONTRIBUTION_CATALOG_V2: readonly PluginContributionCatalogE
               const parsed = PluginActionDeclaredExecutionV2Schema.safeParse(value.execution);
               if (!parsed.success) return null;
               if (parsed.data.target === 'daemon') return Object.freeze({ realm: 'daemon' as const });
+              if (parsed.data.target === 'account') return Object.freeze({ realm: 'account' as const, ...parsed.data.account });
               return Object.freeze({
                 realm: 'client' as const,
                 artifactId: parsed.data.client.artifactId,
@@ -1109,6 +1111,7 @@ function derivePluginContributionRegistrationRightsForHost(
     exportName: string;
     platform: PluginContributionClientPlatform;
   }>,
+  accountTarget?: Readonly<{ artifactId: string; exportName: string }>,
 ): readonly PluginContributionRegistrationRight[] {
   return Object.freeze(PLUGIN_CONTRIBUTION_CATALOG_V2.flatMap((entry) => (
     entry.readEntries(contributes).flatMap((value) => {
@@ -1116,6 +1119,8 @@ function derivePluginContributionRegistrationRightsForHost(
       const record = value as Readonly<Record<string, unknown>>;
       const target = entry.runtimeRegistrationTarget(record);
       if (target === null || (host !== undefined && target.realm !== host)) return [];
+      if (accountTarget !== undefined && (target.realm !== 'account'
+        || target.artifactId !== accountTarget.artifactId || target.exportName !== accountTarget.exportName)) return [];
       if (clientTarget !== undefined && (
         target.realm !== 'client'
         || target.artifactId !== clientTarget.artifactId
@@ -1201,6 +1206,14 @@ export function derivePluginClientContributionRegistrationRights(
   }>,
 ): readonly PluginContributionRegistrationRight[] {
   return derivePluginContributionRegistrationRightsForHost(contributes, 'client', target);
+}
+
+/** Exact portable activation rights; Account storage never grants Machine registrations. */
+export function derivePluginAccountContributionRegistrationRights(
+  contributes: Readonly<Record<string, unknown>>,
+  target: Readonly<{ artifactId: string; exportName: string }>,
+): readonly PluginContributionRegistrationRight[] {
+  return derivePluginContributionRegistrationRightsForHost(contributes, 'account', undefined, target);
 }
 
 export function listPluginContributionIdentities(

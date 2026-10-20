@@ -23,6 +23,15 @@ const localized = { key: 'plugin.title', fallback: 'Title' };
 const daemonExecution = { target: 'daemon' } as const;
 
 describe('plugin executable contribution target grammar', () => {
+  it('admits portable Account execution with a closed exact artifact reference', () => {
+    const execution = { target: 'account', account: { artifactId: 'account-runtime', exportName: 'activateAccount' } };
+    expect(PluginActionExecutionV2Schema.parse(execution)).toEqual(execution);
+    for (const invalid of [
+      { ...execution, platforms: ['web'] },
+      { ...execution, account: { ...execution.account, machineId: 'machine' } },
+      { target: 'account' },
+    ]) expect(PluginActionExecutionV2Schema.safeParse(invalid).success).toBe(false);
+  });
   it('accepts closed Session target declarations only for declared object operands', () => {
     const action = {
       id: 'inspect-target', title: localized, scopes: ['session'], surfaces: ['agent'],

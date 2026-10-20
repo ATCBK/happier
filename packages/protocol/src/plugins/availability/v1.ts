@@ -22,6 +22,7 @@ import { PluginDeclaredUiEntriesV1Schema } from '../../daemon/contributionRegist
 import { PluginIdSchema } from '../pluginId.js';
 import {
   PluginUiArtifactIdV2Schema,
+  PluginUiArtifactsManifestEntryV2Schema,
 } from '../ui/uiArtifactsManifest.js';
 import { PluginUiArtifactDigestV1Schema } from '../ui/artifactIntegrity.js';
 import {
@@ -78,7 +79,15 @@ export const PluginUiReleaseSlotV1Schema = lazyZodSchema(() => z.strictObject({
   platform: ArtifactPlatformSchema,
   artifactDigest: PluginUiArtifactDigestV1Schema,
   hostUiApiRange: z.string().check(z.trim(), z.minLength(1)),
+  /** Exact compiler graph for portable activation without a projecting Machine. */
+  artifactGraph: z.optional(PluginUiArtifactsManifestEntryV2Schema),
 }).check(z.superRefine((value, context) => {
+  if (value.artifactGraph && (value.artifactGraph.artifactId !== value.artifactId
+    || value.artifactGraph.tier !== value.tier
+    || value.artifactGraph.digest !== value.artifactDigest
+    || value.artifactGraph.hostUiApiRange !== value.hostUiApiRange)) {
+    context.addIssue({ code: 'custom', path: ['artifactGraph'], message: 'Compiler graph must match the exact release slot.' });
+  }
   if (value.tier === 'hostedWeb' && value.platform !== 'web') {
     context.addIssue({
       code: "custom",

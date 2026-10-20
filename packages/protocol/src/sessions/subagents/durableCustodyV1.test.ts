@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createSessionSubagentCustodyPlainContentFingerprintV1,
   createSessionSubagentCustodyKeyV1,
+  createSessionSubagentSourceCustodyStorageIdentityV1,
   serializeSessionSubagentCustodyDetailV1,
   serializeSessionSubagentCustodyEncryptedFingerprintInputV1,
   SessionSubagentCustodyListQueryV1Schema,
@@ -199,6 +200,11 @@ describe('durable subagent custody v1 contract', () => {
   });
 
   it('derives the custody key from exact source custody and session scope', () => {
+    const account = { kind: 'account_release', pluginId: 'acme.personal', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` } as const;
+    const stored = createSessionSubagentSourceCustodyStorageIdentityV1(account);
+    expect(stored.kind).toBe('account_release');
+    expect(stored.id).not.toBe(createSessionSubagentSourceCustodyStorageIdentityV1({ ...account, version: '1.0.1' }).id);
+    expect(createSessionSubagentSourceCustodyStorageIdentityV1({ kind: 'managed', immutableGenerationId: 'retained-generation', installSource: 'archive' })).toEqual({ kind: 'managed', id: 'retained-generation' });
     expect(custodyKey).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(custodyKey).not.toBe(createSessionSubagentCustodyKeyV1({ ...scope, sessionId: 'session-b' }));
     expect(custodyKey).not.toBe(createSessionSubagentCustodyKeyV1({ ...scope, contributionId: 'reviewer', sessionId: 'session-a' }));

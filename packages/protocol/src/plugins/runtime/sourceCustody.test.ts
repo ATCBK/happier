@@ -14,6 +14,13 @@ import {
 } from './sourceCustody';
 
 describe('PluginSourceCustodyV1', () => {
+  it('retains exact Account-release custody without manufacturing a Machine generation', () => {
+    const custody = { kind: 'account_release', pluginId: 'acme.account', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` };
+    const admitted = PluginSourceCustodyV1Schema.parse(custody);
+    expect(admitted).toEqual(custody);
+    expect(pluginSourceCustodyV1Equal(admitted, PluginSourceCustodyV1Schema.parse({ ...custody, version: '1.0.1' }))).toBe(false);
+    expect(PluginSourceCustodyV1Schema.safeParse({ ...custody, machineId: 'machine' }).success).toBe(false);
+  });
   // Owns V8's coverage session, so keep it out of ordinary coverage runs.
   it.skipIf(process.env.HAPPIER_SOURCE_CUSTODY_PERF !== '1')('does not construct validation errors while admitting valid development custody', async () => {
     // Measure real V8 execution, not a replacement of the schema or Error class.
@@ -44,6 +51,9 @@ describe('PluginSourceCustodyV1', () => {
     const portable = rehydrateCanonicalProtocolComposableSchema(PluginSourceCustodyV1ProtocolSchema.jsonSchema);
     expect(portable).not.toBeNull();
     for (const value of [
+      { kind: 'account_release', pluginId: 'acme.plugin', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'app-content' } },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@happier-dev/plugins-triage', declarationDigest: `sha256:${'b'.repeat(64)}` } },
       { kind: 'managed', immutableGenerationId: 'generation-a', installSource: 'archive' },
       { kind: 'bundled_first_party', packagedRuntime: { kind: 'pinned_runner_snapshot', snapshotId: 'snapshot-a' } },
       { kind: 'development', registeredRootId: 'root-a' },

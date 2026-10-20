@@ -48,6 +48,41 @@ function packageAssetArchive(resources: readonly Record<string, unknown>[] = [])
 }
 
 describe('Plugin Account availability v1', () => {
+  it('binds bundled Account custody to normalized declaration and artifact content', () => {
+    const declaration = availability.PluginPortableReleaseManifestV1Schema.parse(manifest());
+    const input = { packageName: '@acme/fixture', manifest: declaration, artifacts: [{ artifactId: 'portable', digest: `sha256:${'a'.repeat(64)}` as const }] };
+    const first = availability.computePluginAccountBundledCustodyIdV1(input);
+    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input,
+      artifacts: input.artifacts.map((artifact) => ({ ...artifact, tier: 'reactNative', entry: 'portable/entry.cjs.bundle' })),
+    })).toBe(first);
+    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input, manifest: {
+      ...declaration, contributes: { ...declaration.contributes, actions: [{
+        id: 'read', title: 'Read', scopes: ['global'], surfaces: ['plugin'], dangerLevel: 'safe',
+        execution: { target: 'daemon' },
+      }] },
+    } })).not.toBe(first);
+    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input, artifacts: [{ artifactId: 'portable', digest: `sha256:${'b'.repeat(64)}` }] })).not.toBe(first);
+    expect(availability.computePluginAccountBundledDeclarationDigestV1(declaration)).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  });
+  it('selects explicit enabled Account releases before bundled custody and fails closed', () => {
+    const bundled = {
+      manifest: availability.PluginPortableReleaseManifestV1Schema.parse(manifest()),
+      sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'host' } } as const,
+      custodyId: 'host-fixture',
+    };
+    const read = availability.PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+      availabilityCursor: 1, hostingCapability: { enabled: false },
+      intent: { pluginId: bundled.manifest.id, desiredVersion: null, enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+      release: null, uiArtifacts: [], packageAssets: [],
+    });
+    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: read, bundled })).toMatchObject({ kind: 'available', custodyId: 'host-fixture' });
+    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: {
+      ...read, intent: { ...read.intent!, enabled: false },
+    }, bundled })).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
+    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: {
+      ...read, intent: { ...read.intent!, desiredVersion: '2.0.0' },
+    }, bundled })).toEqual({ kind: 'unavailable', code: 'plugin_release_unavailable' });
+  });
   it('compares complete generated compatibility metadata beyond former count and byte cutoffs', () => {
     const entries = Array.from({ length: 129 }, (_, index) => {
       const artifactId = `panel-${index}`;
@@ -129,6 +164,18 @@ describe('Plugin Account availability v1', () => {
     };
 
     expect(PluginUiReleaseSlotV1Schema.parse(portableSlot)).toEqual(portableSlot);
+    const artifactGraph = {
+      artifactId: portableSlot.artifactId, tier: portableSlot.tier,
+      entry: 'react-native/native-renderer/entry.cjs.bundle', digest: portableSlot.artifactDigest,
+      files: [{ relativePath: 'react-native/native-renderer/entry.cjs.bundle', digest: portableSlot.artifactDigest, byteSize: 1 }],
+      builtWith: { bundler: 'esbuild', version: '1.0.0' },
+      executable: { exports: ['activate'] }, hostUiApiRange: portableSlot.hostUiApiRange,
+    };
+    expect(PluginUiReleaseSlotV1Schema.parse({ ...portableSlot, artifactGraph }))
+      .toEqual({ ...portableSlot, artifactGraph });
+    expect(PluginUiReleaseSlotV1Schema.safeParse({ ...portableSlot,
+      artifactGraph: { ...artifactGraph, digest: `sha256:${'a'.repeat(64)}` },
+    }).success).toBe(false);
     expect(PluginUiReleaseSlotV1Schema.safeParse({
       ...portableSlot,
       hostAppVersion: '2.0.0',

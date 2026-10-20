@@ -11,6 +11,7 @@ import { PluginUiWidgetAreaDeclarationsV1Schema } from '../plugins/contributions
 import {
   PluginSourceCustodyV1Schema,
   pluginSourceCustodyV1Equal,
+  type PluginSourceCustodyV1,
 } from '../plugins/runtime/sourceCustody.js';
 import {
   PluginMachineExecutionOriginV1Schema,
@@ -57,6 +58,8 @@ import {
   PluginActionScopeV2Schema,
   PluginActionSlashV2Schema,
   PluginActionSurfaceV2Schema,
+  PluginActionContributionV2Schema,
+  type PluginActionContributionV2,
   pluginActionRequiresConfirmationPresentation,
   hasValidPluginConnectedAccountPurposeBindingsV2,
 } from '../plugins/actions/v2.js';
@@ -123,7 +126,10 @@ import { PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1 } from '../plugins/settings/accountSe
 import { PluginUiHeaderActionPresentationV1Schema } from '../plugins/contributions/ui/sessionHeaderActions.js';
 import {
   PluginDeclarativeDocumentSourceV1Schema,
+  PluginUiRendererV2Schema,
+  type PluginUiRendererV2,
 } from '../plugins/contributions/ui/v2.js';
+import { PluginContributionPointV1Schema, PluginTargetedContributionV1Schema, type PluginContributionPointV1, type PluginTargetedContributionV1 } from '../plugins/contributions/targetedContributions.js';
 import {
   PluginDeclarativeProjectedModelV1Schema,
 } from '../plugins/contributions/ui/declarativeProjectedModelV1.js';
@@ -162,6 +168,7 @@ import {
   PluginUiTargetedContributionSurfacePresentationV1Schema,
   PluginUiTargetedContributionTargetV1Schema,
   PluginUiTargetedContributionsV1Schema,
+  type PluginUiTargetedContributionsV1,
 } from '../plugins/ui/targetedContributions.js';
 import {
   NormalizedPluginCollectionUiQueryDescriptorV1Schema,
@@ -380,12 +387,62 @@ export type DaemonContributionRegistryProjectionAutomationEligibleEventsV1 = z.i
 export const DaemonPluginUiTargetedContributionsReadRequestSchema = lazyZodSchema(() => z.strictObject({
   ...DaemonContributionRegistryProjectionClientContextV1Shape,
   pluginId: PluginIdSchema,
+  /** Account targets request the Machine's actual source declarations without a Machine target occurrence. */
+  readMode: z.optional(z.literal('sourceDeclarations')),
 }).check(z.superRefine(rejectMismatchedClientPlatforms)));
 export type DaemonPluginUiTargetedContributionsReadRequest = z.infer<
   typeof DaemonPluginUiTargetedContributionsReadRequestSchema
 >;
 
-export const DaemonPluginUiTargetedContributionsReadResponseSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
+/** A current Machine source slice; each declaration retains its actual occurrence and custody. */
+export type DaemonPluginTargetedSourceDeclarationV1 = {
+  manifest: {
+    id: string;
+    contributes: {
+      actions: PluginActionContributionV2[];
+      pluginContributionPoints: PluginContributionPointV1[];
+      targetedPluginContributions: PluginTargetedContributionV1[];
+      ui: { renderers: PluginUiRendererV2[] };
+    };
+  };
+  occurrenceId: string;
+  sourceCustody: PluginSourceCustodyV1;
+};
+export const DaemonPluginTargetedSourceDeclarationV1Schema: z.ZodMiniType<DaemonPluginTargetedSourceDeclarationV1> = lazyZodSchema(() => z.strictObject({
+  manifest: z.strictObject({
+    id: PluginIdSchema,
+    contributes: z.strictObject({
+      actions: z.array(PluginActionContributionV2Schema),
+      pluginContributionPoints: z.array(PluginContributionPointV1Schema),
+      targetedPluginContributions: z.array(PluginTargetedContributionV1Schema),
+      ui: z.strictObject({ renderers: z.array(PluginUiRendererV2Schema) }),
+    }),
+  }),
+  occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema,
+  sourceCustody: PluginSourceCustodyV1Schema,
+}));
+
+export type DaemonPluginUiTargetedContributionsReadResponse =
+  | { status: 'sourceDeclarations'; pluginId: string; sourceDeclarations: DaemonPluginTargetedSourceDeclarationV1[] }
+  | { status: 'current'; targetedContributions: PluginUiTargetedContributionsV1; targetedSurfaceMounts: DaemonPluginUiTargetedSurfaceMountV1[] }
+  | { status: 'unavailable'; code: string };
+
+export const DaemonPluginUiTargetedContributionsReadResponseSchema: z.ZodMiniType<DaemonPluginUiTargetedContributionsReadResponse> = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('sourceDeclarations'),
+    pluginId: PluginIdSchema,
+    sourceDeclarations: z.array(DaemonPluginTargetedSourceDeclarationV1Schema),
+  }).check(z.superRefine((response, context) => {
+    const plugins = new Set<string>();
+    response.sourceDeclarations.forEach((row, index) => {
+      if (plugins.has(row.manifest.id)
+        || row.manifest.contributes.targetedPluginContributions.length === 0
+        || row.manifest.contributes.targetedPluginContributions.some((entry) => entry.target.pluginId !== response.pluginId)) {
+        context.addIssue({ code: 'custom', path: ['sourceDeclarations', index], message: 'Source declarations must uniquely address the requested target.' });
+      }
+      plugins.add(row.manifest.id);
+    });
+  })),
   z.strictObject({
     status: z.literal('current'),
     /** Tagged with the target's current occurrence (`target.occurrenceId`). */
@@ -398,9 +455,6 @@ export const DaemonPluginUiTargetedContributionsReadResponseSchema = lazyZodSche
     code: z.string().check(z.trim(), z.minLength(1)),
   }),
 ]));
-export type DaemonPluginUiTargetedContributionsReadResponse = z.infer<
-  typeof DaemonPluginUiTargetedContributionsReadResponseSchema
->;
 
 /** The one natural Settings record selected by this projection entry. */
 export const PluginProjectedSettingsScopeV2Schema = PluginSettingsScopeRefV1Schema;

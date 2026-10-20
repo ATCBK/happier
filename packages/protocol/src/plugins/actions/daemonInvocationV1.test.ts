@@ -3,6 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from './daemonInvocationV1.js';
 
 describe('client Action automated invocation provenance', () => {
+  it('keeps Account caller package correspondence inside the existing closed binding', () => {
+    const clientActionBinding = {
+      pluginId: 'com.acme.account', pluginVersion: '1.2.3', declarationDigest: `sha256:${'b'.repeat(64)}`,
+      contributionLocalId: 'aggregate', occurrenceId: 'local-account',
+      sourceCustody: { kind: 'account_release', pluginId: 'com.acme.account', version: '1.2.3', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+    };
+    const request = { machineId: 'reading-machine', expectedContributorOccurrenceId: 'source-current',
+      qualifiedActionId: 'com.acme.source/read', executionSurface: 'cli',
+      invocation: { kind: 'clientPluginAction', clientActionBinding } };
+    expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse(request).success).toBe(true);
+    expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
+      invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, pluginVersion: ' ' } },
+    }).success).toBe(false);
+    expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
+      invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, declarationDigest: 'not-a-digest' } },
+    }).success).toBe(false);
+    expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
+      invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, authority: 'present_user' } },
+    }).success).toBe(false);
+  });
   it('admits an independent Discussion Composer intent without deriving a Session identity', () => {
     const request = { machineId: 'machine-1', expectedContributorOccurrenceId: 'current',
       qualifiedActionId: 'acme.plugin/open', executionSurface: 'ui',

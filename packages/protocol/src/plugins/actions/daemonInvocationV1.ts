@@ -5,6 +5,7 @@ import { z } from 'zod/mini';
 import { MessageActionReferenceV1Schema } from '../../sessions/messages/messageActionReferenceV1.js';
 import { PluginContributionLocalIdSchema as CanonicalPluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PluginMachineMaterializationRefV1Schema } from '../availability/materializationRefV1.js';
+import { PluginReleaseVersionV1Schema } from '../availability/releaseRefV1.js';
 import { PluginJsonValueV2Schema } from '../contributions/publicTypes.js';
 import { PluginIdSchema } from '../pluginId.js';
 import { ComposerRefV1Schema, type ComposerRefV1 } from '../ui/composer.js';
@@ -19,11 +20,14 @@ const PluginRuntimeOccurrenceIdSchema = asProtocolZod(PluginUiRuntimeOccurrenceI
 
 /**
  * The mounted UI host's observed binding. This is not a caller credential: the
- * daemon matches it against the exact current registry lease, then derives the
- * invocation caller itself.
+ * daemon matches Machine mounts against its current registry lease, or an
+ * Account Action against its current enabled declaration, then derives the caller.
  */
 export const DaemonPluginStructuredMessageActionMountedBindingSchema = lazyZodSchema(() => z.strictObject({
   pluginId: PluginIdWireSchema,
+  /** Package correspondence for Account callers from another invoking host. */
+  pluginVersion: z.optional(PluginReleaseVersionV1Schema),
+  declarationDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/))),
   contributionLocalId: PluginContributionLocalIdSchema,
   occurrenceId: PluginRuntimeOccurrenceIdSchema,
   sourceCustody: zMini.optional(PluginSourceCustodyV1Schema),

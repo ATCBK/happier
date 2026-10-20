@@ -21,6 +21,20 @@ import {
 } from './v2.js';
 
 describe('plugin contribution catalog', () => {
+  it('assigns Account actions only to their exact portable activation target', () => {
+    const contributes = { actions: [{ id: 'read-account', execution: {
+      target: 'account', account: { artifactId: 'account-runtime', exportName: 'activateAccount' },
+    } }] };
+    expect(derivePluginContributionRegistrationRights(contributes)).toEqual([{
+      family: 'actions', localId: 'read-account', target: {
+        realm: 'account', artifactId: 'account-runtime', exportName: 'activateAccount',
+      },
+    }]);
+    expect(derivePluginDaemonContributionRegistrationRights(contributes)).toEqual([]);
+    expect(derivePluginClientContributionRegistrationRights(contributes, {
+      artifactId: 'account-runtime', exportName: 'activateAccount', platform: 'web',
+    })).toEqual([]);
+  });
   it('admits one machine provisioner declaration and references its same-plugin daemon roles', () => {
     const roles = ['check', 'acquire', 'bootstrap', 'inspect', 'destroy', 'exec', 'put-file'];
     const native = defineProtocolObject({}, { policy: 'closed' });
