@@ -152,7 +152,7 @@ async function persistForegroundSessionMarker(input: Readonly<{
   input.tracked.processCommandHash = processCommandHash;
   input.tracked.processStartTimeMs = processStartTimeMs;
   if (processStartTimeMs !== undefined && processCommandHash) adoptTrackedSessionRunnerIdentity(input.tracked, {
-    pid: input.tracked.pid, processStartTimeMs, processCommandHash,
+    pid: input.tracked.pid, processStartTimeMs, processCommandHash, processCommand,
   });
   await (input.writeSessionMarkerFn ?? writeSessionMarker)({ pid: input.tracked.pid, happySessionId: input.sessionId,
     startedBy: input.metadata.startedBy ?? 'terminal', cwd: input.metadata.path, metadata: input.metadata,
@@ -811,7 +811,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
         await persistSessionMarker(beforeStartupReadiness);
         return;
       }
-      if (trackedForPid && trackedForPid.runnerProcessIdentity?.pid !== pid) {
+      if (trackedForPid && (trackedForPid.runnerProcessIdentity?.pid !== pid || !trackedForPid.runnerProcessIdentity.processCommand)) {
         const runnerIdentity = currentSessionMarkerPid === pid
           ? processIdentity
           : await readProcessIdentityByPidFn(pid).catch((error) => {
@@ -830,6 +830,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
             pid: runnerIdentity.pid,
             processStartTimeMs: runnerIdentity.processStartTimeMs,
             processCommandHash: hashProcessCommand(runnerIdentity.command),
+            processCommand: runnerIdentity.command,
           });
         }
       }

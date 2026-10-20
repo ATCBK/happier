@@ -7,7 +7,7 @@ import type {
 import type { SessionRunnerEntrypointIdentity } from '../sessionRunnerRuntime/types';
 import type { SessionRunnerAgentRuntimeCurrentness } from '../sessionRunnerRuntime/resolveAgentRuntimeCurrentness';
 import { resolveSessionRunnerRuntimeState, resolveTrackedSessionRunnerActivity, type SessionRunnerActivityRefusal } from '../sessionRunnerRuntime/resolveRuntimeState';
-import { resolveSessionRunnerEntrypointIdentityFromProcessCommand } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
+import { readTrackedSessionRunnerProcessCommand, resolveSessionRunnerEntrypointIdentityFromProcessCommand } from '../sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import {
   resolveSessionRunnerRestartEligibility,
   shouldRefreshSessionRunnerResumeIdentity,
@@ -95,7 +95,7 @@ export function captureRunnerRestartIdentityWitness(
 ): RunnerRestartIdentityWitness {
   const runnerIdentity =
     resolveSessionRunnerEntrypointIdentityFromProcessCommand(
-      tracked.processCommand,
+      readTrackedSessionRunnerProcessCommand(tracked),
     );
   return Object.freeze({
     pid: tracked.pid,
@@ -125,7 +125,7 @@ function isActivePid(value: unknown): value is number {
 }
 
 export function summarizeSessionRunnerEndpoint(tracked: TrackedSession): RestartSessionRunnerEndpointSummary {
-  const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand);
+  const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(readTrackedSessionRunnerProcessCommand(tracked));
   return {
     pid: tracked.pid,
     cliVersion: runnerIdentity.status === 'known' ? runnerIdentity.entrypointVersion ?? null : null,
@@ -218,7 +218,7 @@ function validateRestartContext(input: Readonly<{
 
   const expectedEntrypoint = normalizeString(input.request.expectedRunnerEntrypointIdentity);
   if (expectedEntrypoint) {
-    const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand);
+    const runnerIdentity = resolveSessionRunnerEntrypointIdentityFromProcessCommand(readTrackedSessionRunnerProcessCommand(tracked));
     if (runnerIdentity.status !== 'known' || runnerIdentity.comparableId !== expectedEntrypoint) {
       return skipped('runner_identity_changed', sessionId);
     }
@@ -327,9 +327,10 @@ function resolveVersionGate(input: Readonly<{
     };
   }
   if (state.versionState === 'unknown') {
-    const reasonCode = state.plannedRestart.disabledReason === 'current_entrypoint_unknown'
+    const reasonCode = state.daemon.currentEntrypointSource === 'unknown'
       ? 'current_entrypoint_unknown'
-      : 'runner_entrypoint_unknown';
+      : state.runner.entrypointSource === 'unknown'
+        ? 'runner_entrypoint_unknown' : 'runner_generation_unattested';
     return skipped('version_unknown', input.request.sessionId, reasonCode);
   }
   return null;

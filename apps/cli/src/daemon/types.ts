@@ -179,8 +179,8 @@ export interface TrackedSession {
   linuxLaunchUnit?: string;
   /** Same-address Guard receipt; only exact exit custody may publish observed stopped. */
   guardStopReceipt?: import('./guard/sessionStopReceipt').GuardSessionStopReceipt;
-  /** In-memory-only runner PID and generation captured by canonical session-report correlation. */
-  runnerProcessIdentity?: Readonly<Required<ProcessIdentityWitness>>;
+  /** In-memory-only runner generation and observed command captured by canonical session-report correlation. */
+  runnerProcessIdentity?: Readonly<Required<ProcessIdentityWitness> & { processCommand?: string }>;
   /** One-shot in-memory bridge from exact webhook capture to the existing accepted-marker owner. */
   persistWindowsTerminalAcceptedAgentMarker?: (
     identity: ExactWindowsProcessCancellationIdentity,

@@ -4,6 +4,7 @@ import type { SessionRunnerDaemonEntrypointSourceV1 } from '@happier-dev/protoco
 import {
   isGenerationAttestedComparableId,
   resolveSessionRunnerEntrypointIdentityFromProcessCommand,
+  readTrackedSessionRunnerProcessCommand,
 } from './resolveRunnerEntrypointIdentity';
 import { readSessionRunnerStartingModeFromProcessCommand } from './readSessionRunnerStartingMode';
 import { resolveSessionRunnerRestartEligibility } from './resolveRestartEligibility';
@@ -85,8 +86,9 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
 }>): SessionRunnerRuntimeState {
   const tracked = params.tracked ?? null;
   const sessionId = normalizeString(params.sessionId) || normalizeString(tracked?.happySessionId);
+  const runnerCommand = tracked ? readTrackedSessionRunnerProcessCommand(tracked) : undefined;
   const runnerIdentity = tracked
-    ? resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand)
+    ? resolveSessionRunnerEntrypointIdentityFromProcessCommand(runnerCommand)
     : { status: 'unknown', source: 'unknown', reason: 'empty_command' } satisfies SessionRunnerEntrypointIdentity;
   const disabledReason =
     resolveDisabledReason(tracked) ??
@@ -119,7 +121,7 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
       processCommandHash: normalizeString(tracked?.processCommandHash) || null,
       entrypointSource: runnerIdentity.status === 'known' ? runnerIdentity.source : 'unknown',
       startedBy: readStartedBy(tracked?.startedBy),
-      startingMode: readSessionRunnerStartingModeFromProcessCommand(tracked?.processCommand),
+      startingMode: readSessionRunnerStartingModeFromProcessCommand(runnerCommand),
     },
     daemon: {
       cliVersion: params.currentIdentity.status === 'known'

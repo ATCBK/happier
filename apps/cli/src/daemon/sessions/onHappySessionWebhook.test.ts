@@ -32,6 +32,9 @@ import { readProcessIdentityByPid } from '../processIdentity';
 import { serializeWindowsCommandLine } from '../platform/windows/windowsCommandLine';
 import { probeSessionRunnerPresence } from './isSessionRunnerActive';
 import { resolveExistingSessionSpawnPreGate } from '../spawn/resolveExistingSessionSpawnPreGate';
+import { resolveSessionRunnerRuntimeState } from '../sessionRunnerRuntime/resolveRuntimeState';
+import { buildSessionRunnerRuntimeRefreshRequestV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
+import { restartSessionRunnerOnCurrentRuntime } from '../plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 
 function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath = '/tmp'): Metadata {
   return {
@@ -59,13 +62,13 @@ describe('createOnHappySessionWebhook', () => {
       const readIdentity = async (pid: number) => ({
         pid,
         processStartTimeMs: pid === wrapperPid ? 12_345 : 23_456,
-        command: pid === wrapperPid ? '/runtime/scope-exit' : '/runtime/versions/1.2.3/bin/happier claude',
+        command: pid === wrapperPid ? '/runtime/scope-exit' : '/runtime/versions/1.2.3/bin/happier claude --happy-starting-mode remote --started-by daemon',
       });
       const tracked: TrackedSession = {
         pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
         agentRuntimeDaemonServiceAuthorityFilePath: path.join(dir, 'authority.json'),
         acceptedSpawnMarkerGate: Promise.resolve(true),
-        spawnOptions: { directory: dir, backendTarget: { kind: 'backend', backendId: 'claude' }, spawnNonce: 'wrapper-launch' },
+        spawnOptions: { directory: dir, backendTarget: { kind: 'backend', backendId: 'claude' }, spawnNonce: 'wrapper-launch', resume: 'retained-thread' },
       };
       await writeSessionMarker({
         pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: dir,
@@ -89,6 +92,24 @@ describe('createOnHappySessionWebhook', () => {
         expect(tracked.pid).toBe(wrapperPid);
         expect(tracked.processStartTimeMs).toBe(12_345);
         expect(tracked.runnerProcessIdentity).toMatchObject({ pid: runnerPid, processStartTimeMs: 23_456 });
+        const currentIdentity = { status: 'known', source: 'launch_spec', comparableId: 'version:1.2.4', entrypointVersion: '1.2.4' } as const;
+        const state = resolveSessionRunnerRuntimeState({ sessionId, tracked, currentIdentity });
+        expect(state.runner).toMatchObject({ pid: wrapperPid, runtimeId: 'version:1.2.3', startingMode: 'remote' });
+        expect(state.plannedRestart).toMatchObject({ eligible: true, disabledReason: null });
+        const request = buildSessionRunnerRuntimeRefreshRequestV1(state);
+        expect(request).toMatchObject({ expectedRunnerPid: wrapperPid,
+          expectedProcessCommandHash: hashProcessCommand('/runtime/scope-exit'), expectedRunnerEntrypointIdentity: 'version:1.2.3' });
+        if ('ok' in request) throw new Error('Expected guarded runner refresh');
+        const requestRestart = vi.fn();
+        expect(await restartSessionRunnerOnCurrentRuntime({ tracked, currentIdentity,
+          request: { ...request, dryRun: true }, requestRestart })).toMatchObject({ ok: true, status: 'dry_run_restartable' });
+        expect(requestRestart).not.toHaveBeenCalled();
+        const changedRunner = resolveSessionRunnerRuntimeState({ sessionId, currentIdentity,
+          tracked: { ...tracked, sessionRunnerPid: runnerPid + 1 } });
+        expect(changedRunner.runner).toMatchObject({ runtimeId: null, startingMode: 'unknown' });
+        expect(buildSessionRunnerRuntimeRefreshRequestV1(changedRunner)).toMatchObject({
+          ok: false, reasonCode: 'runner_entrypoint_unknown',
+        });
       });
       const report = createOnHappySessionWebhook({
         pidToTrackedSession: sessions, pidToAwaiter: new Map([[wrapperPid, awaiter]]),
@@ -877,6 +898,7 @@ describe('createOnHappySessionWebhook', () => {
       pid: agentPid,
       processStartTimeMs: 2_000,
       processCommandHash: hashProcessCommand(processCommand),
+      processCommand,
     });
     expect(onPidPromoted).toHaveBeenCalledOnce();
     expect(onPidPromoted).toHaveBeenCalledWith({
