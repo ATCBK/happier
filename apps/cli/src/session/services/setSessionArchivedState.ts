@@ -26,7 +26,7 @@ export async function setSessionArchivedState(params: Readonly<{
   archived: boolean;
   signal?: AbortSignal;
   externalAction?: Parameters<typeof requestSessionStop>[0]['externalAction'];
-  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
+  resolveAuthorizationHeaders?: Parameters<typeof requestSessionStop>[0]['resolveAuthorizationHeaders'];
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; archivedAt: number | null }>

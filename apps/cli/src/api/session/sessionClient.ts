@@ -2799,6 +2799,8 @@ export class ApiSessionClient extends EventEmitter {
         const nowMs = Date.now();
         const lifecycle = { latestTurnStatus: this.materializationRuntime.getLatestTurnStatus(),
             latestTurnStatusObservedAtMs: this.materializationRuntime.getLatestTurnStatusObservedAt() };
+        const activityState = this.runtimeActivityProjection.runtimeActivityState;
+        const activityActiveCount = this.runtimeActivityProjection.runtimeActivityActiveCount;
         const requests = Object.entries(this.agentState?.requests ?? {}).filter(([requestId, request]) => !isAgentStateRequestCoveredByCompletedRequests({
             requestId, request, completedRequests: this.agentState?.completedRequests,
             options: resolveAgentStateRequestCoverageOptions({ kind: 'localPermissionBridge' }),
@@ -2807,8 +2809,9 @@ export class ApiSessionClient extends EventEmitter {
             sessionId: this.sessionId, nowMs, origin: this.rolePromptOrganization.origin,
             lifecycle,
             runtime: { presence: 'online', active: true, lastObservedAtMs: nowMs,
-                activityState: this.runtimeActivityProjection.runtimeActivityState,
-                activityActiveCount: this.runtimeActivityProjection.runtimeActivityActiveCount },
+                activityState: activityState === 'active' || activityState === 'idle' || activityState === 'unknown'
+                    ? activityState : undefined,
+                activityActiveCount: typeof activityActiveCount === 'number' ? activityActiveCount : undefined },
             pending: { hasPendingPermissionRequests: requests.includes('permission'), hasPendingUserActionRequests: requests.includes('user_action'),
                 pendingRequestObservedAtMs: nowMs },
             work: readSessionWorkStateV1FromMetadata(this.metadata),
@@ -3000,7 +3003,7 @@ export class ApiSessionClient extends EventEmitter {
         evidence: SessionFollowRuleSourceEvidenceV1,
     ): Promise<SessionPersonalFollowCommit | null> {
         if (!commit || this.closed || this.metadataAuthorityKind !== 'owner') return null;
-        let result: SessionActivityChangedResult | void;
+        let result: SessionActivityChangedResult | void = undefined;
         try {
             result = await this.notifySessionFollowRuleMessageCommitted({
                 localId: commit.localId, seq: commit.committedSequence, evidence,
@@ -3621,23 +3624,10 @@ export class ApiSessionClient extends EventEmitter {
             };
     }
 
-    getStoredContentEncryptionContext(): Readonly<
-        | { mode: 'plain' }
-        | {
-            mode: 'e2ee';
-            ctx: Readonly<{
-                encryptionKey: Uint8Array;
-                encryptionVariant: 'legacy' | 'dataKey';
-            }>;
-        }
-    > {
-        if (this.storedContentCrypto.mode === 'plain') {
-            return { mode: 'plain' };
-        }
-        return {
-            mode: 'e2ee',
-            ctx: this.storedContentCrypto.ctx,
-        };
+    getStoredContentEncryptionContext(): SessionStoredContentCryptoContext {
+        return this.storedContentCrypto.mode === 'plain'
+            ? { mode: 'plain', ctx: null }
+            : { mode: 'e2ee', ctx: this.storedContentCrypto.ctx };
     }
 
     getServerBinding(): SessionClientServerBinding {
@@ -3690,10 +3680,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private getMetadataTupleCryptoContext(): SessionStoredContentCryptoContext {
-        const context = this.getStoredContentEncryptionContext();
-        return context.mode === 'plain'
-            ? { mode: 'plain', ctx: null }
-            : context;
+        return this.getStoredContentEncryptionContext();
     }
 
     private async updateRuntimeActivityProjectionExact(projection: Readonly<{
@@ -4478,7 +4465,7 @@ export class ApiSessionClient extends EventEmitter {
             credentials: { token: this.token }, sessionId: this.sessionId, signal,
         }));
         if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
-        const raw = await emitSocketWithAck<unknown>({
+        const raw = await emitSocketWithAck({
             socket: this.socket,
             event: SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
             timeoutMs: null,
@@ -4502,7 +4489,7 @@ export class ApiSessionClient extends EventEmitter {
             credentials: { token: this.token }, sessionId: this.sessionId, signal,
         }));
         if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
-        const raw = await emitSocketWithAck<unknown>({
+        const raw = await emitSocketWithAck({
             socket: this.socket,
             event: SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,
             timeoutMs: null,
@@ -4636,8 +4623,8 @@ export class ApiSessionClient extends EventEmitter {
             v: 1,
             sessionId: this.sessionId,
         });
-        const raw = await emitSocketWithAck<unknown>({
-            socket: this.socket as any,
+        const raw = await emitSocketWithAck({
+            socket: this.socket,
             event: DISCUSSION_AGENT_POST_EVENT_V1,
             timeoutMs: null,
             payload: request,

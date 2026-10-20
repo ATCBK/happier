@@ -278,10 +278,11 @@ async function defaultResolveGeneration(): Promise<number> {
 
 function isExpectedPluginOccurrenceCurrent(
     registry: ResolvedExecutablePluginRuntimeRegistry,
-    pluginId: string,
-    expectedOccurrenceId: string,
+    pluginId: string | undefined,
+    expectedOccurrenceId: string | undefined,
 ): boolean {
     try {
+        if (pluginId === undefined) return false;
         const currentOccurrenceId = registry.readPluginOccurrenceId?.(pluginId)
             ?? registry.contributes.occurrenceIdsByPluginId?.[pluginId]
             ?? null;

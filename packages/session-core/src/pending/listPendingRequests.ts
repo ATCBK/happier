@@ -339,7 +339,14 @@ export function listPendingTranscriptRequests(
         .flatMap((state) => (state.status === 'pending' ? [state.request] : []));
 }
 
-function listPendingAgentStateRequests(agentState: AgentState | SessionActionConfirmationsV1 | null | undefined): SessionPendingRequest[] {
+type PendingAgentStateRequestFacts = Readonly<{
+    requests?: Readonly<Record<string, Pick<NonNullable<AgentState['requests']>[string],
+        'tool' | 'kind' | 'source' | 'arguments' | 'createdAt' | 'turnId' | 'sidechainId'
+        | 'questionV1' | 'currentHandler' | 'permissionSuggestions' | 'mcpTool'>>> | null;
+    completedRequests?: AgentState['completedRequests'];
+}>;
+
+function listPendingAgentStateRequests(agentState: PendingAgentStateRequestFacts | SessionActionConfirmationsV1 | null | undefined): SessionPendingRequest[] {
     const requests = agentState?.requests;
     if (!requests) return [];
     const completed = agentState?.completedRequests ?? null;
@@ -379,7 +386,7 @@ function listPendingAgentStateRequests(agentState: AgentState | SessionActionCon
     });
 }
 
-export function derivePendingRequestFlagsFromAgentState(agentState: AgentState | SessionActionConfirmationsV1 | null | undefined): PendingRequestFlags {
+export function derivePendingRequestFlagsFromAgentState(agentState: PendingAgentStateRequestFacts | SessionActionConfirmationsV1 | null | undefined): PendingRequestFlags {
     const requests = listPendingAgentStateRequests(agentState);
     if (requests.length === 0) {
         return EMPTY_PENDING_REQUEST_FLAGS;
