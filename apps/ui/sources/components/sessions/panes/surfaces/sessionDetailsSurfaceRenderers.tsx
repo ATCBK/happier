@@ -20,14 +20,12 @@ import {
 } from '@/components/browser/surfaces';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import { readFileTargetAnchorResource, readWorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
-import { SessionInteractiveExecutionRunDraftView } from '@/components/sessions/runs/launcher/SessionInteractiveExecutionRunDraftView';
+import { createExecutionRunDetailsSurfaceRenderers } from '@/components/sessions/runs/launcher/executionRunDetailsSurfaceRenderers';
 import { isSessionPeekDetailsResource } from '@/components/sessions/work/createSessionPeekDetailsTab';
 import { SessionPeekDetailsView } from '@/components/sessions/work/SessionPeekDetailsView';
 import { isWorkflowRunPeekDetailsResource } from '@/components/sessions/work/createWorkflowRunPeekDetailsTab';
 import { WorkflowRunPeekDetailsView } from '@/components/sessions/work/WorkflowRunPeekDetailsView';
 import { SessionWorkMapDetailsView, isSessionWorkMapDetailsResource } from '@/components/sessions/work/SessionWorkMapDetailsView';
-import { SessionExecutionRunDetailsView } from '@/components/sessions/runs/details/SessionExecutionRunDetailsView';
-import { createExecutionRunDetailsTab } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
 import { SessionBoardDetailsSurface } from '@/components/sessions/board/SessionBoardDetailsSurface';
 import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
 import {
@@ -47,12 +45,11 @@ import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/us
 import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/board';
 import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { PluginBrowserProjectionModel } from '@/sync/domains/plugins/browser/actions';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import type { PluginBrowserProjectionModel } from '@/sync/domains/plugins/browser/actions';
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
 import type { PeerMediationObservabilityUiStore } from '@/sync/domains/machines/peer/mediation/observability';
-import { DiscussionSelectionSourceV1Schema, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import type { PeerMediationObservabilityScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/observability/v1';
 import type { PluginUiDestinationRuntimeFormFactorV1 } from '@happier-dev/protocol/plugins/ui';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
@@ -155,50 +152,6 @@ function isSubagentResource(value: unknown): value is Readonly<{ kind: 'subagent
     if (!value || typeof value !== 'object') return false;
     const maybe = value as { kind?: unknown; subagentId?: unknown };
     return maybe.kind === 'subagent' && typeof maybe.subagentId === 'string' && maybe.subagentId.trim().length > 0;
-}
-
-function isExecutionRunLauncherResource(value: unknown): value is Readonly<{
-    kind: 'executionRunLauncher';
-    mode?: 'conversation';
-    intent?: 'review' | 'plan' | 'delegate';
-    source?: DiscussionSelectionSourceV1;
-    initialInstructions?: string;
-    roleId?: string;
-}> {
-    if (!value || typeof value !== 'object') return false;
-    const maybe = value as {
-        kind?: unknown;
-        intent?: unknown;
-        roleId?: unknown;
-        source?: unknown;
-        initialInstructions?: unknown;
-        mode?: unknown;
-    };
-    if (maybe.kind !== 'executionRunLauncher') return false;
-    if (!(maybe.mode == null || maybe.mode === 'conversation')) return false;
-    if (maybe.mode === 'conversation' && maybe.intent != null) {
-        return false;
-    }
-    if (!(maybe.intent == null || maybe.intent === 'review' || maybe.intent === 'plan' || maybe.intent === 'delegate')) {
-        return false;
-    }
-    if (maybe.initialInstructions != null && typeof maybe.initialInstructions !== 'string') return false;
-    if (maybe.roleId != null && (typeof maybe.roleId !== 'string' || maybe.roleId.trim().length === 0)) return false;
-    if (maybe.source == null) return true;
-    const source = DiscussionSelectionSourceV1Schema.safeParse(maybe.source);
-    if (!source.success) return false;
-    return maybe.mode !== 'conversation'
-        || (typeof source.data.draftCorrelationId === 'string' && source.data.draftCorrelationId.trim().length > 0);
-}
-
-function isExecutionRunResource(value: unknown): value is Readonly<{ kind: 'executionRun'; runId: string; retryInputLocalId?: string }> {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const maybe = value as { kind?: unknown; runId?: unknown; retryInputLocalId?: unknown };
-    return maybe.kind === 'executionRun'
-        && typeof maybe.runId === 'string'
-        && maybe.runId.trim().length > 0
-        && (maybe.retryInputLocalId === undefined
-            || (typeof maybe.retryInputLocalId === 'string' && maybe.retryInputLocalId.trim().length > 0));
 }
 
 function readSessionDiscussionDetailsTarget(value: unknown): SessionDiscussionDetailsTarget | null {
@@ -607,70 +560,8 @@ export function createSessionDetailsSurfaceRenderers(
                 );
             },
         },
-        {
-            id: 'session-execution-run-launcher',
-            owner: 'session',
-            order: 70,
-            canRender: (input) => readResourceKind(input) === 'executionRunLauncher' && isExecutionRunLauncherResource(input.tab.resource),
-            render: (input) => {
-                if (!isExecutionRunLauncherResource(input.tab.resource)) return null;
-                if (
-                    input.tab.resource.source
-                    && (!options.serverId || !areServerProfileIdentifiersEquivalent(input.tab.resource.source.serverId, options.serverId))
-                ) return null;
-                // One composer-first start for every ask (lab `convo-S1`): a conversation draft carries
-                // no intent; a Review, Plan or Delegate tab carries its own; the old intent-less
-                // "Advanced" tab asks for a review with every choice, as the form did.
-                const resource = input.tab.resource;
-                return (
-                    <SessionInteractiveExecutionRunDraftView
-                        sessionId={options.sessionId}
-                        serverId={options.serverId}
-                        autoFocusComposer
-                        intent={resource.mode === 'conversation' ? null : resource.intent ?? 'review'}
-                        roleId={resource.roleId ?? null}
-                        initialText={resource.initialInstructions}
-                        launchOrigin={resource.source && 'draftCorrelationId' in resource.source
-                            ? resource.source as DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>
-                            : undefined}
-                        onRunStarted={(runId, recovery, presentation) => {
-                            input.callbacks.replaceTab?.(
-                                input.tab.key,
-                                createExecutionRunDetailsTab(runId, recovery, presentation?.title),
-                                { intent: input.tab.isPreview ? 'preview' : 'pinned' },
-                            );
-                        }}
-                    />
-                );
-            },
-        },
-        {
-            id: 'session-execution-run',
-            owner: 'session',
-            order: 71,
-            canRender: (input) => readResourceKind(input) === 'executionRun' && isExecutionRunResource(input.tab.resource),
-            render: (input) => {
-                if (!isExecutionRunResource(input.tab.resource)) return null;
-                return (
-                    <SessionExecutionRunDetailsView
-                        sessionId={options.sessionId}
-                        runId={input.tab.resource.runId}
-                        retryInputLocalId={input.tab.resource.retryInputLocalId}
-                        serverId={options.serverId}
-                        presentation="panel"
-                        openingTitle={input.tab.title}
-                        onRequestClose={() => options.closeDetailsTab(input.tab.key)}
-                        onTitleResolved={(title) => {
-                            input.callbacks.replaceTab?.(
-                                input.tab.key,
-                                // Same key and resource: only the name changes; pin and preview state stay.
-                                { key: input.tab.key, kind: input.tab.kind, title, resource: input.tab.resource },
-                            );
-                        }}
-                    />
-                );
-            },
-        },
+        ...createExecutionRunDetailsSurfaceRenderers({ owner: 'session', sessionId: options.sessionId,
+            serverId: options.serverId, closeDetailsTab: options.closeDetailsTab }),
         {
             id: 'session-provider-details',
             owner: 'session',

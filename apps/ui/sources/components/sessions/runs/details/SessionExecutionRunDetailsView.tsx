@@ -1,5 +1,6 @@
 import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
@@ -53,7 +54,7 @@ import { ChainTranscriptList } from '@/components/sessions/transcript/ChainTrans
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
-import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
+import { SessionParticipantComposer, type ParticipantComposerPreparedSubmission } from '@/components/sessions/participants/composer/SessionParticipantComposer';
 import { useSessionRecipientState } from '@/components/sessions/agentInput/routing/useSessionRecipientState';
 import { useSessionAgentInputRoutingControls } from '@/components/sessions/agentInput/routing/useSessionAgentInputRoutingControls';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
@@ -79,7 +80,8 @@ import {
 import type { TranscriptNavigationEntry } from '@/components/sessions/transcript/navigation/transcriptNavigationTypes';
 import { ExecutionRunStepsRow } from '@/components/sessions/runs/details/ExecutionRunStepsRow';
 import { AppSessionTranscriptSourceProvider, createAppSidechainHistoryLoader } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
-import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { SessionTranscriptSourceProvider, useOptionalSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import { requestRegisteredSessionComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -135,13 +137,15 @@ export type SessionExecutionRunDetailsViewHandle = Readonly<{
 }>;
 
 type SessionExecutionRunDetailsViewProps = Readonly<{
-    sessionId: string;
+    sessionId: string | null;
+    workspace?: Readonly<{ machineId: string; cwd: string }>;
     runId: string;
     serverId?: string | null;
     presentation?: 'screen' | 'panel';
     showInfoCard?: boolean;
     showSendComposer?: boolean;
     retryInputLocalId?: string;
+    initialText?: string;
     /** The name the opener already knows (the tab's title), so the wait says what is opening. */
     openingTitle?: string | null;
     /** Closes the surface hosting this Run (its Details tab), offered when the Run is gone. */
@@ -153,14 +157,17 @@ type SessionExecutionRunDetailsViewProps = Readonly<{
     onTitleResolved?: (title: string) => void;
 }>;
 
-export const SessionExecutionRunDetailsView = React.memo(React.forwardRef<SessionExecutionRunDetailsViewHandle, SessionExecutionRunDetailsViewProps>((props, ref) => (
-    <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.serverId}>
+export const SessionExecutionRunDetailsView = React.memo(React.forwardRef<SessionExecutionRunDetailsViewHandle, SessionExecutionRunDetailsViewProps>((props, ref) => {
+    // Explicit absence also masks a surrounding Session pane's transcript authority.
+    return props.sessionId === null ? <SessionTranscriptSourceProvider source={null}>
         <SessionExecutionRunDetailsContent {...props} ref={ref} />
-    </AppSessionTranscriptSourceProvider>
-)));
+    </SessionTranscriptSourceProvider> : <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.serverId}>
+        <SessionExecutionRunDetailsContent {...props} ref={ref} />
+    </AppSessionTranscriptSourceProvider>;
+}));
 
 const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDetailsViewHandle, SessionExecutionRunDetailsViewProps>((props, ref) => {
-    const source = useSessionTranscriptSource();
+    const source = useOptionalSessionTranscriptSource();
     const { theme } = useUnistyles();
     const router = useRouter();
     const interactiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
@@ -170,8 +177,17 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         justifyContent: 'center' as const,
     }), [interactiveTargetSize]);
     const explicitServerId = props.serverId?.trim() || null;
-    const session = useSessionViewShellSession(props.sessionId, explicitServerId);
-    const hasQualifiedSession = explicitServerId === null || session !== null;
+    const storedSession = useSessionViewShellSession(props.sessionId ?? '', explicitServerId);
+    const session = props.sessionId === null ? null : storedSession;
+    const hasQualifiedSession = props.sessionId === null ? props.workspace !== undefined : explicitServerId === null || session !== null;
+    const pendingScopeServerId = explicitServerId ?? session?.serverId;
+    const pendingScopeResolution = useServerCredentialAccountScopeResolution(pendingScopeServerId);
+    const pendingOutboxScope = pendingScopeResolution.kind === 'bound' ? pendingScopeResolution.scope : null;
+    const { execute: executeAction, isCurrent: actionScopeIsCurrent, approval } = useMountedActionExecution(pendingOutboxScope);
+    const runOperation = React.useMemo(() => props.sessionId === null && props.workspace ? {
+        executionRunTargetMachineId: props.workspace.machineId,
+        externalActionTarget: { kind: 'machine' as const, machineId: props.workspace.machineId },
+    } : {}, [props.sessionId, props.workspace?.machineId]);
     const [state, setState] = React.useState<LoadState>({ status: 'loading' });
     const [daemonProcessLine, setDaemonProcessLine] = React.useState<string | null>(null);
     const [stopError, setStopError] = React.useState<string | null>(null);
@@ -182,8 +198,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     const [pendingInteraction, setPendingInteraction] = React.useState<'cancel_turn' | 'resume' | null>(null);
     const [rawToolResultExpanded, setRawToolResultExpanded] = React.useState(false);
     const { messages: sessionMessages, isLoaded: sessionMessagesLoaded } = useSessionMessages(
-        props.sessionId,
-        { enabled: hasQualifiedSession },
+        props.sessionId ?? '',
+        { enabled: props.sessionId !== null && hasQualifiedSession },
     );
     const transcriptFallback = React.useMemo<ExecutionRunTranscriptFallback | null>(() => {
         const transcriptState = findTranscriptExecutionRunState(sessionMessages, props.runId);
@@ -202,7 +218,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // screen is a background refresh: it must not replace the loaded surface
     // (and the mounted composer with its text and selection) with a spinner.
     // Only an address that is not loaded yet, or an error, enters `loading`.
-    const runAddressKey = `${explicitServerId ?? ''}\u0000${props.sessionId}\u0000${props.runId}`;
+    const runAddressKey = JSON.stringify([explicitServerId, pendingOutboxScope?.accountId, props.sessionId,
+        props.workspace?.machineId, props.workspace?.cwd, props.runId]);
     const loadedRunAddressRef = React.useRef<string | null>(null);
     // Request currentness: concurrent loads (route effect, bus notification,
     // interaction, header Refresh) settle in arbitrary order, so only the newest
@@ -218,7 +235,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         const generation = loadGenerationRef.current + 1;
         loadGenerationRef.current = generation;
         const isCurrentRequest = () => !controller.signal.aborted && loadGenerationRef.current === generation;
-        if (!props.sessionId || !props.runId) {
+        if ((props.sessionId === null ? !props.workspace : !props.sessionId) || !props.runId) {
             setState({ status: 'error', error: t('runs.runDetails.failedToLoad') });
             return;
         }
@@ -230,9 +247,19 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             return;
         }
         const rpcOptions = { ...(explicitServerId ? { serverId: explicitServerId } : {}), signal: controller.signal };
-        const getRun = (request: Readonly<{ runId: string; includeStructured: true }>) => (
-            sessionExecutionRunGet(props.sessionId, request, rpcOptions)
-        );
+        const getRun = async (request: Readonly<{ runId: string; includeStructured: true; waitForInputId?: string }>) => {
+            if (props.sessionId !== null) return sessionExecutionRunGet(props.sessionId, request, rpcOptions);
+            try {
+                const result = await executeAction('execution.run.get', { sessionId: null, ...request }, { ...runOperation, signal: controller.signal });
+                if (!result.ok) return result;
+                const parsed = ExecutionRunGetResponseSchema.safeParse(result.result);
+                return parsed.success ? { ok: true as const, ...parsed.data }
+                    : { ok: false as const, error: t('runs.runDetails.failedToLoad'), errorCode: 'execution_run_invalid_response' };
+            } catch (error) {
+                return { ok: false as const, error: error instanceof Error ? error.message : t('runs.runDetails.failedToLoad'),
+                    errorCode: 'execution_run_target_unavailable' };
+            }
+        };
         if (loadedRunAddressRef.current !== runAddressKey) {
             setState({ status: 'loading' });
             setDaemonProcessLine(null);
@@ -245,8 +272,14 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 : first;
         if (!isCurrentRequest()) return;
         if (result.ok === false) {
+            if (props.sessionId === null) {
+                loadedRunAddressRef.current = null;
+                setState(result.errorCode === 'execution_run_not_found' ? { status: 'gone' }
+                    : { status: 'error', error: String(result.error ?? t('runs.runDetails.failedToLoad')) });
+                return;
+            }
             if (result.errorCode === 'execution_run_not_found' && !sessionMessagesLoaded) {
-                await source.history.loadOlder?.().catch(() => null);
+                await source?.history.loadOlder?.().catch(() => null);
                 if (!isCurrentRequest()) return;
             }
             const daemonFallback = await resolveDaemonExecutionRunFallback({
@@ -300,6 +333,18 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             structuredMeta: result.structuredMeta,
             source: 'session_rpc',
         });
+        if (props.sessionId === null) {
+            const currentInput = run.inputTurns?.current;
+            const inputId = currentInput?.state === 'active' ? currentInput.inputIds[0] : undefined;
+            if (inputId) {
+                const completed = await getRun({ runId: props.runId, includeStructured: true, waitForInputId: inputId });
+                if (isCurrentRequest() && completed.ok && 'run' in completed) setState({ status: 'loaded', run: completed.run,
+                    latestToolResult: completed.latestToolResult, structuredMeta: completed.structuredMeta, source: 'session_rpc' });
+                else if (isCurrentRequest() && !completed.ok) setInteractionError(
+                    typeof completed.error === 'string' && completed.error.trim() ? completed.error : t('runs.runDetails.failedToLoad'));
+            }
+            return;
+        }
         const daemonFallback = await resolveDaemonExecutionRunFallback({
             sessionId: props.sessionId,
             serverId: explicitServerId,
@@ -314,7 +359,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (daemonFallback?.daemonProcessLine) {
             setDaemonProcessLine(daemonFallback.daemonProcessLine);
         }
-    }, [explicitServerId, hasQualifiedSession, props.runId, props.sessionId, runAddressKey, sessionMessagesLoaded, source, transcriptFallback]);
+    }, [executeAction, runOperation, explicitServerId, hasQualifiedSession, props.runId, props.sessionId, props.workspace?.machineId, props.workspace?.cwd, runAddressKey, sessionMessagesLoaded, source, transcriptFallback]);
 
     React.useEffect(() => {
         void load();
@@ -332,7 +377,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // surface, so it does not refetch; an unknown Run (`runId: null`) does.
     const runActivityServerId = explicitServerId ?? session?.serverId ?? null;
     React.useEffect(() => {
-        if (!hasQualifiedSession || !runActivityServerId) return;
+        if (!hasQualifiedSession || !runActivityServerId || props.sessionId === null) return;
         return subscribeExecutionRunActivity(
             { serverId: runActivityServerId, sessionId: props.sessionId },
             (notification) => {
@@ -350,23 +395,17 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         });
     }, [state]);
     const transcriptToolRouteId = React.useMemo(() => buildToolCallMessageRouteId({ toolId: transcriptToolId }), [transcriptToolId]);
-    const pendingScopeServerId = explicitServerId ?? session?.serverId;
-    const pendingScopeResolution = useServerCredentialAccountScopeResolution(pendingScopeServerId);
-    const pendingOutboxScope = pendingScopeResolution.kind === 'bound'
-        ? pendingScopeResolution.scope
-        : null;
-    const { execute: executeAction, isCurrent: actionScopeIsCurrent, approval } = useMountedActionExecution(pendingOutboxScope);
     const { snapshot: acpCatalog } = useAcpCatalog(pendingOutboxScope);
     const acpCatalogSnapshot = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale ? acpCatalog.catalog : undefined;
-    const interaction = source.useInteraction();
-    const resolvedTranscriptMessageId = useResolvedSessionMessageRouteId(props.sessionId, transcriptToolRouteId ?? '');
-    const transcriptMessageFromStore = useMessage(props.sessionId, resolvedTranscriptMessageId ?? transcriptToolRouteId ?? '');
+    const interaction = source ? source.useInteraction() : deriveTranscriptInteraction({ kind: 'public' });
+    const resolvedTranscriptMessageId = useResolvedSessionMessageRouteId(props.sessionId ?? '', transcriptToolRouteId ?? '');
+    const transcriptMessageFromStore = useMessage(props.sessionId ?? '', resolvedTranscriptMessageId ?? transcriptToolRouteId ?? '');
     const transcriptMessage = transcriptMessageFromStore ?? transcriptFallback?.message ?? null;
     const executionRunRecipient = React.useMemo(() => ({
         kind: 'execution_run' as const,
         runId: props.runId,
     }), [props.runId]);
-    const targetPending = useSessionPendingMessages(props.sessionId, executionRunRecipient);
+    const targetPending = useSessionPendingMessages(props.sessionId ?? '', executionRunRecipient);
     // The direct Run composer mounts before any transcript tool marker exists, so it composes the
     // same recipient/routing controls the tool-marker branch reaches through
     // `SessionMessageDetailsView`: one canonical send-mode control, no silent default.
@@ -394,8 +433,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     );
 
     const sidechainHydration = useEnsureSidechainsLoaded({
-        enabled: transcriptToolId !== null,
-        sessionId: props.sessionId,
+        enabled: props.sessionId !== null && transcriptToolId !== null,
+        sessionId: props.sessionId ?? '',
         sidechainIds: transcriptSidechainIds,
     });
     // A Run whose profile materializes nothing in the parent transcript never
@@ -404,12 +443,12 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // the Run's own sidechain, so this branch reads the same sync-owned sidechain
     // projection and renders them through the same shared list, including the
     // pending-to-committed crossover for this exact target.
-    const runSidechainMessages = useSessionSidechainMessages(props.sessionId, transcriptToolId);
+    const runSidechainMessages = useSessionSidechainMessages(props.sessionId ?? '', props.sessionId === null ? null : transcriptToolId);
     const runTranscriptMessages = React.useMemo(() => [...runSidechainMessages], [runSidechainMessages]);
     // The Run can be admitted before its transcript marker is materialized. Keep
     // this brief state visible until the canonical sidechain/pending projections
     // provide content; do not infer a timer, queue, or producer-owned lifecycle.
-    const showPreMarkerState = state.status === 'loaded'
+    const showPreMarkerState = props.sessionId !== null && state.status === 'loaded'
         && state.run.status === 'running'
         && transcriptMessage === null
         && runTranscriptMessages.length === 0
@@ -423,7 +462,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         ]);
     }, [pendingScopeServerId, props.runId, props.sessionId, transcriptToolId]);
     const loadOlderRunSidechain = React.useMemo(
-        () => createAppSidechainHistoryLoader(props.sessionId, transcriptToolId),
+        () => createAppSidechainHistoryLoader(props.sessionId ?? '', props.sessionId === null ? null : transcriptToolId),
         [props.sessionId, transcriptToolId],
     );
     const isRunSidechainHydrating = runTranscriptMessages.length === 0
@@ -432,7 +471,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         );
 
     React.useEffect(() => {
-        if (!hasQualifiedSession) return;
+        if (!hasQualifiedSession || props.sessionId === null) return;
         if (pendingScopeServerId && !pendingOutboxScope) return;
         fireAndForget(
             sync.fetchPendingMessages(props.sessionId, pendingOutboxScope ?? undefined, executionRunRecipient),
@@ -446,7 +485,11 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
      * else. It is not a transcript row and is never published anywhere.
      */
     const latestToolResultProjection = React.useMemo<ToolCall | null>(() => {
-        if (state.status !== 'loaded' || state.latestToolResult === undefined) return null;
+        if (state.status !== 'loaded') return null;
+        const meta = state.structuredMeta;
+        const result = state.latestToolResult === undefined && props.sessionId === null
+            && meta !== null && typeof meta === 'object' && 'payload' in meta ? meta.payload : state.latestToolResult;
+        if (result === undefined) return null;
         return {
             name: 'execution_run_result',
             state: 'completed',
@@ -455,9 +498,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             startedAt: null,
             completedAt: null,
             description: null,
-            result: state.latestToolResult,
+            result,
         };
-    }, [state]);
+    }, [state, props.sessionId]);
 
     // Result first (agents lab RP1): a Run with a structured result shows that result as the page,
     // and how it got there — its transcript — waits behind one disclosure row. A Run without one
@@ -474,7 +517,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (!kind) return null;
         return { kind, payload: (meta as { payload?: unknown }).payload };
     }, [state]);
-    const structuredCard = structuredMeta && !showSteps
+    const structuredCard = props.sessionId !== null && structuredMeta && !showSteps
         ? renderExecutionRunStructuredMeta({
             meta: structuredMeta,
             sessionId: props.sessionId,
@@ -485,7 +528,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             groupId: state.status === 'loaded' ? state.run.display?.groupId ?? null : null,
         })
         : null;
-    const hasStructuredResult = structuredMeta !== null;
+    const hasStructuredResult = props.sessionId !== null && structuredMeta !== null;
     /** The result as text for ⋯ → Copy result: the structured summary, else the raw result. */
     const copyResultText = React.useMemo(() => {
         const summary = (structuredMeta?.payload as { summary?: unknown } | undefined)?.summary;
@@ -533,7 +576,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // Whether the Run waits on a person: the roster's canonical attention (the enriched roster is the
     // only owner that observes pending prompts), read into the same words the roster row uses.
     const roster = useSessionAgentActivityRoster({
-        sessionId: props.sessionId,
+        sessionId: props.sessionId ?? '',
         serverId: explicitServerId ?? session?.serverId ?? undefined,
         session,
     });
@@ -568,6 +611,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             let transportIssued = false;
             try {
                 const result = await executeAction('execution.run.stop', { sessionId: props.sessionId, runId: props.runId }, {
+                    ...runOperation,
                     onTransportIssued: () => { transportIssued = true; },
                 });
                 if (!actionScopeIsCurrent() || isExecutionRunMutationCancelled(result)) return;
@@ -578,7 +622,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         await load();
                     } else {
                         // The machine did not confirm: offer the existing whole-session fallback.
-                        setStopUnconfirmed(transportIssued);
+                        setStopUnconfirmed(props.sessionId !== null && transportIssued);
                     }
                 } else {
                     await load();
@@ -587,18 +631,18 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 if (!actionScopeIsCurrent() || isExecutionRunMutationCancelled(error)) return;
                 setStopError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
                 if (!transportIssued) setInteractionError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
-                setStopUnconfirmed(transportIssued);
+                setStopUnconfirmed(props.sessionId !== null && transportIssued);
             } finally {
                 setIsStopping(false);
             }
         })(), { tag: 'SessionExecutionRunDetailsView.stopRun' });
-    }, [actionScopeIsCurrent, executeAction, isStopping, load, props.runId, props.sessionId]);
+    }, [actionScopeIsCurrent, executeAction, runOperation, isStopping, load, props.runId, props.sessionId]);
     const onSessionStopped = React.useCallback(() => {
         setStopUnconfirmed(false);
         setStopError(null);
         void load();
     }, [load]);
-    const machine = useExecutionRunMachineName(session?.metadata ?? null);
+    const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
     // Show in transcript (⋯): the session transcript owns the jump; this surface only names the
     // Run's row. Offered where the transcript sits beside the Run (the Details tab); the phone
     // route has no reveal owner for it yet.
@@ -618,10 +662,11 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (next && next !== current) onTitleResolved(next);
     }, [givenRunTitle, onTitleResolved, props.openingTitle, props.runId, runTitle]);
     const showInTranscript = React.useMemo(() => {
-        if (props.presentation !== 'panel' || !transcriptRouteMessageId || !runTitle) return null;
+        const sessionId = props.sessionId;
+        if (sessionId === null || props.presentation !== 'panel' || !transcriptRouteMessageId || !runTitle) return null;
         const entry: TranscriptNavigationEntry = {
             id: `execution-run:${props.runId}`,
-            sessionId: props.sessionId,
+            sessionId,
             seq: transcriptMessageSeq,
             routeMessageId: transcriptRouteMessageId,
             transcriptBlockIndex: null,
@@ -636,12 +681,12 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             loaded: true,
         };
         return () => {
-            const handler = readTranscriptNavigationJumpHandler(props.sessionId);
+            const handler = readTranscriptNavigationJumpHandler(sessionId);
             if (handler) {
                 void handler(entry);
                 return;
             }
-            void awaitTranscriptNavigationJumpHandler(props.sessionId).then((published) => published?.(entry));
+            void awaitTranscriptNavigationJumpHandler(sessionId).then((published) => published?.(entry));
         };
     }, [props.presentation, props.runId, props.sessionId, runTitle, transcriptMessageSeq, transcriptRouteMessageId]);
     // ⋯ → Send to ⟨lead⟩: the finished result into the lead Session's composer (canonical handoff).
@@ -649,11 +694,12 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     const leadServerId = explicitServerId ?? session?.serverId ?? null;
     const leadTitle = session ? getSessionName(session, leadServerId) : null;
     const presentation = props.presentation;
-    const sendToSession = React.useMemo(() => (leadTitle && leadServerId ? {
+    const leadSessionId = props.sessionId;
+    const sendToSession = React.useMemo(() => (leadSessionId !== null && leadTitle && leadServerId ? {
         sessionTitle: leadTitle,
         onSend: (resultText: string) => {
             fireAndForget(sendExecutionRunResultToSession({
-                sessionId: props.sessionId,
+                sessionId: leadSessionId,
                 serverId: leadServerId,
                 resultText,
                 runTitle,
@@ -667,11 +713,11 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 // Beside the Session its composer is already on screen; the phone page returns to it.
                 revealPrimaryComposer: presentation === 'panel'
                     ? () => undefined
-                    : () => router.replace(buildScopedSessionRouteHref({ sessionId: props.sessionId, serverId: leadServerId })),
-                focusPrimaryComposer: () => requestRegisteredSessionComposerFocus({ serverId: leadServerId, sessionId: props.sessionId }),
+                    : () => router.replace(buildScopedSessionRouteHref({ sessionId: leadSessionId, serverId: leadServerId })),
+                focusPrimaryComposer: () => requestRegisteredSessionComposerFocus({ serverId: leadServerId, sessionId: leadSessionId }),
             }), { tag: 'SessionExecutionRunDetailsView.sendToSession' });
         },
-    } : null), [actionScopeIsCurrent, executeAction, leadServerId, leadTitle, presentation, props.sessionId, router, runTitle, sendTemplate]);
+    } : null), [actionScopeIsCurrent, executeAction, leadServerId, leadTitle, presentation, leadSessionId, router, runTitle, sendTemplate]);
     // The one composer here answers this agent, and says so (lab `convo-C1`).
     const replyAgentLabel = state.status === 'loaded' ? resolveExecutionRunBackendLabel(state.run.backendTarget, acpCatalogSnapshot) : null;
     const invokeInteraction = React.useCallback((kind: 'cancel_turn' | 'resume') => {
@@ -687,9 +733,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                             runId: props.runId,
                             occurrenceId: cancellableInputTurn.occurrenceId,
                             turnId: cancellableInputTurn.turnId,
-                        })
+                        }, runOperation)
                         : { ok: false as const, error: t('runs.runDetails.controlFailed') }
-                    : await executeAction('execution.run.ensure', { sessionId: props.sessionId, runId: props.runId, resume: true });
+                    : await executeAction('execution.run.ensure', { sessionId: props.sessionId, runId: props.runId, resume: true }, runOperation);
                 if (!actionScopeIsCurrent()) return;
                 if (result.ok === false) {
                     setInteractionError(String(result.error ?? t('runs.runDetails.controlFailed')));
@@ -703,9 +749,18 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 setPendingInteraction(null);
             }
         })(), { tag: `SessionExecutionRunDetailsView.${kind}` });
-    }, [actionScopeIsCurrent, cancellableInputTurn, executeAction, load, pendingInteraction, props.runId, props.sessionId]);
+    }, [actionScopeIsCurrent, cancellableInputTurn, executeAction, runOperation, load, pendingInteraction, props.runId, props.sessionId]);
+    const submitDetachedMessage = React.useCallback(async (submission: ParticipantComposerPreparedSubmission) => {
+        if (props.sessionId !== null || !props.workspace) throw new Error(t('common.unavailable'));
+        const result = await executeAction('execution.run.send', { sessionId: null, runId: props.runId,
+            message: submission.text, localInputId: submission.localId }, runOperation);
+        if (!result.ok) throw new Error(result.error ?? t('errors.failedToSendMessage'));
+        if (!actionScopeIsCurrent()) throw new Error(t('common.unavailable'));
+        submission.onOutboundHandoff();
+        void load();
+    }, [actionScopeIsCurrent, executeAction, runOperation, load, props.runId, props.sessionId, props.workspace?.machineId]);
 
-    const content = state.status === 'loading' ? (
+    const content = state.status === 'loading' || state.status === 'loaded' && loadedRunAddressRef.current !== runAddressKey ? (
         // A named wait (agents lab ST "opening"): what is opening and where it is read from. The
         // sized loading card narrates "Still waiting · N s" by itself once the wait runs long.
         <SurfaceStateCard
@@ -766,7 +821,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             <View style={{ flex: 1, minHeight: 0, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s12 }}>
             <View style={{ gap: theme.space.s8 }}>
                 {/* A walkthrough or commit-proposal Run offers its own notification beside the output it writes. */}
-                {canMutateRunViaSessionRpc && state.run.status === 'running' && structuredMeta?.kind !== EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? (
+                {props.sessionId !== null && canMutateRunViaSessionRpc && state.run.status === 'running' && structuredMeta?.kind !== EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? (
                     <SessionRunWorkNotifications sessionId={props.sessionId} runId={props.runId} serverId={explicitServerId} />
                 ) : null}
                 {discussionOrigin ? (
@@ -792,7 +847,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         </Text>
                     </View>
                 ) : null}
-                {!transcriptMessage && transcriptToolRouteId ? (
+                {leadSessionId !== null && !transcriptMessage && transcriptToolRouteId ? (
                     <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={t('toolView.open')}
@@ -800,7 +855,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         onPress={() => {
                             navigateWithBlurOnWeb(() => {
                                 router.push(buildScopedSessionRouteHref({
-                                    sessionId: props.sessionId,
+                                    sessionId: leadSessionId,
                                     serverId: props.serverId ?? session?.serverId,
                                     suffix: `/message/${encodeURIComponent(transcriptToolRouteId)}`,
                                 }));
@@ -828,7 +883,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(pendingOutboxScope.serverId)}`)}
                 />
             ) : null}
-            {stopUnconfirmed ? (
+            {props.sessionId !== null && stopUnconfirmed ? (
                 <ExecutionRunStopFailedState
                     sessionId={props.sessionId}
                     serverId={explicitServerId ?? session?.serverId ?? null}
@@ -892,7 +947,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 The result is presented through the transcript's own structured
                 projection; the exact payload a plugin returned stays reachable
                 under its own disclosure rather than being the primary content. */}
-            {state.latestToolResult !== undefined && !hasStructuredResult ? (
+            {latestToolResultProjection !== null && !hasStructuredResult ? (
                 <View
                     testID="session-run-details-latest-tool-result"
                     style={{
@@ -926,7 +981,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                             testID="session-run-details-latest-tool-result-raw"
                             style={{ color: theme.colors.text.secondary, fontFamily: 'Menlo' }}
                         >
-                            {JSON.stringify(state.latestToolResult, null, 2)}
+                            {JSON.stringify(latestToolResultProjection.result, null, 2)}
                         </Text>
                     ) : null}
                 </View>
@@ -937,7 +992,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 Agent composer; this view decides only whether the run's own interaction
                 projection permits one. The plain `TextInput` that used to sit here was a
                 second composer with its own send state and its own direct runtime call. */}
-            {session && !structuredCard && transcriptMessage?.kind === 'tool-call' ? (
+            {props.sessionId !== null && session && !structuredCard && transcriptMessage?.kind === 'tool-call' ? (
                 <SessionMessageDetailsView
                     sessionId={props.sessionId}
                     session={session}
@@ -948,9 +1003,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     browserContextState={browserContextRuntime?.composerContext.state ?? null}
                 />
             ) : null}
-            {session && !structuredCard && transcriptMessage?.kind !== 'tool-call' ? (
+            {(session || props.sessionId === null) && !structuredCard && transcriptMessage?.kind !== 'tool-call' ? (
                 <View style={{ gap: theme.space.s10 }}>
-                    {transcriptToolId !== null ? (
+                    {props.sessionId !== null && session && transcriptToolId !== null ? (
                         // Same container the marker branch gives its transcript
                         // (`SessionMessageDetailsView`'s `toolCallFullViewContainer`), so the
                         // shared list is measured identically on both paths.
@@ -971,7 +1026,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                                 messageWrapperTestIdPrefix="session-run-details-transcript-message"
                             />
                         </View>
-                    ) : (targetPending.messages.length > 0 || targetPending.discarded.length > 0) ? (
+                    ) : props.sessionId !== null && (targetPending.messages.length > 0 || targetPending.discarded.length > 0) ? (
                         // Only reachable before the Run resolves (no sidechain id yet): the queued
                         // rows still belong on screen, and the list above owns them from then on.
                         <PendingMessagesTranscriptBlock
@@ -985,17 +1040,21 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     {canShowSendComposer ? (
                         <SessionParticipantComposer
                             key={JSON.stringify([
-                                props.serverId ?? session.serverId ?? '',
+                                props.serverId ?? session?.serverId ?? '',
+                                pendingOutboxScope?.accountId,
                                 props.sessionId,
                                 executionRunRecipient.runId,
                                 props.retryInputLocalId ?? '',
                             ])}
                             sessionId={props.sessionId}
-                            serverId={props.serverId ?? session.serverId}
-                            canSendMessages={interaction.canSendMessages}
-                            recipient={executionRunRecipient}
+                            workspace={props.workspace}
+                            serverId={props.serverId ?? session?.serverId}
+                            canSendMessages={props.sessionId === null ? actionScopeIsCurrent() : interaction.canSendMessages}
+                            recipient={props.sessionId === null ? null : executionRunRecipient}
+                            submitPreparedMessage={props.sessionId === null ? submitDetachedMessage : undefined}
+                            initialText={props.initialText}
                             executionRunRequestedAction={executionRunRecipientState.executionRunRequestedAction}
-                            extraActionChips={executionRunRoutingControls.extraActionChips}
+                            extraActionChips={props.sessionId === null ? [] : executionRunRoutingControls.extraActionChips}
                             initialLocalId={props.retryInputLocalId}
                             browserContextState={browserContextRuntime?.composerContext.state ?? null}
                             {...(replyAgentLabel ? { placeholder: t('agentStart.pane.replyTo', { agent: replyAgentLabel }) } : {})}

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createExecutionRunDetailsSurfaceRenderers } from '@/components/sessions/runs/launcher/executionRunDetailsSurfaceRenderers';
 
 import type {
     DetailsSurfaceRendererV1,
@@ -112,6 +113,8 @@ export function createWorkspaceDetailsSurfaceRenderers(
         mount: pluginDetailsDestinationMount,
     });
     return [
+        ...createExecutionRunDetailsSurfaceRenderers({ owner: 'workspace', sessionId: null, serverId: options.serverId,
+            workspace: { machineId: options.machineId, cwd: options.activeRootPath || options.rootPath } }),
         {
             id: 'workspace-sync-conflicts',
             owner: 'workspace',

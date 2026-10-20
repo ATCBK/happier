@@ -19,6 +19,7 @@ import { changeTextTestInstance, createMachineFixture, createSessionFixture, ren
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -55,6 +56,8 @@ import { SessionInteractiveExecutionRunDraftView } from './SessionInteractiveExe
 import { StartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
+import { askSelectionQuote, type AskSelectionTargetContext } from '@/components/ui/code/selection/askSelectionTarget';
+import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
 
 // Platform, credentials, local persistence, HTTP and RPC are the boundaries. The composer,
 // capture/coordinator, draft repository, launcher options, role catalog, capability/feature
@@ -133,6 +136,8 @@ let sequence = 0;
 let screen: Screen;
 let backends: Record<string, { available: boolean; intents: string[] }>;
 let protocolSupported = true;
+let detachedScopeSupported = true;
+let detachedSendFailure = false;
 let admissionFailure = false;
 let admissionGate: Promise<void> | null = null;
 /** Holds the Machine's capability read, or fails it, so a test can stand in the unanswered window. */
@@ -205,12 +210,12 @@ function chip(key: string): Chip {
     return found!;
 }
 function input() {
-    const found = screen.root.findAll((node) => node.props.testID === 'session-composer-input' && typeof node.props.onChangeText === 'function').at(-1);
+    const found = screen.root.findAll((node) => ['session-composer-input', 'new-session-composer-input'].includes(node.props.testID) && typeof node.props.onChangeText === 'function').at(-1);
     expect(found).toBeDefined();
     return found!;
 }
 function sendButton() {
-    const found = screen.root.findAll((node) => node.props.testID === 'session-composer-send' && typeof node.props.onPress === 'function').at(-1);
+    const found = screen.root.findAll((node) => ['session-composer-send', 'new-session-composer-send'].includes(node.props.testID) && typeof node.props.onPress === 'function').at(-1);
     expect(found).toBeDefined();
     return found!;
 }
@@ -297,6 +302,8 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         resetPromptLibraryCatalogSnapshotsForTests();
         random.next = 0;
         protocolSupported = true;
+        detachedScopeSupported = true;
+        detachedSendFailure = false;
         admissionFailure = false;
         admissionGate = null;
         capabilitiesGate = null;
@@ -336,7 +343,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 protocolVersion: 1,
                 results: { ...reviewAgentReadiness(), 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: {
                     available: true, backends, protocolVersion: 2,
-                    features: { detachedScope: true, startAndWait: true, exactInputResults: true, runScopedAgentBindings: protocolSupported, secretReferenceOverlay: protocolSupported },
+                    features: { detachedScope: detachedScopeSupported, startAndWait: true, exactInputResults: true, runScopedAgentBindings: protocolSupported, secretReferenceOverlay: protocolSupported },
                 } } },
             };
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_START
@@ -351,7 +358,8 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 return { type: 'success', sessionId: 'session_1' };
             }
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return await (listResult ?? { runs: listedRuns });
-            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND) return { ok: true };
+            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND) return detachedSendFailure
+                ? { ok: false, error: 'Machine did not accept input' } : { ok: true };
             if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                 protocolVersion: 1,
                 projection: pluginProjection ? { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
@@ -359,18 +367,29 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             });
             return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
         });
+        const nextSequence = ++sequence;
+        const serverUrl = `https://launcher-${nextSequence}.example.test`;
+        const serverIdentityId = `srv_launcher_${nextSequence}`;
+        // Genuine HTTP boundaries: the canonical fixture publishes the installation key,
+        // mints the exact authorization, and opens the real sealed requester invocation.
+        const detachedStart = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId,
+            accountId: 'account_1', machineId: 'machine_1', actionId: 'execution.run.start', tokenEpoch: 0,
+            execute: async (input, context) => {
+                expect(context.target).toEqual({ kind: 'machine', machineId: 'machine_1' });
+                expect(context.invocation).toMatchObject({ caller: { kind: 'host' }, surface: 'ui', authority: 'present_user' });
+                expect(context.invocation.defaultSessionId).toBeUndefined();
+                emittedStarts.push(record(input));
+                return await (startResults.shift() ?? started());
+            },
+        });
         home = await serveActionHomes({
-            homes: [{ key: 'home', serverUrl: `https://launcher-${++sequence}.example.test`, serverIdentityId: `srv_launcher_${sequence}`,
+            homes: [{ key: 'home', serverUrl, serverIdentityId,
                 accountId: 'account_1', currentAccount: true }],
             route: async (request) => {
-                if (request.path === '/v1/actions/execution.run.start') {
-                    const body = record(request.body);
-                    emittedStarts.push(record(body.input));
-                    return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
-                        v: 1, actionId: 'execution.run.start', requestId: body.requestId,
-                        execution: { ok: true, result: await (startResults.shift() ?? started()) },
-                    }));
-                }
+                const detachedResponse = await detachedStart.handle(request.url, { method: request.method,
+                    headers: request.headers, signal: request.signal,
+                    ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) });
+                if (detachedResponse) return detachedResponse;
                 if (request.path === '/v1/actions/review.engines.list') return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
                     v: 1, actionId: 'review.engines.list', requestId: record(request.body).requestId,
                     execution: { ok: true, result: { items: Object.keys(backends).map((engineId) => ReviewEngineListItemSchema.parse({
@@ -443,39 +462,105 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     });
     afterEach(async () => { await disconnectActiveServerConnection(); await standardCleanup(); await home?.dispose(); });
 
-    it('starts a quote-seeded detached conversation on the file Machine without a Session', async () => {
+    it.each(['project', 'session'] as const)('starts a quote-seeded detached conversation from the %s pane on the file Machine without a parent Session', async (pane) => {
         const opened = vi.fn();
-        const { createWorkspaceDetailsSurfaceRenderers } = await import('@/components/projects/panes/details/surfaces/workspaceDetailsSurfaceRenderers');
-        const { createInteractiveExecutionRunDraftDetailsTab } = await import('./executionRunLauncherModel');
         const scope = { kind: 'project' as const, workspaceRefId: 'workspace_1', serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo' };
-        const tab = { ...createInteractiveExecutionRunDraftDetailsTab({ initialText: 'src/app.ts:3\n```\nselected code\n```' }), isPinned: true, isPreview: false };
+        let requestedTab: DetailsTab | undefined;
+        expect(await askSelectionQuote({ workspaceScope: scope, sessionTarget: pane === 'session' ? { sessionId: 'session_1' } : null,
+            sideRun: pane === 'session', quote: 'src/app.ts:3\n```\nselected code\n```', context: {
+                openDetailsTab: tab => { requestedTab = tab; },
+                navigateToNewSession: () => { throw new Error('A capable exact Machine must open its Run draft'); },
+            } })).toBe(true);
+        if (!requestedTab) throw new Error('The canonical Ask target did not open a draft');
+        const tab = { ...requestedTab, isPinned: true, isPreview: false };
         const surfaceInput = { tab, scope, region: 'details' as const, active: true,
             descriptor: { surfaceId: 'project:workspace_1:details:run-draft', resourceKey: tab.key, scope, region: 'details' as const, status: 'available' as const },
             callbacks: { replaceTab: (_key: string, next: { resource?: unknown }) => opened(next.resource) } };
-        const renderers = createWorkspaceDetailsSurfaceRenderers({ scopeId: 'project:workspace_1', workspaceRefId: 'workspace_1',
+        const renderers = pane === 'project'
+            ? (await import('@/components/projects/panes/details/surfaces/workspaceDetailsSurfaceRenderers')).createWorkspaceDetailsSurfaceRenderers({ scopeId: 'project:workspace_1', workspaceRefId: 'workspace_1',
             workspaceCacheKey: 'workspace_1', workspaceScope: scope, serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo',
-            presentation: 'panel', pinDetailsTab: vi.fn(), openFileTab: vi.fn(), renderWorkspaceInfo: () => null });
+            presentation: 'panel', pinDetailsTab: vi.fn(), openFileTab: vi.fn(), renderWorkspaceInfo: () => null })
+            : (await import('@/components/sessions/panes/surfaces/sessionDetailsSurfaceRenderers')).createSessionDetailsSurfaceRenderers({
+                scopeId: 'session:session_1', sessionId: 'session_1', serverId, requestClose: vi.fn(), openFileTab: vi.fn(),
+                getStartEditingFileHandler: () => vi.fn(), sessionScreenTestIdsEnabled: false, closeDetailsTab: vi.fn(),
+            });
         const renderer = renderers.find(candidate => candidate.canRender(surfaceInput));
         expect(renderer).toBeDefined();
         screen = await renderScreen(<>{renderer!.render(surfaceInput)}</>);
         await waitFor(() => expect(composer().isSendDisabled).toBe(false));
         expect(input().props.value).toContain('selected code');
         await act(async () => { await sendButton().props.onPress(); });
-        await waitFor(() => expect(opened).toHaveBeenCalledWith(expect.objectContaining({ kind: 'executionRun', runId: 'run_1' })));
+        await waitFor(() => expect(opened, JSON.stringify({ visible: screen.getTextContent(), emittedStarts })).toHaveBeenCalledWith(expect.objectContaining({ kind: 'executionRun', runId: 'run_1',
+            sessionId: null, workspace: { machineId: 'machine_1', cwd: '/repo' } })));
         expect(emittedStarts).toEqual([expect.objectContaining({ sessionId: null, cwd: '/repo', runClass: 'long_lived' })]);
         expect(JSON.stringify(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('selected code');
+        expect(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND)
+            .every(([request]) => request.machineId === 'machine_1')).toBe(true);
         expect(outbound).toEqual([]);
     });
 
-    it('appends a later host selection to the mounted draft without replacing the question', async () => {
+    it('starts a quote-seeded detached fallback when the exact Machine does not support detached conversations', async () => {
+        detachedScopeSupported = false;
+        const navigate = vi.fn<AskSelectionTargetContext['navigateToNewSession']>();
+        const openDetailsTab = vi.fn();
+        const quote = 'src/app.ts:3\n```\nselected code\n```';
+        expect(await askSelectionQuote({ workspaceScope: { serverId, machineId: 'machine_1', rootPath: '/repo' },
+            sessionTarget: { sessionId: 'session_1' }, sideRun: true, quote, context: { openDetailsTab, navigateToNewSession: navigate } })).toBe(true);
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(navigate).toHaveBeenCalledWith({ dataId: null, draftId: expect.any(String) });
+        const draftId = navigate.mock.calls[0]![0].draftId;
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        expect(readNewSessionDraftFromRepository({ scope: { serverId, accountId: 'account_1' }, draftId })).toMatchObject({
+            input: quote, selectedMachineId: 'machine_1', selectedPath: '/repo',
+        });
+        expect(emittedStarts).toEqual([]);
+        expect(outbound).toEqual([]);
+    });
+
+    it('starts a quote-seeded detached fallback through the persisted Account Session preference without opening a Run', async () => {
+        const scope = { serverId, accountId: 'account_1' };
+        saveAccountSettings(scope, { ...getStorage().getState().settings, filesAskWithoutSessionTarget: 'session' }, 1);
+        const navigate = vi.fn<AskSelectionTargetContext['navigateToNewSession']>();
+        const openDetailsTab = vi.fn();
+        const quote = 'src/app.ts:3\n```\nselected code\n```';
+        expect(await askSelectionQuote({ workspaceScope: { serverId, machineId: 'machine_1', rootPath: '/repo' },
+            sessionTarget: null, quote, context: { openDetailsTab, navigateToNewSession: navigate } })).toBe(true);
+        expect(openDetailsTab).not.toHaveBeenCalled();
+        expect(navigate).toHaveBeenCalledWith({ dataId: null, draftId: expect.any(String) });
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        expect(readNewSessionDraftFromRepository({ scope, draftId: navigate.mock.calls[0]![0].draftId })).toMatchObject({
+            input: quote, selectedMachineId: 'machine_1', selectedPath: '/repo',
+        });
+        expect(emittedStarts).toEqual([]);
+        expect(outbound).toEqual([]);
+    });
+
+    it.each([false, true])('appends a later host selection to the mounted draft without replacing the question (detached=%s)', async detached => {
         const opened = vi.fn();
-        await mount({ initialText: 'First selected line', onRunStarted: opened });
+        const target = { sessionId: detached ? null : 'session_1', ...(detached ? { workspace: { machineId: 'machine_1', cwd: '/repo' } } : {}) };
+        await mount({ ...target, initialText: 'First selected line', onRunStarted: opened });
         await waitFor(() => expect(composer().isSendDisabled).toBe(false));
         await type('First selected line\nWhy is this here?');
-        await screen.update(<SessionInteractiveExecutionRunDraftView sessionId="session_1" serverId={serverId}
+        await screen.update(<SessionInteractiveExecutionRunDraftView {...target} serverId={serverId}
             initialText="Second selected line" onRunStarted={opened} />);
         await waitFor(() => expect(input().props.value).toBe('First selected line\nWhy is this here?\nSecond selected line'));
         expect(emittedStarts).toEqual([]);
+    });
+
+    it('starts a quote-seeded detached Run and keeps its unsent quote when the first input is refused', async () => {
+        detachedSendFailure = true;
+        const opened = vi.fn();
+        await mount({ sessionId: null, workspace: { machineId: 'machine_1', cwd: '/repo' },
+            initialText: 'Selected code\nWhy is it here?', onRunStarted: opened });
+        await waitFor(() => expect(composer().isSendDisabled).toBe(false));
+        const inputId = composer().initialLocalId;
+        await act(async () => { await sendButton().props.onPress(); });
+        await waitFor(() => expect(opened, JSON.stringify({ visible: screen.getTextContent(), emittedStarts })).toHaveBeenCalledWith('run_1', {
+            retryInputLocalId: inputId, initialText: 'Selected code\nWhy is it here?',
+        }, expect.anything()));
+        expect(input().props.value).toBe('Selected code\nWhy is it here?');
+        expect(emittedStarts).toHaveLength(1);
+        expect(outbound).toEqual([]);
     });
 
     it('creates nothing until rendered Send, then admits captured text to the exact new Run', async () => {
