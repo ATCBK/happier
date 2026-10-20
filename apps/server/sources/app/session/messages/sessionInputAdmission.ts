@@ -100,9 +100,10 @@ export async function isSessionInputTargetCurrentForPublisherInTx(tx: Tx, value:
 }
 
 /** The sole server receipt builder; callers supply transaction-final admission. */
-export function buildSessionInputAdmissionReceipt(input:
+export function buildSessionInputAdmissionReceipt(input: (
     | Readonly<{ issuer: "authenticatedAccount"; access: EffectiveSessionAccess; callerInputConstraints?: CallerInputConstraintsV1; admittedTarget?: SessionInputMachineTargetV1 }>
-    | Readonly<{ issuer: "authenticatedMachine"; callerInputConstraints?: CallerInputConstraintsV1; admittedTarget?: SessionInputMachineTargetV1 }>,
+    | Readonly<{ issuer: "authenticatedMachine"; callerInputConstraints?: CallerInputConstraintsV1; admittedTarget?: SessionInputMachineTargetV1 }>
+    ) & Readonly<{ nextTurnNote?: SessionInputAdmissionReceiptV1['nextTurnNote'] }>,
 ): SessionInputAdmissionReceiptV1 {
     const constraints = input.callerInputConstraints
         && (input.callerInputConstraints.models !== null || input.callerInputConstraints.permissionModes !== null)
@@ -112,6 +113,7 @@ export function buildSessionInputAdmissionReceipt(input:
         } } : {};
     if (input.issuer === "authenticatedMachine") {
         return SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: input.issuer, ...constraints,
+            ...(input.nextTurnNote ? { nextTurnNote: input.nextTurnNote } : {}),
             ...(input.admittedTarget ? { admittedTarget: input.admittedTarget } : {}) });
     }
     if (!input.access.capabilities.submitAgentInput || input.access.level === "view") {
@@ -124,6 +126,7 @@ export function buildSessionInputAdmissionReceipt(input:
         sessionRelationship: input.access.level === "owner" ? "owner"
             : input.access.level === "admin" ? "sharedAdmin" : "sharedEditor",
         ...constraints,
+        ...(input.nextTurnNote ? { nextTurnNote: input.nextTurnNote } : {}),
         ...(input.admittedTarget ? { admittedTarget: input.admittedTarget } : {}),
     });
 }
@@ -142,6 +145,7 @@ export function isSameSessionInputAdmissionIssuer(
     current: SessionInputAdmissionReceiptV1,
 ): boolean {
     return existing.issuer === current.issuer
+        && existing.nextTurnNote === current.nextTurnNote
         && (existing.issuer === "authenticatedMachine"
             || current.issuer === "authenticatedAccount" && existing.actorAccountId === current.actorAccountId)
         && (existing.admittedTarget === undefined ? current.admittedTarget === undefined
