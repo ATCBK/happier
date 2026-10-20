@@ -12962,7 +12962,7 @@ settingsSession: {
         progressAccessibilityLabel: "Progreso de la descarga",
         verifyingDetail: "Verificando",
         verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
-          `Verificado ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
+          `Verificación: ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
         verifyingAccessibilityLabel: "Progreso de la verificación",
         failedDetail: "Falló",
         failedSubtitle: "No se pudo preparar el modelo. Toca para volver a intentarlo.",
