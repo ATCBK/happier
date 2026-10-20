@@ -5569,6 +5569,55 @@ describe('runHostSessionRuntime', () => {
     expect(runSessionLoopLifecycleFn).not.toHaveBeenCalled();
   });
 
+  it('preserves native return identity when Stop arrives during MCP preparation before Agent admission', async () => {
+    const harness = createHarness();
+    const home = await mkdtemp(join(tmpdir(), 'native-return-stopped-startup-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    const mcpStarted = createDeferred<void>();
+    const releaseMcp = createDeferred<void>();
+    let requestStop!: () => Promise<void>;
+    const resumeId = 'native-return-before-admission';
+    const createSessionRuntime = vi.fn(harness.config.createSessionRuntime!);
+    harness.config.flavor = 'claude';
+    harness.config.policyAgentId = 'claude';
+    harness.config.providerSessionMetadataKey = 'claudeSessionId';
+    harness.opts.resume = resumeId;
+    harness.config.createSessionRuntime = createSessionRuntime;
+    harness.config.onRuntimeStopReady = stop => { requestStop = stop; };
+    harness.deps.resolveRunnerMcpServersFn = async () => {
+      mcpStarted.resolve();
+      await releaseMcp.promise;
+      return { happierMcpServer: { stop() {} }, mcpServers: {} };
+    };
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      const { createLocalAgentNativeResumeRecordStore } = await import('@/session/agentTransition/agentNativeReturn');
+      const { resolveVendorResumeIdForExistingSession } = await import('@/daemon/spawn/resolveVendorResumeIdForExistingSession');
+      const store = createLocalAgentNativeResumeRecordStore();
+      const key = { happierSessionId: harness.session.sessionId, agentId: 'claude' as const };
+      const record = { identity: { v: 1 as const, vendorResumeId: resumeId }, departureSeqInclusive: 12 };
+      await store.writeAgentNativeResumeRecord({ ...key, ...record });
+      await harness.session.updateMetadata((metadata: Metadata) => ({ ...metadata, flavor: 'claude', claudeSessionId: resumeId }));
+      const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await mcpStarted.promise;
+      const stopping = requestStop();
+      releaseMcp.resolve();
+      await Promise.all([running, stopping]);
+      expect(createSessionRuntime).not.toHaveBeenCalled();
+      expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+      expect(harness.session.getMetadataSnapshot().claudeSessionId).toBe(resumeId);
+      expect(resolveVendorResumeIdForExistingSession({ agent: 'claude', credentials: null,
+        rawSession: {}, metadataRecord: harness.session.getMetadataSnapshot() })).toBe(resumeId);
+      await expect(store.readAgentNativeResumeRecord(key)).resolves.toEqual(record);
+    } finally {
+      releaseMcp.resolve();
+      envScope.restore();
+      reloadConfiguration();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('releases pre-runtime durable custody when the provider runtime factory fails', async () => {
     loggerDebugMock.mockClear();
     const harness = createHarness();
