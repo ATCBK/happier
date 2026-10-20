@@ -12,8 +12,9 @@ import { rejectUnsafeBrowserEgressKeys } from './egress/keyRejection.js';
 
 const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
-const EvalInlineStringValueSchema = lazyZodSchema(() => z.string().check(z.maxLength(1024)));
-const ExpandedPropertyStringValueSchema = lazyZodSchema(() => z.string().check(z.maxLength(65_536)));
+// Presentation-only previews retain the existing wire bounds. Expansion carries full values.
+export const BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES = 10;
+export const BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH = 1024;
 
 export const BrowserDiagnosticFamilyV1Schema = lazyZodSchema(() => z.enum([
   'console',
@@ -497,8 +498,8 @@ export type DaemonBrowserDiagnosticsSnapshotResponseV1 = z.infer<
 >;
 
 export const BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema = lazyZodSchema(() => z.strictObject({
-    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
-    valuePreview: z.string().check(z.maxLength(1024)),
+    name: z.string(),
+    valuePreview: z.string().check(z.maxLength(BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH)),
     truncated: z._default(z.optional(z.boolean()), false),
   }));
 export type BrowserDiagnosticsRemoteObjectPreviewPropertyV1 = z.infer<
@@ -507,11 +508,12 @@ export type BrowserDiagnosticsRemoteObjectPreviewPropertyV1 = z.infer<
 
 export const BrowserDiagnosticsRemoteObjectV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.enum(['undefined', 'null', 'boolean', 'number', 'string', 'symbol', 'bigint', 'object', 'function']),
-    value: z.optional(z.union([EvalInlineStringValueSchema, z.number(), z.boolean(), z.null()])),
+    value: z.optional(z.union([z.string(), z.number(), z.boolean(), z.null()])),
     objectId: z.optional(IdSchema),
-    className: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
-    description: z.optional(z.string().check(z.maxLength(1024))),
-    preview: z._default(z.optional(z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).check(z.maxLength(10))), []),
+    className: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    description: z.optional(z.string()),
+    preview: z._default(z.optional(z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).check(z.maxLength(BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES))), []),
+    previewTruncated: z.optional(z.boolean()),
   }).check(z.superRefine((value, context) => {
     if ((value.type === 'object' || value.type === 'function') && !value.objectId) {
       context.addIssue({
@@ -523,22 +525,7 @@ export const BrowserDiagnosticsRemoteObjectV1Schema = lazyZodSchema(() => z.stri
   })));
 export type BrowserDiagnosticsRemoteObjectV1 = z.infer<typeof BrowserDiagnosticsRemoteObjectV1Schema>;
 
-export const BrowserDiagnosticsExpandedRemoteObjectV1Schema = lazyZodSchema(() => z.strictObject({
-    type: z.enum(['undefined', 'null', 'boolean', 'number', 'string', 'symbol', 'bigint', 'object', 'function']),
-    value: z.optional(z.union([ExpandedPropertyStringValueSchema, z.number(), z.boolean(), z.null()])),
-    objectId: z.optional(IdSchema),
-    className: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
-    description: z.optional(z.string().check(z.maxLength(1024))),
-    preview: z._default(z.optional(z.array(BrowserDiagnosticsRemoteObjectPreviewPropertyV1Schema).check(z.maxLength(10))), []),
-  }).check(z.superRefine((value, context) => {
-    if ((value.type === 'object' || value.type === 'function') && !value.objectId) {
-      context.addIssue({
-        code: "custom",
-        path: ['objectId'],
-        message: 'Object and function expanded property values must use remote-object references.',
-      });
-    }
-  })));
+export const BrowserDiagnosticsExpandedRemoteObjectV1Schema = BrowserDiagnosticsRemoteObjectV1Schema;
 export type BrowserDiagnosticsExpandedRemoteObjectV1 = z.infer<
   typeof BrowserDiagnosticsExpandedRemoteObjectV1Schema
 >;
@@ -657,7 +644,7 @@ export type BrowserDiagnosticsGetPropertiesRequestV1 = z.infer<
 >;
 
 export const BrowserDiagnosticsObjectPropertyV1Schema = lazyZodSchema(() => z.strictObject({
-    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    name: z.string(),
     value: BrowserDiagnosticsExpandedRemoteObjectV1Schema,
     enumerable: z._default(z.optional(z.boolean()), false),
   }));
@@ -674,7 +661,7 @@ export const BrowserDiagnosticsGetPropertiesResultV1Schema = lazyZodSchema(() =>
     status: z.enum(['completed', 'failed', 'blocked', 'collectorDegraded']),
     audited: z.literal(true),
     objectId: IdSchema,
-    properties: z._default(z.optional(z.array(BrowserDiagnosticsObjectPropertyV1Schema).check(z.maxLength(100))), []),
+    properties: z._default(z.optional(z.array(BrowserDiagnosticsObjectPropertyV1Schema)), []),
     errorCode: z.optional(BrowserDiagnosticUnavailableReasonV1Schema),
   }));
 export type BrowserDiagnosticsGetPropertiesResultV1 = z.infer<

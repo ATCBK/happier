@@ -52,7 +52,7 @@ export const INJECTED_EVAL_RUNTIME = `
         evalRequestId: request.evalRequestId,
         resultType: result.type,
         resultDescriptionAvailable: Boolean(result.description),
-        resultPreviewTruncated: Array.isArray(result.preview) && result.preview.some(function (item) { return item.truncated === true; })
+        resultPreviewTruncated: result.previewTruncated === true || Array.isArray(result.preview) && result.preview.some(function (item) { return item.truncated === true; })
       });
       postEvalResult(request, 'completed', result);
     }
@@ -102,7 +102,7 @@ export const INJECTED_EVAL_RUNTIME = `
 
     try {
       var objectRef = Object(objectValue);
-      var properties = Object.keys(objectRef).slice(0, 100).map(function (name) {
+      var properties = Object.getOwnPropertyNames(objectRef).map(function (name) {
         var propertyValue;
         try {
           propertyValue = objectRef[name];
@@ -110,7 +110,7 @@ export const INJECTED_EVAL_RUNTIME = `
           propertyValue = undefined;
         }
         return {
-          name: String(name).slice(0, 256) || '[property]',
+          name: String(name),
           value: toExpandedRemoteObject(propertyValue, request.objectGroupId),
           enumerable: Object.prototype.propertyIsEnumerable.call(objectRef, name)
         };

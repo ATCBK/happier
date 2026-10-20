@@ -1,3 +1,5 @@
+import { BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES, BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH } from '@happier-dev/protocol/browser/diagnostics/v1';
+
 export const INJECTED_OBJECT_INSPECTOR_RUNTIME = `
 	  var evalSuppressed = false;
   var objectSeq = 0;
@@ -22,7 +24,7 @@ export const INJECTED_OBJECT_INSPECTOR_RUNTIME = `
       if (value === null) return 'null';
       if (value === undefined) return 'undefined';
       if (typeof value === 'function') return 'function';
-      if (typeof value === 'object' && value && value.constructor && value.constructor.name) return String(value.constructor.name).slice(0, 256);
+      if (typeof value === 'object' && value && value.constructor && value.constructor.name) return String(value.constructor.name);
       return typeof value;
     } catch (_error) {
       return 'unavailable';
@@ -31,20 +33,22 @@ export const INJECTED_OBJECT_INSPECTOR_RUNTIME = `
 
   function previewProperties(value) {
     try {
-      return Object.keys(Object(value)).slice(0, 10).map(function (name) {
+      return Object.keys(Object(value)).slice(0, ${BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES}).map(function (name) {
         var propertyValue;
         var propertyPreview;
         var truncated = false;
         try {
           propertyValue = value[name];
           propertyPreview = preview(propertyValue);
-          truncated = typeof propertyPreview === 'string' && propertyPreview.length >= 1024;
+          truncated = typeof propertyValue === 'string'
+            ? propertyValue.length > ${BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH}
+            : typeof propertyPreview === 'string' && propertyPreview.length > ${BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH};
         } catch (_error) {
           propertyPreview = '[unavailable]';
         }
         return {
-          name: String(name).slice(0, 256) || '[property]',
-          valuePreview: String(propertyPreview || '').slice(0, 1024),
+          name: String(name),
+          valuePreview: String(propertyPreview || '').slice(0, ${BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH}),
           truncated: truncated
         };
       });
@@ -56,33 +60,28 @@ export const INJECTED_OBJECT_INSPECTOR_RUNTIME = `
   function toRemoteObject(value, objectGroupId) {
     if (value === undefined) return { type: 'undefined' };
     if (value === null) return { type: 'null', value: null };
-    if (typeof value === 'string') return { type: 'string', value: value.slice(0, 1024) };
+    if (typeof value === 'string') return { type: 'string', value: value };
     if (typeof value === 'number') return { type: 'number', value: value };
     if (typeof value === 'boolean') return { type: 'boolean', value: value };
-    if (typeof value === 'bigint') return { type: 'bigint', description: String(value).slice(0, 1024) };
-    if (typeof value === 'symbol') return { type: 'symbol', description: String(value).slice(0, 1024) };
+    if (typeof value === 'bigint') return { type: 'bigint', description: String(value) };
+    if (typeof value === 'symbol') return { type: 'symbol', description: String(value) };
 
     var group = objectGroup(objectGroupId);
     objectSeq += 1;
     var objectId = config.viewId + ':' + config.navigationGeneration + ':' + group.name + ':' + objectSeq;
     group.values[objectId] = value;
+    var properties = previewProperties(value);
     return {
       type: typeof value === 'function' ? 'function' : 'object',
       objectId: objectId,
       className: describeValue(value),
       description: describeValue(value),
-      preview: previewProperties(value)
+      preview: properties,
+      previewTruncated: Object.keys(Object(value)).length > properties.length || properties.some(function (item) { return item.truncated; })
     };
   }
 
   function toExpandedRemoteObject(value, objectGroupId) {
-    if (value === undefined) return { type: 'undefined' };
-    if (value === null) return { type: 'null', value: null };
-    if (typeof value === 'string') return { type: 'string', value: value.slice(0, 65536) };
-    if (typeof value === 'number') return { type: 'number', value: value };
-    if (typeof value === 'boolean') return { type: 'boolean', value: value };
-    if (typeof value === 'bigint') return { type: 'bigint', description: String(value).slice(0, 1024) };
-    if (typeof value === 'symbol') return { type: 'symbol', description: String(value).slice(0, 1024) };
     return toRemoteObject(value, objectGroupId);
   }
 

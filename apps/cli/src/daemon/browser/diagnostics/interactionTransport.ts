@@ -1,4 +1,4 @@
-import { BrowserDiagnosticsElementPickerRequestV1Schema, BrowserDiagnosticsEvalRequestV1Schema, BrowserDiagnosticsGetPropertiesRequestV1Schema, BrowserDiagnosticsReleaseObjectGroupRequestV1Schema } from '@happier-dev/protocol/browser/diagnostics/v1';
+import { BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES, BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH, BrowserDiagnosticsElementPickerRequestV1Schema, BrowserDiagnosticsEvalRequestV1Schema, BrowserDiagnosticsGetPropertiesRequestV1Schema, BrowserDiagnosticsReleaseObjectGroupRequestV1Schema } from '@happier-dev/protocol/browser/diagnostics/v1';
 import type { BrowserDiagnosticsElementPickerRequestV1, BrowserDiagnosticsElementPickerResultV1, BrowserDiagnosticsEvalRequestV1, BrowserDiagnosticsEvalResultV1, BrowserDiagnosticsExpandedRemoteObjectV1, BrowserDiagnosticsGetPropertiesRequestV1, BrowserDiagnosticsGetPropertiesResultV1, BrowserDiagnosticsObjectPropertyV1, BrowserDiagnosticsReleaseObjectGroupRequestV1, BrowserDiagnosticsReleaseObjectGroupResultV1, BrowserDiagnosticsRemoteObjectPreviewPropertyV1, BrowserDiagnosticsRemoteObjectV1, RuntimeActionIdV1 } from '@happier-dev/protocol';
 
 import type {
@@ -34,11 +34,6 @@ import type { SurfaceInputControl } from '../../surfaces/inputControl';
  */
 
 const ID_MAX = 256;
-const INLINE_VALUE_MAX = 1024;
-const EXPANDED_VALUE_MAX = 65_536;
-const PREVIEW_MAX = 1024;
-const PREVIEW_PROPERTY_LIMIT = 10;
-const PROPERTY_LIMIT = 100;
 const DEFAULT_PICKER_TIMEOUT_MS = 60_000;
 const RELEASED_OBJECT_GROUP_KEY_LIMIT = 512;
 const TRACKED_OBJECT_GROUP_LIMIT = 512;
@@ -119,20 +114,21 @@ function resolveRemoteObjectType(cdp: Record<string, unknown>): RemoteObjectType
   return REMOTE_OBJECT_TYPES.has(rawType as RemoteObjectType) ? (rawType as RemoteObjectType) : null;
 }
 
-function buildPreview(cdp: Record<string, unknown>): BrowserDiagnosticsRemoteObjectPreviewPropertyV1[] {
+function buildPreview(cdp: Record<string, unknown>): Readonly<{ properties: BrowserDiagnosticsRemoteObjectPreviewPropertyV1[]; truncated: boolean }> {
   const preview = record(cdp.preview);
   const properties = preview && Array.isArray(preview.properties) ? preview.properties : [];
   const out: BrowserDiagnosticsRemoteObjectPreviewPropertyV1[] = [];
   for (const entry of properties) {
     const prop = record(entry);
     if (!prop) continue;
-    const name = typeof prop.name === 'string' ? prop.name.trim() : '';
-    if (!name) continue;
+    if (typeof prop.name !== 'string') continue;
+    const name = prop.name;
     const valuePreview = valuePreviewString(prop.value);
-    out.push({ name: clamp(name, ID_MAX), valuePreview: clamp(valuePreview, PREVIEW_MAX), truncated: false });
-    if (out.length >= PREVIEW_PROPERTY_LIMIT) break;
+    out.push({ name, valuePreview: clamp(valuePreview, BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH),
+      truncated: valuePreview.length > BROWSER_DIAGNOSTICS_PREVIEW_MAX_VALUE_LENGTH || record(prop.valuePreview)?.overflow === true });
+    if (out.length >= BROWSER_DIAGNOSTICS_PREVIEW_MAX_PROPERTIES) break;
   }
-  return out;
+  return { properties: out, truncated: preview?.overflow === true || properties.length > out.length || out.some(property => property.truncated) };
 }
 
 /**
@@ -140,7 +136,7 @@ function buildPreview(cdp: Record<string, unknown>): BrowserDiagnosticsRemoteObj
  * when the CDP value cannot satisfy the contract (e.g. an object/function reference with no objectId),
  * so the caller omits the result rather than emit a schema-invalid value.
  */
-function toRemoteObject(value: unknown, maxValueLen: number): BrowserDiagnosticsRemoteObjectV1 | null {
+function toRemoteObject(value: unknown): BrowserDiagnosticsRemoteObjectV1 | null {
   const cdp = record(value);
   if (!cdp) return null;
   const type = resolveRemoteObjectType(cdp);
@@ -150,20 +146,22 @@ function toRemoteObject(value: unknown, maxValueLen: number): BrowserDiagnostics
     ? clamp(cdp.objectId, ID_MAX)
     : undefined;
   const className = typeof cdp.className === 'string' && cdp.className.trim().length > 0
-    ? clamp(cdp.className.trim(), ID_MAX)
+    ? cdp.className.trim()
     : undefined;
   const description = typeof cdp.description === 'string'
-    ? clamp(cdp.description, INLINE_VALUE_MAX)
+    ? cdp.description
     : undefined;
 
   if (type === 'object' || type === 'function') {
     if (!objectId) return null;
+    const preview = buildPreview(cdp);
     return {
       type,
       objectId,
       ...(className ? { className } : {}),
       ...(description ? { description } : {}),
-      preview: buildPreview(cdp),
+      preview: preview.properties,
+      previewTruncated: preview.truncated,
     };
   }
 
@@ -175,7 +173,7 @@ function toRemoteObject(value: unknown, maxValueLen: number): BrowserDiagnostics
   } else if (type === 'number') {
     scalar = typeof cdp.value === 'number' ? cdp.value : undefined;
   } else if (type === 'string') {
-    scalar = typeof cdp.value === 'string' ? clamp(cdp.value, maxValueLen) : undefined;
+    scalar = typeof cdp.value === 'string' ? cdp.value : undefined;
   } else {
     // undefined / symbol / bigint carry no inline value; the description conveys the detail.
     scalar = undefined;
@@ -193,9 +191,7 @@ function toRemoteObject(value: unknown, maxValueLen: number): BrowserDiagnostics
 function toExpandedRemoteObject(
   value: unknown,
 ): BrowserDiagnosticsExpandedRemoteObjectV1 | null {
-  // The expanded shape is structurally identical to the remote-object shape but allows a longer
-  // inline string value (65 KiB vs 1 KiB). The mapper output satisfies both contracts.
-  return toRemoteObject(value, EXPANDED_VALUE_MAX);
+  return toRemoteObject(value);
 }
 
 export function createBrowserDiagnosticsInteractionTransport(
@@ -472,10 +468,10 @@ export function createBrowserDiagnosticsInteractionTransport(
     if (!rec) return evalResult(request, 'completed');
     const exceptionDetails = record(rec.exceptionDetails);
     if (exceptionDetails) {
-      const exception = toRemoteObject(exceptionDetails.exception, INLINE_VALUE_MAX);
+      const exception = toRemoteObject(exceptionDetails.exception);
       return evalResult(request, 'failed', exception ? { result: exception } : {});
     }
-    const result = toRemoteObject(rec.result, INLINE_VALUE_MAX);
+    const result = toRemoteObject(rec.result);
     return evalResult(request, 'completed', result ? { result } : {});
   }
 
@@ -525,12 +521,11 @@ export function createBrowserDiagnosticsInteractionTransport(
     for (const entry of list) {
       const descriptor = record(entry);
       if (!descriptor) continue;
-      const name = typeof descriptor.name === 'string' ? descriptor.name.trim() : '';
-      if (!name) continue;
+      if (typeof descriptor.name !== 'string') continue;
+      const name = descriptor.name;
       const value = toExpandedRemoteObject(descriptor.value);
       if (!value) continue;
-      properties.push({ name: clamp(name, ID_MAX), value, enumerable: descriptor.enumerable === true });
-      if (properties.length >= PROPERTY_LIMIT) break;
+      properties.push({ name, value, enumerable: descriptor.enumerable === true });
     }
     return propertiesResult(request, 'completed', { properties });
   }
