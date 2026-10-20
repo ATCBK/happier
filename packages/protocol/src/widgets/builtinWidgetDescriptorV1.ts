@@ -107,7 +107,7 @@ const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse
     checkout: WorkspaceRefV1WriteSchema,
 }), { target: 'draft-7' })));
 const workspaceInputs: WidgetInputDescriptorV1 = {
-    inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which workspace?', widget: 'select', inputType: { hostType: 'workspace' }, required: true }] },
+    inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which checkout?', widget: 'select', inputType: { hostType: 'workspace' }, required: true }] },
     inputSchema: workspaceInputSchema,
 };
 /** Presentation inputs belong only to bodies that actually consume them. Query scope stays shared. */
