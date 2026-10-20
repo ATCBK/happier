@@ -68,14 +68,15 @@ export function callerHoldsDependencyConsumption(env = process.env) {
 
 /**
  * Environment for a package-manager install that runs under the dependency writer lock.
- * First-party workspace postinstall builds take read custody of that same lock, so an install
- * that ran them would wait on itself. Only the CLI postinstall, which owns real runtime
- * prerequisites, runs as an install side effect; owners prepare other component outputs
- * explicitly. An explicit caller scope is preserved.
+ * First-party workspace postinstall builds take read custody of that same lock, so they inherit
+ * the writer's custody instead of waiting on the install that runs them. Unless the caller chose
+ * a scope, only the CLI postinstall, which owns real runtime prerequisites, runs as an install
+ * side effect; owners prepare other component outputs explicitly.
  */
-export function resolveLockedInstallEnv(env = process.env) {
-  if (String(env.HAPPIER_INSTALL_SCOPE ?? '').trim()) return env;
-  return { ...env, HAPPIER_INSTALL_SCOPE: 'cli' };
+export function resolveLockedInstallEnv(env = process.env, { lockPath, owner } = {}) {
+  const scoped = String(env.HAPPIER_INSTALL_SCOPE ?? '').trim() ? env : { ...env, HAPPIER_INSTALL_SCOPE: 'cli' };
+  if (!lockPath || !owner) return scoped;
+  return { ...scoped, [BUILD_DEPENDENCY_CUSTODY_ENV]: JSON.stringify([lockPath, owner.pid, owner.createdAtMs]) };
 }
 
 // Parallel compiler children consume one containing finite build. Reuse its
@@ -443,7 +444,7 @@ export async function withDependencyRefresh({
   if (!force && !beforeLock.required && !shouldRunDependencyReadyAction
     && !isDependencyRefreshMutationActive({ installDir, env })) return { refreshed: false, reason: 'up-to-date' };
 
-  return await withDependencyRefreshLock({ installDir, env }, async () => {
+  return await withDependencyRefreshLock({ installDir, env }, async ({ lockPath, owner }) => {
     const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
     if (!force && !afterDependencyLock.required && !shouldRunDependencyReadyAction) return { refreshed: false, reason: 'up-to-date' };
     const mutate = async () => {
@@ -468,7 +469,7 @@ export async function withDependencyRefresh({
         });
         const didRefresh = (force || beforeMutation.required) && refreshExisting;
         // The refresh runs under this writer lock; its installer spawns with this environment.
-        if (didRefresh) await refresh({ env: resolveLockedInstallEnv(env) });
+        if (didRefresh) await refresh({ env: resolveLockedInstallEnv(env, { lockPath, owner }) });
         if (onDependenciesReady) await onDependenciesReady();
         // Ready-only repairs preserve callers' explicit no-install policy.
         // They cannot certify stale dependency inputs as newly installed.

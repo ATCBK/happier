@@ -124,11 +124,15 @@ import(${JSON.stringify(dependencyRefreshUrl)})
     extraEnv: { HAPPIER_STACK_STACKS_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '', npm_execpath: '' },
   }) });
   delete env.HAPPIER_INSTALL_SCOPE;
-
-  const outcome = await withYarnInstallGuard({ installDir: root, componentDir: root, quiet: true, env },
+  const install = (scopeEnv) => withYarnInstallGuard({ installDir: root, componentDir: root, quiet: true, env: { ...env, ...scopeEnv } },
     ({ env: installEnv }) => run('yarn', ['install', '--frozen-lockfile'], { cwd: root, env: installEnv, stdio: 'ignore' }));
 
-  assert.equal(outcome.refreshed, true);
+  assert.equal((await install({})).refreshed, true);
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
+
+  // An explicit scope that admits the first-party build runs it inside the install's custody.
+  await writeFile(join(root, 'yarn.lock'), '# changed workspace fixture\n');
+  assert.equal((await install({ HAPPIER_INSTALL_SCOPE: 'protocol' })).refreshed, true);
   assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
 });
 
