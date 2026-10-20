@@ -5511,6 +5511,7 @@ class Sync {
         const ownsActiveProjection = (): boolean => Boolean(
             exactAccountLifetime
             && exactAuthority
+            && isCurrent()
             && exactAccountLifetime.isCurrent()
             && areServerAccountScopesEqual(getActiveServerAccountScope(), exactAccountLifetime.scope)
             && (() => {
