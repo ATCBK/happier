@@ -44,6 +44,7 @@ let viewTargetsDecisionMock: FeatureDecision = enabledDecision;
 const pane: AppPaneScopeApi = {
     scopeId: 'session:s1',
     scopeState: {
+        mainHidden: false,
         right: { isOpen: false, activeTabId: null as string | null, selectedDestination: null, tabState: {} },
         details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
         bottom: { isOpen: false, activeTabId: null as string | null, selectedDestination: null, tabState: {} },

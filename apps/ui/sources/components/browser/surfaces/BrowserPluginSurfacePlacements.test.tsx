@@ -227,6 +227,7 @@ async function withBrowserPanelHarness(
     (globalThis as { window: unknown }).window = new EventTarget();
     storage.getState().applyLocalSettings({ appPaneScopesV1: options.panelOpen === false ? {} : {
         'browser-panels:browser-test': {
+            mainHidden: false,
             right: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: { [browserPanelPlacement.id]: { isOpen: true } } },
             details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
             bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },

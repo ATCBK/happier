@@ -111,9 +111,9 @@ describe('resolveSessionCompanionPlacement', () => {
     });
 
     it('hides while an overlaid pane owns z-order and focus', () => {
-        expect(placement({ paneLayout: paneLayout({ layout: { kind: 'overlayStack', right: 'overlay', details: 'hidden' } }) }))
+        expect(placement({ paneLayout: paneLayout({ layout: { kind: 'overlayStack', main: 'docked', right: 'overlay', details: 'hidden' } }) }))
             .toEqual({ kind: 'hidden' });
-        expect(placement({ paneLayout: paneLayout({ layout: { kind: 'overlayStack', right: 'hidden', details: 'overlay' } }) }))
+        expect(placement({ paneLayout: paneLayout({ layout: { kind: 'overlayStack', main: 'docked', right: 'hidden', details: 'overlay' } }) }))
             .toEqual({ kind: 'hidden' });
     });
 
@@ -121,7 +121,7 @@ describe('resolveSessionCompanionPlacement', () => {
         expect(placement({
             paneLayout: paneLayout({
                 mainRegionWidthPx: 900,
-                layout: { kind: 'twoPane', right: 'docked', details: 'hidden' },
+                layout: { kind: 'twoPane', main: 'docked', right: 'docked', details: 'hidden' },
             }),
         })).toEqual({ kind: 'reserved_rail', edge: 'trailing', widthPx: 280 });
     });

@@ -1001,8 +1001,10 @@ describe('BrowserShell', () => {
         );
 
         // FP-BRW-LAUNCHER-1: the empty state is now the live workspace launcher (URL entry +
-        // guidance), not the inert "No browser targets" banner.
-        expect(screen.findByTestId('browser-shell-launchpad-url-entry')).toBeTruthy();
+        // guidance), not the inert "No browser targets" banner. On desktop the shell's own address
+        // bar is that entry: the launchpad never draws a second one under it (DA3 D13).
+        expect(screen.findByTestId('browser-shell-address')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-launchpad-url-entry')).toBeNull();
         expect(screen.findByTestId('browser-shell-launchpad-guidance')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-launchpad-empty')).toBeNull();
         expect(screen.findByTestId('browser-shell-view-unavailable')).toBeNull();
@@ -1071,7 +1073,8 @@ describe('BrowserShell', () => {
         );
 
         expect(screen.findByTestId('browser-shell-first-use')).toBeNull();
-        expect(screen.findByTestId('browser-shell-launchpad-url-entry')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-address')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-launchpad-url-entry')).toBeNull();
         await act(async () => { screen.pressByTestId('browser-shell-launchpad-agent-browser-allow-sandbox'); });
         expect(onAllowBrowserSandbox).toHaveBeenCalledTimes(1);
     });

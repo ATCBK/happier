@@ -236,6 +236,12 @@ export function BrowserLaunchpad(props: Readonly<{
      * sibling tab. `onOpenTarget` (new tab) stays reserved for external-surface opens.
      */
     onNavigateInPlace?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
+    /**
+     * Whether the launchpad draws its own address entry. A host whose chrome already shows an address
+     * bar turns it off, so a page never offers two address fields (DA3 D13); the launchpad keeps it
+     * where it stands alone (the phone page, the Session viewer).
+     */
+    urlEntry?: boolean;
     testID?: string;
 }>): React.ReactElement {
     const testID = props.testID ?? 'browser-launchpad';
@@ -335,7 +341,7 @@ export function BrowserLaunchpad(props: Readonly<{
               * The page frame is deliberately NOT constrained: a webview must fill its pane.
               */}
             <ConstrainedScreenContent>
-                <View style={stylesheet.urlEntry}>
+                {props.urlEntry === false ? null : <View style={stylesheet.urlEntry}>
                     <BrowserUrlField
                         testID={`${testID}-url-entry`}
                         density="panel"
@@ -349,7 +355,7 @@ export function BrowserLaunchpad(props: Readonly<{
                         accessibilityLabel={t('browserLaunchpad.urlEntry.label')}
                         onSubmitUrl={handleSubmitUrl}
                     />
-                </View>
+                </View>}
 
                 {props.agentBrowser && hasRows ? (
                     <AgentBrowserPrerequisite testID={`${testID}-agent-browser`} {...props.agentBrowser} />
@@ -472,8 +478,11 @@ function AgentBrowserPrerequisite(props: BrowserLaunchpadAgentBrowser & Readonly
             />
         );
     }
-    // A failed install is not a prerequisite to re-check: the retry is a new explicit open.
+    // A failed install is not a prerequisite to re-check: the retry is a new explicit open. A missing
+    // Chromium downloads on the first open too, so opening an address is its one action: a re-check
+    // button beside that sentence would not say what it does.
     const installFailed = props.reasonCode === 'browser_runtime_provisioning_failed';
+    const offersRecheck = !installFailed && props.reasonCode !== 'managed_package_missing';
     return (
         <SurfaceStateCard
             testID={props.testID}
@@ -482,7 +491,7 @@ function AgentBrowserPrerequisite(props: BrowserLaunchpadAgentBrowser & Readonly
             title={installFailed ? t('browserPresence.stream.installFailedTitle') : t('browserPresence.stream.setupTitle', { agent: identity.name })}
             reason={reason.body}
             diagnosticCode={reason.diagnosticCode}
-            action={!installFailed && props.onRetry ? { label: t('browserPresence.stream.tryAgain'), onPress: props.onRetry } : undefined}
+            action={offersRecheck && props.onRetry ? { label: t('browserPresence.stream.tryAgain'), onPress: props.onRetry } : undefined}
             accessibilitySemantics={installFailed ? 'alert' : 'status'}
         />
     );

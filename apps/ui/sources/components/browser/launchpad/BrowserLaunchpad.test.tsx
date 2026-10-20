@@ -469,7 +469,7 @@ describe('BrowserLaunchpad', () => {
         expect(screen.findByTestId('browser-launchpad-empty')).toBeNull();
     });
 
-    it('explains a missing managed Chromium in place of the guidance, with the code behind Details and a way to check again', async () => {
+    it('explains a missing managed Chromium in place of the guidance, with the code behind Details and the address field as its one action', async () => {
         const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
         const onRetry = vi.fn();
 
@@ -488,8 +488,26 @@ describe('BrowserLaunchpad', () => {
         expect(screen.findByTestId('browser-launchpad-agent-browser')).toBeTruthy();
         expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-managed_package_missing')).toBeTruthy();
         expect(screen.findByTestId('browser-launchpad-guidance')).toBeNull();
-        await act(async () => { screen.pressByTestId('browser-launchpad-agent-browser-action'); });
-        expect(onRetry).toHaveBeenCalledTimes(1);
+        // Chromium downloads when a page is opened, so opening an address is the way forward; a
+        // re-check button beside that sentence would not say what it does.
+        expect(screen.findByTestId('browser-launchpad-agent-browser-action')).toBeNull();
+        expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it('leaves the address to the host when the host already draws one', async () => {
+        const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+        const screen = await renderScreen(
+            <BrowserLaunchpad
+                platform="desktop"
+                rows={[]}
+                refreshStatus="idle"
+                onOpenTarget={vi.fn()}
+                urlEntry={false}
+                testID="browser-launchpad"
+            />,
+        );
+        expect(screen.findByTestId('browser-launchpad-url-entry')).toBeNull();
+        expect(screen.findByTestId('browser-launchpad-guidance')).toBeTruthy();
     });
 
     it('says a failed Chromium install in words, keeps the code behind Details and offers no replay (a new open is the retry)', async () => {

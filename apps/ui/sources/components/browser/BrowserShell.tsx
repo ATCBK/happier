@@ -720,6 +720,9 @@ export function BrowserShell(props: Readonly<{
                             props.onAllowBrowserSandbox)}
                         onOpenTarget={props.onOpenTarget}
                         onNavigateInPlace={props.onNavigateInPlace}
+                        // The wide chrome's address bar is this page's one address field; a phone page
+                        // and the Session viewer draw no chrome, so the launchpad brings its own.
+                        urlEntry={phone || inViewer}
                     />
                 ) : (
                     <BrowserViewHost
