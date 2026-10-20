@@ -332,15 +332,16 @@ describe('PostHog plugin manifest', () => {
         );
         const sources = TriageSourcesContributionProtocolV1;
 
-        // The settings directory read, discovery, the three source-native detail
+        // The settings directory and scope-unit reads, discovery, source-native detail
         // reads and the authoritative get are exactly the `ui`-reachable Actions
         // this plugin declares, and every one carries the same mounted-only
         // placement: the explicit empty list withdraws it from global placement
-        // discovery while its `ui` (and, for the two Protocol-owned roles,
+        // discovery while its `ui` (and, for the Protocol-owned roles,
         // `plugin`) invocation stays exactly as reachable as before.
         const mountedOnly = [
             POSTHOG_ACTION_IDS.configuration,
             POSTHOG_ACTION_IDS.listInstances,
+            POSTHOG_ACTION_IDS.listScopeUnits,
             POSTHOG_ACTION_IDS.issueEvents,
             POSTHOG_ACTION_IDS.issueActivity,
             POSTHOG_ACTION_IDS.codeVariables,
@@ -352,6 +353,8 @@ describe('PostHog plugin manifest', () => {
         }
         expect(actions.get(POSTHOG_ACTION_IDS.listInstances)?.surfaces, 'posthog/list-instances')
             .toEqual(sources.operations.listInstances.declaration.surfaces);
+        expect(actions.get(POSTHOG_ACTION_IDS.listScopeUnits)?.surfaces, 'posthog/list-scope-units')
+            .toEqual(sources.operations.listScopeUnits.declaration.surfaces);
         expect(actions.get(POSTHOG_ACTION_IDS.get)?.surfaces, 'posthog/get')
             .toEqual(sources.operations.get.declaration.surfaces);
         for (const id of [POSTHOG_ACTION_IDS.issueEvents, POSTHOG_ACTION_IDS.issueActivity,
