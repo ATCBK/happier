@@ -9096,6 +9096,30 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
     },
+    sessionControlSwitch: async ({ sessionId, to, context, signal }) => withProjectHome(async () => {
+      if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const transport = await resolveTransportForSession(sessionId, signal, { context, actionId: 'session.control.switch' });
+      if (!transport.ok) return { ok: false, errorCode: transport.code, error: transport.code };
+      try {
+        const switched = await callSessionRpc({ ...transport, token: params.credentials.token,
+          sessionId: transport.sessionId, method: `${transport.sessionId}:switch`, request: { to },
+          ...(context.authority !== 'present_user' ? { authorityCeiling: 'account_automation' as const } : {}),
+          ...(context.externalActionExecutionAuthorization && params.externalActionMachineRequestPrivateKey
+            && params.externalActionMachineInstallationId ? { externalAction: {
+              context, effectActionId: 'session.control.switch', installationId: params.externalActionMachineInstallationId,
+              privateKey: params.externalActionMachineRequestPrivateKey,
+            } } : {}),
+          ...(signal ? { signal } : {}),
+        });
+        if (switched === true) return { switched: true };
+        if (switched && typeof switched === 'object' && 'ok' in switched && switched.ok === false) return switched;
+        return { ok: false, errorCode: 'session_control_unavailable', error: 'session_control_unavailable' };
+      } catch (error) {
+        const errorCode = readRpcErrorCode(error) ?? 'session_control_unavailable';
+        return { ok: false, errorCode, error: errorCode };
+      }
+    }),
+
     sessionModeSet: async ({ sessionId, modeId }) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };

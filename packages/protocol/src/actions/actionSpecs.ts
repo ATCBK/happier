@@ -2810,6 +2810,12 @@ const SessionModeSetInputSchema = lazyZodSchema(() => z.looseObject({
   modeId: z.string(),
 }));
 
+const SessionControlSwitchInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  to: z.enum(['remote', 'local']),
+}));
+const SessionControlSwitchOutputSchema = lazyZodSchema(() => z.strictObject({ switched: z.literal(true) }));
+
 const SessionConfigOptionSetInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: z.optional(z.string().check(z.minLength(1))),
   configId: z.string().check(z.trim(), z.minLength(1)),
@@ -11300,6 +11306,25 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputSchema: SessionUserActionAnswerInputSchema,
   },
   {
+    id: 'session.control.switch', approval: { result: 'optional', flow: 'deferred' },
+    title: 'Switch Session control',
+    description: 'Switch between local terminal and remote control through the active Session terminal owner.',
+    safety: 'safe',
+    sideEffectClass: 'write',
+    executionPlacement: 'session',
+    placements: [],
+    bindings: { mcpToolName: 'session_control_switch', rpcMethod: 'switch' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    inputHints: { fields: [
+      { path: 'sessionId', title: 'Session id', widget: 'text' },
+      { path: 'to', title: 'Control', widget: 'select', required: true, options: [
+        { value: 'remote', label: 'Remote' }, { value: 'local', label: 'Local terminal' },
+      ] },
+    ] },
+    inputSchema: SessionControlSwitchInputSchema,
+    outputSchema: SessionControlSwitchOutputSchema,
+  },
+  {
     id: 'session.mode.set', approval: {result: 'optional',flow: 'deferred'},
     title: 'Set session mode',
     sideEffectClass: 'write',
@@ -14860,6 +14885,7 @@ const CURRENT_SESSION_CONTEXT_ACTION_IDS = new Set<ActionId>([
   'session.turn.cancel',
   'session.stop',
   'session.runtime.refresh',
+  'session.control.switch',
   'session.terminalComposer.clear',
   'session.pendingInput.interruptAndRun',
   'session.title.set',

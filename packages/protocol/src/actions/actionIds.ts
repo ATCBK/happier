@@ -440,6 +440,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.permission.remote.grants.revoke',
     'session.user_action.answer',
     'session.needs_you.raise',
+    'session.control.switch',
     'session.mode.set',
   ],
   external_sessions: [

@@ -2094,6 +2094,13 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionModeSet: (args: Readonly<{ sessionId: string; modeId: string }>) => Promise<unknown>;
+  sessionControlSwitch?: (args: Readonly<{
+    sessionId: string;
+    to: 'remote' | 'local';
+    serverId?: string | null;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
   sessionConfigOptionSet?: (args: Readonly<{ sessionId: string; configId: string; valueId: string }>) => Promise<unknown>;
   sessionConnectedServicesAuthSet?: (args: SessionConnectedServiceAuthSwitchRpcParams & Readonly<{ machineId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionModesList: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;
