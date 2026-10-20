@@ -150,26 +150,21 @@ export async function shikiTokenizeScopeLines(params: Readonly<{
     colors?: Record<string, unknown> | null;
 }>): Promise<readonly (readonly ShikiScopeToken[])[]> {
     const languageId = resolveShikiLanguageId(params.language);
+    if (languageId === 'text') return params.lines.map(text => [{ text, column: 0, scopes: [] }]);
     const themeId = resolveHappierShikiThemeId(params);
     const { highlighter } = await getShikiHighlighterForTheme({ ...params, languageId, themeId });
-    const { tokens } = highlighter.codeToTokens(params.lines.join('\n'), {
-        lang: languageId,
-        theme: themeId as BundledTheme,
-        includeExplanation: 'scopeName',
-    });
-    let lineOffset = 0;
-    return params.lines.map((line, lineIndex) => {
-        const row = (tokens[lineIndex] ?? []).flatMap(token => {
-            let column = token.offset - lineOffset;
-            if (!token.explanation) return [{ text: token.content, column, scopes: [] }];
-            return token.explanation.map(part => {
-                const result = { text: part.content, column, scopes: part.scopes.map(scope => scope.scopeName) };
-                column += part.content.length;
-                return result;
-            });
-        });
-        lineOffset += line.length + 1;
-        return row;
+    // The public grammar API gives scopes directly. includeExplanation instead
+    // aligns two tokenization passes and throws on Shiki 3.22's Wolfram grammar.
+    const grammar = highlighter.getLanguage(languageId);
+    let state: Parameters<typeof grammar.tokenizeLine>[1] = null;
+    return params.lines.map(line => {
+        const row = grammar.tokenizeLine(line, state);
+        state = row.ruleStack;
+        return row.tokens.map(token => ({
+            text: line.slice(token.startIndex, token.endIndex),
+            column: token.startIndex,
+            scopes: token.scopes,
+        })).filter(token => token.text.length > 0);
     });
 }
 

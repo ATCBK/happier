@@ -17,4 +17,10 @@ describe('code intelligence identifier positions', () => {
         expect(resolveCodeIdentifier('value + other', { line: 0, character: 6 }, null)).toBeNull();
         expect(resolveCodeIdentifier('value', { line: -1, character: 0 }, null)).toBeNull();
     });
+
+    it('selects the same Unicode identifiers accepted by the Machine search boundary', () => {
+        const line = '℘ + cafe\u0301 + 𝒜 + $item';
+        expect(readCodeLineIdentifiers(line, 'typescript').map(name => name.symbol)).toEqual(['℘', 'cafe\u0301', '𝒜', '$item']);
+        expect(resolveCodeIdentifier(line, { line: 0, character: line.indexOf('𝒜') + 1 }, 'typescript')?.symbol).toBe('𝒜');
+    });
 });
