@@ -33,9 +33,11 @@ export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRef
 /** Local feedback identity comes from the admitted owner-native position, never an anchor or preview. */
 export function widgetLayoutEntityDropDestinationKey(admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>): string | null {
     if (admission.effect.actionId !== 'widgets.item.move') return null;
-    const parsed = WidgetInstanceActionInputSchemasV1['widgets.item.move'].safeParse(admission.effect.input);
-    if (!parsed.success || !('to' in parsed.data)) return null;
-    const { to } = parsed.data;
+    const move = WidgetInstanceActionInputSchemasV1['widgets.item.move'].parse(admission.effect.input);
+    // The legacy same-surface shape uses a widget ordinal; `to.index` is native content placement.
+    if (!('to' in move)) return JSON.stringify(['widget-order-position', move.ref.surface,
+        move.area ?? null, move.groupId ?? null, move.toIndex]);
+    const { to } = move;
     return JSON.stringify(['widget-position', to.surface, to.tabId ?? null, to.area ?? null, to.groupId ?? null, to.index]);
 }
 
