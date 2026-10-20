@@ -2294,21 +2294,31 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     }
                     throw error;
                 }
+                const claimedDeclaration = createReleaseLessDeclarationV1(manifest);
+                const readCurrent = () => tx.accountPluginIntent.findUnique({
+                    where: { accountId_pluginId: { accountId: params.accountId, pluginId } },
+                    select: INTENT_ROW_SELECT,
+                });
+                const observed = await readCurrent();
+                const observedIntent = observed ? intentFromRow(observed) : null;
+                // An exact rejoin is a read of the incumbent, with no quota,
+                // promotion or Account mutation. Linearize it at this read;
+                // changed claims still enter exclusively and reread below.
+                if (observedIntent?.desiredVersion === null
+                    && readCurrentReleaseLessDeclarationV1(observed, pluginId)?.manifestDigestSha256 === claimedDeclaration.manifestDigestSha256
+                    && collectionContractsEqual(observedIntent.writableCollections, claimed)) {
+                    return { intent: observedIntent, ...(prepare ? { preparation: [] } : {}) };
+                }
                 // Immutable contracts are global, not Account state. Prepare
                 // them before occupying this Account's publication fence, in
                 // the same Contract→Account order as release publication.
-                // Keep intent, quota and promotion admission inside the fence;
-                // failed admission still rolls materialization back atomically.
-                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
-                const current = await tx.accountPluginIntent.findUnique({
-                    where: {
-                        accountId_pluginId: {
-                            accountId: params.accountId,
-                            pluginId,
-                        },
-                    },
-                    select: INTENT_ROW_SELECT,
+                // Preparation only reads the incumbent. Actual intent/quota
+                // promotion retains exclusive admission; failed admission
+                // still rolls materialization back atomically.
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], {
+                    includeSingleAccount: true, intent: prepare ? "content" : "exclusive",
                 });
+                const current = await readCurrent();
                 const currentIntent = current ? intentFromRow(current) : null;
                 if (prepare && currentIntent === null) {
                     throw new PluginAvailabilityOperationError("plugin_intent_writable_collections_not_ready");
@@ -2349,7 +2359,6 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 }
                 const writableCollections = [...writers.values()];
                 const currentDeclaration = readCurrentReleaseLessDeclarationV1(current, pluginId);
-                const claimedDeclaration = createReleaseLessDeclarationV1(manifest);
                 const releaseLessDeclaration = currentDeclaration !== null
                     && semver.lt(manifest.version, currentDeclaration.manifest.version)
                     ? currentDeclaration

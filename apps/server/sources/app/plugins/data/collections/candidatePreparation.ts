@@ -12,6 +12,7 @@ import semver from "semver";
 import { createReleaseLessDeclarationV1, readCurrentReleaseLessDeclarationV1, type ReleaseLessDeclarationV1 } from "@/app/plugins/availability/currentDeclaration";
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isPrismaErrorCode } from "@/storage/db";
@@ -407,8 +408,9 @@ async function resolveCandidatePreparationBindingInTx(input: Readonly<{
     tx: Tx;
     accountId: string;
     binding: PluginCollectionCandidatePreparationBindingV1;
+    intent: AccountAdmissionIntent;
 }>): Promise<ResolvedCandidatePreparationBinding> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, input.intent);
     if (fence.status === "account_not_found") {
         throw new PluginCollectionCandidatePreparationOperationError(
             "collection_candidate_preparation_unavailable",
@@ -1574,6 +1576,7 @@ export async function pagePluginCollectionCandidatePreparationSource(input: Read
             tx,
             accountId: input.accountId,
             binding: request.binding,
+            intent: "content",
         });
         const fingerprint = candidatePreparationCursorFingerprint({
             accountId: input.accountId,
@@ -1675,6 +1678,7 @@ export async function stagePluginCollectionCandidatePreparation(input: Readonly<
             tx,
             accountId: input.accountId,
             binding: request.binding,
+            intent: "exclusive",
         });
         const batchIncompatibility = findPluginCollectionBatchQuotaIncompatibility({
             deployment,

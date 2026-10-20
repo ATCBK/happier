@@ -13,6 +13,8 @@ import { inTx, type Tx } from "@/storage/inTx";
 import { registerPluginAvailabilityRoutes } from "./routes";
 import { resolveCurrentPluginDeclarationsTx } from "./currentDeclaration";
 import { createPluginAvailabilityOperations } from "./operations";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { pagePluginCollectionCandidatePreparationSource, stagePluginCollectionCandidatePreparation } from "@/app/plugins/data/collections/candidatePreparation";
 
 const route = PluginAvailabilityActionHttpPathsV1["account.plugins.availability.collectionWriters.claim"];
 const withAuthenticatedTestApp: (
@@ -92,6 +94,97 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
         }
         await competitor;
     }
+
+    it.each([false, true])("rejoins an unchanged claim without exclusive admission (prepare: %s)", async prepare => {
+        const { account, manifest, headers } = await fixture();
+        const pending: Promise<unknown>[] = [];
+        try {
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const first = await app.inject({ method: "POST", url: route, headers, payload: { manifest } });
+                expect(first.statusCode, first.body).toBe(200);
+                const before = await db.account.findUniqueOrThrow({ where: { id: account.id } });
+                let completed = false;
+                await inTx(async tx => {
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                    await commitOrBlock(tx, async () => {
+                        const response = await app.inject({ method: "POST", url: route, headers,
+                            payload: { manifest, ...(prepare ? { prepare: true } : {}) } });
+                        expect(response.statusCode, response.body).toBe(200);
+                        const result = PluginAvailabilityCollectionWritersClaimActionOutputV1Schema.parse(response.json());
+                        expect(result.intent).toEqual(first.json().intent);
+                        if (prepare) expect(result.preparation).toEqual([]);
+                        completed = true;
+                    }, pending);
+                    expect(completed, "An unchanged declaration must not queue an exclusive Account waiter").toBe(true);
+                });
+                expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(before.seq);
+            });
+        } finally { await Promise.allSettled(pending); }
+    });
+
+    it("pages candidate source content under shared admission while stage writes remain exclusive", async () => {
+        const { account, manifest } = await fixture();
+        const operations = createPluginAvailabilityOperations();
+        await operations.claimCollectionWriters({ accountId: account.id, input: { manifest } });
+        const nextManifest = PluginManifestV2Schema.parse({ ...manifest, version: "2.0.0", contributes: {
+            accountCollections: [{ ...manifest.contributes.accountCollections[0]!, schemaVersion: 2,
+                readableSchemaVersions: [1], migrations: [{ id: "upgrade", fromSchemaVersion: 1, toSchemaVersion: 2 }] }],
+        } });
+        const prepared = await operations.claimCollectionWriters({ accountId: account.id,
+            input: { manifest: nextManifest, prepare: true } });
+        const binding = prepared.preparation![0]!.binding;
+        const pending: Promise<unknown>[] = [];
+        try {
+            let paged = false;
+            await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                await commitOrBlock(tx, async () => {
+                    expect(await pagePluginCollectionCandidatePreparationSource({ accountId: account.id,
+                        request: { binding, limit: 10 } })).toMatchObject({ rows: [] });
+                    paged = true;
+                }, pending);
+                expect(paged, "A source-page read must not queue an exclusive Account waiter").toBe(true);
+                let staged = false;
+                await commitOrBlock(tx, async () => {
+                    await stagePluginCollectionCandidatePreparation({ accountId: account.id,
+                        request: { binding, items: [{ source: { rowId: "absent", revision: 1 },
+                            target: { content: { t: "plain", v: {} }, projection: { status: "open" } } }] } });
+                    staged = true;
+                }, pending);
+                expect(staged, "Quota-affecting stage writes must still wait for content admission").toBe(false);
+            });
+            await Promise.all(pending);
+        } finally { await Promise.allSettled(pending); }
+    });
+
+    it("prepares a new candidate without exclusively admitting a quota mutation", async () => {
+        const { account, manifest, headers } = await fixture();
+        const pending: Promise<unknown>[] = [];
+        try {
+            await withAuthenticatedTestApp(registerPluginAvailabilityRoutes, async app => {
+                const first = await app.inject({ method: "POST", url: route, headers, payload: { manifest } });
+                expect(first.statusCode, first.body).toBe(200);
+                const nextManifest = PluginManifestV2Schema.parse({ ...manifest, version: "2.0.0", contributes: {
+                    accountCollections: [{ ...manifest.contributes.accountCollections[0]!, schemaVersion: 2,
+                        readableSchemaVersions: [1], migrations: [{ id: "upgrade", fromSchemaVersion: 1, toSchemaVersion: 2 }] }],
+                } });
+                let prepared = false;
+                await inTx(async tx => {
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                    await commitOrBlock(tx, async () => {
+                        const response = await app.inject({ method: "POST", url: route, headers,
+                            payload: { manifest: nextManifest, prepare: true } });
+                        expect(response.statusCode, response.body).toBe(200);
+                        const result = PluginAvailabilityCollectionWritersClaimActionOutputV1Schema.parse(response.json());
+                        expect(result.intent).toEqual(first.json().intent);
+                        expect(result.preparation).toHaveLength(1);
+                        prepared = true;
+                    }, pending);
+                    expect(prepared, "Preparation only reads the incumbent and materializes immutable contracts").toBe(true);
+                });
+            });
+        } finally { await Promise.allSettled(pending); }
+    });
 
     it("claims through HTTP and admits the exact Data writer despite a foreign Account cursor write on every attempt", async () => {
         const { account, manifest, ref, headers } = await fixture();
