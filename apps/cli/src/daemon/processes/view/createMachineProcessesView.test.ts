@@ -24,24 +24,34 @@ import { listHappierProcessRoots } from '../roots/listHappierProcessRoots';
 import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
 import { PROCESS_LAUNCH_NOTIFICATION_PATH, ProcessLaunchNotificationResultSchema } from '@/processes/launchNotification';
 import { createProcessCustodySamplingInvoker } from '@/subprocess/supervision/processCustody';
+import { decodeHelperCensus } from '@/processes/census/decodeHelperCensus';
 
 // Native census and vitals I/O are system boundaries; the sampler and every domain owner are real.
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
-it.each(['reused', 'exited', 'unreadable', 'resources_unreadable'] as const)('reconciles a %s PID through the recipient watch projection', async observation => {
+it.each(['reused', 'exited', 'unreadable', 'resources_unreadable', 'principal_unreadable', 'principal_null', 'principal_changed', 'external_principal_changed', 'external_self_principal_null'] as const)('reconciles a %s PID through the recipient watch projection', async observation => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let reused = false;
-    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
-        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null },
-        { pid: 20, ppid: 1, start: { startTimeMs: 200 }, principal: { kind: 'uid', value: '1000' }, name: 'agent', memory: { bytes: 10, kind: 'rss' }, cpuTimeUs: null },
-        ...(!reused || observation === 'reused' || observation === 'resources_unreadable' ? [{ pid: 42, ppid: reused && observation === 'reused' ? 1 : 20,
+    const external = observation === 'external_principal_changed' || observation === 'external_self_principal_null';
+    const cpu = () => reused && observation === 'external_self_principal_null' ? Date.now() * 1000 : null;
+    const principalObservation = observation === 'principal_unreadable' || observation === 'principal_null' || observation === 'principal_changed' || external;
+    boundary.read.mockImplementation(async () => {
+        const snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }> = { status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: reused && observation === 'external_self_principal_null' ? null : { kind: 'uid', value: '1000' }, name: 'daemon', memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: cpu() },
+        { pid: 20, ppid: 1, start: { startTimeMs: 200 }, principal: { kind: 'uid', value: '1000' }, name: 'agent', memory: { bytes: 10, kind: 'rss' }, cpuTimeUs: cpu() },
+        ...(!reused || observation === 'reused' || observation === 'resources_unreadable' || principalObservation ? [{ pid: 42, ppid: external || reused && observation === 'reused' ? 1 : 20,
             start: { startTimeMs: reused && observation === 'reused' ? 2000 : 400, native: reused && observation === 'reused' ? 'gen2' : 'gen1' },
-            principal: { kind: 'uid' as const, value: '1000' }, name: reused && observation === 'reused' ? 'unrelated' : 'tool',
-            memory: reused && observation === 'resources_unreadable' ? null : { bytes: reused ? 999 : 100, kind: 'rss' as const }, cpuTimeUs: null },
+            principal: reused && principalObservation ? observation === 'external_self_principal_null' ? { kind: 'uid' as const, value: '1000' }
+                : observation === 'principal_changed' || external ? { kind: 'uid' as const, value: '1001' } : null
+                : { kind: 'uid' as const, value: '1000' }, name: reused && observation === 'reused' ? 'unrelated' : 'tool',
+            memory: reused && observation === 'resources_unreadable' ? null : { bytes: reused ? 999 : 100, kind: 'rss' as const }, cpuTimeUs: cpu() },
         ] : []),
-    ], ...(reused && (observation === 'unreadable' || observation === 'resources_unreadable')
-        ? { partial: [{ pid: 42, missing: observation === 'unreadable' ? ['start'] : ['memory', 'cpuTimeUs'] }] } : {}) }));
+    ], ...(reused && (observation === 'unreadable' || observation === 'resources_unreadable' || observation === 'principal_unreadable')
+        ? { partial: [{ pid: 42, missing: observation === 'unreadable' ? ['start'] : observation === 'principal_unreadable' ? ['principal'] : ['memory', 'cpuTimeUs'] }] } : {}) };
+        return observation === 'principal_null' ? decodeHelperCensus(JSON.stringify({ v: 1, capturedAtMs: snapshot.capturedAtMs,
+            logicalCpus: snapshot.logicalCpus, rows: snapshot.rows }), 100) : snapshot;
+    });
     const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
         { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
         { owner: { kind: 'session', sessionId: 'old-owner' }, pid: 20, start: { startTimeMs: 200 }, ownerCreatedAtMs: 200, live: true },
@@ -56,41 +66,52 @@ it.each(['reused', 'exited', 'unreadable', 'resources_unreadable'] as const)('re
     }) }, historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
         appendAlert: async () => undefined, minutes: () => [], alerts: () => [] }, monotonicMs: () => Date.now() });
     const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
-        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false,
-        requesterForOwner: owner => ({ accountId: owner.kind === 'session' ? 'guest' : 'custodian' }) });
-    const requester = { accountId: 'guest', custodianAccountId: 'custodian' };
-    const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => external,
+        requesterForOwner: owner => ({ accountId: owner.kind === 'session' ? 'guest' : 'custodian', displayName: 'Fixture identity' }) });
+    const requester = { accountId: external ? 'custodian' : 'guest', custodianAccountId: 'custodian' };
+    const request = { machineId: 'm', scope: external ? 'all' as const : 'happier' as const, view: 'tree' as const };
     const cancellation = new AbortController();
     try {
         await sampler.start();
         const initial = await view.watch(request, requester);
-        expect(initial.changed && initial.answer.totals.happier.memoryBytes).toBe(110);
+        expect(initial.changed && initial.answer.totals.happier.memoryBytes).toBe(external ? 30 : 110);
         const firstPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
         await vi.advanceTimersByTimeAsync(2000);
         const first = await firstPending;
-        expect(first.changed && first.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(110);
+        expect(first.changed && first.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(external ? 10 : 110);
         reused = true;
-        const secondPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+        let measured: MachineProcessesWatchResultV1 | undefined;
+        const secondPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal)
+            .then(answer => { measured = answer; return answer; });
         await vi.advanceTimersByTimeAsync(2000);
+        expect(measured?.changed).toBe(true);
         const second = await secondPending;
         expect(second.changed).toBe(true);
         if (!second.changed) throw new Error('Expected measured watch answer');
+        if (external) {
+            expect(initial.changed && initial.answer.notHappier?.flatMap(group => group.members).map(row => row.pid)).toEqual([42]);
+            expect(second.answer.notHappier).toEqual([]);
+            expect(second.answer.unverifiableCount).toBe(1);
+            expect(JSON.stringify(second.answer)).not.toContain('999');
+            return;
+        }
         const unreadable = observation === 'unreadable' || observation === 'resources_unreadable';
-        expect(second.answer.owners[0].members.map(row => row.pid)).toEqual(unreadable ? [20, 42] : [20]);
-        expect(second.answer.totals.happier).toMatchObject({ processCount: unreadable ? 2 : 1, memoryBytes: unreadable ? null : 10 });
-        if (unreadable) expect(second.answer.owners[0].members.find(row => row.pid === 42))
-            .toMatchObject({ level: observation === 'unreadable' ? 'unknown' : 'proven', memoryBytes: null });
-        expect(second.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(unreadable ? null : 10);
+        const retained = unreadable || principalObservation;
+        expect(second.answer.owners[0].members.map(row => row.pid)).toEqual(retained ? [20, 42] : [20]);
+        expect(second.answer.totals.happier).toMatchObject({ processCount: retained ? 2 : 1, memoryBytes: retained ? null : 10 });
+        if (retained) expect(second.answer.owners[0].members.find(row => row.pid === 42))
+            .toMatchObject({ level: observation === 'resources_unreadable' ? 'proven' : 'unknown', memoryBytes: null });
+        expect(second.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(retained ? null : 10);
         expect(second.answer.history?.['session:old-owner']?.[0].memoryBytes).toBe(110);
         expect(Object.keys(second.answer.history ?? {})).toEqual(['session:old-owner']);
         expect(second.answer.othersWork).toEqual({ count: 1 });
         expect(MachineProcessesWatchResultV1Schema.safeParse(second).success).toBe(true);
-        if (observation === 'unreadable') {
+        if (observation === 'unreadable' || principalObservation) {
             const ref = second.answer.owners[0].members.find(row => row.pid === 42)!.ref;
             expect((await view.check({ machineId: 'm', refs: [ref] }, requester)).checks)
                 .toEqual([{ ref, present: false, identityEqual: false }]);
         }
-        if (unreadable) {
+        if (retained) {
             reused = false;
             const recoveredPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
             await vi.advanceTimersByTimeAsync(2000);

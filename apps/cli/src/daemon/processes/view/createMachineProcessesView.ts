@@ -8,6 +8,7 @@ import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/invent
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
 import type { ProcessStartIdentity } from '@/processes/census/processCensus';
+import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
 import type { createLeftBehindPass } from '../leftBehind/leftBehindPass';
@@ -153,16 +154,25 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                             const refs = owners.get(key) ?? new Map<number, string>();
                             refs.set(row.pid, processRef(row.pid, row.start)); owners.set(key, refs);
                         }
-                        const observedMetrics = new Map(metrics.observe(snapshot, sample.intervalMs, owners));
-                        for (const row of rows) if (sampled.has(row.pid) && partial.has(row.pid)) {
-                            observedMetrics.set(row.pid, { ref: processRef(row.pid, row.start), memoryBytes: null, identityUnavailable: true });
+                        const principal = observed.get(options.selfPid ?? process.pid)?.principal ?? null;
+                        const prior = new Map(ownership.snapshot.rows.map(row => [row.pid, row]));
+                        const priorPrincipal = prior.get(options.selfPid ?? process.pid)?.principal ?? null;
+                        const identityUnavailable = new Map<number, string>();
+                        for (const row of rows) if (sampled.has(row.pid)) {
+                            const current = observed.get(row.pid);
+                            const previousPrincipal = prior.get(row.pid)?.principal ?? null;
+                            const principalUncertain = current && (compareProcessPrincipals(current.principal, previousPrincipal) !== 'self'
+                                || compareProcessPrincipals(previousPrincipal, priorPrincipal) === 'self'
+                                    && compareProcessPrincipals(current.principal, principal) !== 'self');
+                            if (!partial.has(row.pid) && !principalUncertain) continue;
+                            identityUnavailable.set(row.pid, processRef(row.pid, row.start));
                         }
-                        currentMetrics = observedMetrics;
+                        currentMetrics = metrics.observe(snapshot, sample.intervalMs, owners, identityUnavailable);
                         latestMetricAtMs = snapshot.capturedAtMs;
                         // A cold or expired CPU baseline needs two observations in
                         // this active watch. Returning after the first would let
                         // transport/re-arm gaps expire that baseline on every poll.
-                        const needsCpuBaseline = firstMetricObservation && snapshot.rows.some(row => row.cpuTimeUs !== null)
+                        const needsCpuBaseline = firstMetricObservation && snapshot.rows.some(row => row.cpuTimeUs !== null && !identityUnavailable.has(row.pid))
                             && ![...currentMetrics.values()].some(metric => metric.cpuPercent !== undefined);
                         if (needsCpuBaseline) return;
                     }
