@@ -25,6 +25,7 @@ import {
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
 import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
+import { readActiveConfiguredSourceRows } from '../corpus/configuration/readConfiguredSourceRows.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 import type { TriageAdmittedSourceV1 } from './listEntries.js';
 import {
@@ -162,6 +163,18 @@ function createContext(input: Readonly<{
 const INPUT = TriageReadConfiguredSourceInstancesInputV1Schema.parse({ v: 1 });
 
 describe('the caller-scoped configured-instance read', () => {
+    it('filters uninstalled contributions from the host read without retiring their durable configuration', async () => {
+        const { collections, control } = createTestkitCorpusCollections();
+        control.sourceInstances.seed(toCorpusStoredValue(instanceRow({ source: FORGE, seed: 1 })));
+        control.sourceInstances.seed(toCorpusStoredValue(instanceRow({ source: TRACKER, seed: 2 })));
+        const result = await createTriageReadConfiguredSourceInstancesActionHandler()(INPUT, createContext({
+            collections, surface: 'cli', admitted: [admittedSource(FORGE)],
+        }));
+        expect(result).toMatchObject({ kind: 'read', status: 'complete' });
+        expect(result.kind === 'read' && result.instances.map(record => record.configured.instance.source)).toEqual([FORGE]);
+        const retained = await readActiveConfiguredSourceRows(collections.sourceInstances);
+        expect(retained.rows.map(row => row.configured.instance.source)).toEqual([FORGE, TRACKER]);
+    });
     it.each(['ui', 'voice', 'background', 'plugin'] as const)('does not treat an absent-caller %s surface as host Action authority', async (surface) => {
         const { collections } = createTestkitCorpusCollections();
         expect(await createTriageReadConfiguredSourceInstancesActionHandler()(
