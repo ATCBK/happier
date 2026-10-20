@@ -164,7 +164,7 @@ export type PluginTestkitOptions = Readonly<{
      * The compiled activation half of the one public author path. Authors pass
      * the `definePlugin(...)` result; the raw module shape is host-internal.
      */
-    module: Pick<DefinedPlugin, 'activate'>;
+    module: Pick<DefinedPlugin, 'activate'> & Partial<Pick<DefinedPlugin, 'activateAccount'>>;
     /**
      * Explicit contributed-Action targets resolved by this synthetic host.
      * The testkit stamps caller provenance from its own current materialization;

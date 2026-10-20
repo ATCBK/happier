@@ -86,6 +86,31 @@ it('keeps rejected manifest field paths in public testkit errors', async () => {
     .rejects.toThrow('contributes.ui.renderers.0.unsupportedRendererField');
 });
 
+it('refuses a Machine-origin request for an Account Action before its effects', async () => {
+  let effects = 0;
+  const definition = definePlugin({ id: 'acme.portable-origin', version: '1.0.0', actions: {
+    receive: { title: 'Read Account data', surfaces: ['plugin'], placementBindings: [],
+      execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } },
+      run: async () => { effects += 1; return { accepted: true }; },
+    },
+  } });
+  const account = await createPluginTestkit({ manifest: definition.manifest, module: definition });
+  const caller = await createPluginTestkit({ manifest: actionManifest('acme.origin-caller', 'send', ['cli']), actionTargets: [account],
+    module: { activate(api) { api.actions.register('send', async (_input, context) => {
+      try {
+        await context.services.actions.executeWithExecutionOrigin({ pluginId: definition.manifest.id, localId: 'receive' }, null);
+        return { notStarted: false };
+      } catch (error) {
+        return { notStarted: isPluginActionHandlerInvocationNotStartedAdvisory(error), code: isPluginError(error) ? error.code : 'unexpected' };
+      }
+    }); } },
+  });
+  try {
+    expect(await caller.invokeAction('send', null)).toEqual({ notStarted: true, code: 'plugin_action_execution_origin_unavailable' });
+    expect(effects).toBe(0);
+  } finally { await caller.dispose(); await account.dispose(); }
+});
+
 const agentManifest = {
   ...manifest,
   contributes: {

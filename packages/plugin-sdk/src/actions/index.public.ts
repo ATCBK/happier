@@ -180,6 +180,7 @@ export type { ActionExecuteResult } from './service.js';
 export type { ActionHandler } from './service.js';
 export type { PluginActionInvocationSurfaceV2 } from './service.js';
 export type { PluginClientActionContext } from './service.js';
+export type { PluginAccountActionContext, PluginAccountActionHandler } from './contracts.js';
 export type { PluginClientActionHandler } from './service.js';
 export type { PluginClientActionUi } from './service.js';
 export type { ActionInputFieldHint } from './inputHints.js';

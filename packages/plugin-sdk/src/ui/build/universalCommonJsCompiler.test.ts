@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runInNewContext } from 'node:vm';
+import { runInNewContext, runInThisContext } from 'node:vm';
 import { createRequire } from 'node:module';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { compileUniversalPluginUiCommonJs } from './universalCommonJsCompiler.js';
 import { packageNameOfSpecifier, readWorkspacePackages, resolveWorkspaceSource } from '../../../../cli-common/sourceRuntimeEntries.mjs';
 import { resolve } from 'node:path';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest';
+import { derivePluginAccountContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { createPluginRegistrationScope, readPluginActionInputParser } from '../../host/registration/index.js';
+import type { PluginAccountActivationModule } from '../../activation.js';
+import { manifest as authoredAccountManifest } from '../../../fixtures/account-actions/src/index.js';
 
 const roots: string[] = [];
 
@@ -46,6 +51,39 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it('compiles and activates a separately authored Account plugin through the shared registration owner', async () => {
+        const projectRoot = resolve(import.meta.dirname, '../../../fixtures/account-actions');
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot, entryPath: join(projectRoot, 'src/index.ts'), artifactId: 'account-runtime',
+            requestedExports: ['manifest', 'activate'], exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native', 'browser'] }) : undefined,
+        });
+        expect(result.externalSpecifiers).toEqual([]);
+        const module = { exports: {} as Record<string, unknown> };
+        // UI and CLI portable CommonJS loaders execute in the invoking realm;
+        // a separate VM realm would make ordinary host JSON fail prototype admission.
+        const evaluate = runInThisContext(`(function(module, exports) { ${new TextDecoder().decode(result.bytes)}\n})`) as (
+            module: { exports: Record<string, unknown> }, exports: Record<string, unknown>,
+        ) => void;
+        evaluate(module, module.exports);
+        const manifest = PluginManifestV2Schema.parse(module.exports.manifest);
+        expect(manifest).toEqual(PluginManifestV2Schema.parse(authoredAccountManifest));
+        const scope = createPluginRegistrationScope({ pluginId: manifest.id,
+            target: { realm: 'account', artifactId: 'account-runtime', exportName: 'activate' },
+            rights: derivePluginAccountContributionRegistrationRights(manifest.contributes, { artifactId: 'account-runtime', exportName: 'activate' }),
+        });
+        if (typeof module.exports.activate !== 'function') throw new Error('Missing portable activation export');
+        // The independently compiled module is the executable system boundary.
+        await (module.exports.activate as PluginAccountActivationModule['activate'])(scope.api);
+        const registrations = scope.commit();
+        expect(registrations.map((registration) => registration.localId)).toEqual(manifest.contributes.actions.map((action) => action.id));
+        const read = registrations.find((registration) => registration.localId === 'read');
+        expect(readPluginActionInputParser(read?.value)?.({ key: 'retained' }).success).toBe(true);
+        expect(readPluginActionInputParser(read?.value)?.({ key: 'retained', machineId: 'forged' }).success).toBe(false);
+        await scope.dispose();
+    });
     it('compiles the public-authoring renderer exported to external plugin authors', async () => {
         const projectRoot = resolve(import.meta.dirname, '../../../examples/public-authoring');
         const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {

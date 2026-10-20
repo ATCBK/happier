@@ -241,6 +241,7 @@ export type { PluginAgentExternalSessionLinkDataArray } from './actionTypeMap.ge
 export type { PluginAgentExternalSessionLinkDataObject } from './actionTypeMap.generated.js';
 export type { PluginAgentExternalSessionLinkDataValue } from './actionTypeMap.generated.js';
 export type { PluginClientActionContext } from './service.js';
+export type { PluginAccountActionContext, PluginAccountActionHandler } from './contracts.js';
 export type { PluginClientActionHandler } from './service.js';
 export type { PluginClientActionUi } from './service.js';
 export type { PluginDevLoopActionInputById } from './dtos/pluginDevLoopActionDtos.generated.js';

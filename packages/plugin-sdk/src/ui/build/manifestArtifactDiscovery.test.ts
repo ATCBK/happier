@@ -41,6 +41,17 @@ async function fixture(exportTarget: unknown): Promise<string> {
 }
 
 describe('discoverExecutablePluginUiArtifacts', () => {
+  it('discovers portable Account activation without a UI declaration', async () => {
+    const root = await fixture('./account.ts');
+    await writeFile(join(root, '.happier-plugin/plugin.json'), JSON.stringify({
+      contributes: { actions: [{ id: 'read', execution: {
+        target: 'account', account: { artifactId: 'panel', exportName: 'activateAccount' },
+      } }] },
+    }), 'utf8');
+    await expect(discoverExecutablePluginUiArtifacts(root)).resolves.toEqual([{
+      artifactId: 'panel', entryPath: join(root, 'account.ts'), requestedExports: ['activateAccount'],
+    }]);
+  });
   it('discovers declared client read and drag/drop activation exports without a renderer or Action', async () => {
     const root = await fixture('./ui/panel.tsx');
     await writeFile(

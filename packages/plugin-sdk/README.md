@@ -77,6 +77,48 @@ Session-native work retain their own targets.
 render without a runtime occurrence. Absence does not admit private machine
 operations or manufacture a targeted contribution snapshot.
 
+## Portable Account Actions (0.3 development)
+
+Use Account placement for portable Action code that must run in the invoking
+UI or CLI without a Machine. It is not implied by Account-scoped data or UI:
+
+```ts
+const plugin = definePlugin({
+  id: 'acme.personal', version: '1.0.0',
+  actions: {
+    read: {
+      title: 'Read personal value', surfaces: ['ui', 'cli', 'agent', 'plugin'],
+      placementBindings: [], dangerLevel: 'safe', inputSchema,
+      execution: { target: 'account', account: { artifactId: 'account-runtime', exportName: 'activate' } },
+      run: async ({ key }, context) => {
+        const entry = await context.services.storage.account.kv.get(key, { signal: context.signal });
+        return { value: entry && !('deleted' in entry) ? entry.value : null };
+      },
+    },
+  },
+});
+export const manifest = plugin.manifest;
+export const activate = plugin.activateAccount;
+```
+
+Export that module as `./happier-plugin-ui/account-runtime` in `package.json`.
+The existing portable-artifact compiler rejects Node builtins. Account handlers
+receive Account storage, ordinary host Action execution and admitted targeted
+contributions, not Machine services or UI navigation. When several artifact/export
+pairs exist, wrap `activateAccount(api, { artifactId, exportName })` for each exact
+entry; the host grants only its manifest-declared registration rights.
+
+The current enabled Account release (or trusted host-bundled declaration) is
+the custody authority. Ordinary enablement, schema validation, policy, approval,
+cancellation and currentness checks still apply. Do not retain invocation-bound
+services for later work, retry an uncertain write, or treat a source descriptor
+as permission to execute on a Machine. Provider-backed operations remain daemon
+Actions and may report Machine-required independently of personal sources.
+See the [public fixture](fixtures/account-actions/src/index.ts) and
+[platform owner](../../docs/plugin-platform.md#portable-account-actions-03-development-source).
+This API is 0.3 development source; verify generated API/toolchain compatibility
+before targeting a published host.
+
 ## Cross-plugin protocol authoring
 
 Use the [SDK protocol-evolution doctrine](../../docs/compatibility.md#sdk-protocol-evolution)

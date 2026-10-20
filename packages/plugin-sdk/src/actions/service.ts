@@ -50,6 +50,8 @@ export type {
   ActionHandler,
   PluginActionInvocationSurfaceV2,
   PluginClientActionUi,
+    PluginAccountActionContext,
+    PluginAccountActionHandler,
 } from './contracts.js';
 /**
  * Client-targeted Action invocation types are only available in a client

@@ -9,6 +9,7 @@ import type {
 import type {
     ActionHandler,
     PluginClientActionHandler,
+    PluginAccountActionHandler,
 } from './actions/service.js';
 import type {
     JsonValue,
@@ -425,6 +426,20 @@ export interface PluginClientApi {
     };
     readonly voiceProviders: VoiceProvidersRegistrationApi;
 }
+
+/** Portable Account artifact uses the same activate(api) registration ABI. @realm any */
+export interface PluginAccountApi {
+    readonly actions: {
+        register<I extends JsonValue = JsonValue, O extends JsonValue | void = JsonValue | void>(
+            id: string, handler: PluginAccountActionHandler<I, O>,
+        ): void;
+    };
+}
+
+/** @realm any */
+export type PluginAccountActivationModule = Readonly<{
+    activate(api: PluginAccountApi): void | PluginCleanup | Promise<void | PluginCleanup>;
+}>;
 
 /** @realm any */
 export type PluginActivationModule = Readonly<{

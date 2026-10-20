@@ -2,7 +2,7 @@ import { COMPOSER_ATTACHMENT_RUNTIME_REGISTRATION_FIELDS_V1 } from '@happier-dev
 import { declaresHostSynthesizedAgentResumeOnlyExternalSources, findAgentResumeOnlyExternalSourceContractIssue } from '@happier-dev/protocol/plugins/contributions/agent-resume-only-sources';
 import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 
-import type { ActionContract, ActionHandler } from './actions/contracts.js';
+import type { ActionContract, ActionHandler, PluginAccountActionHandler } from './actions/contracts.js';
 import {
     attachPluginActionInputParser,
     attachPluginActionResultParser,
@@ -18,6 +18,7 @@ import type {
     HostingProviderRuntime,
     PluginActivationModule,
     PluginApi,
+    PluginAccountApi,
     PluginCleanup,
     ComposerAttachmentRuntime,
     ComposerReferenceRuntime,
@@ -174,6 +175,7 @@ export type PluginActionPlacement =
  */
 export type PluginActionExecutionV2 =
     | Readonly<{ target: 'daemon' }>
+    | Readonly<{ target: 'account'; account: Readonly<{ artifactId: string; exportName: string }> }>
     | Readonly<{
         target: 'client';
         client: Readonly<{
@@ -296,6 +298,10 @@ export type PluginActionDeclaration = Readonly<{
         operation?: ActionOperationDeclarationV1;
     }>
     | Readonly<{
+        execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
+        operation?: never;
+    }>
+    | Readonly<{
         execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>;
         operation?: never;
     }>
@@ -307,6 +313,9 @@ type PluginDaemonActionDeclaration = PluginActionDeclaration & Readonly<{
 
 type PluginClientActionDeclaration = PluginActionDeclaration & Readonly<{
     execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>;
+}>;
+type PluginAccountActionDeclaration = PluginActionDeclaration & Readonly<{
+    execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
 }>;
 
 export type ProtocolActionSchemaInput<TSchema> = TSchema extends ProtocolComposableSchema<unknown, unknown>
@@ -323,6 +332,13 @@ type PluginActionRuntimeDeclaration<TDefinition extends PluginActionDeclaration>
                     ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
                     ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
                 >;
+    }>
+    | Readonly<{
+        execution: PluginAccountActionDeclaration['execution'];
+        run?: PluginAccountActionHandler<
+            ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
+            ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
+        >;
     }>
     | Readonly<{
         execution: PluginClientActionDeclaration['execution'];
@@ -950,6 +966,13 @@ export type DefinePluginInput<
                         >;
                     }>
                     | Readonly<{
+                        execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
+                        run?: PluginAccountActionHandler<
+                            ProtocolActionSchemaInput<TActions[TLocalId] extends { inputSchema: infer TSchema } ? TSchema : undefined>,
+                            ProtocolActionSchemaOutput<TActions[TLocalId] extends { resultSchema: infer TSchema } ? TSchema : undefined>
+                        >;
+                    }>
+                    | Readonly<{
                         execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>;
                         run?: never;
                     }>
@@ -1183,6 +1206,10 @@ export interface DefinedPlugin<
      * host ABI without making authors inherit its emitted implementation graph.
      */
     readonly activate: (api: PluginApi) => void | PluginCleanup | Promise<void | PluginCleanup>;
+    /** Registers only Account Actions for one exact portable activation export. */
+    readonly activateAccount: (api: PluginAccountApi, target?: Readonly<{
+        artifactId: string; exportName: string;
+    }>) => void;
     /**
      * Frozen qualified Action references derived from the same declaration map
      * used for manifest projection and activation. Their declarations retain
@@ -1224,8 +1251,12 @@ function projectProtocolSchema(value: PluginActionSchema | undefined): PluginJso
 
 type DaemonPluginActionDefinition = Exclude<
     PluginActionDefinition,
-    Readonly<{ execution: Readonly<{ target: 'client' }> }>
+    Readonly<{ execution: Readonly<{ target: 'client' | 'account' }> }>
 > & Readonly<{ run: ActionHandler }>;
+type AccountPluginActionDefinition = PluginActionDefinition & Readonly<{
+    execution: Extract<PluginActionExecutionV2, { target: 'account' }>;
+    run?: PluginAccountActionHandler;
+}>;
 
 const DAEMON_ACTION_EXECUTION: PluginActionExecutionV2 = Object.freeze({ target: 'daemon' });
 
@@ -1241,6 +1272,12 @@ function isDaemonPluginActionDefinition(
 }
 
 function assertRootActionHandlerDeclaration(definition: PluginActionDefinition): void {
+    if (readActionExecution(definition).target === 'account') {
+        if (definition.run !== undefined && typeof definition.run !== 'function') {
+            throw new TypeError('Account Action handlers must be callable');
+        }
+        return;
+    }
     if (readActionExecution(definition).target === 'daemon') {
         if (!isDaemonPluginActionDefinition(definition)) {
             throw new TypeError('Daemon Action declarations require a root handler');
@@ -1252,12 +1289,16 @@ function assertRootActionHandlerDeclaration(definition: PluginActionDefinition):
     }
 }
 
-function normalizeActionHandler(definition: DaemonPluginActionDefinition): ActionHandler {
+function normalizeActionHandler<TContext>(definition: Readonly<{
+    inputSchema?: PluginActionSchema;
+    resultSchema?: PluginActionSchema;
+    run: (input: JsonValue, context: TContext) => JsonValue | void | Promise<JsonValue | void>;
+}>): (input: JsonValue, context: TContext) => JsonValue | void | Promise<JsonValue | void> {
     const inputSchema = readProtocolComposableSchema<JsonValue, JsonValue>(definition.inputSchema);
     const resultSchema = readProtocolComposableSchema<JsonValue, JsonValue>(definition.resultSchema);
     if (inputSchema === undefined && resultSchema === undefined) return definition.run;
     const authorHandler = definition.run;
-    let handler: ActionHandler = (input, context) => authorHandler(input, context);
+    let handler = (input: JsonValue, context: TContext) => authorHandler(input, context);
     if (resultSchema !== undefined) {
         handler = attachPluginActionResultParser(handler, resultSchema);
     }
@@ -1869,7 +1910,7 @@ const ACTIONS_ADAPTER: DefinePluginFamilyAdapter = Object.freeze({
     activate(input, api) {
         const definitions = input.actions as Readonly<Record<string, PluginActionDefinition>> | undefined;
         for (const [localId, definition] of Object.entries(definitions ?? {})) {
-            if (readActionExecution(definition).target === 'client') continue;
+            if (readActionExecution(definition).target !== 'daemon') continue;
             if (!isDaemonPluginActionDefinition(definition)) {
                 throw new TypeError('Daemon Action declarations require a root handler');
             }
@@ -2981,10 +3022,32 @@ function definePluginImplementation<
         }
         return await capturedInput.setup?.(api);
     };
+    const activateAccount: DefinedPlugin['activateAccount'] = (api, selectedTarget) => {
+        const definitions = authorInput.actions as Readonly<Record<string, PluginActionDefinition>> | undefined;
+        const accountDefinitions = Object.entries(definitions ?? {}).filter(
+            (entry): entry is [string, AccountPluginActionDefinition] => readActionExecution(entry[1]).target === 'account',
+        );
+        const targets = new Map(accountDefinitions.map(([, definition]) => [
+            JSON.stringify([definition.execution.account.artifactId, definition.execution.account.exportName]), definition.execution.account,
+        ]));
+        if (!selectedTarget && targets.size > 1) {
+            throw new TypeError('Multiple Account activation targets require an exact artifactId and exportName');
+        }
+        const target = selectedTarget ?? targets.values().next().value;
+        for (const [localId, definition] of accountDefinitions) {
+            if (definition.execution.account.artifactId !== target?.artifactId
+                || definition.execution.account.exportName !== target.exportName) continue;
+            if (typeof definition.run !== 'function') {
+                throw new TypeError(`Account Action '${localId}' requires its separately declared portable activation handler`);
+            }
+            api.actions.register(localId, normalizeActionHandler({ ...definition, run: definition.run }));
+        }
+    };
 
     return Object.freeze({
         manifest,
         activate,
+        activateAccount,
         actionContracts,
         contributionPoints,
         daemonDatabases,

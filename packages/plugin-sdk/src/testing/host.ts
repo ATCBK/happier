@@ -9,11 +9,12 @@ import type {
     PluginMachineMaterializationRefV1,
     RehydratedPluginContributionPointOperationV1,
 } from '@happier-dev/protocol';
-import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { derivePluginDaemonContributionRegistrationRights, derivePluginContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { formatPluginManifestIngestionDiagnostics } from '@happier-dev/protocol/plugins/manifest/ingest';
 
 import type {
     ActionHandler,
+    PluginAccountActionHandler,
     AdmittedTargetedOperationExecutionHandle,
     ActionsService,
     ContributedActionExecutionWithOriginOptions,
@@ -460,6 +461,18 @@ export async function createPluginTestkit(
         target: { realm: 'daemon' },
         rights,
     });
+    const accountTargets = [...new Map(manifest.contributes.actions.flatMap(action => action.execution.target === 'account'
+        ? [[JSON.stringify(action.execution.account), action.execution.account] as const] : [])).values()];
+    const accountRegistrationScopes = options.module.activateAccount ? accountTargets.map(account => ({
+        account,
+        scope: createPluginRegistrationScope({ pluginId: manifest.id, target: { realm: 'account', ...account },
+            rights: derivePluginContributionRegistrationRights(manifest.contributes as Readonly<Record<string, unknown>>)
+                .filter(right => right.target.realm === 'account'
+                    && right.target.artifactId === account.artifactId && right.target.exportName === account.exportName) }),
+    })) : [];
+    async function disposeRegistrationScopes(): Promise<void> {
+        await Promise.all([registrationScope.dispose(), ...accountRegistrationScopes.map(({ scope }) => scope.dispose())]);
+    }
     const invocationLifetime = new AbortController();
     const defaultServicesFixture = options.services ?? {};
     const defaultPresentation = options.presentation ?? createUnavailablePresentation();
@@ -501,6 +514,10 @@ export async function createPluginTestkit(
     const syntheticSourceCustody = Object.freeze({
         kind: 'development' as const,
         registeredRootId: `plugin-testkit:${manifest.id}`,
+    });
+    const syntheticAccountSourceCustody = Object.freeze({
+        kind: 'account_release' as const, pluginId: manifest.id, version: manifest.version,
+        archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
     });
     const defaultServices = actionTargets.size === 0 && fixtureContributorTargets.length === 0
         ? createPluginServices(defaultServicesFixture)
@@ -552,7 +569,19 @@ export async function createPluginTestkit(
         pluginCleanup = typeof activationResult === 'function'
             ? activationResult as PluginCleanup
             : null;
-        registrations = registrationScope.commit();
+        for (const { account, scope } of accountRegistrationScopes) {
+            const accountActivationResult: unknown = await options.module.activateAccount?.(scope.api, account);
+            if (accountActivationResult !== undefined && typeof accountActivationResult !== 'function') {
+                throw new TypeError(`Plugin '${manifest.id}' test Account activate export must return void or one cleanup function`);
+            }
+            if (typeof accountActivationResult === 'function') {
+                const daemonCleanup = pluginCleanup;
+                pluginCleanup = async () => {
+                    try { await accountActivationResult(); } finally { await daemonCleanup?.(); }
+                };
+            }
+        }
+        registrations = Object.freeze([...registrationScope.commit(), ...accountRegistrationScopes.flatMap(({ scope }) => scope.commit())]);
         actionInvocations = new Map(
             registrations.flatMap((registration) => {
                 if (registration.family !== 'actions') return [];
@@ -577,7 +606,7 @@ export async function createPluginTestkit(
         state = 'failed';
         const cleanupErrors: unknown[] = [];
         try {
-            await registrationScope.dispose();
+            await disposeRegistrationScopes();
         } catch (cleanupError) {
             cleanupErrors.push(cleanupError);
         }
@@ -616,7 +645,7 @@ export async function createPluginTestkit(
         disposalPromise = (async () => {
             const errors: unknown[] = [];
             try {
-                await registrationScope.dispose();
+                await disposeRegistrationScopes();
             } catch (error) {
                 errors.push(error);
             }
@@ -653,9 +682,9 @@ export async function createPluginTestkit(
     function resolvePluginActionCaller(
         source: TestkitActionServiceSource,
     ): PluginActionCaller | null {
-        const executionOrigin = resolveCurrentPluginExecutionOrigin();
-        if (!executionOrigin) return null;
-        const materialization = executionOrigin.materializationRef;
+        const isAccount = actionDefinitions.get(source.localId)?.execution.target === 'account';
+        const executionOrigin = isAccount ? null : resolveCurrentPluginExecutionOrigin();
+        if (!isAccount && !executionOrigin) return null;
         const originSurface = source.surface === 'plugin'
             && source.caller?.kind === 'plugin'
             ? source.caller.originSurface
@@ -667,9 +696,8 @@ export async function createPluginTestkit(
             pluginId: manifest.id,
             contribution: Object.freeze({ id: source.localId, qualifiedId: source.qualifiedId }),
             occurrenceId: syntheticOccurrenceId,
-            sourceCustody: syntheticSourceCustody,
-            materialization,
-            executionOrigin,
+            sourceCustody: isAccount ? syntheticAccountSourceCustody : syntheticSourceCustody,
+            ...(executionOrigin === null ? {} : { materialization: executionOrigin.materializationRef, executionOrigin }),
             ...(originSurface === undefined ? {} : { originSurface }),
         });
     }
@@ -683,10 +711,12 @@ export async function createPluginTestkit(
 
         const currentMaterialization = currentCaller.materialization;
         const callerMaterialization = caller.materialization;
-        return currentMaterialization !== undefined
+        return currentCaller.occurrenceId === caller.occurrenceId
+            && (actionDefinitions.get(source.localId)?.execution.target === 'account'
+                ? currentMaterialization === undefined && callerMaterialization === undefined
+                : currentMaterialization !== undefined
             && callerMaterialization !== undefined
-            && arePluginMachineMaterializationRefsEqual(currentMaterialization, callerMaterialization)
-            && currentCaller.occurrenceId === caller.occurrenceId;
+            && arePluginMachineMaterializationRefsEqual(currentMaterialization, callerMaterialization));
     }
 
     function throwIfContributedActionCallerInactive(
@@ -1212,28 +1242,45 @@ export async function createPluginTestkit(
         const result = await invocation.invoke(invocationOptions.input, {
             ...(invocationOptions.signal ? { signal: invocationOptions.signal } : {}),
             handler: async ({ input, qualifiedId, signal }) => {
-                const context = Object.freeze({
+                const invocationServices = createInvocationServices(invocationOptions.services, {
+                    localId: invocationOptions.localId, qualifiedId, surface: invocationOptions.surface,
+                    ...(invocationOptions.caller === undefined ? {} : { caller: invocationOptions.caller }),
+                    ...(invocationOptions.sessionId === undefined ? {} : { sessionId: invocationOptions.sessionId }),
+                    signal,
+                });
+                const commonContext = {
                     plugin: Object.freeze({ id: manifest.id, version: manifest.version }),
                     contribution: Object.freeze({ id: invocationOptions.localId, qualifiedId }),
                     surface: invocationOptions.surface,
-                    invocationId: globalThis.crypto.randomUUID(),
                     invokedAtMs: Date.now(),
                     ...(invocationOptions.caller === undefined ? {} : { caller: invocationOptions.caller }),
+                    signal,
+                };
+                if (definition?.execution.target === 'account') {
+                    // The test host supplies only the portable public capability
+                    // set. Machine services cannot accidentally make this test pass.
+                    const accountHandler = handler as unknown as PluginAccountActionHandler;
+                    return await accountHandler(input, Object.freeze({ ...commonContext, services: Object.freeze({
+                        storage: Object.freeze({ get account() {
+                            const account = invocationServices.storage.account;
+                            if (!account) throw unavailableBoundaryError('plugin_test_service_unavailable', 'Account storage fixture is unavailable');
+                            return account;
+                        } }),
+                        actions: Object.freeze({
+                            get execute() { return invocationServices.actions.execute.bind(invocationServices.actions); },
+                            get executeAdmittedTargetedOperation() { return invocationServices.actions.executeAdmittedTargetedOperation.bind(invocationServices.actions); },
+                        }),
+                        targetedContributions: invocationServices.targetedContributions,
+                    }) }));
+                }
+                const context = Object.freeze({
+                    ...commonContext,
+                    invocationId: globalThis.crypto.randomUUID(),
                     ...(invocationOptions.sessionId === undefined
                         ? {}
                         : { session: Object.freeze({ id: invocationOptions.sessionId }) }),
                     ...(messageAction === undefined ? {} : { messageAction }),
-                    signal,
-                    services: createInvocationServices(invocationOptions.services, {
-                        localId: invocationOptions.localId,
-                        qualifiedId,
-                        surface: invocationOptions.surface,
-                        ...(invocationOptions.caller === undefined ? {} : { caller: invocationOptions.caller }),
-                        ...(invocationOptions.sessionId === undefined
-                            ? {}
-                            : { sessionId: invocationOptions.sessionId }),
-                        signal,
-                    }),
+                    services: invocationServices,
                     ui: invocationOptions.presentation ?? defaultPresentation,
                 });
                 return await handler(input, context);
@@ -1296,8 +1343,11 @@ export async function createPluginTestkit(
             const materialization = PluginMachineMaterializationRefV1Schema.safeParse(
                 targetInvocation.caller.materialization,
             );
-            if (!materialization.success
-                || materialization.data.pluginId !== targetInvocation.caller.pluginId) {
+            const accountCaller = targetInvocation.caller.sourceCustody.kind === 'account_release'
+                || targetInvocation.caller.sourceCustody.kind === 'bundled_first_party';
+            if ((targetInvocation.caller.materialization === undefined && !accountCaller)
+                || (targetInvocation.caller.materialization !== undefined && (!materialization.success
+                    || materialization.data.pluginId !== targetInvocation.caller.pluginId))) {
                 throw createPluginActionHandlerNotStartedError({
                     code: 'plugin_action_caller_unavailable',
                     message: 'Plugin contributed Action calls require current host-stamped caller provenance',
@@ -1307,12 +1357,20 @@ export async function createPluginTestkit(
                 || targetInvocation.expectedExecutionOrigin !== undefined
                 || targetInvocation.expectedExecutionRouting !== undefined;
             const beforeExecutionOrigin = requiresExecutionOrigin
+                && actionDefinitions.get(targetInvocation.localId)?.execution.target === 'daemon'
                 ? resolveCurrentPluginExecutionOrigin()
                 : null;
             if (requiresExecutionOrigin && !beforeExecutionOrigin) {
                 throw createPluginActionHandlerNotStartedError({
                     code: 'plugin_action_execution_origin_unavailable',
                     message: 'Current target execution origin is unavailable',
+                });
+            }
+            if (actionDefinitions.get(targetInvocation.localId)?.execution.target === 'daemon'
+                && resolveCurrentPluginMaterializationRef() === null) {
+                throw createPluginActionHandlerNotStartedError({
+                    code: 'plugin_action_machine_required',
+                    message: 'This source Action requires an execution Machine',
                 });
             }
             if (beforeExecutionOrigin !== null

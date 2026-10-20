@@ -1,0 +1,9 @@
+{
+  "name": "@acme/account-actions",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./happier-plugin-ui/account-runtime": "./src/index.ts"
+  }
+}

@@ -143,6 +143,17 @@ const bundleCases = [
         source: 'export { PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1 } from ENTRY;',
     },
     {
+        name: 'portable targeted Action admission',
+        entry: resolve(import.meta.dirname, './host/registration/index.public.ts'),
+        source: `export {
+          createManifestTargetedContributionsService,
+          requireAdmittedTargetedOperationExecutionBinding,
+          resolveAdmittedTargetedOperationInput,
+          validateTargetedOperationInput,
+          validateTargetedOperationResult,
+        } from ENTRY;`,
+    },
+    {
         name: 'Declarative document content-type projection',
         entry: resolve(import.meta.dirname, './ui/declarativeDocument.ts'),
         source: 'export { PLUGIN_DECLARATIVE_DOCUMENT_CONTENT_TYPE_V1 } from ENTRY;',

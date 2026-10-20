@@ -4,6 +4,7 @@ import type { ComposerAttachmentRuntimeRegistrationFieldV1 } from '@happier-dev/
 import type {
     ActionHandler,
     PluginClientActionHandler,
+    PluginAccountActionHandler,
 } from '../../actions/service.js';
 import type {
     AgentExternalSessionObservationContribution,
@@ -13,6 +14,7 @@ import type {
     HookHandler,
     PluginApi,
     PluginClientApi,
+    PluginAccountApi,
     PluginMcpDiscoveryHandler,
     PluginMcpServerRuntime,
     PluginNotificationSender,
@@ -103,6 +105,7 @@ export type PluginRegistrationRight = Readonly<{
     localId: string;
     target:
         | Readonly<{ realm: 'daemon' }>
+        | Readonly<{ realm: 'account'; artifactId: string; exportName: string }>
         | Readonly<{
             realm: 'client';
             artifactId: string;
@@ -126,6 +129,7 @@ export type PluginRegistrationRight = Readonly<{
 
 export type PluginRegistrationScopeTarget =
     | Readonly<{ realm: 'daemon' }>
+    | Readonly<{ realm: 'account'; artifactId: string; exportName: string }>
     | Readonly<{
         realm: 'client';
         artifactId: string;
@@ -184,7 +188,7 @@ type PluginRegistrationScopeParams = Readonly<{
     cleanupTimeoutMs?: number;
 }>;
 
-type PluginRegistrationScope<TApi extends PluginApi | PluginClientApi> = Readonly<{
+type PluginRegistrationScope<TApi extends PluginApi | PluginClientApi | PluginAccountApi> = Readonly<{
     api: TApi;
     commit(): readonly PluginRuntimeRegistration[];
     registrations(): readonly PluginRuntimeRegistration[];
@@ -1704,6 +1708,9 @@ function connectedAccountRegistrationCorrespondenceError(
  * install a plugin or publish daemon currentness.
  */
 export function createPluginRegistrationScope(
+    params: PluginRegistrationScopeParams & Readonly<{ target: Extract<PluginRegistrationScopeTarget, { realm: 'account' }> }>,
+): PluginRegistrationScope<PluginAccountApi>;
+export function createPluginRegistrationScope(
     params: PluginRegistrationScopeParams & Readonly<{ target: PluginClientRegistrationScopeTarget }>,
 ): PluginRegistrationScope<PluginClientApi>;
 export function createPluginRegistrationScope(
@@ -1711,7 +1718,7 @@ export function createPluginRegistrationScope(
 ): PluginRegistrationScope<PluginApi>;
 export function createPluginRegistrationScope(
     params: PluginRegistrationScopeParams,
-): PluginRegistrationScope<PluginApi | PluginClientApi> {
+): PluginRegistrationScope<PluginApi | PluginClientApi | PluginAccountApi> {
     const rightsByKey = new Map<string, PluginRegistrationRight>();
     for (const right of params.rights) {
         if (!Object.values(REGISTRATION_FAMILY).includes(right.family as never)) {
@@ -1722,6 +1729,10 @@ export function createPluginRegistrationScope(
         }
         const targetMatches = params.target.realm === 'daemon'
             ? right.target.realm === 'daemon'
+            : params.target.realm === 'account'
+                ? right.target.realm === 'account'
+                    && right.target.artifactId === params.target.artifactId
+                    && right.target.exportName === params.target.exportName
             : right.target.realm === 'client'
                 && right.target.artifactId === params.target.artifactId
                 && right.target.exportName === params.target.exportName
@@ -1739,7 +1750,7 @@ export function createPluginRegistrationScope(
             ...right,
             target: right.target.realm === 'daemon'
                 ? Object.freeze({ realm: 'daemon' as const })
-                : Object.freeze({
+                : right.target.realm === 'account' ? Object.freeze({ ...right.target }) : Object.freeze({
                     ...right.target,
                     platforms: Object.freeze([...right.target.platforms]),
                 }),
@@ -2012,6 +2023,13 @@ export function createPluginRegistrationScope(
             return register(REGISTRATION_FAMILY.actions, id, handler);
         },
     });
+    const accountActions: PluginAccountApi['actions'] = Object.freeze({
+        register<I extends JsonValue = JsonValue, O extends JsonValue | void = JsonValue | void>(
+            id: string, handler: PluginAccountActionHandler<I, O>,
+        ) {
+            return register(REGISTRATION_FAMILY.actions, id, handler);
+        },
+    });
     const hooks: PluginApi['hooks'] = Object.freeze({
         register(id, handler) { return register(REGISTRATION_FAMILY.hooks, id, handler); },
     });
@@ -2201,7 +2219,9 @@ export function createPluginRegistrationScope(
         dragSources: Object.freeze({ register: (id: string, runtime: PluginDragSourceRuntime) => register(REGISTRATION_FAMILY.dragSources, id, runtime) }),
         dropTargets: Object.freeze({ register: (id: string, runtime: PluginDropTargetRuntime) => register(REGISTRATION_FAMILY.dropTargets, id, runtime) }),
     });
-    const api: PluginApi | PluginClientApi = params.target.realm === 'client'
+    const accountApi: PluginAccountApi = Object.freeze({ actions: accountActions });
+    const api: PluginApi | PluginClientApi | PluginAccountApi = params.target.realm === 'account'
+        ? accountApi : params.target.realm === 'client'
         ? clientApi
         : daemonApi;
 

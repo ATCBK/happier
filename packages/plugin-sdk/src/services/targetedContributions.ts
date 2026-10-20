@@ -1,4 +1,4 @@
-/** @moduleRealm daemon */
+/** @moduleRealm any */
 import type { Disposable, PluginCancellationOptions } from '../lifecycle.js';
 import type {
     PluginTargetedContributionSelectionV1,

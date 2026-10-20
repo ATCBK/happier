@@ -62,6 +62,9 @@ function discoverReferences(manifest: UnknownRecord) {
     const client = asRecord(execution?.client);
     if (execution?.target === 'client')
       addReference(references, client?.artifactId, client?.exportName);
+    const account = asRecord(execution?.account);
+    if (execution?.target === 'account')
+      addReference(references, account?.artifactId, account?.exportName);
   }
   for (const provider of asRecords(contributes?.voiceProviders)) {
     if (provider.kind !== 'conversation') continue;

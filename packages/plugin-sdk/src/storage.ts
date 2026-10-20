@@ -48,6 +48,7 @@ export interface StorageScopeService extends StorageTransaction {
  * A retained Account-KV identity. A deleted entry is intentionally visible so
  * an author can use its version to revive that exact key without making stale
  * `expectedVersion: 'absent'` writes able to resurrect it.
+ * @realm any
  */
 export type AccountKvEntry<TValue extends JsonValue = JsonValue> =
     | Readonly<{
@@ -59,10 +60,12 @@ export type AccountKvEntry<TValue extends JsonValue = JsonValue> =
         deleted: true;
     }>;
 
+/** @realm any */
 export type AccountKvListItem = Readonly<{
     key: string;
 }> & AccountKvEntry;
 
+/** @realm any */
 export interface AccountKvTransaction {
     get<TValue extends JsonValue = JsonValue>(
         key: string,
@@ -83,6 +86,7 @@ export interface AccountKvTransaction {
  * Account KV is distinct from generic daemon/session storage: it exposes
  * author-visible per-key CAS while the host retains one opaque Account-row
  * CAS internally for atomic persistence.
+ * @realm any
  */
 export interface AccountKvService extends AccountKvTransaction {
     list(options?: Readonly<{
@@ -103,6 +107,7 @@ export interface AccountKvService extends AccountKvTransaction {
 /**
  * Account data is authenticated and Account-mode bound by the host. It is not
  * a Settings facade and never falls back to daemon-local storage.
+ * @realm any
  */
 export interface PluginAccountStorageScope {
     readonly kv: AccountKvService;
@@ -114,6 +119,7 @@ export interface PluginAccountStorageScope {
 /**
  * The context shape `requireAccountStorage` reads: any plugin value carrying
  * the services bag, which is what every Action handler and runtime already has.
+ * @realm any
  */
 export type PluginAccountStorageConsumerContext = Readonly<{
     services: Readonly<{
@@ -133,6 +139,7 @@ export type PluginAccountStorageConsumerContext = Readonly<{
  * it; the one thing that ever differed between them was the error identity,
  * which is why that stays the caller's rather than being flattened into a
  * single shared code.
+ * @realm any
  */
 export function requireAccountStorage(
     context: PluginAccountStorageConsumerContext,

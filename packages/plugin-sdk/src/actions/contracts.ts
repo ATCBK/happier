@@ -10,6 +10,9 @@ import type { PluginInvocationContext } from '../invocation.js';
 import type { PluginEphemeralSharedScope } from '../ephemeralSharedScope.js';
 import type { PluginUiHostApi } from '../ui/hostApi.js';
 import type { PluginActionContributionV2 } from './actionTypeMap.generated.js';
+import type { ActionsService } from './service.js';
+import type { PluginAccountStorageScope } from '../storage.js';
+import type { TargetedContributionsService } from '../services/targetedContributions.js';
 
 /**
  * A contributed Action's qualified runtime identity plus declaration-only
@@ -60,6 +63,27 @@ export type PluginClientActionContext = Readonly<{
     /** Same bounded host-resolved snapshot as daemon Actions; absent outside a message menu. */
     messageAction?: PluginInvocationContext['messageAction'];
 }>;
+
+/** Portable invocation capabilities; no Machine or native process capability is implied. @realm any */
+export type PluginAccountActionContext = Readonly<{
+    plugin: PluginIdentity;
+    contribution: PluginInvocationContributionIdentity;
+    surface: PluginInvocationContext['surface'];
+    invokedAtMs: number;
+    caller?: PluginInvocationContext['caller'];
+    signal: AbortSignal;
+    services: Readonly<{
+        storage: Readonly<{ account: PluginAccountStorageScope }>;
+        actions: Pick<ActionsService, 'execute' | 'executeAdmittedTargetedOperation'>;
+        targetedContributions: TargetedContributionsService;
+    }>;
+}>;
+
+/** @realm any */
+export type PluginAccountActionHandler<
+    I extends JsonValue = JsonValue,
+    O extends JsonValue | void = JsonValue | void,
+> = (input: I, context: PluginAccountActionContext) => O | Promise<O>;
 
 /** Handler for one daemon-targeted manifest Action contribution. */
 export type ActionHandler<

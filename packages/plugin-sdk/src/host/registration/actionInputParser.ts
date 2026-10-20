@@ -44,10 +44,10 @@ function createPluginActionParser(schema: ProtocolActionInputSchema): PluginActi
 }
 
 /** Installs definePlugin's executable input semantics on its fresh handler wrapper. */
-export function attachPluginActionInputParser(
-    handler: ActionHandler,
+export function attachPluginActionInputParser<THandler extends (...args: never[]) => unknown>(
+    handler: THandler,
     schema: ProtocolActionInputSchema,
-): ActionHandler {
+): THandler {
     Object.defineProperty(handler, ACTION_INPUT_PARSER_PROPERTY, {
         value: createPluginActionParser(schema),
         configurable: false,
@@ -58,10 +58,10 @@ export function attachPluginActionInputParser(
 }
 
 /** Installs definePlugin's executable result semantics on its fresh handler wrapper. */
-export function attachPluginActionResultParser(
-    handler: ActionHandler,
+export function attachPluginActionResultParser<THandler extends (...args: never[]) => unknown>(
+    handler: THandler,
     schema: ProtocolActionInputSchema,
-): ActionHandler {
+): THandler {
     Object.defineProperty(handler, ACTION_RESULT_PARSER_PROPERTY, {
         value: createPluginActionParser(schema),
         configurable: false,
