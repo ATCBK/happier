@@ -22,7 +22,7 @@ import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServe
 import { resolveDisplayIdentityForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { storage } from '@/sync/domains/state/storage';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
-import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import type { LazyActionAccountContext } from './actionAccountContext';
 
 /** Status stays usable without a running Agent; detail reads are explicit and use the existing inventory. */
@@ -33,9 +33,16 @@ export function createUiSessionStatusGet(account: LazyActionAccountContext | nul
     account.assertCurrent();
     signal?.throwIfAborted();
     if (serverId && serverId !== account.serverId) return { ok: false, code: 'server_scope_mismatch' };
-    const { session } = await runWithServerRequestAuthorityForServerAccountScope({ scope: account.accountLifetime.scope,
-      activeRequest: account.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId,
-        isCurrent: account.accountLifetime.isCurrent }));
+    let session: Awaited<ReturnType<typeof readSessionSnapshotForAuthority>>['session'];
+    try {
+      ({ session } = await runWithServerRequestAuthorityForServerAccountScope({ scope: account.accountLifetime.scope,
+        activeRequest: account.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId,
+          isCurrent: account.accountLifetime.isCurrent })));
+    } catch (error) {
+      // The Home answered that this Session does not exist: a definite answer, unlike an unreachable Home.
+      if (error instanceof SessionSnapshotReadError && error.httpStatus === 404) return { ok: false, code: 'session_not_found' };
+      throw error;
+    }
     account.assertCurrent();
     signal?.throwIfAborted();
     const access = session.access;

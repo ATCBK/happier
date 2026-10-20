@@ -167,6 +167,79 @@ describe('session.list execution', () => {
     ] });
   });
 
+  describe('one picked Session (point check)', () => {
+    const home = 'home-current';
+    const context = { surface: 'ui', authority: 'present_user', serverId: home } as const;
+    const address = (sessionId: string) => ({ serverId: home, sessionId });
+    const awareness = (overrides: Partial<SessionAwarenessProjectionV1> = {}): SessionAwarenessProjectionV1 => ({
+      v: 1, sessionId: 'B', title: 'Bound B', lifecycle: 'active', runtime: 'idle', freshness: 'live',
+      operational: { primary: 'none', reasons: [] }, encryption: 'plain', availability: 'complete', ...overrides,
+    });
+    const summary = (id: string) => ({ id, createdAt: 1, updatedAt: 1, active: true, activeAt: 1, encryptionMode: 'plain' as const, encryption: null });
+    const setup = (status: ActionExecutorDeps['sessionStatusGet']) => {
+      // Transport boundary only: how many Session pages and single reads the Home is asked for.
+      const pages: unknown[] = [];
+      const reads: string[] = [];
+      const executor = createExecutor({
+        sessionList: async request => { pages.push(request); return buildSessionAwarenessListResultV1({
+          sessions: [awareness({ sessionId: 'A', title: 'Listed A' }), awareness()],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }); },
+        sessionStatusGet: async request => { reads.push(request.sessionId); return await status!(request); },
+        widgetAccountScope: () => ({ serverId: home, accountId: 'viewer' }),
+      });
+      const consumer = (sessionId: string) => ({ kind: 'widget' as const,
+        surface: { serverId: home, accountId: 'viewer', owner: { kind: 'home' as const } },
+        definition: { kind: 'builtin' as const, id: 'session_summary' }, selectedSession: address(sessionId) });
+      const resolve = (sessionId: string) => executor.execute('action.options.resolve', {
+        consumer: consumer(sessionId), fieldPath: 'session', values: [address(sessionId)] }, context);
+      return { pages, reads, resolve };
+    };
+
+    it('checks the picked Session with one direct read and never pages the Session list', async () => {
+      const { pages, reads, resolve } = setup(async () => ({ ok: true, session: summary('B'), awareness: awareness() }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [
+        { value: address('B'), label: 'Bound B', description: 'Recent' },
+      ] } });
+      expect(reads).toEqual(['B']);
+      expect(pages).toHaveLength(0);
+    });
+
+    it('still marks a locked Session unavailable, as the inventory does', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: true, session: summary('B'),
+        awareness: awareness({ title: undefined, encryption: 'locked', availability: 'locked' }) }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [
+        { value: address('B'), label: 'B', disabled: true },
+      ] } });
+      expect(pages).toHaveLength(0);
+    });
+
+    it('offers nothing for a Session the Home reports gone', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: false, code: 'session_not_found' }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+      expect(pages).toHaveLength(0);
+    });
+
+    it('falls back to the inventory when the direct read cannot answer', async () => {
+      const { pages, resolve } = setup(async () => ({ ok: false, code: 'server_unreachable' }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [{ value: address('B') }] } });
+      expect(pages).toHaveLength(1);
+    });
+
+    it('does not accept a different Session that the direct read resolved by prefix', async () => {
+      const { resolve } = setup(async () => ({ ok: true, session: summary('Bravo'), awareness: awareness({ sessionId: 'Bravo' }) }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [{ value: address('B') }] } });
+    });
+  });
+
+  it('narrows any other options source to the requested values through the same inventory read', async () => {
+    const machinesList = vi.fn(async () => ({ items: [{ id: 'm1', label: 'One' }, { id: 'm2', label: 'Two' }] }));
+    const executor = createExecutor({ machinesList });
+    await expect(executor.execute('action.options.resolve', { optionsSourceId: 'sessions.spawn.machines.available',
+      values: ['m2'] }, { surface: 'ui', authority: 'present_user', serverId: 'home-current' }))
+      .resolves.toMatchObject({ ok: true, result: { options: [{ value: 'm2' }] } });
+    expect(machinesList).toHaveBeenCalledTimes(1);
+  });
+
   it('does not return partial Session options when current read authority is refused on continuation', async () => {
     const executor = createExecutor({ sessionList: async ({ query }) => query?.cursor
       ? { ok: false, errorCode: 'permission_denied', error: 'permission_denied' }

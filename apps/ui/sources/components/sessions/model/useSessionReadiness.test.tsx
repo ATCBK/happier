@@ -219,3 +219,14 @@ it('discards a late exact-Session response after the readiness detail closes', a
     expect(hook.getCurrent().repair).toBeNull();
     expect(network.requests).toEqual([]);
 });
+
+it('answers a Session the Home reports missing as not found, so a picked Session needs no inventory to be refused', async () => {
+    const home = await network.addHome('https://status-missing.test', 'alice');
+    network.resetRequests();
+    network.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/gone'
+        ? Response.json({ error: 'Session not found' }, { status: 404 }) : null);
+    const account = await captureLazyActionAccountContext(home.id);
+    try {
+        expect(await createUiSessionStatusGet(account)({ sessionId: 'gone' })).toEqual({ ok: false, code: 'session_not_found' });
+    } finally { account.dispose(); }
+});
