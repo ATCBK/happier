@@ -1184,9 +1184,9 @@ export function registerSessionClientRuntimeHandlers(
                     ...(opts?.meta ? { meta: opts.meta } : {}),
                     provenance: {
                         kind: 'non_dependent',
-                        source: 'sidechainId' in normalizedBody && typeof normalizedBody.sidechainId === 'string'
-                            ? 'sidechain'
-                            : 'external',
+                        // The final Run result belongs on its parent's tool call,
+                        // but retains the same independent Run output custody.
+                        source: 'sidechain',
                     },
                 },
             );

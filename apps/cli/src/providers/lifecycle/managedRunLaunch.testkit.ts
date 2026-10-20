@@ -20,8 +20,10 @@ import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGate
  * supplied by each test; no authorization, registry or materializer is mocked. */
 export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
   catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
+  includeBundledDeclarations?: boolean;
   holdResponseForInput?: string;
   upstreamUrl?: string;
+  readUpstreamAnswer?: boolean;
   experimental?: boolean;
   connectedAccounts?: readonly ConnectedAccountPurposeDeclarationV1[];
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
@@ -30,6 +32,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   const agentId = `${pluginId}/agent`;
   const agentTargetKey = `agent:${agentId}`;
   const gateway = input.physicalGateway ? createSharedGatewayRegistryTestkit({ directory,
+    ...(input.includeBundledDeclarations ? { includeBundledDeclarations: true } : {}),
     ...(input.happyHomeDir ? { happyHomeDir: input.happyHomeDir } : {}),
     ...(input.catalogModels ? { catalogModels: input.catalogModels } : {}),
     ...(input.holdResponseForInput ? { holdResponseForInput: input.holdResponseForInput } : {}),
@@ -98,13 +101,16 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
       headers: { Authorization: 'Bearer ' + request.launchEnvironment.values.RUN_PROVIDER_TOKEN, 'content-type': 'application/json' },
       body: JSON.stringify({ model: request.providerBinding.model.id, input: input.text }), signal });
     if (!response.ok) throw new Error('Managed Run endpoint refused: ' + response.status);
-    await response.text();
+    const body = await response.text();
+    ${input.readUpstreamAnswer ? `const answer = JSON.parse(body);
+    if (!answer || typeof answer !== 'object' || typeof answer.output_text !== 'string') throw new Error('Missing controlled upstream answer');
+    return answer.output_text;` : ''}
   }
   export function fixtureAgentRuntimeFactory() { return { sessions: { executionRunContextV1: { async open(request, context) {
     if (request.kind !== 'create') throw new Error('Fixture supports create only');
     return createFiniteExecutionRunHostRuntime({ request, signal: context.signal,
-      async execute({ signal, emit }) { await requestEndpoint(request, request.input, signal);
-        emit({ kind: 'output-delta', channel: 'assistant', text: 'Managed Run completed' });
+      async execute({ signal, emit }) { const answer = await requestEndpoint(request, request.input, signal);
+        emit({ kind: 'output-delta', channel: 'assistant', text: answer ?? 'Managed Run completed' });
         return { status: 'complete' }; },
       mapFailure() { return { code: 'fixture_endpoint_failed', message: 'Fixture endpoint refused' }; },
       unsupportedSendDiagnostic: { code: 'fixture_finite_run', message: 'Fixture Run is finite' }
@@ -119,8 +125,8 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
         const turnId = input.delivery.turnId;
         emit({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
         emit({ kind: 'turn-start', turnId, startedBy: 'host' });
-        await requestEndpoint(request, input.input, options?.signal ? AbortSignal.any([context.signal, options.signal]) : context.signal);
-        emit({ kind: 'message-delta', turnId, channel: 'assistant', text: 'Managed Run completed' });
+        const answer = await requestEndpoint(request, input.input, options?.signal ? AbortSignal.any([context.signal, options.signal]) : context.signal);
+        emit({ kind: 'message-delta', turnId, channel: 'assistant', text: answer ?? 'Managed Run completed' });
         emit({ kind: 'turn-complete', turnId });
         return { status: 'admitted' };
       },
@@ -153,7 +159,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   } });
   const mergedContributes = createMergedContributionRegistry(projectLoadedPluginContributes({
     loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'external', existingAgentIds: new Set(),
-  }), {});
+  }), input.includeBundledDeclarations ? undefined : {});
   if (!mergedContributes.providersByContributionKey) throw new Error('Missing committed Provider projection');
   const contributes = { ...mergedContributes, providersByContributionKey: mergedContributes.providersByContributionKey };
   const generationAuthority = await readCurrentCommittedPluginGenerations(resolvePluginStorePaths({ happyHomeDir }), {});

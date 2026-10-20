@@ -12342,7 +12342,7 @@ describe('runHostSessionRuntime', () => {
               snapshot.observe({ ...assistant, localId: options.localId, seq: observedSeq, source: 'committed' });
               finalAssistantSeq = observedSeq;
             }
-            return { persisted: true as const, delivered: true as const };
+            return { persisted: true as const, delivered: true as const, committedSequence: observedSeq };
           },
         });
         setSessionRuntimeFactory(harness.config, () => ({ operations: runtime, nativeRuntime: runtime }));

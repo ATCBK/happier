@@ -83,6 +83,8 @@ import { recordTrackedRunnerAgentSessionOpenAttestation } from '@/daemon/agentRu
 import { prepareProjectAgentLaunch } from '@/workspaces/projectSetup/projectAgentLaunch';
 import type { HostAgentNativeLaunchPreparation } from '@/plugins/runtime/invocation/services/exec';
 import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
+import { SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 
 // This is a host attribution contract, not Claude codec/process certification.
 // An authored public-SDK Agent supplies the external sessions.open/send behavior;
@@ -98,6 +100,7 @@ type AdmittedSessionRunOptions = Readonly<{
   runReportPolicy?: import('@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1').FollowPolicyV1;
   runReportPreferencesUnavailable?: boolean;
   beforeRunReportPreferencesRead?: () => Promise<void>;
+  beforeTranscriptAck?: () => Promise<void>;
   runtimePluginIds?: readonly string[];
   acpCatalog?(directory: string): ReturnType<typeof AcpCatalogRecordV1Schema.parse>;
   run(fixture: AdmittedSessionRunFixture): Promise<void>;
@@ -259,7 +262,7 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
   socketHome = new SocketIoServer(home.server, { path: '/v1/updates/' });
   socketHome.use((socket, next) => next(socket.handshake.auth.token === token ? undefined : new Error('Unauthorized fixture socket')));
   socketHome.on('connection', socket => {
-    socket.onAny((event: string, ...args: unknown[]) => {
+    socket.onAny(async (event: string, ...args: unknown[]) => {
       if (event === SOCKET_RPC_EVENTS.REGISTER) {
         const registration = args[0];
         if (registration && typeof registration === 'object' && 'method' in registration
@@ -271,6 +274,7 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
       }
       const callback = args.at(-1);
       const answer = activityHome.answer(event, args[0]) ?? transcriptHome.answer(event, args[0]);
+      if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) await options?.beforeTranscriptAck?.();
       if (answer !== null && typeof callback === 'function') callback(answer);
     });
   });
@@ -410,6 +414,11 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
     ...(skillStore ? { skillStore } : {}),
     getChildren: () => tracked, machineId: 'admitted-machine', controlToken,
     agentRuntimeDaemonServices: { dispatch: async (request, context) => {
+      const traceLifecycleOperation = request.operation.kind === 'plugin_services.prepare_v1'
+        || request.operation.kind === 'plugin_services.close_v1'
+        || request.operation.kind === 'execution_run.snapshot.release_v1';
+      if (traceLifecycleOperation) console.error('Admitted Run daemon dispatch started', request.operation.kind);
+      try {
       if (request.operation.kind === 'session.open.attest') {
         const tracked = context.trackedSession;
         const attestation = tracked && await recordTrackedRunnerAgentSessionOpenAttestation({ tracked,
@@ -477,6 +486,16 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
         return { ok: true as const, result: await services.dispatch(serviceRequest) };
       }
       throw new Error(`Unexpected runner operation: ${request.operation.kind}`);
+      } catch (error) {
+        console.error('Admitted Run daemon dispatch failure', {
+          operation: request.operation.kind,
+          name: error instanceof Error ? redactBugReportSensitiveText(error.name) : typeof error,
+          message: error instanceof Error ? redactBugReportSensitiveText(error.message) : 'Non-Error dispatch failure',
+        });
+        throw error;
+      } finally {
+        if (traceLifecycleOperation) console.error('Admitted Run daemon dispatch finished', request.operation.kind);
+      }
     } },
     stopSession: async () => ({ status: 'not_found' as const }),
     spawnSession: async () => { throw new Error('Unexpected child spawn'); },

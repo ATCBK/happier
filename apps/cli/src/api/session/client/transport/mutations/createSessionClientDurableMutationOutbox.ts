@@ -2742,7 +2742,9 @@ function createGenericSessionClientDurableMutationOutboxInstance(
         },
         async enqueueTranscriptMessage(mutation, opts) {
             const { whenCommitted, ...result } = await enqueue(createQueuedTranscriptMessage(mutation), {
-                awaitFlush: true,
+                // Independent child output must not retain its native runtime behind
+                // a Home ACK. The journal still owns delivery after local custody.
+                awaitFlush: mutation.provenance?.source !== 'sidechain' || opts?.admission?.requireDelivery === true,
                 ...(opts?.admission === undefined ? {} : { admission: opts.admission }),
                 ...(opts?.observeCommitSignal === undefined ? {} : { observeCommitSignal: opts.observeCommitSignal }),
             });

@@ -908,7 +908,7 @@ describe('ApiSessionClient pending queue materialization', () => {
                 active: true, activeAt: 1, thinking: false, thinkingAt: null, latestTurnStatus: null,
                 latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
                 meaningfulActivityAt: null, agentStateVersion: 0 },
-            messages: [{ seq: 1, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v:
+            messages: [{ seq: 1, localId: 'original', createdAt: 1, messageRole: 'agent', content: { t: 'plain', v:
                 buildAcpAgentMessageEnvelope({ provider: 'codex', body: { type: 'message', message: 'RETAINED_FOLLOW_ORIGINAL' } }) } }],
             hasMore: false });
         vi.spyOn(axios, 'post').mockImplementation(async url => {

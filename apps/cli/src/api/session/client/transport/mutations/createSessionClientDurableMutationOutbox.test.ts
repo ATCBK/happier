@@ -722,6 +722,50 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
         }
     });
 
+    it.each([false, true])('retains sidechain output independently of Home acknowledgement unless delivery is required (%s)', async requireDelivery => {
+        persistenceMocks.save.mockResolvedValue(undefined);
+        const started = createDeferred();
+        const acknowledgment = createDeferred();
+        const socket = createConnectedSocket();
+        const acknowledge = socket.emitWithAck;
+        socket.emitWithAck = async (event, payload) => {
+            if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1) {
+                started.resolve();
+                await acknowledgment.promise;
+            }
+            return await acknowledge(event, payload);
+        };
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({
+            token: 'token', sessionId: 'session-1', flushOnReady: false,
+            getSocket: () => socket, requestReconnect: () => undefined,
+        });
+        const mutation: TranscriptMessageAppendMutationV1 = {
+            ...createTranscriptMutation({ localId: 'child-result', sidechainId: null, text: 'Completed child' }),
+            provenance: { kind: 'non_dependent', source: 'sidechain' },
+        };
+        await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        let settled = false;
+        const pending = outbox.enqueueTranscriptMessage(mutation, requireDelivery
+            ? { admission: { signal: new AbortController().signal, requireDelivery: true } }
+            : undefined).then(result => { settled = true; return result; });
+        try {
+            await started.promise;
+            await drainAsyncWork();
+            expect(settled).toBe(!requireDelivery);
+            expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual(expect.arrayContaining([
+                expect.objectContaining({ payload: expect.objectContaining({ localId: mutation.localId }) }),
+            ]));
+            acknowledgment.resolve();
+            await expect(pending).resolves.toMatchObject({ persisted: true, localId: mutation.localId });
+            await outbox.flush('flush');
+            expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual([]);
+        } finally {
+            acknowledgment.resolve();
+            await pending;
+            await outbox.close();
+        }
+    });
+
     it.each(['abort', 'close'] as const)('settles a required transcript delivery wait on %s without losing durable custody', async (cancellation) => {
         persistenceMocks.save.mockResolvedValue(undefined);
         const socket = createConnectedSocket();

@@ -119,6 +119,63 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
     } });
   });
 
+  it('releases a terminal child with an unaccepted parent report while another child stays active', async () => {
+    await withAdmittedSessionRun({ directOwner: true, run: async fixture => {
+      const completed = createNativeSessionBoundary();
+      const sibling = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementationOnce(completed.open).mockImplementationOnce(sibling.open);
+      const first = await fixture.start({ notifyParentOnCompletion: true, runReportPolicy: { preset: 'everything' } });
+      await completed.waitForInputs(1);
+      const second = await fixture.start();
+      await sibling.waitForInputs(1);
+
+      completed.complete();
+      await wait(fixture, first.runId);
+      await vi.waitFor(() => expect(completed.isDisposed()).toBe(true));
+      const signal = new AbortController().signal;
+      const pending = await fixture.bridge!.prepareWorkerUpdates(fixture.session.sessionId, { signal });
+      expect(pending.map(item => item.update.workerId)).toContain(first.runId);
+      expect(sibling.isDisposed()).toBe(false);
+      expect(await readRun(fixture, second.runId)).toMatchObject({ status: 'running', turnInFlight: true });
+
+      sibling.complete();
+      await wait(fixture, second.runId);
+      await vi.waitFor(() => expect(sibling.isDisposed()).toBe(true));
+      // Report acceptance has independent custody; native cleanup cannot consume it.
+      expect((await fixture.bridge!.prepareWorkerUpdates(fixture.session.sessionId, { signal }))
+        .map(item => item.update.workerId)).toContain(first.runId);
+    } });
+  });
+
+  it('releases a terminal child while Home holds its final transcript acknowledgement', async () => {
+    let releaseAck!: () => void;
+    const acknowledgement = new Promise<void>(resolve => { releaseAck = resolve; });
+    let isTerminal = async () => false;
+    let ackHeld = false;
+    await withAdmittedSessionRun({ beforeTranscriptAck: async () => {
+      if (!(await isTerminal())) return;
+      ackHeld = true;
+      await acknowledgement;
+    }, run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const started = await fixture.start();
+      await native.waitForInputs(1);
+      isTerminal = async () => (await readRun(fixture, started.runId)).status === 'succeeded';
+      try {
+        native.complete();
+        await vi.waitFor(() => expect(ackHeld).toBe(true));
+        expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'succeeded' });
+        await vi.waitFor(() => expect(native.isDisposed()).toBe(true));
+        await wait(fixture, started.runId);
+      } finally {
+        isTerminal = async () => false;
+        releaseAck();
+        await fixture.session.flushDurableMutationDelivery();
+      }
+    } });
+  });
+
   it('ACKs retained ephemeral inputs before completion, publishes activity, and emits the final tool result only on stop', async () => {
     await withAdmittedSessionRun({ resume: true, directOwner: true, run: async fixture => {
       const native = createNativeSessionBoundary();
@@ -138,6 +195,7 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
       await vi.waitFor(async () => expect(await readRun(fixture, started.runId)).toMatchObject({
         status: 'running', turnInFlight: false, display: { groupId: 'group_1' },
       }));
+      expect(native.isDisposed()).toBe(false);
       expect(finalResults()).toHaveLength(0);
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -163,6 +221,7 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
       expect(await stop(fixture, started.runId)).toMatchObject({ ok: true });
       await wait(fixture, started.runId);
       expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'cancelled' });
+      await vi.waitFor(() => expect(native.isDisposed()).toBe(true));
       await vi.waitFor(() => expect(finalResults()).toHaveLength(1));
       await vi.waitFor(() => expect(fixture.lifecycleEvents).toContainEqual(expect.objectContaining({ eventId: 'executionRun.stopped',
         payload: expect.objectContaining({ runId: started.runId, reason: 'user' }) })));
@@ -197,6 +256,7 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
       await native.waitForInputs(1);
       native.complete(JSON.stringify({ summary: 'first', deliverables: [] }));
       await wait(fixture, started.runId);
+      await vi.waitFor(() => expect(native.isDisposed()).toBe(true));
       expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'succeeded', lifecycle: { v: 1, state: 'recoverable_with_input' } });
       expect(await fixture.bridge!.ensure(started.runId, { resume: true }))
         .toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
@@ -204,8 +264,11 @@ describe('ExecutionRunHostBridge admitted registry integration', () => {
       const resumed = await send(fixture, started.runId, 'Review again.', true);
       expect(resumed, JSON.stringify({ resumed, opens: native.opens.map(open => ({ kind: open.kind, sessionId: open.sessionId })) })).toMatchObject({ ok: true });
       await native.waitForInputs(2);
+      expect(native.opens.at(-1)).toMatchObject({ kind: 'resume', providerSessionId: 'registry-native-session' });
+      expect(native.isDisposed()).toBe(false);
       native.complete(JSON.stringify({ summary: 'resumed', deliverables: [] }));
       await wait(fixture, started.runId);
+      await vi.waitFor(() => expect(native.isDisposed()).toBe(true));
       expect(await readRun(fixture, started.runId)).toMatchObject({ runId: started.runId, status: 'succeeded' });
       expect(native.inputs).toHaveLength(2);
       expect(JSON.stringify(native.inputs[1])).toContain('Review again.');

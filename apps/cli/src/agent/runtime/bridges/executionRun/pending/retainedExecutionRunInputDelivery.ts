@@ -291,6 +291,7 @@ export function createRetainedExecutionRunInputDelivery(
             const meta = {
                 localId,
                 ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
+                ...(input.actionRequestAttributionV1 ? { actionRequestAttributionV1: input.actionRequestAttributionV1 } : {}),
             };
             if (sessionRunContext || profileContext) {
                 contextInitialized = true;
