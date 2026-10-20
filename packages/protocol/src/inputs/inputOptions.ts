@@ -189,7 +189,13 @@ function readDynamicOptionDirectory(
 
 const SESSION_GROUP_LABELS = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
 
+/**
+ * The one rule for which Sessions the picker offers, whether a Session arrives in the inventory scan or in a
+ * point read: archived Sessions are not offered (the scan also asks for `storage: 'active'`), a locked one is
+ * offered as a disabled option, and a gone one never arrives. Returns null when the Session is not offered.
+ */
 function readSessionAwarenessOption(serverId: string, session: SessionAwarenessProjectionV1) {
+  if (session.lifecycle === 'archived') return null;
   const readable = isSessionAwarenessContentReadableV1(session.encryption);
   const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
   const option: InputOption = {
@@ -203,16 +209,15 @@ function readSessionAwarenessOption(serverId: string, session: SessionAwarenessP
 
 /**
  * The `sessions` source's point check: each picked Session is answered by the one-Session status read
- * instead of paging the whole Home. A pick the Home reports gone has no option; any answer the read
- * cannot give (refused grant, unreachable Home, a prefix that resolved another Session) returns null so
- * the inventory scan, which every source keeps as its default, decides instead.
+ * instead of paging the whole Home, then judged by the same rule as the scan. A pick the Home reports gone
+ * has no option; a read that cannot answer is that read's own failure, not a reason to scan.
  */
 async function readSessionOptionsForValues(params: Readonly<{
   executor: Readonly<{ execute: (actionId: ActionId, input: unknown, ctx?: ActionExecutorContext) => Promise<ActionExecuteResult> }>;
   ctx: ActionExecutorContext;
   serverId: string;
   values: readonly JsonValue[];
-}>): Promise<readonly InputOption[] | null> {
+}>): Promise<Extract<ActionExecuteResult, { ok: false }> | readonly InputOption[]> {
   const options: InputOption[] = [];
   for (const value of params.values) {
     const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
@@ -220,15 +225,19 @@ async function readSessionOptionsForValues(params: Readonly<{
     if (!address.success || address.data.serverId !== params.serverId) continue;
     params.ctx.signal?.throwIfAborted();
     const result = await params.executor.execute('session.status.get', { sessionId: address.data.sessionId }, params.ctx);
-    if (!result.ok) return null;
+    if (!result.ok) return result;
     const status = readRecord(result.result);
     if (status.ok === false) {
-      if (status.code === 'session_not_found') continue;
-      return null;
+      const code = typeof status.code === 'string' && status.code ? status.code : 'unavailable';
+      if (code === 'session_not_found') continue;
+      return { ok: false, errorCode: code, error: code };
     }
     const awareness = SessionAwarenessProjectionV1Schema.safeParse(status.awareness);
-    if (!awareness.success || awareness.data.sessionId !== address.data.sessionId) return null;
-    options.push(readSessionAwarenessOption(params.serverId, awareness.data).option);
+    if (!awareness.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    // A host that resolves ids by prefix answers another Session when this exact id does not exist.
+    if (awareness.data.sessionId !== address.data.sessionId) continue;
+    const offered = readSessionAwarenessOption(params.serverId, awareness.data);
+    if (offered) options.push(offered.option);
   }
   return options;
 }
@@ -430,7 +439,7 @@ export async function resolveInputOptions(params: Readonly<{
     const executor = createActionExecutor(deps);
     if (params.values) {
       const direct = await readSessionOptionsForValues({ executor, ctx, serverId: sessionServerId, values: params.values });
-      if (direct) return { ok: true, result: direct };
+      return 'ok' in direct ? direct : { ok: true, result: direct };
     }
     const groups: Record<'needsYou' | 'working' | 'recent', InputOption[]> = { needsYou: [], working: [], recent: [] };
     const consumer = params.consumer;
@@ -461,8 +470,8 @@ export async function resolveInputOptions(params: Readonly<{
             projectSessionIds.add(session.sessionId);
             continue;
           }
-          const { group, option } = readSessionAwarenessOption(sessionServerId, session);
-          groups[group].push(option);
+          const offered = readSessionAwarenessOption(sessionServerId, session);
+          if (offered) groups[offered.group].push(offered.option);
         }
         cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
       } while (cursor);

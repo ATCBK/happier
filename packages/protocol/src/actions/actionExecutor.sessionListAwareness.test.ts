@@ -219,15 +219,28 @@ describe('session.list execution', () => {
       expect(pages).toHaveLength(0);
     });
 
-    it('falls back to the inventory when the direct read cannot answer', async () => {
+    it('reports the direct read failure as it is, without paying the inventory scan', async () => {
       const { pages, resolve } = setup(async () => ({ ok: false, code: 'server_unreachable' }));
-      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [{ value: address('B') }] } });
-      expect(pages).toHaveLength(1);
+      await expect(resolve('B')).resolves.toMatchObject({ ok: false, errorCode: 'server_unreachable' });
+      expect(pages).toHaveLength(0);
     });
 
-    it('does not accept a different Session that the direct read resolved by prefix', async () => {
+    it('treats a Session that the host resolved only by prefix as gone', async () => {
       const { resolve } = setup(async () => ({ ok: true, session: summary('Bravo'), awareness: awareness({ sessionId: 'Bravo' }) }));
-      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [{ value: address('B') }] } });
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+    });
+
+    it('refuses an archived Session exactly as the inventory scan does', async () => {
+      const archived = awareness({ lifecycle: 'archived' });
+      const { pages, resolve } = setup(async () => ({ ok: true, session: summary('B'), awareness: archived }));
+      await expect(resolve('B')).resolves.toMatchObject({ ok: true, result: { options: [] } });
+      expect(pages).toHaveLength(0);
+      // The scan applies the same rule even when a Home returns an archived row in the active listing.
+      const executor = createExecutor({ widgetAccountScope: () => ({ serverId: home, accountId: 'viewer' }),
+        sessionList: async () => buildSessionAwarenessListResultV1({ sessions: [archived, awareness({ sessionId: 'C', title: 'Listed C' })],
+          nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) });
+      await expect(executor.execute('action.options.resolve', { optionsSourceId: 'sessions' }, context))
+        .resolves.toMatchObject({ ok: true, result: { options: [{ value: address('C') }] } });
     });
   });
 
