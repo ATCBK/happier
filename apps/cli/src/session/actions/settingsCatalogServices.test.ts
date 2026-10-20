@@ -9,8 +9,7 @@ import { createVoiceSettingsOwner } from '@happier-dev/protocol/voice/settings/v
 import { createCliSettingsCatalogServices, projectCliProviderStateSharingRiskAgentIdsV1 } from './settingsCatalogServices';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
-import { readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
+import { readProviderStateSharingRiskAgentIdsV1, prepareAgentProviderStateSharingChangeV1, prepareDefaultProviderStateSharingChangeV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
 import { encodeScmDiffSummaryModelOverride, scmDiffSummarySettingBinding, SCM_DIFF_SUMMARY_SETTING_KEYS, type ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
@@ -168,17 +167,53 @@ describe('exact remote Voice Agent catalog admission', () => {
         expect(projectCliProviderStateSharingRiskAgentIdsV1(empty, { activated: true, unavailable: false })).toEqual([]);
         expect(projectCliProviderStateSharingRiskAgentIdsV1(empty, { activated: true, unavailable: true })).toBeNull();
     });
-    it('derives named sharing risks only from genuine current bundled capabilities', () => {
+    it('derives sharing risks from every current Agent declaration', () => {
         const entries = [...readCurrentContributionRegistry().agentDefinitionsById.values()];
         const services = createCliSettingsCatalogServices({});
-        if (entries.some(entry => entry.provenance !== 'first_party' || !isBundledAgentId(entry.id))) {
+        const risks = readProviderStateSharingRiskAgentIdsV1(entries.map(entry => ({ agentId: entry.id,
+            capability: entry.richDefinition?.definition.capabilities.providerStateSharing,
+        })));
+        expect(services.readProviderStateSharingRiskAgentIds()).toEqual(risks);
+        expect(risks).toContain('codex');
+    });
+    it('keeps bundled and default sharing writable beside an admitted external Agent, then refuses retirement', async () => {
+        const admitted = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            plugins: [{ manifest: createPluginManifestV2Fixture({ id: 'acme.sharing-catalog', contributes: {
+                agents: [{ id: 'assistant', title: 'External Agent', primary: 'executionRuns', runtime: { kind: 'custom' },
+                    capabilities: { executionRuns: { open: ['create'], stop: true, checkpoint: false } } }],
+            } }), files: {
+                'daemon.mjs': `export function createAgent() { throw new Error('Sharing settings must not execute an Agent'); }
+                    export function activate(api) { api.agents.register('assistant', createAgent); }`,
+            } }],
+        });
+        const services = createCliSettingsCatalogServices({});
+        try {
+            expect(readCurrentContributionRegistry().agentDefinitionsById.has('acme.sharing-catalog/assistant')).toBe(true);
+            const settings = accountSettingsParse({ connectedServicesProviderStateSharingSettingsV1: {
+                v: 1, defaults: { configMode: 'linked', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+            } }).connectedServicesProviderStateSharingSettingsV1;
+            expect(services.readProviderStateSharingRiskAgentIds()).toContain('codex');
+            for (const prepare of [
+                () => prepareAgentProviderStateSharingChangeV1(settings, { agentId: 'codex', stateMode: 'shared' }, services),
+                () => prepareDefaultProviderStateSharingChangeV1(settings, true, services),
+            ]) {
+                const consent = await prepare();
+                expect(consent).toMatchObject({ status: 'confirmation_required', agentIds: expect.arrayContaining(['codex']) });
+            }
+            const admittedServices = { ...services, confirmProviderStateSharingRiskAgents: async () => true };
+            const agent = await prepareAgentProviderStateSharingChangeV1(settings, { agentId: 'codex', stateMode: 'shared' }, admittedServices);
+            const defaults = await prepareDefaultProviderStateSharingChangeV1(settings, true, admittedServices);
+            expect(agent.status).toBe('prepared');
+            expect(defaults.status).toBe('prepared');
+            if (agent.status !== 'prepared' || defaults.status !== 'prepared') throw new Error('Sharing intent unavailable');
+            expect(agent.mutate(settings)?.byAgentId.codex?.stateMode).toBe('shared');
+            expect(defaults.mutate(settings)?.defaults.stateMode).toBe('shared');
+            await admitted.dispose();
             expect(services.readProviderStateSharingRiskAgentIds()).toBeNull();
-        } else {
-            const risks = readProviderStateSharingRiskAgentIdsV1(entries.map(entry => ({ agentId: entry.id,
-                capability: isBundledAgentId(entry.id) ? getAgentCore(entry.id).connectedServices?.providerStateSharing : null,
-            })));
-            expect(services.readProviderStateSharingRiskAgentIds()).toEqual(risks);
-            expect(risks).toContain('codex');
+            expect(agent.mutate(settings)).toBeNull();
+            expect(defaults.mutate(settings)).toBeNull();
+        } finally {
+            await admitted.dispose();
         }
     });
     it('uses the selected remote routing tuple and refuses its captured proof after a real projection generation change', async () => {
