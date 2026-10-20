@@ -477,14 +477,14 @@ async function main() {
               HAPPIER_STACK_PM_ISOLATE_HOME: '1',
             });
             const quiet = verbosity === 0 && !json;
-            await withYarnInstallGuard({ installDir: mainDir, componentDir: mainDir, env, quiet: quiet || json }, async () => {
+            await withYarnInstallGuard({ installDir: mainDir, componentDir: mainDir, env, quiet: quiet || json }, async ({ env: installEnv }) => {
               try {
-                await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env, stdio: quiet ? 'ignore' : 'inherit' });
+                await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env: installEnv, stdio: quiet ? 'ignore' : 'inherit' });
               } catch (e) {
                 // Re-run once with logs for diagnosis, then warn and continue.
                 if (quiet) {
                   try {
-                    await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env, stdio: 'inherit' });
+                    await run('yarn', ['install', '--frozen-lockfile'], { cwd: mainDir, env: installEnv, stdio: 'inherit' });
                     return;
                   } catch (retryError) {
                     throw retryError;

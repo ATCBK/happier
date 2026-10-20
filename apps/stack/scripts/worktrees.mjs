@@ -388,9 +388,9 @@ async function installDependencies({ dir }) {
   // Package managers (especially Yarn) write progress to stdout, which would corrupt JSON parsing
   // in wrappers like `stack pr`.
   const jsonMode = Boolean((process.argv ?? []).includes('--json'));
-  const runForJson = async (cmd, args) => {
+  const runForJson = async (cmd, args, runEnv = env) => {
     try {
-      const out = await runCapture(cmd, args, { cwd: dir, env });
+      const out = await runCapture(cmd, args, { cwd: dir, env: runEnv });
       if (out) process.stderr.write(out);
     } catch (e) {
       const out = String(e?.out ?? '');
@@ -402,12 +402,12 @@ async function installDependencies({ dir }) {
   };
 
   if (pm.kind === 'yarn') {
-    const outcome = await withYarnInstallGuard({ installDir: dir, componentDir: dir, env, quiet: jsonMode }, async () => {
+    const outcome = await withYarnInstallGuard({ installDir: dir, componentDir: dir, env, quiet: jsonMode }, async ({ env: installEnv }) => {
       // Works for yarn classic; yarn berry will ignore/translate flags as needed.
       if (jsonMode) {
-        await runForJson('yarn', ['install', '--frozen-lockfile']);
+        await runForJson('yarn', ['install', '--frozen-lockfile'], installEnv);
       } else {
-        await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir, env });
+        await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir, env: installEnv });
       }
     });
     return outcome.refreshed
