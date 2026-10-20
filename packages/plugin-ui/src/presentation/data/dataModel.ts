@@ -33,40 +33,7 @@ export function formatHappierDataValue(value: HappierDataValue, locale?: string)
   }
 }
 
-/** What a byte figure measures; it sets the base, never the call site (program ruling D8). */
-export type HappierDataBytesKind = 'storage' | 'memory';
-
-const HAPPIER_BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;
-
-/**
- * A byte figure split into its number and unit, in the reader's locale. Storage (disks, files, scans,
- * transfers) is decimal, as drives and the OS show it ("994 GB", a 1 TB drive is "1 TB"); memory (RAM,
- * processes, swap) is binary labelled GB, as Activity Monitor and Task Manager do ("128 GB"). Values at
- * or above one unit keep three significant figures ("3.84 GB", "58.4 GB", "412 GB"); whole values drop
- * trailing zeroes. Sub-byte values keep the whole-byte presentation.
- */
-export function formatHappierDataBytesParts(bytes: number, options: Readonly<{ kind: HappierDataBytesKind; locale?: string }>): Readonly<{ value: string; unit: string }> {
-  const base = options.kind === 'memory' ? 1024 : 1000;
-  let value = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
-  let index = 0;
-  while (index < HAPPIER_BYTE_UNITS.length - 1 && value >= base) { value /= base; index += 1; }
-  let rounded = value >= 1 ? Number(value.toPrecision(3)) : Math.round(value);
-  // Rounding can reach the next unit's threshold ("1000 KB"): carry it.
-  if (index < HAPPIER_BYTE_UNITS.length - 1 && rounded >= base) { rounded = 1; index += 1; }
-  let text: string;
-  try {
-    text = new Intl.NumberFormat(options.locale === undefined ? undefined : [options.locale], { maximumSignificantDigits: 3 }).format(rounded);
-  } catch {
-    text = String(rounded);
-  }
-  return { value: text, unit: HAPPIER_BYTE_UNITS[index]! };
-}
-
-/** "412 GB", "128 GB", "180 MB": a byte figure in the base its kind sets. */
-export function formatHappierDataBytes(bytes: number, options: Readonly<{ kind: HappierDataBytesKind; locale?: string }>): string {
-  const parts = formatHappierDataBytesParts(bytes, options);
-  return `${parts.value} ${parts.unit}`;
-}
+export { formatHappierDataBytes, formatHappierDataBytesParts, type HappierDataBytesKind } from './formatBytes.js';
 
 /** A whole-number percentage in the reader's locale ("63%"). */
 export function formatHappierDataShare(share: number, locale?: string): string {

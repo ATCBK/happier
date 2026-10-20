@@ -35,6 +35,11 @@
       "types": "./dist/presentation/index.d.ts",
       "default": "./dist/presentation/index.js"
     },
+    "./presentation/formatBytes": {
+      "happier-source": "./src/presentation/data/formatBytes.ts",
+      "types": "./dist/presentation/data/formatBytes.d.ts",
+      "default": "./dist/presentation/data/formatBytes.js"
+    },
     "./presentation/typeScale": {
       "happier-source": "./src/presentation/text/typeScale.ts",
       "types": "./dist/presentation/text/typeScale.d.ts",
