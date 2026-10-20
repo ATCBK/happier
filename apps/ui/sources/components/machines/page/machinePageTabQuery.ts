@@ -7,10 +7,11 @@ export type MachinePageTabId = 'overview' | 'processes' | 'storage' | 'guard';
 export type MachinePageTabParams =
     | Readonly<{ id: 'overview' }>
     /**
-     * Plan 30 §10: sorted by a column; on a phone an owner (`page=owner&owner=<row>`) or one process pushes.
-     * `filter=leftBehind` opens only what ended sessions left running (the Machines widget's Clean up).
+     * Plan 30 §10: sorted by a column; on a phone an owner (`page=owner&owner=<row>`), one external app
+     * (`page=app&app=<name>`, All processes) or one process pushes.
+     * `scope=all` opens on All processes (the way back from an app's page). `filter=leftBehind` opens only what ended sessions left running (the Machines widget's Clean up).
      */
-    | Readonly<{ id: 'processes'; sort?: 'memory' | 'cpu'; page?: 'owner' | 'process'; owner?: string; process?: string; filter?: 'leftBehind' }>
+    | Readonly<{ id: 'processes'; sort?: 'memory' | 'cpu'; page?: 'owner' | 'process' | 'app'; owner?: string; process?: string; app?: string; scope?: 'all'; filter?: 'leftBehind' }>
     /** Plan 40 §4.11: the Happier view, or one category's page (`page=category&categoryId=caches`). */
     /**
      * Plan 40 §4.11: the Happier view or Whole disk (`view=disk`, an opened folder `nodeId`, Large/Old `files`),
@@ -60,7 +61,7 @@ export function machinePageTabQuery(params: MachinePageTabParams): Readonly<Reco
 /** Every key across the tabs' param arms. The record must name each one exactly, so a tab's new param is cleared too. */
 type MachinePageTabParamKey = MachinePageTabParams extends infer Arm ? Arm extends unknown ? Exclude<keyof Arm, 'id'> : never : never;
 const MACHINE_PAGE_TAB_PARAM_KEYS = Object.keys({
-    sort: true, page: true, owner: true, process: true, filter: true,
+    sort: true, page: true, owner: true, process: true, app: true, scope: true, filter: true,
     view: true, categoryId: true, nodeId: true, files: true, prepare: true, volumeId: true,
 } satisfies Record<MachinePageTabParamKey, true>);
 

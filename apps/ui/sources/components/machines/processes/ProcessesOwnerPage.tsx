@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { useMachinePageState } from '@/components/machines/page/machinePageContext';
@@ -13,6 +13,7 @@ import { formatVitalsPercent } from '@/components/machines/vitals/vitalsFormat';
 import { VitalsMeterRow } from '@/components/machines/vitals/VitalsMeterRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -29,6 +30,7 @@ import {
   ProcessOwnershipPill,
 } from './processesCollectionAnatomy';
 import {
+  describeProcessIdentity,
   describeProcessTitle,
   ProcessOwnerMark,
   useProcessOwnerStatus,
@@ -36,22 +38,29 @@ import {
 } from './processOwnerIdentity';
 import {
   buildMachineProcessesView,
+  type ProcessesAppMemberItem,
   type ProcessesOwnerItem,
 } from './processesPresentation';
-import { useProcessesController } from './useProcessesController';
+import { useProcessRowActions } from './ProcessRowMenu';
+import {
+  ProcessesControllerContext,
+  useProcessesController,
+} from './useProcessesController';
 
 type ProcessesParams = Extract<MachinePageTabParams, { id: 'processes' }>;
 
 /**
  * Phone (lab `rp` Dp): a row pushes its owner — identity, its two meters, its processes, then the actions as
  * a quiet button row with the destructive one last and one sentence of consequence — and a process pushes
- * its detail. The same watch and the same Actions as the tree.
+ * its detail. An external app (All processes) pushes its own page: its two meters and each of its processes
+ * with the same row menu as the tree. The same watch and the same Actions as the tree.
  */
 export function ProcessesOwnerPage(
   props: Omit<MachinePageTabBodyProps, 'params'> &
     Readonly<{ params: ProcessesParams }>,
 ) {
   const { serverId, machineId, machineName, online, setParams, params } = props;
+  const { theme } = useUnistyles();
   const { target } = useMachinePageState();
   const daemonState: unknown = target.machine?.daemonState;
   const published = React.useMemo(
@@ -61,7 +70,7 @@ export function ProcessesOwnerPage(
   const processes = useMachineProcesses({
     serverId,
     machineId,
-    scope: 'happier',
+    scope: params.page === 'app' ? 'all' : 'happier',
     view: 'tree',
     online,
     ...(params.page === 'process' && params.process
@@ -79,9 +88,11 @@ export function ProcessesOwnerPage(
     setParams(
       params.page === 'process' && params.owner
         ? { id: 'processes', page: 'owner', owner: params.owner }
-        : { id: 'processes' },
+        : params.page === 'app'
+          ? { id: 'processes', scope: 'all', ...(params.sort ? { sort: params.sort } : {}) }
+          : { id: 'processes' },
     );
-  }, [params.owner, params.page, setParams]);
+  }, [params.owner, params.page, params.sort, setParams]);
   const controller = useProcessesController({
     serverId,
     machineId,
@@ -100,11 +111,12 @@ export function ProcessesOwnerPage(
       answer
         ? buildMachineProcessesView({
             answer,
-            scope: 'happier',
+            scope: params.page === 'app' ? 'all' : 'happier',
             sort: { key: params.sort ?? 'memory', direction: 'descending' },
+            ...(params.page === 'app' ? { hidden: controller.hidden } : {}),
           })
         : null,
-    [answer, params.sort],
+    [answer, controller.hidden, params.page, params.sort],
   );
 
   const backLink = (
@@ -124,6 +136,8 @@ export function ProcessesOwnerPage(
       </View>
     );
 
+  const memoryTotal = published?.host?.memoryTotalBytes ?? null;
+  const cores = published?.host?.logicalCores ?? null;
   if (params.page === 'process') {
     const process = answer.owners
       .flatMap((owner) => owner.members.map((row) => ({ row, owner })))
@@ -162,6 +176,37 @@ export function ProcessesOwnerPage(
     );
   }
 
+  if (params.page === 'app') {
+    const app = view.items.find((item) => item.kind === 'app' && item.app.appGroup === params.app);
+    if (!app || app.kind !== 'app')
+      return (
+        <View style={styles.page}>
+          {backLink}
+          <SurfaceStateCard kind="empty" title={t('machineProcesses.kill.recheckedGone')} />
+        </View>
+      );
+    const members = view.items.filter(
+      (item): item is ProcessesAppMemberItem => item.kind === 'appMember' && item.parentKey === app.key,
+    );
+    return (
+      <ProcessesControllerContext.Provider value={controller}>
+        <View style={styles.page} testID="machine-processes-app-page">
+          {backLink}
+          <View style={styles.header}>
+            <View style={styles.inline}>
+              <Icon name="desktop" size={20} color={theme.colors.text.secondary} />
+              <Text style={styles.title} numberOfLines={2}>{app.app.appGroup}</Text>
+            </View>
+          </View>
+          <OwnerMeters memoryBytes={app.memoryBytes} cpuPercent={app.cpuPercent} memoryTotal={memoryTotal} cores={cores} />
+          <ItemGroup title={t('machineProcesses.phone.ownerProcesses', { count: members.length })}>
+            {members.map((item) => <AppMemberRow key={item.key} item={item} />)}
+          </ItemGroup>
+        </View>
+      </ProcessesControllerContext.Provider>
+    );
+  }
+
   const owner = view.items.find(
     (item): item is ProcessesOwnerItem =>
       item.kind === 'owner' && item.owner.rowId === params.owner,
@@ -179,8 +224,6 @@ export function ProcessesOwnerPage(
   const members = view.items.filter(
     (item) => item.kind === 'process' && item.ownerKey === owner.key,
   );
-  const memoryTotal = published?.host?.memoryTotalBytes ?? null;
-  const cores = published?.host?.logicalCores ?? null;
   return (
     <View style={styles.page} testID="machine-processes-owner-page">
       {backLink}
@@ -190,38 +233,7 @@ export function ProcessesOwnerPage(
         serverId={serverId}
         machineId={machineId}
       />
-      <ItemGroup header="none">
-        <View style={styles.meters}>
-          <VitalsMeterRow
-            label={t('machineProcesses.tiles.memory')}
-            strongLabel
-            part={formatProcessMemory(owner.memoryBytes)}
-            whole={
-              memoryTotal && owner.memoryBytes !== null
-                ? `· ${t('machineProcesses.phone.memoryOfMachine', { percent: formatVitalsPercent((owner.memoryBytes / memoryTotal) * 100) })}`
-                : ''
-            }
-            used={owner.memoryBytes ?? 0}
-            capacity={memoryTotal ?? Math.max(1, owner.memoryBytes ?? 1)}
-            tone="calm"
-            accessibilityLabel={`${t('machineProcesses.tiles.memory')} ${formatProcessMemory(owner.memoryBytes)}`}
-          />
-          <VitalsMeterRow
-            label={t('machineProcesses.tiles.cpu')}
-            strongLabel
-            part={formatProcessCpu(owner.cpuPercent)}
-            whole={
-              cores
-                ? `· ${t('machineProcesses.phone.cpuOfCores', { cores })}`
-                : ''
-            }
-            used={owner.cpuPercent ?? 0}
-            capacity={100}
-            tone="calm"
-            accessibilityLabel={`${t('machineProcesses.tiles.cpu')} ${formatProcessCpu(owner.cpuPercent)}`}
-          />
-        </View>
-      </ItemGroup>
+      <OwnerMeters memoryBytes={owner.memoryBytes} cpuPercent={owner.cpuPercent} memoryTotal={memoryTotal} cores={cores} />
       {owner.owner.ceiling ? <ItemGroup
         title={t('machineProcesses.ceiling.title')}
         description={t('machineProcesses.ceiling.scopeHelp')}
@@ -245,6 +257,7 @@ export function ProcessesOwnerPage(
               title={describeProcessTitle(item.row)}
               subtitle={
                 <View style={styles.inline}>
+                  <ProcessIdentityText row={item.row} />
                   <Text
                     style={styles.quiet}
                   >{`${formatProcessCpu(item.cpuPercent)} ${t('machineProcesses.columns.cpu')}`}</Text>
@@ -300,6 +313,80 @@ export function ProcessesOwnerPage(
       </View>
       <Text style={styles.quiet}>{t('machineProcesses.phone.ownerFoot')}</Text>
     </View>
+  );
+}
+
+/** What a row named by its display name also is ("Dev server · node"); nothing for a row its title already says. */
+function ProcessIdentityText(props: Readonly<{ row: Parameters<typeof describeProcessIdentity>[0] }>) {
+  const identity = describeProcessIdentity(props.row);
+  return identity ? <Text numberOfLines={1} style={styles.quiet}>{identity}</Text> : null;
+}
+
+function OwnerMeters(
+  props: Readonly<{
+    memoryBytes: number | null;
+    cpuPercent: number | null;
+    memoryTotal: number | null;
+    cores: number | null;
+  }>,
+) {
+  const { memoryBytes, cpuPercent, memoryTotal, cores } = props;
+  return (
+    <ItemGroup header="none">
+      <View style={styles.meters}>
+        <VitalsMeterRow
+          label={t('machineProcesses.tiles.memory')}
+          strongLabel
+          part={formatProcessMemory(memoryBytes)}
+          whole={
+            memoryTotal && memoryBytes !== null
+              ? `· ${t('machineProcesses.phone.memoryOfMachine', { percent: formatVitalsPercent((memoryBytes / memoryTotal) * 100) })}`
+              : ''
+          }
+          used={memoryBytes ?? 0}
+          capacity={memoryTotal ?? Math.max(1, memoryBytes ?? 1)}
+          tone="calm"
+          accessibilityLabel={`${t('machineProcesses.tiles.memory')} ${formatProcessMemory(memoryBytes)}`}
+        />
+        <VitalsMeterRow
+          label={t('machineProcesses.tiles.cpu')}
+          strongLabel
+          part={formatProcessCpu(cpuPercent)}
+          whole={
+            cores
+              ? `· ${t('machineProcesses.phone.cpuOfCores', { cores })}`
+              : ''
+          }
+          used={cpuPercent ?? 0}
+          capacity={100}
+          tone="calm"
+          accessibilityLabel={`${t('machineProcesses.tiles.cpu')} ${formatProcessCpu(cpuPercent)}`}
+        />
+      </View>
+    </ItemGroup>
+  );
+}
+
+/** One process of an external app: its name and figures, with the tree's own row menu (copy its name, Kill). */
+function AppMemberRow(props: Readonly<{ item: ProcessesAppMemberItem }>) {
+  const { item } = props;
+  const menu = useProcessRowActions(item).accessory;
+  return (
+    <Item
+      testID={`machine-processes-app-row-${item.key}`}
+      title={item.row.name}
+      subtitle={
+        <Text style={styles.quiet}>{`${formatProcessCpu(item.cpuPercent)} ${t('machineProcesses.columns.cpu')}`}</Text>
+      }
+      rightElement={
+        <View style={styles.inline}>
+          <Text style={styles.quiet}>{formatProcessMemory(item.memoryBytes)}</Text>
+          {menu}
+        </View>
+      }
+      rightElementOutsidePressable
+      showChevron={false}
+    />
   );
 }
 

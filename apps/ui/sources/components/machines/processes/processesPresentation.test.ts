@@ -206,6 +206,45 @@ describe('buildMachineProcessesView', () => {
         expect(Object.keys(item.row)).not.toContain('command');
   });
 
+  const dockerAnswer = () => createProcessesAnswer({
+    notHappier: [{ appGroup: 'Docker Desktop', members: [
+      { name: 'com.docker.backend', appGroup: 'Docker Desktop', pid: 900, ref: 'docker-backend', memoryBytes: 640, cpuPercent: 0.1 },
+      { name: 'com.docker.virtualization', appGroup: 'Docker Desktop', pid: 901, ref: 'docker-vm', memoryBytes: 5_000, cpuPercent: 0.4 },
+    ] }, { appGroup: 'Slack', members: [{ name: 'Slack', appGroup: 'Slack', pid: 950, ref: 'slack', memoryBytes: 100, cpuPercent: 0 }] }],
+  });
+
+  it('counts an external app’s matching members in the match summary and opens the app to show only them', () => {
+    const view = buildMachineProcessesView({ answer: dockerAnswer(), scope: 'all', sort: { key: 'memory', direction: 'descending' }, query: 'backend' });
+    expect(keys(view.items.filter((item) => item.group === 'notHappier'))).toEqual(['a:Docker Desktop', 'm:docker-backend']);
+    expect(view.revealKeys).toContain('a:Docker Desktop');
+    // One matching member: its own figures, never the zero a Happier-only count would give.
+    expect(view.match).toMatchObject({ matched: 1, memoryBytes: 640, cpuPercent: 0.1 });
+    const byApp = buildMachineProcessesView({ answer: dockerAnswer(), scope: 'all', sort: { key: 'memory', direction: 'descending' }, query: 'docker desktop' });
+    expect(keys(byApp.items.filter((item) => item.kind === 'appMember'))).toEqual(['m:docker-vm', 'm:docker-backend']);
+    expect(byApp.match).toMatchObject({ matched: 2, memoryBytes: 5_640 });
+    // The scope's total counts the processes the search ran over, external apps included.
+    expect(byApp.match!.total).toBe(view.match!.total);
+    expect(view.match!.total).toBeGreaterThan(buildMachineProcessesView({ answer: dockerAnswer(), scope: 'happier', sort: { key: 'memory', direction: 'descending' }, query: 'backend' }).match!.total);
+  });
+
+  it('opens every branch above a nested match, not only its owner', () => {
+    const view = buildMachineProcessesView({ answer: createProcessesAnswer(), scope: 'happier', sort: { key: 'memory', direction: 'descending' }, query: 'vitest' });
+    expect(keys(view.items)).toEqual(expect.arrayContaining(['o:session:refactor', 'p:shell', 'p:vitest']));
+    expect(view.revealKeys).toEqual(expect.arrayContaining(['o:session:refactor', 'p:shell']));
+    // The match itself is not a branch to open, and an unrelated owner opens nothing.
+    expect(view.revealKeys).not.toContain('p:vitest');
+    expect(view.revealKeys).not.toContain('o:service:website');
+  });
+
+  it('finds an owned row by the display name the daemon gave it', () => {
+    const answer = createProcessesAnswer();
+    const vite = answer.owners.flatMap((owner) => owner.members).find((row) => row.ref === 'vite')!;
+    vite.displayName = 'Storybook';
+    vite.command = 'node node_modules/.bin/dev';
+    const view = buildMachineProcessesView({ answer, scope: 'happier', sort: { key: 'memory', direction: 'descending' }, query: 'storybook' });
+    expect(keys(view.items)).toContain('p:vite');
+  });
+
   it('lets a stopped row leave without changing anything else', () => {
     const view = buildMachineProcessesView({
       answer: createProcessesAnswer(),

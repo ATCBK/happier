@@ -20,12 +20,30 @@ import { useSessionStatus } from '@/utils/sessions/sessionUtils';
  * canonical session status presenter's. Nothing here re-derives a status rule.
  */
 
-/** A process in plain words first ("Type checker"); the command follows in mono where it is shown. */
+/**
+ * A process in plain words first: its browser engine, else the name the daemon knows it by ("Vite", the Agent's
+ * or MCP server's catalog name), else what it does ("Type checker"), else its native name. The command follows
+ * in mono where it is shown.
+ */
 export function describeProcessTitle(
-  row: Pick<ProcessRowV1, 'role' | 'name' | 'browserEngine'>,
+  row: Pick<ProcessRowV1, 'role' | 'name' | 'browserEngine' | 'displayName'>,
 ): string {
   if (row.browserEngine) return { chromium: 'Chromium', firefox: 'Firefox', webkit: 'WebKit' }[row.browserEngine];
+  if (row.displayName) return row.displayName;
   return row.role ? t(`machineProcesses.roles.${row.role}`) : row.name;
+}
+
+/**
+ * What a row named by `displayName` also is, so two "Node" or "Agent" rows stay tellable apart: its role in
+ * words and its native process name ("Dev server · node"). Rows titled by their role or name already say it.
+ */
+export function describeProcessIdentity(
+  row: Pick<ProcessRowV1, 'role' | 'name' | 'browserEngine' | 'displayName'>,
+): string | null {
+  if (row.browserEngine || !row.displayName) return null;
+  const parts = [row.role ? t(`machineProcesses.roles.${row.role}`) : null, row.name]
+    .filter((part): part is string => part !== null && part !== row.displayName);
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
 function rootOf(owner: OwnerRowV1): ProcessRowV1 | null {

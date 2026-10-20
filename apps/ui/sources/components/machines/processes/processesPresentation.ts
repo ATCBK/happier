@@ -159,6 +159,7 @@ function roleWords(role: ProcessRowV1['role']): string | undefined {
 function matchesProcess(row: ProcessRowV1, query: string): boolean {
   return [
     row.name,
+    row.displayName,
     row.command,
     roleWords(row.role),
     row.browserEngine,
@@ -232,6 +233,8 @@ type OwnerBuild = Readonly<{
   owner: ProcessesOwnerItem;
   descendants: readonly ProcessesItem[];
   matched: number;
+  /** Processes the search kept only because something under them matches: every one of these must open. */
+  branchKeys: readonly string[];
 }>;
 
 function buildOwner(
@@ -274,6 +277,7 @@ function buildOwner(
       (absorbedRoot !== null && matchesProcess(absorbedRoot, query)));
   // While searching, a process stays when it or something under it matches; the owner opens to show it.
   const keep = new Set<string>();
+  const branchKeys: string[] = [];
   let matched = 0;
   if (query && !ownerMatches) {
     const visit = (key: string): boolean => {
@@ -282,6 +286,7 @@ function buildOwner(
         const self = matchesProcess(row, query);
         if (self) matched += 1;
         const below = visit(processKeyOf(row));
+        if (below) branchKeys.push(processKeyOf(row));
         if (self || below) {
           keep.add(processKeyOf(row));
           any = true;
@@ -346,6 +351,7 @@ function buildOwner(
     },
     descendants,
     matched,
+    branchKeys,
   };
 }
 
@@ -404,7 +410,7 @@ export function buildMachineProcessesView(
       if (folded.has(owner.key)) continue;
       items.push(...build.descendants);
       if (query && build.matched > 0 && build.descendants.length > 0)
-        revealKeys.push(owner.key);
+        revealKeys.push(owner.key, ...build.branchKeys);
     }
   }
 
@@ -429,6 +435,9 @@ export function buildMachineProcessesView(
     matched += leftBehind.count;
   }
 
+  // What the search ran over and what it matched among other apps' processes (All processes only).
+  let externalTotal = 0;
+  const externalMatches: (Figures & Readonly<{ count: number }>)[] = [];
   if (input.scope === 'all' && !input.ownersOnly) {
     const apps = (answer.notHappier ?? [])
       .map((app): ProcessesAppItem => ({
@@ -441,19 +450,13 @@ export function buildMachineProcessesView(
         cpuPercent: sum(app.members.map((row) => row.cpuPercent ?? 0)),
         memoryBytes: sum(app.members.map((row) => row.memoryBytes)),
       }))
-      .filter(
-        (app) =>
-          !query ||
-          app.app.appGroup.toLocaleLowerCase().includes(query) ||
-          app.app.members.some((row) =>
-            row.name.toLocaleLowerCase().includes(query),
-          ),
-      )
       .sort(compare);
     for (const app of apps) {
-      items.push(app);
+      externalTotal += app.count;
+      // An app named by the search shows every member; otherwise only the members that match, under an opened app.
+      const appMatches = query.length > 0 && app.app.appGroup.toLocaleLowerCase().includes(query);
       const members = app.app.members
-        .filter((row) => !input.hidden?.has(`m:${row.ref}`))
+        .filter((row) => !query || appMatches || row.name.toLocaleLowerCase().includes(query))
         .map((row): ProcessesAppMemberItem => ({
           kind: 'appMember',
           key: `m:${row.ref}`,
@@ -462,41 +465,53 @@ export function buildMachineProcessesView(
           row,
           cpuPercent: row.cpuPercent ?? null,
           memoryBytes: row.memoryBytes,
-        }))
-        .sort(compare);
-      items.push(...members);
+        }));
+      if (query && members.length === 0) continue;
+      if (query) {
+        externalMatches.push(...members.map((member) => ({ count: 1, cpuPercent: member.cpuPercent, memoryBytes: member.memoryBytes })));
+        if (!appMatches) revealKeys.push(app.key);
+      }
+      items.push(app);
+      items.push(...members.filter((member) => !input.hidden?.has(member.key)).sort(compare));
     }
     const others = answer.otherPrincipals;
     if (others && others.count > 0) {
-      items.push({
-        kind: 'otherPeople',
-        key: 'others',
-        parentKey: null,
-        group: 'otherPeople',
-        count: others.count,
-        names: others.names,
-        cpuPercent: others.cpuPercent ?? null,
-        memoryBytes: others.memoryBytes,
-      });
+      externalTotal += others.count;
+      const othersMatch = query.length > 0 && others.names.some((name) => name.toLocaleLowerCase().includes(query));
+      if (!query || othersMatch) {
+        if (othersMatch) externalMatches.push({ count: others.count, cpuPercent: others.cpuPercent ?? null, memoryBytes: others.memoryBytes });
+        items.push({
+          kind: 'otherPeople',
+          key: 'others',
+          parentKey: null,
+          group: 'otherPeople',
+          count: others.count,
+          names: others.names,
+          cpuPercent: others.cpuPercent ?? null,
+          memoryBytes: others.memoryBytes,
+        });
+      }
     }
   }
 
-  const total = answer.totals.happier.processCount + answer.leftBehind.length;
+  const total = answer.totals.happier.processCount + answer.leftBehind.length + externalTotal;
   const match = query
     ? {
-        matched,
+        matched: matched + externalMatches.reduce((count, entry) => count + entry.count, 0),
         total,
         cpuPercent: sum([
           ...owners.map((build) =>
             build.matched > 0 ? build.owner.cpuPercent : 0,
           ),
           ...leftBehind.items.map((row) => row.cpuPercent ?? 0),
+          ...externalMatches.map((entry) => entry.cpuPercent ?? 0),
         ]),
         memoryBytes: sum([
           ...owners.map((build) =>
             build.matched > 0 ? build.owner.memoryBytes : 0,
           ),
           ...leftBehind.items.map((row) => row.memoryBytes),
+          ...externalMatches.map((entry) => entry.memoryBytes),
         ]),
       }
     : null;

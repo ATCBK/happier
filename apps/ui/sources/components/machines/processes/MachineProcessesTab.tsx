@@ -91,18 +91,24 @@ export function parseMachineProcessesParams(
   const sort =
     raw.sort === 'cpu' || raw.sort === 'memory' ? raw.sort : undefined;
   const filter = raw.filter === 'leftBehind' ? raw.filter : undefined;
+  const scope = raw.scope === 'all' ? raw.scope : undefined;
   const page =
     raw.page === 'owner' && raw.owner
       ? 'owner'
       : raw.page === 'process' && raw.process
         ? 'process'
-        : undefined;
+        : raw.page === 'app' && raw.app
+          ? 'app'
+          : undefined;
   return {
     id: 'processes',
     ...(sort ? { sort } : {}),
     ...(filter ? { filter } : {}),
+    ...(scope ? { scope } : {}),
     ...(page === 'owner'
       ? { page, owner: raw.owner }
+      : page === 'app'
+        ? { page, app: raw.app }
       : page === 'process'
         ? {
             page,
@@ -187,7 +193,7 @@ export const MachineProcessesTab = React.memo(function MachineProcessesTab(
 ) {
   const params: ProcessesParams =
     props.params.id === 'processes' ? props.params : { id: 'processes' };
-  if (params.page === 'owner' || params.page === 'process')
+  if (params.page === 'owner' || params.page === 'process' || params.page === 'app')
     return <ProcessesOwnerPage {...props} params={params} />;
   return <MachineProcessesTree {...props} params={params} />;
 });
@@ -211,7 +217,7 @@ function MachineProcessesTree(
   const homeDir = target.machine?.metadata?.homeDir;
   const startSession = useMachineStartSession({ serverId, machineId });
 
-  const [scope, setScope] = React.useState<Scope>('happier');
+  const [scope, setScope] = React.useState<Scope>(props.params.scope === 'all' ? 'all' : 'happier');
   const [query, setQuery] = React.useState('');
   const [unfolded, setUnfolded] = React.useState<ReadonlySet<string>>(
     () => new Set(),
@@ -366,7 +372,14 @@ function MachineProcessesTree(
         return;
       }
       if (compact) {
-        if (item.kind === 'owner')
+        if (item.kind === 'app')
+          setParams({
+            id: 'processes',
+            ...(props.params.sort ? { sort: props.params.sort } : {}),
+            page: 'app',
+            app: item.app.appGroup,
+          });
+        else if (item.kind === 'owner')
           setParams({
             id: 'processes',
             ...(props.params.sort ? { sort: props.params.sort } : {}),

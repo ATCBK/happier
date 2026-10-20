@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
 
 import { StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
@@ -10,6 +11,7 @@ import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { t } from '@/text';
 
 import { MachineSummaryStrip } from './MachineSummaryStrip';
+import { MACHINE_SUMMARY_METRICS } from './machineSummaryStripModel';
 import { MACHINE_SUMMARY_PREVIEW } from './machineSummaryPreview';
 
 describe('MachineSummaryStrip', () => {
@@ -63,6 +65,22 @@ describe('MachineSummaryStrip', () => {
         expect(screen.getTextContent()).toContain('4%');
         expect(screen.getTextContent()).not.toContain('19 GB');
         expect(screen.getTextContent()).not.toContain('310 GB');
+    });
+
+    it('steps the `under` row down to the metrics that fit its measured width, calm ones first, and back up when it widens', async () => {
+        const screen = await renderScreen(<MachineSummaryStrip testID="strip" availability={MACHINE_SUMMARY_PREVIEW.calm}
+            style="bars" metrics={MACHINE_SUMMARY_METRICS} layout="under" />);
+        const measure = (width: number) => act(() => screen.findByTestId('strip')!.props.onLayout({ nativeEvent: { layout: { width, height: 16, x: 0, y: 0 } } }));
+        const named = () => screen.findAll(node => node.type === Tooltip).length;
+        // Before the first measurement every chosen metric shows (nothing is dropped on a guess).
+        expect(named()).toBe(MACHINE_SUMMARY_METRICS.length);
+        measure(250);
+        expect(named()).toBeLessThan(MACHINE_SUMMARY_METRICS.length);
+        expect(named()).toBeGreaterThanOrEqual(1);
+        measure(40);
+        expect(named()).toBe(1);
+        measure(520);
+        expect(named()).toBe(MACHINE_SUMMARY_METRICS.length);
     });
 
     it('keeps its slots without figures while the values are not held yet, never saying zero', async () => {

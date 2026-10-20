@@ -325,6 +325,60 @@ describe('MachineProcessesTab', () => {
     expect(row).toContain('Chromium');
     expect(row).toContain('node playwright test');
   });
+  it('names an owned row by the display name the daemon gave it, beside its role and native name', async () => {
+    const answer = createProcessesAnswer();
+    const owner = answer.owners[0];
+    owner.members.find((row) => row.ref === 'vite')!.displayName = 'Vite';
+    const { screen } = await mount({ answer });
+    await act(async () => { screen.pressByTestId(`machine-processes-row-o:${owner.rowId}`); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-p:vite')).not.toBeNull()); });
+    const row = textOf(screen.findHostByTestId('machine-processes-row-p:vite:cell'));
+    expect(row).toContain('Vite');
+    expect(row).toContain('Dev server · node');
+    // A row with no display name keeps its role in words, and external wire rows still carry no command.
+    expect(textOf(screen.findHostByTestId('machine-processes-row-p:tsgo:cell'))).toContain('Type checker');
+  });
+  it('opens a phone app group on its own page and offers each process there its Kill action', async () => {
+    const answer = createProcessesAnswer({
+      notHappier: [{ appGroup: 'Docker Desktop', members: [
+        { name: 'com.docker.backend', appGroup: 'Docker Desktop', pid: 900, ref: 'docker-backend', memoryBytes: 640, cpuPercent: 0.1 },
+        { name: 'com.docker.virtualization', appGroup: 'Docker Desktop', pid: 901, ref: 'docker-vm', memoryBytes: 5_000, cpuPercent: 0.4 },
+      ] }],
+    });
+    const machine = { metadata: { host: 'leeroy-mbp', platform: 'darwin', happyCliVersion: '0.3.0', happyHomeDir: '/Users/leeroy/.happier',
+      homeDir: '/Users/leeroy', resourcesPolicyV1: { v: 1, processes: { allProcessesVisible: true } } } as Machine['metadata'] };
+    device.type = 'phone';
+    try {
+      const list = await mount({ answer, machine });
+      await act(async () => { list.screen.pressByTestId('machine-processes-scope:all'); });
+      await act(async () => { await vi.waitFor(() => expect(list.screen.findByTestId('machine-processes-row-a:Docker Desktop')).not.toBeNull()); });
+      await act(async () => { list.screen.pressByTestId('machine-processes-row-a:Docker Desktop'); });
+      expect(list.setParams).toHaveBeenLastCalledWith({ id: 'processes', page: 'app', app: 'Docker Desktop' });
+      const page = await mount({ answer, machine, params: { id: 'processes', page: 'app', app: 'Docker Desktop' }, waitForRows: false });
+      await act(async () => { await vi.waitFor(() => expect(page.screen.findByTestId('machine-processes-app-page')).not.toBeNull()); });
+      await act(async () => { await vi.waitFor(() => expect(page.screen.findByTestId('machine-processes-app-row-m:docker-backend')).not.toBeNull()); });
+      expect(page.screen.findByTestId('machine-processes-app-row-m:docker-vm')).not.toBeNull();
+      expect(page.screen.root.findAll(node => node.props.testID === 'machine-processes-menu-m:docker-backend' && Array.isArray(node.props.items))[0]!.props.items
+        .map((item: { title: string }) => item.title)).toEqual(['Copy name', 'Kill process…']);
+    } finally {
+      device.type = null;
+    }
+  });
+  it('shows a matching external app’s processes and figures when searching All processes, never a zero match', async () => {
+    const answer = createProcessesAnswer({
+      notHappier: [{ appGroup: 'Docker Desktop', members: [
+        { name: 'com.docker.backend', appGroup: 'Docker Desktop', pid: 900, ref: 'docker-backend', memoryBytes: 640, cpuPercent: 0.1 },
+      ] }],
+    });
+    const { screen } = await mount({ answer, machine: { metadata: { host: 'leeroy-mbp', platform: 'darwin', happyCliVersion: '0.3.0',
+      happyHomeDir: '/Users/leeroy/.happier', homeDir: '/Users/leeroy', resourcesPolicyV1: { v: 1, processes: { allProcessesVisible: true } } } as Machine['metadata'] } });
+    await act(async () => { screen.pressByTestId('machine-processes-scope:all'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-a:Docker Desktop')).not.toBeNull()); });
+    await act(async () => { screen.changeTextByTestId('machine-processes-search', 'backend'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-m:docker-backend')).not.toBeNull()); });
+    expect(textOf(screen.findByTestId('machine-processes-total-match'))).toContain('1');
+    expect(textOf(screen.findByTestId('machine-processes-total-match'))).not.toContain('0 of');
+  });
   it.each([
     { id: 'processes' as const },
     { id: 'processes' as const, page: 'owner' as const, owner: 'session:refactor' },

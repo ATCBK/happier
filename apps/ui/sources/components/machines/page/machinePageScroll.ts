@@ -10,7 +10,7 @@ import { isMachinePageTabRoot, type MachinePageTabParams } from './machinePageTa
 export function machinePageScrollKey(params: MachinePageTabParams): string {
     const page = 'page' in params ? params.page ?? '' : '';
     const subject = params.id === 'storage' ? params.categoryId ?? ''
-        : params.id === 'processes' ? params.owner ?? params.process ?? '' : '';
+        : params.id === 'processes' ? params.owner ?? params.process ?? params.app ?? '' : '';
     return `${params.id}|${page}|${subject}`;
 }
 

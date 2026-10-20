@@ -34,6 +34,7 @@ import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { resolveOwnershipLabel } from './ownershipLabelPresentation';
 import { ProcessPortChip } from './ProcessPortMenu';
 import {
+  describeProcessIdentity,
   describeProcessTitle,
   processGlyphName,
   ProcessOwnerMark,
@@ -280,9 +281,11 @@ const ProcessRowWhere = React.memo(function ProcessRowWhere(
   switch (item.kind) {
     case 'owner':
       return <OwnerWhere item={item} input={input} />;
-    case 'process':
+    case 'process': {
+      const identity = describeProcessIdentity(item.row);
       return (
         <View style={styles.where}>
+          {identity ? <Text numberOfLines={1} style={styles.quiet}>{identity}</Text> : null}
           {item.row.driverLabel || item.row.command && !input.compact ? (
             <Text numberOfLines={1} style={styles.command}>
               {item.row.driverLabel ?? item.row.command}
@@ -292,6 +295,7 @@ const ProcessRowWhere = React.memo(function ProcessRowWhere(
           {input.readOnly ? <ProcessRowPorts item={item} input={input} /> : null}
         </View>
       );
+    }
     case 'leftBehind':
       return (
         <View style={styles.where}>

@@ -18,6 +18,8 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
@@ -141,11 +143,23 @@ async function mount(params: React.ComponentProps<typeof MachineStorageTab>['par
     return { screen, setParams, serverId };
 }
 /** A running session on this machine whose worktree is in use (the real session stop Action reaches it by the Machine network). */
-function holdingSession(serverId: string) {
+async function holdingSession(serverId: string) {
+    await loadSyncSingletonForTests();
     const metadata = createSessionFixture().metadata;
     if (!metadata) throw new Error('The canonical Session fixture must have readable metadata');
-    return installSessionActionFixture({ homes: home, storage, serverId, session: { id: 'sess-1',
+    const session = installSessionActionFixture({ homes: home, storage, serverId, session: { id: 'sess-1',
         metadata: { ...metadata, path: '/Users/leeroy/dev/happier/.dev/worktree/live', host: 'leeroy-mbp', homeDir: '/Users/leeroy', machineId: 'machine', flavor: 'codex' } } });
+    const http = createSessionMetadataHttpBoundary(() => ({ [session.id]: session }));
+    // Person Stop persists its hold through Sync before asking the daemon to stop.
+    // Serve that real writer at the existing Home HTTP boundary.
+    const answer = { select: async (_input: unknown, request: Readonly<{ url: string; init: RequestInit | undefined }>) => {
+        const response = http.handle(request.url, request.init);
+        if (!response) throw new Error('Holding Session metadata route was not handled');
+        return { status: response.status, body: await response.json() };
+    } };
+    home.answer(serverId, `/v2/sessions/${session.id}`, answer);
+    home.answer(serverId, `/v2/sessions/${session.id}?accessProjectionVersion=1`, answer);
+    return http;
 }
 
 const before = storage.getState();
@@ -249,7 +263,7 @@ describe('MachineStorageTab', () => {
         const sheet = await renderScreen(<Sheet {...shown.props} onClose={close} />);
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-old-log')).not.toBeNull()); });
         await act(async () => { sheet.pressByTestId('machine-storage-review-mode:delete'); });
-        modal.current!.spies.confirm.mockClear().mockResolvedValue(false);
+        modal.current!.spies.confirm.mockClear();
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
         await act(async () => { await vi.waitFor(() => expect(calls.filter(call => call.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW)).toHaveLength(1)); });
         // The sheet's own button is the one confirmation of an irreversible delete: no second dialog follows it.
@@ -707,10 +721,12 @@ describe('MachineStorageTab', () => {
         const pile = [resolved({ itemId: 'wt-live', path }), resolved({ itemId: 'wt-kept', path: `${path}-kept` })];
         const order: string[] = [];
         let stopped = false;
+        let holderMetadata: Awaited<ReturnType<typeof holdingSession>> | undefined;
         const { screen, serverId } = await mount({ id: 'storage' }, {}, (rpc) => {
             const input = rpc.payload ?? {};
             switch (rpc.method) {
                 case RPC_METHODS.STOP_SESSION:
+                    expect(holderMetadata?.writes).toContain('sess-1');
                     order.push(`stop:${String(input.sessionId)}`);
                     stopped = true;
                     return { status: 'stopped' };
@@ -733,7 +749,7 @@ describe('MachineStorageTab', () => {
                 default: return undefined;
             }
         });
-        holdingSession(serverId);
+        holderMetadata = await holdingSession(serverId);
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
         await act(async () => { screen.pressByTestId('machine-storage-pile-review'); });
         const shown = modal.current!.spies.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
@@ -751,7 +767,7 @@ describe('MachineStorageTab', () => {
         expect(order).toEqual(['stop:sess-1', 'check-stopped', 'move']);
     });
 
-    it('keeps an in-use worktree when its session does not stop, and says so', async () => {
+    it.each(['daemon Stop', 'metadata write'] as const)('keeps an in-use worktree when its session does not stop, and says so (%s)', async failure => {
         const path = '/Users/leeroy/dev/happier/.dev/worktree/live';
         const pile = [resolved({ itemId: 'wt-live', path })];
         const calls: Rpc[] = [];
@@ -768,7 +784,8 @@ describe('MachineStorageTab', () => {
                 default: return undefined;
             }
         });
-        holdingSession(serverId);
+        const holderMetadata = await holdingSession(serverId);
+        if (failure === 'metadata write') holderMetadata.rejectNextPatch('sess-1');
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-review')).not.toBeNull()); });
         await act(async () => { screen.pressByTestId('machine-storage-pile-review'); });
         const shown = modal.current!.spies.show.mock.calls.at(-1)?.[0] as { component: React.ComponentType<Record<string, unknown>>; props: Record<string, unknown> };
@@ -778,7 +795,8 @@ describe('MachineStorageTab', () => {
         await act(async () => { await vi.waitFor(() => expect(sheet.findByTestId('machine-storage-review-row-wt-live')).not.toBeNull()); });
         await act(async () => { sheet.pressByTestId('machine-storage-review-confirm'); });
         await act(async () => { await vi.waitFor(() => expect(sheet.getTextContent()).toContain('The session didn’t stop')); });
-        expect(calls.filter(call => call.method === RPC_METHODS.STOP_SESSION)).toHaveLength(1);
+        expect(holderMetadata.writes).toContain('sess-1');
+        expect(calls.filter(call => call.method === RPC_METHODS.STOP_SESSION)).toHaveLength(failure === 'metadata write' ? 0 : 1);
         expect(calls.some(call => call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE)).toBe(false);
         expect(close).not.toHaveBeenCalled();
     });

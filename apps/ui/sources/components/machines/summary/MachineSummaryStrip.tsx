@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 
@@ -41,6 +41,25 @@ const RING_FIGURE_STROKE = 5;
  * trouble first, else the first chosen).
  */
 const INLINE_NUMBERS_CAPACITY = 1;
+/** The room one `under` instrument takes by style: its drawing, the gap and its figure slot. */
+const UNDER_FIGURE_SLOT = 44;
+const UNDER_UNIT_WIDTH: Readonly<Record<MachineSummaryStyle, number>> = {
+    numbers: UNDER_FIGURE_SLOT,
+    rings: RING_SIZE.under + 4 + UNDER_FIGURE_SLOT,
+    bars: LINE_WIDTH.under + 4 + UNDER_FIGURE_SLOT,
+    sparklines: LINE_WIDTH.under + 4 + UNDER_FIGURE_SLOT,
+};
+
+/**
+ * How many instruments the `under` row has room for at its measured width (Orca's density steps, MPG-20):
+ * the row sits under a name in a block that gives it the whole width (the popover, a phone list line, a card),
+ * so its own width is the room. Calm metrics yield first and a toned one is never dropped (`fitMachineSummaryMetrics`);
+ * before the first measurement every chosen metric shows. At least one always fits.
+ */
+export function machineSummaryUnderCapacity(style: MachineSummaryStyle, availableWidth: number | null, gap: number): number {
+    if (availableWidth === null) return Number.POSITIVE_INFINITY;
+    return Math.max(1, Math.floor((availableWidth + gap) / (UNDER_UNIT_WIDTH[style] + gap)));
+}
 
 export type MachineSummaryStripProps = Readonly<{
     availability: MachineResourceAvailability | null;
@@ -61,11 +80,20 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
     const styles = stylesheet;
     const summary = props.availability?.kind === 'reporting' ? props.availability.summary : null;
     const instruments = React.useMemo(() => (summary ? buildMachineSummaryInstruments(summary) : null), [summary]);
+    const [underWidth, setUnderWidth] = React.useState<number | null>(null);
+    const onLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        setUnderWidth(current => (current === width ? current : width));
+    }, []);
     if (props.metrics.length === 0) return null;
     if (props.layout === 'fact') return <MachineMemoryFact instruments={instruments} testID={props.testID} />;
     // Held in a const so the narrowing reaches the instruments drawn below.
     const layout = props.layout;
-    const shown = props.layout === 'inline' && props.style === 'numbers' ? fitMachineSummaryMetrics(props.metrics, instruments, INLINE_NUMBERS_CAPACITY) : props.metrics;
+    const shown = props.layout === 'inline' && props.style === 'numbers'
+        ? fitMachineSummaryMetrics(props.metrics, instruments, INLINE_NUMBERS_CAPACITY)
+        : props.layout === 'under'
+            ? fitMachineSummaryMetrics(props.metrics, instruments, machineSummaryUnderCapacity(props.style, underWidth, theme.space.s12))
+            : props.metrics;
     // A failed watch or read keeps its values, one step dimmer: the freshness line says why (M-15).
     const stale = props.availability?.kind === 'reporting' && (props.availability.freshness === 'stale' || props.availability.readStatus !== undefined);
     const accessibilityLabel = describeMachineSummary(instruments, shown);
@@ -74,7 +102,9 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
             testID={props.testID}
             accessible
             accessibilityLabel={accessibilityLabel}
-            style={[props.layout === 'tiles' ? styles.tiles : styles.row, props.layout === 'inline' ? styles.inlineRow : null, stale ? styles.stale : null]}
+            onLayout={props.layout === 'under' ? onLayout : undefined}
+            style={[props.layout === 'tiles' ? styles.tiles : styles.row, props.layout === 'inline' ? styles.inlineRow : null,
+                props.layout === 'under' ? styles.underRow : null, stale ? styles.stale : null]}
         >
             {shown.map(metric => (
                 <MachineSummaryInstrumentView
@@ -270,6 +300,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     inlineRow: {
         gap: theme.space.s6,
+    },
+    // Fills the block under the name, so its own measured width is the room the instruments have.
+    underRow: {
+        alignSelf: 'stretch',
+        minWidth: 0,
     },
     tiles: {
         flexDirection: 'row',
