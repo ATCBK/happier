@@ -1319,11 +1319,6 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   'HAPPIER_SQLITE_AUTO_MIGRATE',
   'HAPPIER_STACK_MIGRATE_MODE',
   'METRICS_ENABLED',
-  'HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY',
-  // Optional Account artifact hosting must keep the originating Stack's admission and byte limits.
-  'HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__ENABLED',
-  'HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ARTIFACT_BYTES',
-  'HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ACCOUNT_BYTES',
   // The application origin mailed links (verification, reset, invitations) are rendered on.
   'HAPPIER_WEBAPP_URL',
   'HAPPIER_SQLITE_BUSY_TIMEOUT_MS',
@@ -1334,18 +1329,14 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   'HAPPIER_STACK_SERVER_LOG_LEVEL',
   'HAPPIER_SERVER_LOG_LEVEL',
   'HAPPIER_WEB_LATENCY_TRACE',
-  // Stored-content public shares use the server's isolated-origin and abuse-control owners.
-  'HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN',
-  'HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER',
-  'HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_MAX_REQUESTS',
-  'HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_WINDOW_MS',
 ]);
 const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_PREFIXES = [
+  // Server feature configuration is non-secret; preserve the Stack's policy wherever it runs.
+  'HAPPIER_FEATURE_',
   'HAPPIER_SERVER_RETENTION__',
   // Auth mail delivery and the email/password method: a Stack's own settings must reach its server
   // wherever it is placed, or mail-dependent sign-in silently stays off on a remote target.
   'HAPPIER_AUTH_EMAIL_',
-  'HAPPIER_FEATURE_AUTH_EMAIL_PASSWORD__',
 ];
 // Secrets never enter a remote command line or its persisted env file.
 const REMOTE_SERVER_LIGHT_NEVER_FORWARDED_ENV_KEYS = new Set(['HAPPIER_AUTH_EMAIL_SMTP_PASSWORD']);
