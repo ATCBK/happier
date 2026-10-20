@@ -47,6 +47,11 @@ import type { ScmBackend, ScmRepoDetection } from '@/scm/types';
 import { createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createRepositoryCheckpointPromptLifecycle } from '@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle';
 import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
+import * as sessionRpcTransport from '@/session/transport/rpc/sessionRpc';
+import { waitForExecutionRun } from '@/session/services/executionRuns';
+import { ExecutionRunWaitResultSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
+import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1, DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 type TestExecutionRunRuntimeFactory = (opts: Readonly<{
   runId?: string;
@@ -707,6 +712,82 @@ const executionRunRpcActionBindings = [
 ] as const satisfies readonly (readonly [string, ActionId])[];
 
 describe('executionRuns session RPC handlers', () => {
+  it('composes the wait contract from the registered producer to the CLI consumer', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'wait-account' })).toString('base64url')}.signature`;
+    const get = vi.spyOn(axios, 'get');
+    const priorGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url, options) => String(url).endsWith('/v2/account/session-follow-preferences')
+      ? { status: 200, data: { ...DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1,
+          ...DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } }
+      : priorGet(url, options));
+    let finishTurn: (() => void) | undefined;
+    let enteredTurn: (() => void) | undefined;
+    const turnEntered = new Promise<void>(resolve => { enteredTurn = resolve; });
+    const turnFinished = new Promise<void>(resolve => { finishTurn = resolve; });
+    let backend: ReturnType<typeof createTestExecutionRunHostRuntime>;
+    backend = createTestExecutionRunHostRuntime({
+      onSendPrompt() { enteredTurn?.(); },
+      async onWaitForTurnCompletion() {
+        await turnFinished;
+        backend.emitMessage({ type: 'model-output', fullText: 'Review complete' });
+      },
+      onDispose() { finishTurn?.(); },
+    });
+    const client = createEncryptedRpcTestClient({
+      scopePrefix: 'sess_1', callerAuthority: 'present_user',
+      registerHandlers: rpc => registerExecutionRunHandlers(rpc, {
+        sessionId: 'sess_1', cwd: process.cwd(), parentProvider: 'claude',
+        createBackend: () => backend, sendAcp: async () => {},
+        resolveRunReportPolicy: createSessionRunReportPolicyReader({ serverId: 'wait-home',
+          serverHttpBaseUrl: 'https://wait.test', accountId: 'wait-account',
+          readCredentials: async () => ({ token, encryption: null }), isCurrent: () => true }),
+      }),
+    });
+    const started = await client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      intent: 'task', modelSelection: null,
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, instructions: 'Review the change.',
+      permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+    });
+    expect(started.runId, JSON.stringify(started)).toMatch(/^run_/);
+    await turnEntered;
+    // Substitute only the network boundary; registration, Action executor,
+    // bridge, observer, encrypted codec and strict consumer all remain real.
+    const transport = vi.spyOn(sessionRpcTransport, 'callSessionRpc').mockImplementation(async params => {
+      expect(params.method).toBe(`sess_1:${SESSION_RPC_METHODS.EXECUTION_RUN_WAIT}`);
+      return await client.call(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, params.request);
+    });
+    const observe = (timeoutMs: number | null) => waitForExecutionRun({
+      token: 'token', sessionId: 'sess_1', mode: 'plain', ctx: null,
+      runId: started.runId, timeoutMs,
+    });
+    try {
+      const timedOut = await client.call<unknown, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, {
+        runId: started.runId, timeoutSeconds: 1,
+      });
+      expect(timedOut, JSON.stringify(timedOut)).toMatchObject({
+        ok: true, status: 'running', disposition: 'observation_timeout', runId: started.runId,
+      });
+      expect(ExecutionRunWaitResultSchema.safeParse(timedOut).success).toBe(true);
+      // Deliver the captured real timeout frame through the network substitute;
+      // no hand-written timeout fixture can drift from the registered producer.
+      transport.mockResolvedValueOnce(timedOut);
+      expect(await observe(null)).toEqual(timedOut);
+      vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '0');
+      const refused = await observe(null);
+      expect(refused).toMatchObject({ ok: false, code: 'execution_run_not_allowed' });
+      expect(refused).not.toMatchObject({ code: 'execution_run_wait_result_invalid' });
+      vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+      finishTurn?.();
+      const completed = await observe(null);
+      expect(completed).toMatchObject({ ok: true, status: 'succeeded',
+        result: { run: { runId: started.runId, status: 'succeeded' }, latestToolResult: 'Review complete' } });
+      expect(ExecutionRunWaitResultSchema.safeParse(completed).success).toBe(true);
+    } finally {
+      finishTurn?.();
+      transport.mockRestore();
+    }
+  });
+
   it('registers the host-private live broker authority resolver on the Session runtime', async () => {
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
