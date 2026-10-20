@@ -1,6 +1,85 @@
 import type { KeyboardCommand, KeyboardCommandId, KeyboardCommandSettingsTitleKey, KeybindingRule } from './types';
 
 export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
+    {
+        id: 'code.goToDefinition',
+        settingsTitleKey: 'actionPresentation.titles.code_definition_get',
+        defaultBinding: { binding: 'F12', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        id: 'code.findReferences',
+        settingsTitleKey: 'actionPresentation.titles.code_references_list',
+        defaultBinding: { binding: 'Shift+F12', allowInEditable: true, nativeConsumable: true },
+    },
+    ...([
+        ['media.previous', 'mediaPrevious', 'ArrowLeft'],
+        ['media.next', 'mediaNext', 'ArrowRight'],
+        ['media.zoomIn', 'mediaZoomIn', 'Shift+='],
+        ['media.zoomOut', 'mediaZoomOut', '-'],
+        ['media.fit', 'mediaFit', '0'],
+        ['media.actualSize', 'mediaActualSize', '1'],
+        ['media.playPause', 'mediaPlayPause', 'Space'],
+    ] as const).map(([id, title, binding]): KeyboardCommand => ({
+        id, settingsTitleKey: `settingsKeyboard.commands.${title}`,
+        defaultBindings: (id === 'media.zoomIn' ? [binding, 'NumpadAdd'] : [binding])
+            .map(binding => ({ binding, conflictScope: 'mediaStage', nativeConsumable: true })),
+        when: context => !context.isEditableTarget,
+    })),
+    { id: 'shell.column.toggle', settingsTitleKey: 'settingsKeyboard.commands.shellColumnToggle', defaultBindings: [
+        { binding: 'Mod+B', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Mod+B', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+B', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'panes.main.toggle', settingsTitleKey: 'settingsKeyboard.commands.panesMainToggle', defaultBindings: [
+        { binding: 'Mod+Alt+B', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Mod+Alt+B', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+Shift+B', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'panes.side.toggle', settingsTitleKey: 'settingsKeyboard.commands.panesSideToggle', defaultBindings: [
+        { binding: 'Mod+Shift+E', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Mod+Shift+E', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+Shift+E', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'panes.arrangement.toggle', settingsTitleKey: 'settingsKeyboard.commands.panesArrangementToggle', defaultBindings: [
+        { binding: 'Mod+Alt+E', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Mod+Alt+E', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+Shift+L', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'panes.region.next', settingsTitleKey: 'settingsKeyboard.commands.panesRegionNext', defaultBindings: [
+        { binding: 'F6', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Ctrl+F6', platforms: ['windows', 'linux'], blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'F6', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+F6', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'panes.region.previous', settingsTitleKey: 'settingsKeyboard.commands.panesRegionPrevious', defaultBindings: [
+        { binding: 'Shift+F6', blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Ctrl+Shift+F6', platforms: ['windows', 'linux'], blockedSurfaces: ['web'], nativeConsumable: true },
+        { binding: 'Shift+F6', platforms: ['web'], webHost: 'desktop', nativeConsumable: true },
+        { binding: 'Alt+Shift+F6', platforms: ['web'], webHost: 'browser' },
+    ], when: context => !context.isEditableTarget },
+    { id: 'review.change.next', settingsTitleKey: 'settingsKeyboard.commands.reviewChangeNext',
+        defaultBinding: { binding: 'j', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.change.previous', settingsTitleKey: 'settingsKeyboard.commands.reviewChangePrevious',
+        defaultBinding: { binding: 'k', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.change.keep', settingsTitleKey: 'settingsKeyboard.commands.reviewChangeKeep',
+        defaultBinding: { binding: 'r', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.change.discard', settingsTitleKey: 'settingsKeyboard.commands.reviewChangeDiscard',
+        defaultBinding: { binding: 'd', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.change.ask', settingsTitleKey: 'settingsKeyboard.commands.reviewChangeAsk',
+        defaultBinding: { binding: '/', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.file.next', settingsTitleKey: 'settingsKeyboard.commands.reviewFileNext',
+        defaultBinding: { binding: 'Shift+j', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.file.previous', settingsTitleKey: 'settingsKeyboard.commands.reviewFilePrevious',
+        defaultBinding: { binding: 'Shift+k', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    { id: 'review.undo', settingsTitleKey: 'settingsKeyboard.commands.reviewUndo',
+        defaultBinding: { binding: 'Mod+z', conflictScope: 'review', nativeConsumable: true }, when: context => !context.isEditableTarget },
+    // Handler presence gives a selection priority over the composer chord.
+    { id: 'editor.selection.ask', settingsTitleKey: 'settingsKeyboard.commands.editorSelectionAsk', defaultBindings: [
+        { binding: 'Alt+i', platforms: ['web'], webHost: 'browser', allowInEditable: true, conflictScope: 'editorSelection' },
+        { binding: 'Mod+i', platforms: ['web'], webHost: 'desktop', allowInEditable: true, conflictScope: 'editorSelection' },
+        { binding: 'Mod+i', blockedSurfaces: ['web'], allowInEditable: true, nativeConsumable: true, conflictScope: 'editorSelection' },
+    ] },
+    { id: 'files.track.toggle', settingsTitleKey: 'settingsKeyboard.commands.filesTrackToggle' },
     { id: 'inbox.item.next', settingsTitleKey: 'common.next', defaultBindings: [{ binding: 'ArrowDown' }, { binding: 'j' }],
         when: context => !context.isEditableTarget && !context.isInteractiveTarget },
     { id: 'inbox.item.previous', settingsTitleKey: 'common.previous', defaultBindings: [{ binding: 'ArrowUp' }, { binding: 'k' }],
@@ -124,6 +203,24 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         id: 'search.textInFiles',
         settingsTitleKey: 'settingsKeyboard.commands.searchTextInFiles',
         defaultBinding: { binding: 'Mod+Shift+F', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        id: 'search.files',
+        settingsTitleKey: 'settingsKeyboard.commands.searchFiles',
+        get defaultBindings(): readonly KeybindingRule[] {
+            const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+            const safari = /Safari\//.test(ua) && !/(Chrome|Chromium|CriOS|Edg|OPR|FxiOS)\//.test(ua);
+            return [
+                { binding: 'Mod+P', platforms: ['web'], webHost: 'desktop', allowInEditable: true, nativeConsumable: true },
+                { binding: safari ? 'Mod+Alt+P' : 'Mod+P', platforms: ['web'], webHost: 'browser', allowInEditable: true },
+                { binding: 'Mod+P', blockedSurfaces: ['web'], allowInEditable: true, nativeConsumable: true },
+            ];
+        },
+    },
+    {
+        id: 'search.symbols',
+        settingsTitleKey: 'settingsKeyboard.commands.searchSymbols',
+        defaultBinding: { binding: 'Mod+Shift+O', allowInEditable: true, nativeConsumable: true },
     },
     {
         id: 'find.open', settingsTitleKey: 'settingsKeyboard.commands.findOpen',
@@ -482,6 +579,16 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         defaultBinding: { binding: 'Home' },
         when: (context) => !context.isEditableTarget,
     },
+    {
+        id: 'files.editor.change.next',
+        settingsTitleKey: 'settingsKeyboard.commands.reviewChangeNext',
+        defaultBinding: { binding: 'Alt+F5', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        id: 'files.editor.change.previous',
+        settingsTitleKey: 'settingsKeyboard.commands.reviewChangePrevious',
+        defaultBinding: { binding: 'Alt+Shift+F5', allowInEditable: true, nativeConsumable: true },
+    },
     { id: 'workflow.new', settingsTitleKey: 'workflows.newWorkflow' },
     { id: 'workflow.createWithAgent', settingsTitleKey: 'workflows.authoring.create' },
     // Workflow authoring. Both commands fire while the caret is inside the workflow editor's own
@@ -497,6 +604,16 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         defaultBindings: [
             { binding: 'Alt+S', allowInEditable: true, platforms: ['web'] },
             { binding: 'Mod+S', allowInEditable: true, nativeConsumable: true, blockedSurfaces: ['web'] },
+        ],
+    },
+    {
+        id: 'files.editor.save',
+        settingsTitleKey: 'settingsKeyboard.commands.filesEditorSave',
+        // File and Workflow authoring register only for their focused editor surface.
+        defaultBindings: [
+            { binding: 'Alt+S', platforms: ['web'], webHost: 'browser', allowInEditable: true, conflictScope: 'fileEditor' },
+            { binding: 'Mod+S', platforms: ['web'], webHost: 'desktop', allowInEditable: true, nativeConsumable: true, conflictScope: 'fileEditor' },
+            { binding: 'Mod+S', blockedSurfaces: ['web'], allowInEditable: true, nativeConsumable: true, conflictScope: 'fileEditor' },
         ],
     },
     // Mod+Enter is also `composer.sendImmediate`'s default. The two are never reachable together —
