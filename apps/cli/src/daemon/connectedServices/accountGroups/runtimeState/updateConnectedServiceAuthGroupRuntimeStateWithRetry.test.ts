@@ -32,13 +32,31 @@ function group(runtimeStateRevision: number, state: Readonly<Record<string, unkn
 }
 
 describe('updateConnectedServiceAuthGroupRuntimeStateWithRetry', () => {
-  it('re-reads and recomputes once after a same-generation runtime-state revision conflict', async () => {
+  it('stops recomputing when the authoritative generation changes', async () => {
+    let current = group(4, {});
+    const result = await updateConnectedServiceAuthGroupRuntimeStateWithRetry({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      expectedGeneration: 3,
+      loadGroup: async () => current,
+      buildPatch: () => ({ memberStates: [] }),
+      update: async () => {
+        current = { ...current, generation: 4 };
+        throw new Error('connected_service_auth_group_runtime_state_revision_conflict');
+      },
+    });
+    expect(result).toBeNull();
+  });
+
+  it('re-reads and recomputes through repeated same-generation runtime-state revision conflicts', async () => {
     const loadGroup = vi.fn()
       .mockResolvedValueOnce(group(4, { quotaExhaustedUntilMs: 10 }))
-      .mockResolvedValueOnce(group(5, { quotaExhaustedUntilMs: 10, capacityLimitedUntilMs: 20 }));
+      .mockResolvedValueOnce(group(5, { quotaExhaustedUntilMs: 10, capacityLimitedUntilMs: 20 }))
+      .mockResolvedValueOnce(group(6, { quotaExhaustedUntilMs: 10, capacityLimitedUntilMs: 30 }));
     const update = vi.fn()
       .mockRejectedValueOnce(new Error('connected_service_auth_group_runtime_state_revision_conflict'))
-      .mockImplementationOnce(async (input) => group(6, input.memberStates[0]?.state ?? {}));
+      .mockRejectedValueOnce(new Error('connected_service_auth_group_runtime_state_revision_conflict'))
+      .mockImplementationOnce(async (input) => group(7, input.memberStates[0]?.state ?? {}));
 
     await expect(updateConnectedServiceAuthGroupRuntimeStateWithRetry({
       serviceId: 'openai-codex',
@@ -55,15 +73,15 @@ describe('updateConnectedServiceAuthGroupRuntimeStateWithRetry', () => {
         }],
       }),
       update,
-    })).resolves.toEqual(expect.objectContaining({ runtimeStateRevision: 6 }));
+    })).resolves.toEqual(expect.objectContaining({ runtimeStateRevision: 7 }));
 
-    expect(update).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      expectedRuntimeStateRevision: 5,
+    expect(update).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      expectedRuntimeStateRevision: 6,
       memberStates: [{
         profileId: 'work',
         state: expect.objectContaining({
           quotaExhaustedUntilMs: null,
-          capacityLimitedUntilMs: 20,
+          capacityLimitedUntilMs: 30,
         }),
       }],
     }));

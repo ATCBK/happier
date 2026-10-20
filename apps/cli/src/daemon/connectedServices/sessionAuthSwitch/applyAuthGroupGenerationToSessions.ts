@@ -38,7 +38,6 @@ export type ApplyAuthGroupGenerationToSessionsResult = Readonly<{
  * 2026-07-10), while the cap prevents a large pool from thundering-herd restarting the machine.
  */
 const APPLY_FANOUT_CONCURRENCY = 4;
-const MAX_GENERATION_REDISTRIBUTIONS = 4;
 
 /**
  * Fan a server-committed auth-group generation out to the live sessions bound to the group.
@@ -368,7 +367,7 @@ async function applyImmutableGenerationToSessions(
 ): Promise<ApplyAuthGroupGenerationToSessionsResult> {
   throwIfFanoutAborted(input.signal);
   let committedGeneration = input.committedGeneration;
-  for (let redistribution = 0; redistribution < MAX_GENERATION_REDISTRIBUTIONS; redistribution += 1) {
+  for (let redistribution = 0; ; redistribution += 1) {
     let appliedSessionCount = 0;
     let restartRequestedSessionCount = 0;
     let deferredPersistedSessionCount = 0;
@@ -507,20 +506,9 @@ async function applyImmutableGenerationToSessions(
     const authoritativeGeneration = supersedingGenerations.sort((left, right) => (
       right.decisionCommittedTarget.generation - left.decisionCommittedTarget.generation
     ))[0];
-    if (authoritativeGeneration && redistribution + 1 < MAX_GENERATION_REDISTRIBUTIONS) {
+    if (authoritativeGeneration) {
       committedGeneration = authoritativeGeneration;
       continue;
-    }
-    if (authoritativeGeneration) {
-      const errorCode = 'generation_redistribution_limit_reached';
-      for (const target of input.targets) {
-        resultsBySessionId[target.sessionId] = {
-          reconciliationDisposition: 'superseded_after_apply',
-          errorCode,
-          pendingRecorded: false,
-        };
-        failures.push({ sessionId: target.sessionId, errorCode });
-      }
     }
     throwIfFanoutAborted(input.signal);
     return {
@@ -533,5 +521,4 @@ async function applyImmutableGenerationToSessions(
       resultsBySessionId,
     };
   }
-  throw new Error('connected_service_auth_generation_redistribution_unreachable');
 }

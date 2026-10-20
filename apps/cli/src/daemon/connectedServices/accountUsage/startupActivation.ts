@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import type { ConnectedServiceId, ConnectedServiceUsageSourceV1 } from '@happier-dev/protocol';
 
 import { ConnectedServiceCurrentSourceHydrationConflictError } from './currentSourceHydration';
@@ -54,5 +55,4 @@ export async function activateConnectedServiceQuotaAutomationAfterProviderAccoun
     return { status: 'quota_policy_disabled', error };
   }
 }
-import { setImmediate } from 'node:timers/promises';
 

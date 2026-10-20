@@ -536,6 +536,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
             () => ensurePrivateConnectedServiceMaterializedRoot(nativeRoot));
           signalController.signal.throwIfAborted();
           const stateSharing = await observeConnectedServiceMaterializationPhase(params, 'native_home_state', () => applyConnectedServiceStateSharingDescriptor({
+            signal: signalController.signal,
             descriptor: stateSharingDescriptor,
             nativeSourceContext: {
               // Foreign requester materialization has no authority over the

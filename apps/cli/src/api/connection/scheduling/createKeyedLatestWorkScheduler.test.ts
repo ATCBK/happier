@@ -1,6 +1,52 @@
 import { describe, expect, it } from 'vitest';
 
 describe('createKeyedLatestWorkScheduler', () => {
+  it('retains every pending write across long disconnection when no caller capacity or age bound exists', async () => {
+    const { createKeyedLatestWorkScheduler } = await import('./createKeyedLatestWorkScheduler');
+    let now = 0;
+    let connected = false;
+    const writes = new Set<number>();
+    const scheduler = createKeyedLatestWorkScheduler<string, number>({
+      run: async (_key, payload) => { writes.add(payload); },
+      maxConcurrent: 2,
+      minKeyIntervalMs: 0,
+      now: () => now,
+      isConnected: () => connected,
+    });
+    try {
+      for (let index = 0; index < 1_025; index += 1) scheduler.enqueue(`quota:${index}`, index);
+      now = 2 * 60 * 60_000;
+      scheduler.enqueue('quota:1025', 1_025);
+      connected = true;
+      scheduler.notifyConnectivityChanged();
+      await scheduler.flushAll(1_000);
+      expect(writes).toEqual(new Set(Array.from({ length: 1_026 }, (_, index) => index)));
+      expect(scheduler.getStats().pendingKeyCount).toBe(0);
+    } finally {
+      scheduler.dispose();
+    }
+  });
+
+  it('settles flush waiters when pending work is cancelled or its owner is disposed', async () => {
+    const { createKeyedLatestWorkScheduler } = await import('./createKeyedLatestWorkScheduler');
+    const writes: number[] = [];
+    const scheduler = createKeyedLatestWorkScheduler<string, number>({
+      run: async (_key, payload) => { writes.push(payload); },
+      maxConcurrent: 1,
+      minKeyIntervalMs: 0,
+      isConnected: () => false,
+    });
+    scheduler.enqueue('cancelled', 1);
+    scheduler.enqueue('disposed', 2);
+    const cancelledFlush = scheduler.flushKey('cancelled', 1_000);
+    scheduler.cancelKey('cancelled');
+    await expect(cancelledFlush).resolves.toBe(true);
+    const disposedFlush = scheduler.flushKey('disposed', 1_000);
+    scheduler.dispose();
+    await expect(disposedFlush).resolves.toBe(true);
+    expect(writes).toEqual([]);
+  });
+
   it('keeps only the latest pending payload for a key and flushes it', async () => {
     const mod = await import('./createKeyedLatestWorkScheduler').catch(() => null);
     expect(mod?.createKeyedLatestWorkScheduler).toBeTypeOf('function');

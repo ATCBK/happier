@@ -44,7 +44,7 @@ export async function removeLinkedConnectedServiceHomeEntries(
 }
 
 export async function moveConnectedServiceHomeEntryAside(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     const suffix = `.local-${Date.now()}${attempt === 0 ? '' : `-${attempt}`}`;
     try {
       await rename(path, `${path}${suffix}`);
@@ -56,7 +56,6 @@ export async function moveConnectedServiceHomeEntryAside(path: string): Promise<
       throw error;
     }
   }
-  throw new Error(`Unable to migrate existing connected-service home entry aside for ${path}`);
 }
 
 export async function listDisplacedConnectedServiceHomeDirectories(path: string): Promise<readonly string[]> {

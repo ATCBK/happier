@@ -12,11 +12,10 @@ type Timer = ReturnType<typeof setTimeout>;
 const DEFAULT_DRAIN_DELAY_MS = 2_000;
 const DEFAULT_RETRY_DELAY_MS = 10_000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
-const DEFAULT_DRAIN_LIMIT = 8;
-const DEFAULT_MAX_AUTOMATIC_ATTEMPTS = 8;
 
 let scheduledTimer: Timer | null = null;
 let drainInFlight = false;
+let pendingDrainInput: DrainScheduleInput | null = null;
 
 function clearScheduledTimer(clearTimeoutFn: typeof clearTimeout = clearTimeout): void {
   if (!scheduledTimer) return;
@@ -43,18 +42,10 @@ type DrainScheduleInput = Readonly<{
   logPrefix?: string;
   delayMs?: number;
   retryDelayMs?: number;
-  maxAutomaticAttempts?: number;
-  limit?: number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
   drain?: typeof drainRuntimeAuthFailureReportOutboxToDaemon;
 }>;
-
-function readMaxAutomaticAttempts(value: number | undefined): number {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0
-    ? value
-    : DEFAULT_MAX_AUTOMATIC_ATTEMPTS;
-}
 
 async function drainOnce(input: DrainScheduleInput, automaticAttempt: number): Promise<void> {
   if (drainInFlight) return;
@@ -68,7 +59,6 @@ async function drainOnce(input: DrainScheduleInput, automaticAttempt: number): P
   try {
     const result = await drain({
       ...(input.outboxDir ? { outboxDir: input.outboxDir } : {}),
-      limit: input.limit ?? DEFAULT_DRAIN_LIMIT,
     });
     shouldRetry = result.retried > 0;
   } catch (error) {
@@ -78,7 +68,9 @@ async function drainOnce(input: DrainScheduleInput, automaticAttempt: number): P
     drainInFlight = false;
   }
 
-  if (shouldRetry && automaticAttempt < readMaxAutomaticAttempts(input.maxAutomaticAttempts)) {
+  const pending = pendingDrainInput;
+  pendingDrainInput = null;
+  if (shouldRetry) {
     const retryDelayMs = readDelayMs(input.retryDelayMs, DEFAULT_RETRY_DELAY_MS);
     scheduleDrain({
       ...input,
@@ -87,16 +79,23 @@ async function drainOnce(input: DrainScheduleInput, automaticAttempt: number): P
         DEFAULT_MAX_RETRY_DELAY_MS,
       ),
     }, automaticAttempt + 1);
+  } else if (pending) {
+    scheduleDrain(pending, 1);
   }
 }
 
 export function resetRuntimeAuthFailureReportOutboxDrainSchedulerForTests(): void {
   clearScheduledTimer();
   drainInFlight = false;
+  pendingDrainInput = null;
 }
 
 function scheduleDrain(input: DrainScheduleInput, automaticAttempt: number): void {
-  if (scheduledTimer || drainInFlight) return;
+  if (drainInFlight) {
+    pendingDrainInput = input;
+    return;
+  }
+  if (scheduledTimer) return;
 
   const setTimeoutFn = input.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = input.clearTimeoutFn ?? clearTimeout;

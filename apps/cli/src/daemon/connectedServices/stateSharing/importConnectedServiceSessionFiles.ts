@@ -240,7 +240,7 @@ async function resolveWritableDestinationPath(destinationPath: string, sourceHas
   const ext = extname(destinationPath);
   const stem = basename(destinationPath, ext);
   const hashPrefix = sourceHash.slice(0, 12);
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     const suffix = attempt === 0 ? '' : `-${attempt}`;
     const candidate = join(dir, `${stem}.happier-import-${hashPrefix}${suffix}${ext}`);
     if (await filesHaveSameHash(candidate, sourceHash)) return { path: candidate, alreadyImported: true };
@@ -252,7 +252,6 @@ async function resolveWritableDestinationPath(destinationPath: string, sourceHas
       throw error;
     }
   }
-  throw new Error(`Unable to resolve connected-service session import conflict for ${destinationPath}`);
 }
 
 async function copyFileAtomically(sourcePath: string, destinationPath: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol';
+import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1, QualifiedConnectedAccountCredentialPayloadV1Schema } from '@happier-dev/protocol';
 
 import {
   ConnectedAccountAttemptTransactionApiError,
@@ -214,6 +214,43 @@ function preparedDeviceSettlement(
 }
 
 describe('qualified Connected Account attempt transaction adapters', () => {
+  it.each(['credential', 'redirect'] as const)('retains valid large %s material through the canonical transaction envelope', async (kind) => {
+    const api = createTransactionApi();
+    const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({
+      credentials: tokenOnlyCredentials(), ...plainAccount, api, now: () => 5_000,
+    });
+    const values = QualifiedConnectedAccountCredentialPayloadV1Schema.parse({
+      v: 1, values: { accessToken: 't'.repeat(kind === 'credential' ? 80_000 : 20) },
+    }).values;
+    const snapshot = { ...oauthSnapshot(), stagedCredentials: values,
+      authorizationUrl: `https://provider.example/authorize?state=${'s'.repeat(kind === 'redirect' ? 9_000 : 20)}` };
+    const transaction = await owner.oauth.create({ attemptId: snapshot.attemptId, service, snapshot,
+      callbackUrl: 'https://app.example/callback' });
+    expect((await owner.oauth.read!(snapshot.attemptId))?.snapshot).toEqual(snapshot);
+    await transaction.close();
+  });
+
+  it.each(['oauth', 'device'] as const)('retains a valid %s provider authorization beyond fifteen minutes within server custody', async (kind) => {
+    const api = createTransactionApi();
+    const now = 5_000;
+    const providerExpiry = now + 40 * 60_000;
+    const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({
+      credentials: tokenOnlyCredentials(), ...plainAccount, api, now: () => now,
+    });
+    if (kind === 'oauth') {
+      const snapshot = { ...oauthSnapshot(), expiresAtMs: providerExpiry };
+      const transaction = await owner.oauth.create({ attemptId: snapshot.attemptId, service,
+        snapshot, callbackUrl: 'https://provider.example/oauth/callback' });
+      expect(transaction.expiresAtMs).toBe(providerExpiry);
+      await transaction.close();
+    } else {
+      const snapshot = { ...deviceSnapshot(), expiresAtMs: providerExpiry };
+      await owner.device.acknowledge(snapshot);
+      expect(api.records.get('device:device-attempt')?.expiresAtMs).toBe(providerExpiry);
+      await owner.device.clear(snapshot.attemptId);
+    }
+  });
+
   it('seals host-discovered configuration before the redirect and refuses changes after publication', async () => {
     const api = createTransactionApi();
     const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({ credentials: credentials(7), ...e2eeAccount, api });

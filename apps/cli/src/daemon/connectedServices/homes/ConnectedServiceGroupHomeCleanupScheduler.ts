@@ -111,7 +111,7 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
     const quarantineRoot = join(dirname(path), '.quarantine');
     const entryBase = `${this.nowMs()}-${basename(path)}`;
     await mkdir(quarantineRoot, { recursive: true });
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; ; attempt += 1) {
       const quarantinePath = join(quarantineRoot, attempt === 0 ? entryBase : `${entryBase}-${attempt}`);
       try {
         await this.renamePath(path, quarantinePath);
@@ -122,7 +122,6 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
         throw error;
       }
     }
-    throw new Error(`Failed to allocate connected-service group-home quarantine path for ${path}`);
   }
 
   private async removeGroupHome(key: string, target: DeletedGroupCleanupTarget): Promise<void> {

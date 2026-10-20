@@ -44,8 +44,8 @@ export function createConnectedServiceQuotaPersistenceScheduler<
   run: (key: TKey, payload: TPayload) => Promise<void>;
   maxConcurrent: number;
   minKeyIntervalMs: number;
-  maxKeys: number;
-  maxKeyAgeMs: number;
+  maxKeys?: number;
+  maxKeyAgeMs?: number;
   maxPendingPayloadAgeMs?: number;
   maxConsecutiveFailures?: number;
   now?: () => number;
@@ -58,7 +58,7 @@ export function createConnectedServiceQuotaPersistenceScheduler<
   const maxConsecutiveFailures = options.maxConsecutiveFailures === undefined
     ? null
     : normalizePositiveInteger(options.maxConsecutiveFailures, 1);
-  const maxPausedKeys = normalizePositiveInteger(options.maxKeys, 1);
+  const maxPausedKeys = options.maxKeys === undefined ? null : normalizePositiveInteger(options.maxKeys, 1);
   const now = options.now ?? Date.now;
   const pausedByKey = new Map<TKey, PausedQuotaPersistencePayload<TPayload>>();
   const forceFlushKeys = new Set<TKey>();
@@ -75,7 +75,7 @@ export function createConnectedServiceQuotaPersistenceScheduler<
   }
 
   function evictOldestPausedKeys(protectedKey: TKey): void {
-    while (pausedByKey.size > maxPausedKeys) {
+    while (maxPausedKeys !== null && pausedByKey.size > maxPausedKeys) {
       let oldestKey: TKey | null = null;
       let oldestTouchedAtMs = Number.POSITIVE_INFINITY;
       for (const [key, paused] of pausedByKey) {

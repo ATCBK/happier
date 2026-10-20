@@ -45,6 +45,7 @@ export type TargetMaterializationContext = Readonly<{
 }>;
 
 export type ApplyConnectedServiceStateSharingDescriptorInput = Readonly<{
+  signal?: AbortSignal;
   descriptor: ConnectedServiceStateSharingDescriptor;
   nativeSourceContext: NativeSourceContext;
   existingMaterializedStateContext?: ExistingMaterializedStateContext;
@@ -284,6 +285,7 @@ async function preflightStateLink(params: Readonly<{
 }
 
 async function materializeLinkedStateEntry(params: Readonly<{
+  signal?: AbortSignal;
   providerLabel: string;
   entryName: string;
   sourcePath: string;
@@ -316,7 +318,8 @@ async function materializeLinkedStateEntry(params: Readonly<{
     // The provider may recreate its state directory between the removal above and the atomic
     // symlink rename (including EPERM on Windows). Reconcile that newly appeared entry and retry
     // the same prepared link so a live-home race cannot abort materialization or create a competing path.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    while (true) {
+      params.signal?.throwIfAborted();
       let destinationStat;
       try {
         destinationStat = await lstat(params.destinationPath);
@@ -342,10 +345,12 @@ async function materializeLinkedStateEntry(params: Readonly<{
           || code === 'ENOTEMPTY'
           || code === 'EEXIST'
           || code === 'EPERM';
-        if (!destinationAppeared || attempt === 2) throw error;
+        if (!destinationAppeared) throw error;
+        // EPERM can also be a permanent permission refusal. Retry only the
+        // observed recreated-directory race rather than hiding an OS failure.
+        if (code === 'EPERM' && !await tryLstatConnectedServiceHomeEntry(params.destinationPath)) throw error;
       }
     }
-    throw new Error('State-link promotion retry loop exhausted without returning or throwing');
   } catch (error) {
     await rm(tempLinkPath, { recursive: true, force: true });
     throw error;
@@ -742,6 +747,7 @@ export async function applyConnectedServiceStateSharingDescriptor(
       }
       if (descriptorEntry.mode === 'linked' || descriptorEntry.mode === 'linked_or_copied') {
         if (!await materializeLinkedStateEntry({
+          signal: input.signal,
           providerLabel,
           entryName,
           sourcePath,

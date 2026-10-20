@@ -35,11 +35,11 @@ import type {
   QualifiedConnectedAccountAttemptTransactionAdapters,
 } from './qualifiedConnectedAccountDaemonPersistence';
 
-const DEFAULT_TRANSACTION_TTL_MS = 15 * 60_000;
+// The transaction route admits custody for at most 24 hours. Provider expiry
+// (when supplied) owns any earlier end; redirect/device phases add no deadline.
 const MAX_TRANSACTION_TTL_MS = 24 * 60 * 60_000;
 
 const BoundedIdSchema = z.string().check(z.minLength(1), z.maxLength(256));
-const BoundedValueSchema = z.string().check(z.maxLength(64 * 1024));
 const SafeTimestampSchema = z.number().check(z.int(), z.nonnegative());
 const ServiceSchema = z.strictObject({
   pluginId: BoundedIdSchema,
@@ -51,7 +51,7 @@ const AccountSchema = z.strictObject({
 });
 const StagedCredentialsSchema = z.record(
   z.string().check(z.minLength(1), z.maxLength(128)),
-  BoundedValueSchema,
+  z.string(),
 );
 const ProviderIdentitySchema = z.strictObject({
   accountId: z.optional(BoundedIdSchema),
@@ -99,7 +99,7 @@ const SnapshotBaseShape = {
 const OAuthSnapshotSchema = z.strictObject({
   ...SnapshotBaseShape,
   phase: z.enum(['starting', 'awaitingOAuth', 'outcomeUnknown']),
-  authorizationUrl: z.optional(z.string().check(z.minLength(1), z.maxLength(8_192))),
+  authorizationUrl: z.optional(z.string().check(z.minLength(1))),
   issuer: z.optional(z.string().check(z.minLength(1))),
   issuerResponseParameterRequired: z.optional(z.boolean()),
   expiresAtMs: z.optional(SafeTimestampSchema),
@@ -109,9 +109,9 @@ const DeviceSnapshotSchema = z.strictObject({
   expiresAtMs: SafeTimestampSchema,
   pollIntervalMs: z.number().check(z.int(), z.positive()),
   nextPollAtMs: SafeTimestampSchema,
-  verificationUri: z.string().check(z.minLength(1), z.maxLength(8_192)),
-  verificationUriComplete: z.optional(z.string().check(z.minLength(1), z.maxLength(8_192))),
-  userCode: z.string().check(z.minLength(1), z.maxLength(4_096)),
+  verificationUri: z.string().check(z.minLength(1)),
+  verificationUriComplete: z.optional(z.string().check(z.minLength(1))),
+  userCode: z.string().check(z.minLength(1)),
 });
 const OAuthPayloadSchema = z.strictObject({
   version: z.literal(2),
@@ -120,7 +120,7 @@ const OAuthPayloadSchema = z.strictObject({
   state: z.string().check(z.minLength(32), z.maxLength(4_096)),
   challenge: z.string().check(z.minLength(32), z.maxLength(256)),
   verifier: z.string().check(z.minLength(43), z.maxLength(128)),
-  callbackUrl: z.string().check(z.minLength(1), z.maxLength(8_192)),
+  callbackUrl: z.string().check(z.minLength(1)),
   consumed: z.boolean(),
 });
 const DevicePayloadSchema = z.strictObject({
@@ -261,7 +261,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     });
   const randomBytes = params.randomBytes ?? defaultRandomBytes;
   const transactionTtlMs =
-    params.transactionTtlMs ?? DEFAULT_TRANSACTION_TTL_MS;
+    params.transactionTtlMs ?? MAX_TRANSACTION_TTL_MS;
   const now = params.now ?? Date.now;
   if (
     !Number.isSafeInteger(transactionTtlMs)

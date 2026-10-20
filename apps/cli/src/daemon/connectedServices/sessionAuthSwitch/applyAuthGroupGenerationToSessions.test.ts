@@ -122,7 +122,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
     });
   });
 
-  it('boundedly redistributes the authoritative generation when B is superseded by C during apply', async () => {
+  it('redistributes the authoritative generation when B is superseded by C during apply', async () => {
     const generationB = buildConnectedServiceAuthGroupCommittedGenerationFact({
       decisionId: 'decision-b',
       provenance: 'hard_limit',
@@ -177,6 +177,35 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
     ]));
     expect(result.appliedSessionCount).toBe(2);
     expect(result.failedSessionCount).toBe(0);
+  });
+
+  it('follows valid superseding generations beyond four redistributions within caller lifetime', async () => {
+    const controller = new AbortController();
+    const result = await applyConnectedServiceAuthGroupGenerationToSessions({
+      committedGeneration: manualGeneration,
+      signal: controller.signal,
+      switchReason: 'automatic_runtime_failure',
+      executionAuthority: 'runtime_recovery',
+      targets: [{ sessionId: 'session-1', fromProfileId: 'source' }],
+      applyCommittedGeneration: async ({ committedGeneration }) => {
+        if (committedGeneration.decisionCommittedTarget.generation >= 13) return converged(committedGeneration);
+        return {
+          reconciliationDisposition: 'superseded_after_apply',
+          errorCode: null,
+          authoritativeGeneration: buildConnectedServiceAuthGroupCommittedGenerationFact({
+            decisionId: `decision-${committedGeneration.decisionCommittedTarget.generation + 1}`,
+            provenance: 'reconciliation',
+            decisionCommittedTarget: {
+              ...committedGeneration.decisionCommittedTarget,
+              generation: committedGeneration.decisionCommittedTarget.generation + 1,
+            },
+          }),
+        };
+      },
+      clearAdoptedGeneration: async () => {},
+    });
+    expect(result).toMatchObject({ ok: true, appliedSessionCount: 1, failedSessionCount: 0 });
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it('re-applies C when its projection already advanced the cursor before the real B apply observes supersession', async () => {
@@ -652,7 +681,9 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
     });
   });
 
-  it('reports local non-convergence when redistribution reaches its bound', async () => {
+  it('honors caller cancellation while following superseding generations beyond four redistributions', async () => {
+    const controller = new AbortController();
+    const cancelled = new Error('caller_cancelled_generation_fanout');
     const initial = buildConnectedServiceAuthGroupCommittedGenerationFact({
       decisionId: 'decision-1',
       provenance: 'hard_limit',
@@ -665,13 +696,15 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       },
     });
 
-    const result = await applyConnectedServiceAuthGroupGenerationToSessions({
+    await expect(applyConnectedServiceAuthGroupGenerationToSessions({
       committedGeneration: initial,
+      signal: controller.signal,
       switchReason: 'automatic_runtime_failure',
       executionAuthority: 'runtime_recovery',
       targets: [{ sessionId: 'session-1', fromProfileId: 'source' }],
       applyCommittedGeneration: async ({ committedGeneration }) => {
         const generation = committedGeneration.decisionCommittedTarget.generation + 1;
+        if (generation === 7) controller.abort(cancelled);
         return {
           reconciliationDisposition: 'superseded_after_apply',
           errorCode: null,
@@ -689,17 +722,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
         };
       },
       clearAdoptedGeneration: async () => {},
-    });
-
-    expect(result.resultsBySessionId?.['session-1']).toEqual({
-      reconciliationDisposition: 'superseded_after_apply',
-      errorCode: 'generation_redistribution_limit_reached',
-      pendingRecorded: false,
-    });
-    expect(result.failures).toEqual([{
-      sessionId: 'session-1',
-      errorCode: 'generation_redistribution_limit_reached',
-    }]);
+    })).rejects.toBe(cancelled);
   });
   it('fans out to sessions in parallel instead of serializing turn-boundary deferrals', async () => {
     // Live incident 2026-07-10: the sequential loop meant N mid-turn sessions cost N × the 60s

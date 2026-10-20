@@ -72,7 +72,67 @@ describe('runtimeAuthFailureReportOutboxDrainScheduler', () => {
     }
   });
 
-  it('coalesces duplicate schedules into one outbox drain while active', async () => {
+  it('drains a report enqueued after the active drain has read its persisted snapshot', async () => {
+    const outboxDir = await createTempDir('happier-outbox-scheduler-wake-');
+    let releaseFirst: (() => void) | undefined;
+    let firstStarted: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+    const notified = new Set<string>();
+    const drains: Promise<unknown>[] = [];
+    const report = (sessionId: string) => ({
+      sessionId,
+      classification: {
+        kind: 'auth_expired',
+        serviceId: 'claude-subscription',
+        profileId: 'primary',
+        groupId: null,
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    });
+    const input = {
+      outboxDir,
+      delayMs: 0,
+      drain: (drainInput: Parameters<typeof drainRuntimeAuthFailureReportOutboxToDaemon>[0]) => {
+        const operation = drainRuntimeAuthFailureReportOutboxToDaemon({
+          ...drainInput,
+          notify: async ({ sessionId, reportId }) => {
+            if (sessionId === 'first') {
+              firstStarted?.();
+              await blocked;
+            }
+            notified.add(sessionId);
+            return { recoveryReceipt: { reportId } };
+          },
+        });
+        drains.push(operation);
+        return operation;
+      },
+    };
+    try {
+      await enqueueRuntimeAuthFailureReportOutboxItem({ outboxDir, report: report('first') });
+      scheduleRuntimeAuthFailureReportOutboxDrainToDaemon(input);
+      await vi.advanceTimersToNextTimerAsync();
+      await started;
+      await enqueueRuntimeAuthFailureReportOutboxItem({ outboxDir, report: report('second') });
+      scheduleRuntimeAuthFailureReportOutboxDrainToDaemon(input);
+      releaseFirst?.();
+      await drains[0];
+      await vi.advanceTimersToNextTimerAsync();
+      await drains.at(-1);
+      expect(notified).toEqual(new Set(['first', 'second']));
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally {
+      releaseFirst?.();
+      await Promise.allSettled(drains);
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('coalesces duplicate schedules into one pending outbox wake while active', async () => {
     let resolveDrain: (() => void) | undefined;
     const drain = vi.fn(() => new Promise<{ delivered: number; dropped: number; retried: number }>((resolve) => {
       resolveDrain = () => resolve({ delivered: 1, dropped: 0, retried: 0 });
@@ -105,10 +165,11 @@ describe('runtimeAuthFailureReportOutboxDrainScheduler', () => {
     resolveDrain?.();
     await vi.runAllTimersAsync();
 
-    expect(drain).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledTimes(2);
+    resolveDrain?.();
+    await vi.runAllTimersAsync();
     expect(drain).toHaveBeenCalledWith({
       outboxDir: '/tmp/outbox',
-      limit: 8,
     });
   });
 
@@ -152,49 +213,6 @@ describe('runtimeAuthFailureReportOutboxDrainScheduler', () => {
 
     await vi.advanceTimersByTimeAsync(20);
     expect(drain).toHaveBeenCalledTimes(2);
-  });
-
-  it('stops automatic retry at the existing bound while leaving the outbox item for a later trigger', async () => {
-    const drain = vi.fn(async () => ({ delivered: 0, dropped: 0, retried: 1 }));
-
-    scheduleRuntimeAuthFailureReportOutboxDrainToDaemon({
-      delayMs: 10,
-      retryDelayMs: 20,
-      maxAutomaticAttempts: 3,
-      drain,
-    });
-
-    await vi.advanceTimersByTimeAsync(10);
-    await vi.advanceTimersByTimeAsync(20);
-    await vi.advanceTimersByTimeAsync(20);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(drain).toHaveBeenCalledTimes(3);
-
-    scheduleRuntimeAuthFailureReportOutboxDrainToDaemon({
-      delayMs: 10,
-      retryDelayMs: 20,
-      maxAutomaticAttempts: 3,
-      drain,
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(drain).toHaveBeenCalledTimes(4);
-  });
-
-  it('keeps retrying within the bounded daemon-replacement horizon', async () => {
-    const drain = vi.fn(async () => ({ delivered: 0, dropped: 0, retried: 1 }));
-
-    scheduleRuntimeAuthFailureReportOutboxDrainToDaemon({
-      delayMs: 10,
-      retryDelayMs: 20,
-      drain,
-    });
-
-    await vi.advanceTimersByTimeAsync(10);
-    for (let attempt = 1; attempt < 8; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(20 * (2 ** (attempt - 1)));
-    }
-
-    expect(drain).toHaveBeenCalledTimes(8);
   });
 
   it('unrefs scheduled timers when the timer handle supports it', () => {

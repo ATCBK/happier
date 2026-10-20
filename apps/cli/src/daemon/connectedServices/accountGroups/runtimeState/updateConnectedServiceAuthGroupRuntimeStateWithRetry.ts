@@ -44,7 +44,7 @@ export async function updateConnectedServiceAuthGroupRuntimeStateWithRetry<
     expectedRuntimeStateRevision: number;
   }> & TPatch) => Promise<TGroup>;
 }>): Promise<TGroup | null> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  while (true) {
     const group = await params.loadGroup();
     if (!group || group.generation !== params.expectedGeneration) return null;
     const patch = params.buildPatch(group);
@@ -58,8 +58,7 @@ export async function updateConnectedServiceAuthGroupRuntimeStateWithRetry<
         ...patch,
       });
     } catch (error) {
-      if (attempt > 0 || !isRuntimeStateRevisionConflict(error)) throw error;
+      if (!isRuntimeStateRevisionConflict(error)) throw error;
     }
   }
-  return null;
 }

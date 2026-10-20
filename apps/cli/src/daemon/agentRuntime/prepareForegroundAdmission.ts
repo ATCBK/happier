@@ -1522,6 +1522,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
                 }
                 Object.freeze(nativeSourceEnvironment);
                 const appliedStateSharing = await applyConnectedServiceStateSharingDescriptor({
+                    signal: registration.retirementSignal,
                     descriptor: stateSharingDescriptor,
                     nativeSourceContext: {
                       sourceRoot: resolveConnectedServiceNativeHomeRoot({

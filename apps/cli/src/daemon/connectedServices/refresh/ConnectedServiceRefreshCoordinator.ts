@@ -313,7 +313,6 @@ type RematerializedTargetsResult = Readonly<{
   failedTargets: ReadonlyArray<RematerializedTargetFailure>;
 }>;
 type CanonicalGroupStateForRefresh = Readonly<{ activeProfileId: string | null; generation: number }>;
-const MAX_RETAINED_BRIDGE_REFRESH_ATTEMPTS = 256;
 
 function bindingKey(binding: BoundProfile): string {
   return `${binding.serviceId}/${binding.profileId}`;
@@ -1479,8 +1478,8 @@ export class ConnectedServiceRefreshCoordinator {
       expectedCredentialRevision: input.expectedCredentialRevision, authority: input.authority,
       targetBinding: selection, promise, settlement: 'pending' as 'pending' | 'fulfilled' | 'rejected' };
     this.bridgeRefreshAttemptByBinding.set(attemptKey, attempt);
-    void promise.then(() => { attempt.settlement = 'fulfilled'; this.pruneSettledBridgeRefreshAttempts(); },
-      () => { attempt.settlement = 'rejected'; this.pruneSettledBridgeRefreshAttempts(); });
+    void promise.then(() => { attempt.settlement = 'fulfilled'; },
+      () => { attempt.settlement = 'rejected'; });
     const result = await promise;
     await this.assertAccountRuntimeCurrent();
     return result;
@@ -1812,24 +1811,14 @@ export class ConnectedServiceRefreshCoordinator {
     void promise.then(
       () => {
         attempt.settlement = 'fulfilled';
-        this.pruneSettledBridgeRefreshAttempts();
       },
       () => {
         attempt.settlement = 'rejected';
-        this.pruneSettledBridgeRefreshAttempts();
       },
     );
     const result = await promise;
     await this.assertAccountRuntimeCurrent();
     return result;
-  }
-
-  private pruneSettledBridgeRefreshAttempts(): void {
-    if (this.bridgeRefreshAttemptByBinding.size <= MAX_RETAINED_BRIDGE_REFRESH_ATTEMPTS) return;
-    for (const [key, attempt] of this.bridgeRefreshAttemptByBinding) {
-      if (this.bridgeRefreshAttemptByBinding.size <= MAX_RETAINED_BRIDGE_REFRESH_ATTEMPTS) return;
-      if (attempt.settlement !== 'pending') this.bridgeRefreshAttemptByBinding.delete(key);
-    }
   }
 
   private async performOpenAiCodexChatGptTokensBridgeRefresh(

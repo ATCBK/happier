@@ -1288,11 +1288,11 @@ export class ConnectedServiceQuotasCoordinator {
       maxKeys:
         typeof params.quotaPersistenceMaxKeys === 'number' && Number.isFinite(params.quotaPersistenceMaxKeys)
           ? Math.max(1, Math.trunc(params.quotaPersistenceMaxKeys))
-          : 1_024,
+          : undefined,
       maxKeyAgeMs:
         typeof params.quotaPersistenceMaxKeyAgeMs === 'number' && Number.isFinite(params.quotaPersistenceMaxKeyAgeMs)
           ? Math.max(1, Math.trunc(params.quotaPersistenceMaxKeyAgeMs))
-          : 60 * 60_000,
+          : undefined,
       maxPendingPayloadAgeMs:
         typeof params.quotaPersistenceMaxPendingPayloadAgeMs === 'number' && Number.isFinite(params.quotaPersistenceMaxPendingPayloadAgeMs)
           ? Math.max(1, Math.trunc(params.quotaPersistenceMaxPendingPayloadAgeMs))
@@ -4597,6 +4597,13 @@ export class ConnectedServiceQuotasCoordinator {
     const signal = input.signal ?? controller?.signal;
     const timeoutHandle = fetchTimeoutMs === null ? undefined : setTimeout(() => {
       controller?.abort(new Error('Connected-service quota fetch timed out'));
+      this.recordDiagnostic?.({
+        event: 'quota_work_suppressed',
+        phase: 'tick',
+        reason: 'quota_fetch_timeout',
+        serviceId: buildQualifiedPluginContributionKey(input.profile.ref.service),
+        activeProfileId: input.profile.ref.accountId,
+      });
     }, fetchTimeoutMs);
     timeoutHandle?.unref?.();
     let abortListener: (() => void) | undefined;

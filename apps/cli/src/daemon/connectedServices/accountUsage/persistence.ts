@@ -276,9 +276,6 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     run: persistPayload,
     maxConcurrent: 2,
     minKeyIntervalMs: 0,
-    maxKeys: 500,
-    maxKeyAgeMs: 60 * 60_000,
-    maxPendingPayloadAgeMs: 10 * 60_000,
     maxConsecutiveFailures: 5,
     now: params.now,
     shouldRetry: (error) =>

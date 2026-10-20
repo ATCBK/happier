@@ -1946,6 +1946,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         })],
       },
     });
+    const quotaDiagnostics: unknown[] = [];
     const coordinator = new ConnectedServiceQuotasCoordinator({
       api,
       credentials,
@@ -1955,6 +1956,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       discoveryEnabled: false,
       accountUsageStore,
       qualifiedConnectedAccountRuntime,
+      recordDiagnostic: (event) => { quotaDiagnostics.push(event); },
       quotaPersistenceMinFreshnessMs: 60_000,
       failureBackoffJitterPct: recoveryMode === 'quota_error_network' ? 0 : undefined,
       fetchTimeoutMs: recoveryMode === 'quota_timeout_configured' ? 1_000
@@ -2159,6 +2161,12 @@ describe('ConnectedServiceQuotasCoordinator', () => {
           await pending;
         }
         expect(accountUsageStore.listSnapshots()).toHaveLength(recoveryMode === 'quota_timeout_configured' ? 0 : 1);
+        if (recoveryMode === 'quota_timeout_configured') {
+          expect(quotaDiagnostics).toContainEqual(expect.objectContaining({
+            event: 'quota_work_suppressed',
+            reason: 'quota_fetch_timeout',
+          }));
+        }
         return;
       }
       const schedule = await coordinator.tickOnce();

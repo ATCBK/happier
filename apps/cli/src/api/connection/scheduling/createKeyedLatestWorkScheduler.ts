@@ -70,8 +70,8 @@ export function createKeyedLatestWorkScheduler<TKey extends string, TPayload>(
     run: (key: TKey, payload: TPayload) => Promise<void>;
     maxConcurrent: number;
     minKeyIntervalMs: number;
-    maxKeys: number;
-    maxKeyAgeMs: number;
+    maxKeys?: number;
+    maxKeyAgeMs?: number;
     maxPendingPayloadAgeMs?: number;
     now?: () => number;
     isConnected?: () => boolean;
@@ -84,8 +84,8 @@ export function createKeyedLatestWorkScheduler<TKey extends string, TPayload>(
   const readyQueue: TKey[] = [];
   const maxConcurrent = normalizePositiveInteger(options.maxConcurrent);
   const minKeyIntervalMs = normalizeNonNegativeMs(options.minKeyIntervalMs);
-  const maxKeys = normalizePositiveInteger(options.maxKeys);
-  const maxKeyAgeMs = normalizeNonNegativeMs(options.maxKeyAgeMs);
+  const maxKeys = options.maxKeys === undefined ? null : normalizePositiveInteger(options.maxKeys);
+  const maxKeyAgeMs = options.maxKeyAgeMs === undefined ? null : normalizeNonNegativeMs(options.maxKeyAgeMs);
   const maxPendingPayloadAgeMs = options.maxPendingPayloadAgeMs === undefined
     ? null
     : normalizeNonNegativeMs(options.maxPendingPayloadAgeMs);
@@ -143,7 +143,7 @@ export function createKeyedLatestWorkScheduler<TKey extends string, TPayload>(
         dropPending(key, entry, 'pending_payload_stale');
         continue;
       }
-      if (!entry.pending && nowMs - entry.lastTouchedAtMs > maxKeyAgeMs) {
+      if (!entry.pending && maxKeyAgeMs !== null && nowMs - entry.lastTouchedAtMs > maxKeyAgeMs) {
         clearEntryTimer(entry);
         entry.queued = false;
         removeFromReadyQueue(key);
@@ -153,7 +153,7 @@ export function createKeyedLatestWorkScheduler<TKey extends string, TPayload>(
   }
 
   function evictForMaxKeys(protectedKey?: TKey): boolean {
-    while (entries.size > maxKeys) {
+    while (maxKeys !== null && entries.size > maxKeys) {
       let oldestKey: TKey | null = null;
       let oldestTouchedAt = Number.POSITIVE_INFINITY;
       for (const [key, entry] of entries) {

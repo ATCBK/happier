@@ -204,7 +204,8 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
             });
             const materialized = await materializeConnectedServicesForSpawn({
               agentId: params.input.agentId, materializationKey: operationId,
-              requesterWorkAttributionV1: params.input.tracked?.requesterWorkAttributionV1,
+              requesterWorkAttributionV1: params.input.tracked?.requesterWorkAttributionV1
+                ?? params.input.tracked?.spawnOptions?.requesterWorkAttributionV1,
               activeServerDir: params.activeServerDir, baseDir: params.baseDir,
               sessionDirectory: params.input.cwd ?? params.input.tracked?.spawnOptions?.directory,
               recordsByServiceId: new Map(), connectedAccountsOwner: params.connectedAccountsOwner,
