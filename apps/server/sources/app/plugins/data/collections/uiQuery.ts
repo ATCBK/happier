@@ -570,7 +570,9 @@ async function resolveCurrentContract(input: Readonly<{
             ? persisted
             : await findExactMaterializedPluginCollectionContractTx({ tx: database, ref: requestedRef });
         if (!requestedRow) throw new PluginCollectionReadOperationError("collection_update_required");
-        const requested = readMaterializedPluginCollectionContract(requestedRow);
+        const requested = requestedRow === persisted
+            ? currentWriter
+            : readMaterializedPluginCollectionContract(requestedRow);
         const access = resolvePluginCollectionContractAccessV1({ currentWriter, requested });
         if (!access) throw new PluginCollectionReadOperationError("collection_update_required");
         return {
