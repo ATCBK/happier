@@ -92,6 +92,19 @@ describe('the PRs & Issues grouping axis', () => {
     // A linked Session is sufficient, even before its live work state answers.
     expect(planTriageListItemsV1({ ...input, tasks: { ...input.tasks, audience: 'agents' } }).map((item) => item.row.entryRef.entryId)).toEqual(['linked']);
   });
+  it('carries the source\'s own status word and live relations on a task item, and none on a PRs & Issues item', () => {
+    const base = row('relations', { kindId: 'issue', involvement: ['assignee'] });
+    const task = { ...base, content: { ...base.content!, outcome: { ...base.content!.outcome, snapshot: {
+      ...base.content!.outcome.snapshot,
+      state: { presentation: 'active' as const, stage: 'started' as const, nativeLabel: 'In Review' },
+      relations: { children: { total: 5, completed: 3 } },
+    } } } };
+    const tasks = { audience: 'mine' as const, isTask: () => true, hasSessions: () => false };
+    const [item] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests, tasks });
+    expect(item!.task).toEqual({ category: 'started', statusLabel: 'In Review', relations: { children: { total: 5, completed: 3 } } });
+    const [plain] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests });
+    expect(plain!.task).toBeUndefined();
+  });
   it('retains unchanged items in a 2000-row window when one linked Session changes work group', () => {
     const rows = Array.from({ length: 2000 }, (_, index) => row(String(index)));
     const working = {

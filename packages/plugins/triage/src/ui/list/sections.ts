@@ -1,4 +1,4 @@
-import type { TriageEntryLocatorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
+import type { TriageEntryLocatorV1, TriageEntryRelationsV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
 import { projectTriageDetailFieldsV1, projectTriageDetailFieldTextV1, triageTaskStatusCategoryV1 } from '@happier-dev/triage-protocol/v1';
 
 import { CORPUS_LANE } from '../../corpus/fold/lane.js';
@@ -31,8 +31,9 @@ export const TRIAGE_LIST_GROUPS_V1 = Object.freeze([
   'needsYou',
   'withAgent',
   'inReview',
+  // The Tasks lens's bands, in the order a person works them: In progress, To do, Backlog, then Done and Canceled.
+  'started', 'unstarted', 'backlog', 'completed', 'canceled',
   'everythingElse',
-  'backlog', 'unstarted', 'started', 'completed', 'canceled',
 ] as const);
 export type TriageListGroupIdV1 = (typeof TRIAGE_LIST_GROUPS_V1)[number];
 
@@ -54,7 +55,27 @@ export type TriageListItemV1 = Readonly<{
   agent: TriageAgentStatusV1 | null;
   /** The canonical selected connection's locator; absent for unread or unavailable entries. */
   locator?: TriageEntryLocatorV1 | null;
+  /** On the Tasks lens: the task's shared status category, the source's own status word and its live relations. */
+  task?: TriageListTaskFactsV1 | null;
 }>;
+
+/** A task row's status and relation facts, read from the source's live snapshot (never stored by Happier). */
+export type TriageListTaskFactsV1 = Readonly<{
+  category: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | null;
+  /** The source's own word ("In Review", "Open"); `null` when the source names none. */
+  statusLabel: string | null;
+  relations: TriageEntryRelationsV1 | null;
+}>;
+
+function readTaskFacts(row: TriageListRowV1 | null): TriageListTaskFactsV1 | null {
+  const snapshot = row?.content?.outcome.snapshot;
+  if (snapshot === undefined) return null;
+  return Object.freeze({
+    category: triageTaskStatusCategoryV1(snapshot.state),
+    statusLabel: snapshot.state.nativeLabel ?? null,
+    relations: snapshot.relations ?? null,
+  });
+}
 
 /**
  * Who acts next, from the facts on the row:
@@ -144,6 +165,7 @@ export function planTriageListItemsV1(input: Readonly<{
       signal: readSignal(projected, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: projected === null ? null : readTriageSelectedObservationV1(projected)?.observation.locator ?? null,
+      ...(input.tasks === undefined ? {} : { task: readTaskFacts(projected) }),
     });
   });
   for (const windowRow of input.rows) {
@@ -164,6 +186,7 @@ export function planTriageListItemsV1(input: Readonly<{
       signal: readSignal(windowRow, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: readTriageSelectedObservationV1(windowRow)?.observation.locator ?? null,
+      ...(input.tasks === undefined ? {} : { task: readTaskFacts(windowRow) }),
     }));
   }
   // A Session transition changes its own item/group, not every unchanged
@@ -178,6 +201,7 @@ export function planTriageListItemsV1(input: Readonly<{
       ? prior.row : item.row;
     if (row === prior.row && item.group === prior.group && item.summary === prior.summary
       && item.locator === prior.locator
+      && JSON.stringify(item.task) === JSON.stringify(prior.task)
       && JSON.stringify(item.signal) === JSON.stringify(prior.signal)
       && JSON.stringify(item.agent) === JSON.stringify(prior.agent)) return prior;
     return row === item.row ? item : Object.freeze({ ...item, row });
