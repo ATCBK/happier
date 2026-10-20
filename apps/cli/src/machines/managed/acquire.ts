@@ -537,6 +537,8 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                         expectedContributorOccurrenceId: occurrenceId,
                         admittedConnectedAccountPurposeBinding: { exactPurposeBindingSubjectId: activation.exactPurposeBindingSubjectId, isCurrent: () => isCurrent() && activation.isCurrent() },
                         input: role === 'check' ? {} : 'selectors' in probe ? probe.selectors ?? {} : {},
+                        ...(options.context?.recordOperationCredentialUse
+                            ? { approvalContext: { recordOperationCredentialUse: options.context.recordOperationCredentialUse } } : {}),
                         context: { surface: 'plugin', invocationSurface: 'plugin', originSurface: 'cli', signal: options.signal, initiatingActionCaller: options.context?.actionCaller },
                     });
                     if (!attempt.matched) throw new ManagedMachineControllerError('provider_unavailable');

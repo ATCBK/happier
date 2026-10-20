@@ -5,7 +5,6 @@ import { useRouter, type Href } from 'expo-router';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
-import { useKnownAccountActor } from '@/components/account/useKnownAccountActor';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
 import { useApprovalDecisionHandler } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
@@ -16,6 +15,7 @@ import {
 import type { DiscussionRequesterApproval } from '@/sync/domains/artifacts/approvalArtifacts';
 import { t } from '@/text';
 import { ApprovalDecisionBar } from './ApprovalDecisionBar';
+import { ApprovalOperationActorLine } from './ApprovalOperationActorLine';
 import {
   useApprovalAccountLabel,
   useApprovalRequesterViewer,
@@ -29,7 +29,7 @@ import { resolveApprovalRequesterThreadState } from './approvalRequesterThreadSt
 
 /**
  * C7 "External write needs confirmation", in the thread that asked: a shared Bot's outward request,
- * the exact operation and the setup it writes with, and who confirms. Only the person who asked gets
+ * the exact operation, and who confirms. A receipt adds "Using <credential>" only from the operation's admitted evidence. Only the person who asked gets
  * Decline and "Review and confirm…" (the existing request page, with its Who confirms section);
  * everyone else who can read the request sees who can act. Once decided the card is the receipt in
  * place: done only with effect evidence, and an unknown effect never reads as success.
@@ -63,15 +63,6 @@ export const ApprovalRequesterThreadCard = React.memo(
         subject.requesterAccountId,
         'sentence',
       ) ?? t('session.collaboration.discussion.attribution.anotherPerson');
-    const executor =
-      useApprovalAccountLabel(
-        subject.personaSessionRef.serverId,
-        subject.executionAccountId,
-        'sentence',
-      ) ?? t('session.collaboration.discussion.attribution.anotherPerson');
-    const executorIsViewer =
-      useKnownAccountActor(subject.personaSessionRef.serverId, null).viewerScope
-        ?.accountId === subject.executionAccountId;
     const decidingAccountId =
       'decidingAccountId' in state ? state.decidingAccountId : null;
     const decider =
@@ -169,6 +160,9 @@ export const ApprovalRequesterThreadCard = React.memo(
                       tone: 'neutral',
                     };
 
+    const operationUses =
+      'operationCredentialUses' in state ? state.operationCredentialUses : undefined;
+
     const footer =
       state.kind === 'open' ? (
         entitled ? (
@@ -262,20 +256,12 @@ export const ApprovalRequesterThreadCard = React.memo(
         icon={state.kind === 'failed' ? 'warning-circle' : undefined}
         footer={footer}
       >
-        <View style={styles.note}>
-          <Icon name="key" size={14} color={theme.colors.text.secondary} />
-          <Text
-            testID="approval-requester-thread-writes-with"
-            variant="meta"
-            style={styles.fact}
-          >
-            {executorIsViewer
-              ? t('detailPages.approval.requester.thread.writesWithYours')
-              : t('detailPages.approval.requester.thread.writesWith', {
-                  name: executor,
-                })}
-          </Text>
-        </View>
+        {operationUses?.length ? (
+          <ApprovalOperationActorLine
+            uses={operationUses}
+            serverId={subject.personaSessionRef.serverId}
+          />
+        ) : null}
       </ApprovalPromptChrome>
     );
   },
@@ -305,10 +291,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   noteText: {
     flexShrink: 1,
-  },
-  fact: {
-    flexShrink: 1,
-    color: theme.colors.text.secondary,
   },
   outcomeText: {
     flexShrink: 1,

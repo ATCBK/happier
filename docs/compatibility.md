@@ -2592,6 +2592,17 @@ backfill requirement. Undeployed target/plugin approval schemas may be refined
 in place through the same Artifact owner. Released V1 bytes and readers remain
 the historical compatibility boundary.
 
+For live-only target/plugin approvals in 0.3 development, the original admitted
+invocation retains the confidential operands and the same approval Artifact id
+through settlement. Its captured Account/Home writer publishes the terminal
+outcome, effect-attempt fact and any admitted operation-credential identity on
+that Artifact. Neither confidential input nor handler output is persisted by
+this receipt path. Success, failure and uncertain execution retain the original
+requester and execution origin; an unacknowledged receipt write reports
+`approval_execution_outcome_unknown` without retrying the effect. Once the live
+waiter is gone, another approval attempt remains `approval_stale`; history is
+read through the existing approval reader rather than replaying the operands.
+
 Storage proposals in 0.3 development optionally retain `storageRetryResults`
 inside the same strict V2 Artifact. This is an append-only list of strict settled
 Pile results, limited to the original execution's unsuccessful items with distinct
@@ -2910,8 +2921,15 @@ store. V1 list/get retain the closed snapshot reader inspected in clean `../0.2`
 at `37a6541578749067b49d4579be8c752c9591b8c8`: only `forkRequest`,
 `spawnAttempt`, and `handoff` domain references, with the original terminal
 `errorCode`/`error` pair. Its response projection omits current domain references,
-`setupReview`, `observation`, and failure `details`; it never rewrites retained
+`setupReview`, `observation`, `operationCredentialUses`, and failure `details`; it never rewrites retained
 custody, state, revisions, or revision notifications.
+
+Current V2 operation reads and current approval receipts retain content-free
+`operationCredentialUses` from actual host credential materialization. They
+describe the admitted label/kind, owning Account or Team when known,
+purpose-binding reason, and admission-time currentness; they neither grant
+credential access nor assert continuing readiness. Terminal/rejoined outcomes
+remain unchanged. The existing V1 response and push projection omit these facts.
 
 Managed controller failures in the current development V2 read retain a strict
 `managedControllerRequest` diagnostic: the static request path, failure category,

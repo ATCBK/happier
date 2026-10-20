@@ -5547,7 +5547,7 @@ The host's immutable `actionRequestAttributionV1` records the request, qualified
 requester (or null), persona Session and optional exact source message. Read it
 as **asked by**; returned answers can separately retain **answered by** provenance.
 **Using** is separate from both the execution Account and the cause. Current
-operation/approval receipts carry host-stamped `operationCredentialUses` from the
+operation results and settled approval receipts carry host-stamped `operationCredentialUses` from the
 credential materializer that actually admitted the operation. Each content-free
 entry contains the authorized credential label (or null), connected-account or
 Team-resource kind, actual owning Account/Team when known, and purpose-binding
@@ -5556,6 +5556,12 @@ currentness check, not continuing readiness; a Team entry can retain its admitte
 resource revision. The original outcome remains authoritative, including failed
 or uncertain effects. Plugin result JSON and the Bot owner's identity cannot
 stamp these facts. Older receipts without admission evidence remain unknown.
+An approval without terminal execution history remains pending. Live-only
+target Actions retain the original approval Artifact through incumbent
+settlement and publish the same safe admitted-credential facts beside the
+redacted terminal outcome; confidential operands and handler output remain
+with the live invocation. Never infer a settled approval or its credential
+actor from a pending status.
 Attribution grants no authority. Unknown or
 autonomous causes never become the Bot owner, and retained history is not a full
 audit log. Byline rendering is still being integrated.

@@ -17,6 +17,18 @@ export type ApprovalRequesterThreadState =
 
 const OUTCOME_UNKNOWN = 'approval_execution_outcome_unknown';
 
+/**
+ * The credentials an operation actually ran with, from the receipt's admitted metadata only. Action
+ * result JSON and the execution Account cannot establish the selected credential or its currentness,
+ * and a receipt that records no attempted effect describes no use.
+ */
+export function readApprovalOperationCredentialUses(
+    execution: Readonly<{ effectAttempted?: boolean; operationCredentialUses?: readonly ActionOperationCredentialUseV1[] }> | null | undefined,
+): readonly ActionOperationCredentialUseV1[] | undefined {
+    const uses = execution?.effectAttempted !== false ? execution?.operationCredentialUses : undefined;
+    return uses?.length ? uses : undefined;
+}
+
 export function resolveApprovalRequesterThreadState(
     parsed: DiscussionRequesterApproval['parsed'],
     /** The answer this device's decision owner accepted, until the stored request catches up. */
@@ -37,12 +49,10 @@ export function resolveApprovalRequesterThreadState(
         case 'failed': {
             const execution = request.execution;
             if (!execution) return { kind: 'confirmed_pending', decidingAccountId };
-            // Only admitted receipt metadata describes actual use; Action result JSON and the
-            // execution Account cannot establish the selected credential or its currentness.
             const currentExecution = parsed.family === 'target_action' ? parsed.request.execution
                 : parsed.request.v === 2 ? parsed.request.execution : undefined;
-            const uses = currentExecution?.effectAttempted !== false ? currentExecution?.operationCredentialUses : undefined;
-            const credentialUse = uses?.length ? { operationCredentialUses: uses } : {};
+            const uses = readApprovalOperationCredentialUses(currentExecution);
+            const credentialUse = uses ? { operationCredentialUses: uses } : {};
             if (execution.errorCode === OUTCOME_UNKNOWN) return { kind: 'uncertain', decidingAccountId, ...credentialUse };
             const failure = !execution.ok ? { errorCode: execution.errorCode ?? null }
                 : parsed.family === 'built_in' ? (() => {

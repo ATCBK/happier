@@ -557,13 +557,13 @@ export type PluginActionCurrentIntentRequest<TAction> = Readonly<{
 }>;
 
 export type PluginActionCurrentIntentResult = Readonly<
-  | { status: 'approved'; fingerprint: string }
+  | { status: 'approved'; fingerprint: string; artifactId?: string }
   | { status: 'deferred'; artifactId: string }
   | { status: 'rejected' | 'unavailable'; code: string }
 >;
 
 export type PluginActionPresentUserGateResult<TAction> = Readonly<
-  | { status: 'admitted'; action: TAction }
+  | { status: 'admitted'; action: TAction; artifactId?: string }
   | { status: 'deferred'; artifactId: string }
   | { status: 'unavailable' | 'failed'; code: string; message: string }
 >;
@@ -821,7 +821,8 @@ export function createPluginActionPresentUserGate<TAction>(deps: Readonly<{
       if (currentFingerprint !== fingerprint) {
         return presentUserUnavailable('plugin_action_current_intent_mismatch');
       }
-      return Object.freeze({ status: 'admitted' as const, action: current.action });
+      return Object.freeze({ status: 'admitted' as const, action: current.action,
+        ...(intent.artifactId === undefined ? {} : { artifactId: intent.artifactId }) });
     },
   });
 }

@@ -1637,14 +1637,19 @@ describe('buildTargetActionInvocationRegistry', () => {
                 stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                 return { artifactId: 'approval-external-declared-secret' };
             },
-            read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : null,
+            read: async () => stored?.status === 'open'
+                ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : stored ?? null,
+            update: async ({ request }) => {
+                stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                return { ok: true };
+            },
         });
         try {
             await expect(target.invoke({ pluginId: 'acme.alpha', localId: 'run',
                 input: { releaseTag: 'private-release-effect', value: 'unrelated-readable' }, surface: 'cli', requestCurrentIntent,
             })).resolves.toMatchObject({ status: 'executed' });
             expect(applied).toEqual({ releaseTag: 'private-release-effect', value: 'unrelated-readable' });
-            expect(stored).toMatchObject({ approvalInputCustody: 'live_only', secretInputLabels: { releaseTag: 'Release' } });
+            expect(stored).toMatchObject({ status: 'executed', approvalInputCustody: 'live_only', secretInputLabels: { releaseTag: 'Release' } });
             expect(JSON.stringify(stored)).not.toContain('private-release-effect');
             expect(records).toHaveLength(1);
             expect(JSON.stringify(records)).not.toContain('private-release-effect');

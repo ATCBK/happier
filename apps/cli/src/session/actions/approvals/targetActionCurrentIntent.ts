@@ -1,4 +1,4 @@
-import { PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
+import { PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE, PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import { TargetActionApprovalRequestV1Schema, StoredTargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { PluginLocalizedStringV2, TargetActionApprovalRequestV1 } from '@happier-dev/protocol';
 import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
@@ -7,6 +7,7 @@ import { targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject
 import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { admitApprovalRequesterDecisionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInvocationV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import type { createCliApprovalsArtifactStore } from './artifactStore';
 
 function resolveLocalizedConfirmationText(value: PluginLocalizedStringV2): string {
   return typeof value === 'string' ? value : value.fallback;
@@ -105,6 +106,7 @@ export function targetActionApprovalMatchesCurrentIntent(
 export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
   create: (request: TargetActionApprovalRequestV1) => Promise<Readonly<{ artifactId: string }>>;
   read: (artifactId: string) => Promise<TargetActionApprovalRequestV1 | null>;
+  update?: ReturnType<typeof createCliApprovalsArtifactStore>['targetActionApprovalsUpdate'];
   subscribeChanges?: (
     artifactId: string,
     onChange: () => void,
@@ -122,6 +124,13 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
       updatedAtMs: now,
     });
     if (request === null) {
+      return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+    }
+    const update = deps.update;
+    // A durable request has its existing replay writer. Live-only operands
+    // instead require the incumbent's receipt port before creating consent.
+    if (request.approvalInputCustody === 'live_only' && !update) {
+      currentIntent.reportUnavailable?.('approval_factory_unavailable');
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
     let created: Awaited<ReturnType<typeof deps.create>>;
@@ -155,6 +164,23 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
     }
     return result.decision === 'approve'
       ? { status: 'approved', fingerprint, artifactId,
+          settleExecution: async ({ artifactId: admittedArtifactId, execution }) => {
+            if (admittedArtifactId !== artifactId || !update) throw new Error('approval_stale');
+            const latest = await deps.read(artifactId);
+            if (!latest || latest.approvalInputCustody !== 'live_only'
+              || !['approved', 'executing'].includes(latest.status) || latest.decision?.kind !== 'approve'
+              || !targetActionApprovalSubjectsEqual(request, latest)) throw new Error('approval_stale');
+            const executedAtMs = Math.max((deps.now ?? Date.now)(), latest.updatedAtMs);
+            const terminal = TargetActionApprovalRequestV1Schema.parse({ ...latest,
+              status: execution.ok ? 'executed' : 'failed', updatedAtMs: executedAtMs,
+              execution: { ...execution, executedAtMs,
+                ...(execution.errorCode === PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE
+                  ? { errorCode: 'approval_execution_outcome_unknown' } : {}),
+              },
+            });
+            const updated = await update({ artifactId, request: terminal });
+            if (!updated.ok) throw new Error(updated.errorCode);
+          },
           ...(request.requesterConfirmation ? { revalidateRequesterDecision: async () => {
             const invocation = projectTargetActionApprovalInvocationV1(request);
             return invocation !== null && (await admitApprovalRequesterDecisionV1({

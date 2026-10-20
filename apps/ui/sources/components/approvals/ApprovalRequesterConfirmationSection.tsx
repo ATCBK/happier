@@ -1,12 +1,16 @@
 import * as React from 'react';
+import type { ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { useKnownAccountActor } from '@/components/account/useKnownAccountActor';
 import { resolveAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
+
+import { ApprovalOperationActorLine } from './ApprovalOperationActorLine';
 
 /**
  * Whether the viewer is the one person who may decide a shared Bot's requester-bound request. An
@@ -52,7 +56,8 @@ export function useApprovalAccountLabel(
 
 /**
  * C7 requester confirmation, layered into the approval page: who asked (the only person who may
- * confirm), whose setup the Bot writes with, and, once decided, who decided. The page's decision bar
+ * confirm) and, once decided, who decided; a receipt adds the credential the operation used, from
+ * its admitted evidence alone. The page's decision bar
  * is offered only to the requester; everyone else reads who can act here instead of a button.
  */
 export const ApprovalRequesterConfirmationSection = React.memo(
@@ -64,6 +69,8 @@ export const ApprovalRequesterConfirmationSection = React.memo(
         kind: 'approve' | 'reject';
         decidingAccountId?: string;
       }> | null;
+      /** The settled receipt's admitted credential uses; absent evidence draws nothing. */
+      operationCredentialUses?: readonly ActionOperationCredentialUseV1[];
     }>,
   ) {
     const serverId = props.subject.personaSessionRef.serverId;
@@ -71,10 +78,6 @@ export const ApprovalRequesterConfirmationSection = React.memo(
     const requester = useApprovalAccountLabel(
       serverId,
       props.subject.requesterAccountId,
-    );
-    const executor = useApprovalAccountLabel(
-      serverId,
-      props.subject.executionAccountId,
     );
     const decider = useApprovalAccountLabel(
       serverId,
@@ -103,17 +106,6 @@ export const ApprovalRequesterConfirmationSection = React.memo(
           mode="info"
           showChevron={false}
         />
-        <Item
-          testID="approvals.requester-confirmation.writes-with"
-          title={t('detailPages.approval.requester.writesWith')}
-          detail={
-            executor
-              ? t('detailPages.approval.requester.setupOf', { name: executor })
-              : t('detailPages.approval.requester.anotherPerson')
-          }
-          mode="info"
-          showChevron={false}
-        />
         {props.decision && decider ? (
           <Item
             testID="approvals.requester-confirmation.decided-by"
@@ -135,6 +127,14 @@ export const ApprovalRequesterConfirmationSection = React.memo(
             mode="info"
             showChevron={false}
           />
+        ) : null}
+        {props.operationCredentialUses?.length ? (
+          <SectionContentRow>
+            <ApprovalOperationActorLine
+              uses={props.operationCredentialUses}
+              serverId={serverId}
+            />
+          </SectionContentRow>
         ) : null}
       </ItemGroup>
     );

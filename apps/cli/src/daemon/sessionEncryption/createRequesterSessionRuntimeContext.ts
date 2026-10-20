@@ -203,6 +203,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         : { mode: 'e2ee_unavailable' }; },
   });
   const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: established,
+    credentialOwnerAccountId: bootstrap.attribution.accountId,
     workerMachineId: bootstrap.attribution.machineId, store, reloadController: pluginReloadController,
     allowNativeAccountCredentials: bootstrap.allowNativeAccountCredentials === true, openTeamDirect: directMaterial.open,
     resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,

@@ -625,6 +625,58 @@ describe('managed acquisition durable custody', () => {
             expect(native.effects()).toBe(2);
         }
     });
+    it('records the actual credential used by a managed native provider HTTP effect', async () => {
+        const homeId = 'srv_managed_credential_receipt';
+        const service = { pluginId: 'acme.accounts', localId: 'cloud' };
+        const credential = { purpose: { consumer: input.selection.launch.provider, purpose: 'cloud' },
+            account: { service, accountId: 'selected-cloud' }, configurationRevision: 'cloud-configuration' };
+        const credentialOwner = createConnectedAccountPurposeBindingOwner({
+            credentialOwnerAccountId: 'credential-owner',
+            store: { read: async () => ({ v: 1, bindings: [] }), update: unavailableTransport, subscribe: () => ({ dispose() {} }) },
+            selectTarget: unavailableTransport,
+            resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: 'Cloud deployment account' } : null,
+            materializeAccount: async () => ({ kind: 'environment', env: { TOKEN: 'private-cloud-token' } }),
+            resolveCredentialConfigurationRevision: async () => 'cloud-configuration',
+            projectTargetAccounts: unavailableTransport, assertTargetAccountMaterializable: unavailableTransport,
+        });
+        const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(), purposeBindingOwner: credentialOwner,
+            requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
+            createRedactionLease: () => ({ add() {}, close() {} }) });
+        // The remote provider API is the effect boundary. Custody, target
+        // dispatch, SDK materialization and the binding owner remain real.
+        const providerHttp = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+        vi.stubGlobal('fetch', providerHttp);
+        const native = nativeFixture({ privateNative: true, credentialOwner,
+            credentialPurposes: [{ purpose: 'cloud', service }], referenceManifests: [nativeAccountReferenceManifest(['cloud'])],
+            nativeRoleResults: { destroy: { kind: 'confirmed' } },
+            onNativeRole: async (role, _body, context) => {
+                if (role !== 'destroy') return;
+                const material = await context.services.connectedAccounts.materialize('cloud', { kind: 'environment', keys: ['TOKEN'] });
+                if (material.kind !== 'environment') throw new Error('Expected native credential');
+                await fetch('https://provider.example/resources/managed', { method: 'DELETE', headers: { authorization: `Bearer ${material.env.TOKEN}` } });
+            },
+        });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound',
+            launch: { ...machine.launch, credentials: [credential] }, resource: { contributionRef: machine.launch.provider, schemaVersion: 1, value: {} } });
+        const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller, runtimeRegistry: native.runtimeRegistry,
+            ...accountInputs, managedProviderOperationAuthority: authority,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId, canonicalServerUrl: 'https://home.example', revision: 1,
+                endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' }) };
+        const recordOperationCredentialUse = vi.fn();
+        const options = { requestId: 'native-credential-receipt', context: { operationOwnerUpdate: { update() {} }, recordOperationCredentialUse } };
+        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: retained } });
+        const client = createManagedMachineControllerClient(driverInput, options, 'machines.managed.delete');
+        const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action: 'machines.managed.delete' }, () => retained);
+        await expect(invocation.invoke('destroy', { resource: {} })).resolves.toEqual({ kind: 'confirmed' });
+        expect(providerHttp).toHaveBeenCalledWith('https://provider.example/resources/managed', {
+            method: 'DELETE', headers: { authorization: 'Bearer private-cloud-token' },
+        });
+        expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+            v: 1, kind: 'connected_account', label: 'Cloud deployment account', owner: { kind: 'account', accountId: 'credential-owner' }, service,
+            why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.compute', localId: 'destroy' }, purpose: 'cloud' }, target: 'account' },
+            currentness: { kind: 'current_at_materialization' },
+        }]]);
+    });
     it('materializes both captured native purposes after default changes and refuses a changed secondary connection', async () => {
         const homeId = 'srv_managed_plural_credentials';
         const credentialPurposes = ['cloud', 'cua'].map(purpose => ({ purpose,

@@ -36,6 +36,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
 import { ApprovalRequesterConfirmationSection, useApprovalRequesterViewer } from './ApprovalRequesterConfirmationSection';
+import { readApprovalOperationCredentialUses } from './approvalRequesterThreadState';
 import { readApprovalRequesterSurface, resolveApprovalHomeName } from './approvalRequesterLabels';
 import { BrowserOpenOperationStatusRow } from './BrowserOpenOperationStatus';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from './ActionApprovalFieldsCard';
@@ -753,6 +754,9 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         <ApprovalRequesterConfirmationSection
           subject={requesterConfirmation}
           open={parsed.request.status === 'open' && !answeredWhileOpen}
+          operationCredentialUses={readApprovalOperationCredentialUses(
+            parsed.kind === 'target' || parsed.kind === 'built_in' && parsed.request.v === 2
+              ? parsed.request.execution : undefined)}
           decision={parsed.request.decision
             ? { kind: parsed.request.decision.kind, decidingAccountId: 'decidingAccountId' in parsed.request.decision
               && typeof parsed.request.decision.decidingAccountId === 'string' ? parsed.request.decision.decidingAccountId : undefined }

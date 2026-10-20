@@ -368,6 +368,8 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
                     runtimeRegistry: params.input.runtimeRegistry, actionId,
                     input: nativeInput, expectedContributorOccurrenceId: occurrenceId,
                     admittedManagedProviderOperation: custody,
+                    ...(context?.recordOperationCredentialUse
+                        ? { approvalContext: { recordOperationCredentialUse: context.recordOperationCredentialUse } } : {}),
                     context: { surface: 'plugin', invocationSurface: 'plugin', originSurface: 'cli', signal: invocationSignal,
                         initiatingActionCaller: context?.actionCaller, externalActionContext,
                     },

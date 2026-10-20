@@ -223,6 +223,10 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
       return persistenceFailure ?? buildTargetActionApprovalDecisionResult(rejected);
     }
 
+    if (existing.approvalInputCustody === 'live_only'
+      && getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId) === 0) {
+      return targetActionReplayFailure('approval_stale');
+    }
     if ((existing.status === 'executed' || existing.status === 'failed')
       && existing.decision?.kind === 'approve') {
       return buildTargetActionApprovalDecisionResult(existing);
@@ -237,11 +241,6 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     if (resolveApprovalRequestApproveAdmission(existing).status !== 'available') {
       return targetActionReplayFailure('approval_context_unavailable');
     }
-    if (existing.approvalInputCustody === 'live_only'
-      && getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId) === 0) {
-      return targetActionReplayFailure('approval_stale');
-    }
-
     let approved = existing;
     if (existing.status === 'open') {
       const approvedAtMs = nextTimestamp(existing);

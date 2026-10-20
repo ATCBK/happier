@@ -80,6 +80,7 @@ import type {
   JsonValue,
   PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
@@ -682,7 +683,13 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     } finally { await owners.dispose(); }
   });
 
-  it('settles a shared contributed approval with the credential admitted through its real Plugin service', async () => {
+  it.each([
+    { liveOnly: false, outcome: 'executed' },
+    { liveOnly: true, outcome: 'executed' },
+    { liveOnly: true, outcome: 'failed' },
+    { liveOnly: true, outcome: 'uncertain' },
+    { liveOnly: true, outcome: 'receipt_unknown' },
+  ] as const)('settles a shared contributed approval with the credential admitted through its real Plugin service (liveOnly=$liveOnly, outcome=$outcome)', async ({ liveOnly, outcome }) => {
     const source = createSharedBotContributedContext('session');
     const service = { pluginId: 'acme.external', localId: 'credentials' };
     const purpose = { consumer: { pluginId: 'acme.external', localId: 'inspect' }, purpose: 'release' };
@@ -705,15 +712,23 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       assertTargetAccountMaterializable: async () => { throw new Error('No listed account selection'); },
     });
     const owners = createProductionPluginInvocationServiceOwners({ connectedAccounts: credentialOwner });
+    const controller = new AbortController();
+    const secret = 'private-live-release-input';
     let effects = 0;
     const runtime = createExternalActionRuntime('global', 'acme.external', async context => {
       const material = await context.services.connectedAccounts.materialize('release', { kind: 'environment', keys: ['RELEASE_TOKEN'] });
       expect(material).toEqual({ kind: 'environment', env: { RELEASE_TOKEN: 'private-release-token' } });
       effects += 1;
+      if (outcome === 'failed') throw new PluginError({ code: 'release_refused', message: secret });
+      if (outcome === 'uncertain') controller.abort();
     }, undefined, undefined, undefined, owners, 'writesRemote', undefined, { surfaces: ['agent'], hostAccess: [{
       id: 'release', capability: 'connectedAccounts', reason: 'Publish the approved release',
       scope: { serviceRefs: ['credentials'], operations: ['use'], materializationKinds: ['environment'] },
-    }] });
+    }], ...(liveOnly ? {
+      inputSchema: { type: 'object', properties: { title: { type: 'string' }, token: { type: 'string' } },
+        required: ['title', 'token'], additionalProperties: false },
+      inputHints: { fields: [{ path: 'token', title: 'Release credential', widget: 'secret' }] },
+    } : {}) });
     const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'ephemeral',
       durableRevision: runtime.durableRevision ?? -1, release: async () => {} };
     let stored: TargetActionApprovalRequestV1 | null = null;
@@ -721,15 +736,21 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'credential-write' }; },
         read: async () => stored,
+        update: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(request);
+          if (outcome === 'receipt_unknown') throw new Error('Receipt acknowledgement lost');
+          return { ok: true };
+        },
       }),
     });
     const attribution = { requestRef: 'bob-original-request', requester: { serverId: 'server-external', accountId: 'bob' },
       persona: { serverId: 'server-external', sessionId: 'original-manager-session' }, origin: null };
     try {
-      const created = await createExternalActionExecutor(invoker).execute('action.invoke', {
-        action: { pluginId: 'acme.external', localId: 'inspect' }, input: { title: 'Approved release' },
-      }, { ...source.context, actionRequestAttributionV1: attribution });
-      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'credential-write' } });
+      const pending = createExternalActionExecutor(invoker).execute('action.invoke', {
+        action: { pluginId: 'acme.external', localId: 'inspect' }, input: { title: 'Approved release', ...(liveOnly ? { token: secret } : {}) },
+      }, { ...source.context, signal: controller.signal, actionRequestAttributionV1: attribution });
+      if (liveOnly) await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount('credential-write')).toBe(1));
+      else expect(await pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'credential-write' } });
       expect(materializations).toBe(0);
       const replay = createDaemonExternalActionContributedApprovalReplay({
         readInstallationIdentity: source.readInstallationIdentity,
@@ -745,23 +766,36 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         requesterApprovalDecision: { sessionId: 'bot-session',
           actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' }, isCurrent: async () => true } };
       const result = await replay({ artifactId: 'credential-write', decision: 'approve', context });
-      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: liveOnly ? 'approved' : 'executed' } });
+      if (liveOnly) expect(await pending).toMatchObject(outcome === 'executed' ? { ok: true }
+        : { ok: false, errorCode: outcome === 'failed' ? 'release_refused'
+          : outcome === 'receipt_unknown' ? 'approval_execution_outcome_unknown' : 'plugin_action_outcome_unknown' });
       expect(effects).toBe(1);
       expect(materializations).toBe(1);
       const operationCredentialUses = [{ v: 1, kind: 'connected_account', label: 'Release GitHub',
         owner: { kind: 'account', accountId: 'alice' }, service,
         why: { kind: 'purpose_binding', purpose, target: 'account' }, currentness: { kind: 'current_at_materialization' } }];
-      expect(stored).toMatchObject({ status: 'executed', decision: { decidingAccountId: 'bob' },
+      const executed = outcome === 'executed' || outcome === 'receipt_unknown';
+      expect(stored).toMatchObject({ status: executed ? 'executed' : 'failed', decision: { decidingAccountId: 'bob' },
         executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: attribution },
-        execution: { operationCredentialUses } });
-      expect(result).toMatchObject({ result: { execution: { operationCredentialUses } } });
+        execution: { ok: executed, operationCredentialUses,
+          ...(executed ? {} : { errorCode: outcome === 'failed' ? 'release_refused' : 'approval_execution_outcome_unknown' }) } });
+      const reader = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsGet: async () => stored });
+      const receipt = await reader.execute('approval.request.get', { artifactId: 'credential-write' }, {
+        surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' },
+      });
+      expect(receipt).toMatchObject({ ok: true, result: { request: { status: executed ? 'executed' : 'failed',
+        execution: { ok: executed, operationCredentialUses } } } });
+      if (!liveOnly) expect(result).toMatchObject({ result: { execution: { operationCredentialUses } } });
       const repeated = await replay({ artifactId: 'credential-write', decision: 'approve', context });
-      expect(repeated).toMatchObject({ result: { execution: { operationCredentialUses } } });
+      expect(repeated).toMatchObject(liveOnly ? { ok: false, errorCode: 'approval_stale' }
+        : { result: { execution: { operationCredentialUses } } });
       expect(materializations).toBe(1);
       expect(effects).toBe(1);
-      for (const privateValue of ['private-release-token', 'private-connected-profile']) {
+      for (const privateValue of [secret, 'private-release-token', 'private-connected-profile']) {
         expect(JSON.stringify(stored)).not.toContain(privateValue);
         expect(JSON.stringify(result)).not.toContain(privateValue);
+        expect(JSON.stringify(receipt)).not.toContain(privateValue);
       }
     } finally {
       await owners.dispose();
@@ -786,6 +820,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'bob-confidential' }; },
         read: async () => stored,
+        update: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
       }),
     }));
     const pending = executor.execute('action.invoke', { action: { pluginId: 'acme.external', localId: 'inspect' },
@@ -969,6 +1004,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))); return { artifactId: 'secret-workflow' }; },
         read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+        update: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
       }),
     });
     const listDefinitions = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
@@ -1204,6 +1240,10 @@ describe('createDaemonExternalActionContributedInvoker', () => {
           return { artifactId };
         },
         read: async () => stored ?? null,
+        update: async ({ request }) => {
+          stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+          return { ok: true };
+        },
         subscribeChanges: (_artifactId, onChange) => {
           invalidate = onChange;
           return { dispose: () => { invalidate = undefined; } };
@@ -1274,6 +1314,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       } : {}) })).resolves.toMatchObject({ ok: true, result: { status: 'approved' } });
       await expect(pending).resolves.toMatchObject({ ok: true });
       expect(received).toEqual({ releaseTag: secret, public: ' endpoint ' });
+      expect(stored).toMatchObject({ status: 'executed', execution: { ok: true } });
+      expect(JSON.stringify(stored)).not.toContain(secret);
       expect(acquire).toHaveBeenCalledTimes(1);
       // No second invocation can reconstruct this input from approval history.
       await expect(replay({ artifactId, decision: 'approve' })).resolves.toMatchObject({ ok: false, errorCode: 'approval_stale' });
