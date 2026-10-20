@@ -194,8 +194,6 @@ const editorState = vi.hoisted(() => ({
     },
     getEditorText: () => '# Title\n\nbody',
     editorDirty: false,
-    editorTooLarge: false,
-    editorChunkTooLarge: false,
     isEditingFile: true,
     isSavingEdits: false,
     fileChangedExternally: false,

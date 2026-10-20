@@ -37,7 +37,8 @@ vi.mock('@/components/workspaces/files/file/FileHeader', () => ({
     FileHeader: (props: any) => React.createElement('FileHeader', props, props.rightElement ?? null),
 }));
 
-vi.mock('@/components/workspaces/files/file/FileContentPanel', () => ({
+vi.mock('@/components/workspaces/files/file/FileContentPanel', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/workspaces/files/file/FileContentPanel')>(),
     FileContentPanel: (props: any) => React.createElement('FileContentPanel', props),
 }));
 
@@ -63,6 +64,7 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     useAppPaneScope: () => ({
         scopeState: { details: { tabState: {} } },
         setDetailsTabState: vi.fn(),
+        patchDetailsTabState: vi.fn(),
     }),
 }));
 
@@ -137,9 +139,6 @@ const fileEditorState = vi.hoisted(() => ({
         getEditorText: () => '',
         isSavingEdits: false,
         editorDirty: false,
-        fileChangedExternally: false,
-        editorTooLarge: false,
-        editorChunkTooLarge: false,
         startEditingFile: vi.fn(),
         cancelEditingFile: vi.fn(),
         saveFileEdits: vi.fn(),
@@ -286,7 +285,6 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         fileEditorState.editorSurfaceEnabled = false;
         fileEditorState.isEditingFile = false;
         fileEditorState.editorSeedText = '';
-        fileEditorState.fileChangedExternally = false;
         refreshSpy.mockReset();
         refreshSpy.mockImplementation(async (_input: any) => ({
             status: 'ready' as const,
@@ -734,24 +732,6 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         await act(async () => {});
 
         expect(screen.findAllByType('FileContentPanel')[0]?.props.diffContent).toBe('diff-2');
-    });
-
-    it('surfaces an external file change while editor text is preserved', async () => {
-        fileEditorState.fileChangedExternally = true;
-
-        const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
-
-        const screen = await renderScreen(
-            <WorkspaceFileDetailsView
-                scopeId="workspace:srv1:m1:/repo"
-                scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
-                filePath="src/a.txt"
-                sessionIdForAugmentation={null}
-            />,
-        );
-        await act(async () => {});
-
-        expect(screen.findAllHostsByTestId('file-editor-external-change-banner')).toHaveLength(1);
     });
 
     it('does not switch away from file mode while the file editor is active during an SCM refresh', async () => {

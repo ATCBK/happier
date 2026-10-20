@@ -22,6 +22,7 @@ import { FileIcon } from '@/components/ui/media/FileIcon';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import type { WorkspaceFileEditorHeaderModel } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorHeaderModel';
 
 export type FileDisplayMode = 'file' | 'diff' | 'markdown';
 export type FileDiffMode = 'included' | 'pending' | 'both';
@@ -88,6 +89,7 @@ type FileActionToolbarProps = {
     onStartRangeSelection?: () => void;
     onToggleCommentMode?: (active: boolean) => void;
     fileEditorEnabled?: boolean;
+    editor?: WorkspaceFileEditorHeaderModel;
     isEditingFile?: boolean;
     fileEditorDirty?: boolean;
     fileEditorBusy?: boolean;
@@ -150,11 +152,11 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         onToggleCommentMode,
         fileEditorEnabled,
         isEditingFile,
-        fileEditorDirty,
-        fileEditorBusy,
-        onStartEditingFile,
-        onCancelEditingFile,
-        onSaveEditingFile,
+        fileEditorDirty = props.editor?.status === 'dirty',
+        fileEditorBusy = props.editor?.status === 'saving',
+        onStartEditingFile = props.editor?.onStart,
+        onCancelEditingFile = props.editor?.onCancel,
+        onSaveEditingFile = props.editor?.onSave,
         showMarkdownEditToggle,
         markdownEditMode,
         onMarkdownEditMode,
