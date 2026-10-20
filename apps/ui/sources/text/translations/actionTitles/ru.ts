@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ru = {
+    file_editor_save: 'Сохранить изменения открытого файла',
+    file_editor_resolve: 'Разрешить конфликт открытого файла',
     workspace_tabs_close: "Закрыть вкладку рабочей области",
     scm_commit_undoLast: "Отменить последний коммит",
     memory_remember: "Запомнить факт",
@@ -130,8 +132,8 @@ export const ru = {
     session_list_view_get: "Прочитать настройки вида сессий",
     session_list_view_set: "Изменить вид сессий",
     session_list_view_reset: "Сбросить вид сессий",
-    shell_column_get: "Прочитать настройки навигационной колонки",
-    shell_column_set: "Показать или скрыть навигационную колонку",
+    shell_column_get: "Прочитать состояние колонки",
+    shell_column_set: "Показать или скрыть колонку",
     diagnostics_status_get: "Прочитать экспорт состояния системы",
     settings_list: "Показать настройки",
     settings_get: "Прочитать настройку",

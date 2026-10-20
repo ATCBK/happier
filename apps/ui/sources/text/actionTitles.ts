@@ -4,6 +4,8 @@ import { getTranslationValue, t, type TranslationKeyNoParams } from '@/text';
 
 /** UI names for catalog declarations that use machine ids. Never infer a title from an id. */
 const ACTION_TITLE_KEYS = {
+    'file.editor.save': 'actionPresentation.titles.file_editor_save',
+    'file.editor.resolve': 'actionPresentation.titles.file_editor_resolve',
     wait: 'workflows.actionTitles.waitForWork',
     'webhooks.call': 'workflows.actionTitles.callWebhook',
     'machines.command.run': 'workflows.actionTitles.runCommand',

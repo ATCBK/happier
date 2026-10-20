@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const de = {
+    file_editor_save: 'Änderungen der geöffneten Datei speichern',
+    file_editor_resolve: 'Konflikt der geöffneten Datei lösen',
     workspace_tabs_close: "Arbeitsbereich-Tab schließen",
     scm_commit_undoLast: "Letzten Commit rückgängig machen",
     memory_remember: "Eine Information merken",
@@ -130,8 +132,8 @@ export const de = {
     session_list_view_get: "Session-Ansicht lesen",
     session_list_view_set: "Session-Ansicht ändern",
     session_list_view_reset: "Session-Ansicht zurücksetzen",
-    shell_column_get: "Navigationsspalte lesen",
-    shell_column_set: "Navigationsspalte ein- oder ausblenden",
+    shell_column_get: "Spaltenstatus lesen",
+    shell_column_set: "Spalte ein- oder ausblenden",
     diagnostics_status_get: "Systemstatus-Export lesen",
     settings_list: "Einstellungen auflisten",
     settings_get: "Einstellung lesen",

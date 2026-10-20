@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHant = {
+    file_editor_save: '儲存已開啟檔案的編輯',
+    file_editor_resolve: '解決已開啟檔案的衝突',
     workspace_tabs_close: "關閉工作區分頁",
     scm_commit_undoLast: "復原上一次提交",
     memory_remember: "記住一項資訊",
@@ -130,8 +132,8 @@ export const zhHant = {
     session_list_view_get: "讀取工作階段檢視",
     session_list_view_set: "變更工作階段檢視",
     session_list_view_reset: "重設工作階段檢視",
-    shell_column_get: "讀取導覽欄",
-    shell_column_set: "顯示或隱藏導覽欄",
+    shell_column_get: "讀取欄位狀態",
+    shell_column_set: "顯示或隱藏欄位",
     diagnostics_status_get: "讀取系統狀態匯出資料",
     settings_list: "列出設定",
     settings_get: "讀取設定",

@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ja = {
+    file_editor_save: '開いているファイルの編集を保存',
+    file_editor_resolve: '開いているファイルの競合を解決',
     workspace_tabs_close: "ワークスペースのタブを閉じる",
     scm_commit_undoLast: "最後のコミットを取り消す",
     memory_remember: "情報を記憶",
@@ -130,8 +132,8 @@ export const ja = {
     session_list_view_get: "セッションの表示設定を確認",
     session_list_view_set: "セッションの表示を変更",
     session_list_view_reset: "セッションの表示をリセット",
-    shell_column_get: "ナビゲーション列の状態を表示",
-    shell_column_set: "ナビゲーション列の表示を切り替え",
+    shell_column_get: "列の状態を表示",
+    shell_column_set: "列の表示を切り替え",
     diagnostics_status_get: "システム状態のエクスポートを表示",
     settings_list: "設定の一覧を表示",
     settings_get: "設定を表示",

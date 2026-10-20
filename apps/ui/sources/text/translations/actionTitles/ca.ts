@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ca = {
+    file_editor_save: 'Desa els canvis del fitxer obert',
+    file_editor_resolve: 'Resol el conflicte del fitxer obert',
     workspace_tabs_close: "Tanca la pestanya de l’espai de treball",
     scm_commit_undoLast: "Desfés l’últim commit",
     memory_remember: "Recorda un fet",
@@ -130,8 +132,8 @@ export const ca = {
     session_list_view_get: "Consulta la vista de sessions",
     session_list_view_set: "Canvia la vista de sessions",
     session_list_view_reset: "Restableix la vista de sessions",
-    shell_column_get: "Consulta la columna de navegació",
-    shell_column_set: "Mostra o amaga la columna de navegació",
+    shell_column_get: "Consulta l’estat de la columna",
+    shell_column_set: "Mostra o amaga la columna",
     diagnostics_status_get: "Consulta l'exportació de l'estat del sistema",
     settings_list: "Llista els paràmetres",
     settings_get: "Consulta un paràmetre",

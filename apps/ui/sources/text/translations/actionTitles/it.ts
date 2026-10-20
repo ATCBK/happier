@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const it = {
+    file_editor_save: 'Salva le modifiche del file aperto',
+    file_editor_resolve: 'Risolvi il conflitto del file aperto',
     workspace_tabs_close: "Chiudi la scheda dell'area di lavoro",
     scm_commit_undoLast: "Annulla l'ultimo commit",
     memory_remember: "Ricorda un fatto",
@@ -130,8 +132,8 @@ export const it = {
     session_list_view_get: "Leggi la vista delle sessioni",
     session_list_view_set: "Cambia la vista delle sessioni",
     session_list_view_reset: "Reimposta la vista delle sessioni",
-    shell_column_get: "Leggi la colonna di navigazione",
-    shell_column_set: "Mostra o nascondi la colonna di navigazione",
+    shell_column_get: "Leggi lo stato della colonna",
+    shell_column_set: "Mostra o nascondi la colonna",
     diagnostics_status_get: "Leggi l'esportazione dello stato del sistema",
     settings_list: "Elenca le impostazioni",
     settings_get: "Leggi un'impostazione",

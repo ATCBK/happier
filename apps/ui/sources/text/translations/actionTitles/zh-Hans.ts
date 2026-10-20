@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHans = {
+    file_editor_save: '保存已打开文件的编辑',
+    file_editor_resolve: '解决已打开文件的冲突',
     workspace_tabs_close: "关闭工作区标签页",
     scm_commit_undoLast: "撤销上一次提交",
     memory_remember: "记住一条信息",
@@ -130,8 +132,8 @@ export const zhHans = {
     session_list_view_get: "读取会话视图",
     session_list_view_set: "更改会话视图",
     session_list_view_reset: "重置会话视图",
-    shell_column_get: "读取导航栏",
-    shell_column_set: "显示或隐藏导航栏",
+    shell_column_get: "读取列状态",
+    shell_column_set: "显示或隐藏列",
     diagnostics_status_get: "读取系统状态导出内容",
     settings_list: "列出设置",
     settings_get: "读取设置",
