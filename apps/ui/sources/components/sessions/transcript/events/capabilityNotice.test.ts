@@ -25,12 +25,14 @@ function skillNotice(name: string, itemId: string) {
 }
 
 describe('describeCapabilityNotice for a Skill that did not load', () => {
-  it('never shows the Skill id as its name: an unreadable Skill is named by its id upstream, so it reads as unnamed', () => {
+  it('identifies an unreadable Skill by its id, never as unnamed, without printing the whole id', () => {
     const presentation = describeCapabilityNotice(
       skillNotice(SKILL_ID, SKILL_ID),
     );
-    expect(presentation?.lines.join('\n')).not.toContain(SKILL_ID);
     expect(presentation?.lines).toHaveLength(1);
+    expect(presentation?.lines[0]).toContain(SKILL_ID.split('-')[0]);
+    expect(presentation?.lines[0]).not.toContain(SKILL_ID);
+    expect(presentation?.lines[0]).not.toMatch(/unnamed/i);
     // The one place to fix it still names the Skill by its id.
     expect(presentation?.href).toContain(SKILL_ID);
   });

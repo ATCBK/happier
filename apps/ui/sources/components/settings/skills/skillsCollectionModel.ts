@@ -22,11 +22,12 @@ export const skillHref = (skillId: string) =>
   `${SKILLS_COLLECTION_ROUTE}/${encodeURIComponent(skillId)}`;
 
 /**
- * A skill is shown by its name, never its id: a skill whose content could not be read carries its id
- * where the name would be, so that reads as no name.
+ * A skill is shown by its name. A skill whose content could not be read carries its id where the name
+ * would be, and a full id is not a name a person can read in a sentence, so it is shown as "Skill" plus
+ * the id's first block, which still tells two unreadable skills apart.
  */
 export function skillDisplayName(name: string | null | undefined, skillId: string): string {
-  return name && name !== skillId ? name : t('capabilities.skills.home.unnamed');
+  return name && name !== skillId ? name : t('capabilities.skills.home.byId', { id: skillId.split('-')[0] });
 }
 
 /** The collection offers a search field only once it no longer fits at a glance (the Machines rule). */
