@@ -12,7 +12,8 @@ import { DaemonExecutionRunEntrySchema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 
-const stopDialogs = vi.hoisted(() => ({ alert: vi.fn(), confirm: vi.fn(async () => true) }));
+const stopDialogs = vi.hoisted(() => ({ alert: vi.fn(), confirm: vi.fn(async () => true),
+    alertAsync: vi.fn<typeof import('@/modal').Modal.alertAsync>() }));
 const routeParams = vi.hoisted(() => ({ current: { id: 'machine-missing' } as Record<string, string> }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: stopDialogs,
@@ -26,6 +27,10 @@ const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader(
 afterAll(disposeActionExecutorLoader);
 const MachineDetailScreen = (await import('@/components/machines/page/MachinePageScreen')).MachinePageScreen;
 const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+stopDialogs.alertAsync.mockImplementation(async (title, message, buttons) => {
+    stopDialogs.alert(title, message, buttons);
+    buttons?.find(button => button.text === 'runs.stop.stopSession')?.onPress?.();
+});
 
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | undefined;
 let deferred: ReturnType<typeof createDeferred<readonly Machine[]>> | undefined;
@@ -139,15 +144,17 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                 settings: { actionsSettingsV1 },
             });
             routeParams.current = { id: machine.id, page: 'work' };
-            let focusedServerId: string | undefined;
             if (settlement === 'route-home') {
                 routeParams.current = { id: machine.id, serverId: home.home.id, page: 'work' };
                 const focused = await network.addHome('https://machine-stop-focused-elsewhere.example.test', 'focused-account');
-                focusedServerId = focused.id;
                 const { setActiveServerId, getActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+                const { resolveRoutineServerSelectionScope } = await import('@/sync/domains/server/selection/serverSelectionScope');
+                const { Platform } = await import('react-native');
+                const { isDesktopHost } = await import('@/utils/platform/desktopHost');
                 const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-                await setActiveServerId(focused.id, { scope: 'device' });
+                await setActiveServerId(focused.id, { scope: resolveRoutineServerSelectionScope(Platform.OS, isDesktopHost()) });
                 await restoreConnectionToActiveServer({ token: focused.token });
+                await home.sync.awaitBootstrapForegroundAcquisition();
                 expect(getActiveServerId()).toBe(focused.id);
                 home.storage.setState({ machineListByServerId: { ...home.storage.getState().machineListByServerId,
                     [home.home.id]: [machine] } });
@@ -176,16 +183,18 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
             });
             const screen = await home.render(MachineSubPageScreen);
             await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
+            const stop = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress;
             await act(async () => {
-                await screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress();
+                await stop();
                 await flushHookEffects({ cycles: 2, turns: 2 });
             });
             // A genuine issued run failure, not a pre-issuance policy/setup refusal, offers fallback.
             expect(network.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toBe(true);
             expect(network.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP
                 || request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).every(request => request.serverUrl === home!.home.serverUrl)).toBe(true);
-            expect(stopDialogs.confirm).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle', 'runs.stop.stopRunFailedBody',
-                expect.objectContaining({ destructive: true }));
+            expect(stopDialogs.alert).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle', 'runs.stop.stopRunFailedBody',
+                expect.arrayContaining([expect.objectContaining({ text: 'runs.stop.stopSession', onPress: expect.any(Function) })]));
+            expect(stopDialogs.confirm).not.toHaveBeenCalled();
             const stopEffects = network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION);
             if (settlement === 'disabled') {
                 expect(stopEffects).toEqual([]);
@@ -197,12 +206,13 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                     'Session stop incomplete: destroy_failed');
                 else if (settlement === 'unavailable') expect(stopDialogs.alert).toHaveBeenCalledWith('errors.daemonUnavailableTitle',
                     expect.any(String), expect.arrayContaining([expect.objectContaining({ text: 'common.retry', onPress: expect.any(Function) })]));
-                else expect(stopDialogs.alert).not.toHaveBeenCalled();
+                else expect(stopDialogs.alert.mock.calls.filter(([title]) => title !== 'runs.stop.stopRunFailedTitle')).toEqual([]);
                 const state = home.storage.getState();
                 if (settlement === 'route-home') {
-                    // Cold route-Home control must not publish private metadata into another Account.
-                    expect(state.profileScope).toMatchObject({ serverId: focusedServerId, accountId: 'focused-account' });
-                    expect(state.settingsScope).toMatchObject({ serverId: focusedServerId, accountId: 'focused-account' });
+                    // The Machine page intentionally focuses the Home named by its route.
+                    // The separate explicit-Home strategy test covers ambient same-id data.
+                    expect(state.profileScope).toMatchObject({ serverId: home.home.id, accountId: 'machine-viewer' });
+                    expect(state.settingsScope).toMatchObject({ serverId: home.home.id, accountId: 'machine-viewer' });
                     expect(state.sessions[session.id]).toBeUndefined();
                     expect(state.sessionListRowsByServerId[home.home.id]?.[session.id]).toBeUndefined();
                 } else {

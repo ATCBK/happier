@@ -664,11 +664,12 @@ export async function requestDaemonSignedRootActionExecution(
     || request.actionId === 'plugins.list';
   const result = await daemonPost(SIGNED_ROOT_ACTION_EXECUTE_PATH, request, {
     ...options,
-    // Idle observation owns its deadline; client and contributed Actions may
-    // wait for approval and completion under the caller lifetime.
+    // Stop/refresh completion and idle observation have domain-owned lifetimes;
+    // client and contributed Actions may also wait for approval and completion.
     timeoutMs: options.timeoutMs !== undefined ? options.timeoutMs
       : usesPluginControl ? pluginControlOptions(options).timeoutMs
-      : request.actionId === 'session.wait.idle' || request.actionId === 'action.invoke' || executionPlacement === 'client'
+      : request.actionId === 'session.wait.idle' || request.actionId === 'session.stop'
+        || request.actionId === 'session.runtime.refresh' || request.actionId === 'action.invoke' || executionPlacement === 'client'
         || request.actionId === 'daemon.filesystem.upload' || request.actionId === 'daemon.filesystem.download'
         || (request.actionId === 'daemon.filesystem.copy' && request.input && typeof request.input === 'object'
           && 'kind' in request.input && request.input.kind === 'prepared_transfer') ? null : 300_000,

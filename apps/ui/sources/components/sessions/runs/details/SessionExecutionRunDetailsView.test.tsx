@@ -1088,13 +1088,17 @@ describe('Session Stop fallback Action policy', () => {
 });
 
 describe('Session Stop fallback custody', () => {
-    it.each(['runs', 'details'] as const)('retires the %s fallback observer without retracting its issued Session Stop', async surface => {
+    const cases = (['runs', 'details'] as const).flatMap(surface => (['daemon', 'runner'] as const).map(transport => ({ surface, transport })));
+    it.each(cases)('retires the $surface fallback observer without retracting its issued $transport Session Stop', async ({ surface, transport }) => {
         stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
         vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
         let settle!: (result: unknown) => void;
+        const stopMethod = transport === 'daemon' ? RPC_METHODS.STOP_SESSION : RPC_METHODS.KILL_SESSION;
+        const stopTarget = transport === 'daemon' ? 'm1' : 's1';
         const original = boundary.call.getMockImplementation()!;
-        boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.STOP_SESSION
-            ? new Promise(resolve => { settle = resolve; }) : method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
+        boundary.call.mockImplementation(async (method, input) => method === stopMethod
+            ? new Promise(resolve => { settle = resolve; }) : method === RPC_METHODS.STOP_SESSION
+                ? StopSessionResultSchema.parse({ status: 'not_found' }) : method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
                 ? { runs: [{ ...runState, happyHomeDir: '/tmp/happier', happySessionId: 's1', pid: 123 }] }
                 : original(method, input));
         if (surface === 'runs') {
@@ -1124,10 +1128,10 @@ describe('Session Stop fallback custody', () => {
                 'runs.stop.stopRunFailedBody', expect.any(Array)));
             await pressSessionStopRecovery();
         }
-        await vi.waitFor(() => expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1));
+        await vi.waitFor(() => expect(calls(stopMethod)).toHaveLength(1));
         const issued = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
             && frame.payload !== null && typeof frame.payload === 'object'
-            && Reflect.get(frame.payload, 'method') === `m1:${RPC_METHODS.STOP_SESSION}`);
+            && Reflect.get(frame.payload, 'method') === `${stopTarget}:${stopMethod}`);
         if (!issued?.payload || typeof issued.payload !== 'object') throw new Error('Missing issued Session Stop');
         try {
             await screen.unmount();
@@ -1139,9 +1143,9 @@ describe('Session Stop fallback custody', () => {
             await vi.waitFor(() => expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
                 serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId },
             }));
-            expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+            expect(vi.mocked(Modal.alert).mock.calls.filter(([title]) => title === 'common.error')).toEqual([]);
             expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1);
-            expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
+            expect(calls(RPC_METHODS.KILL_SESSION)).toHaveLength(transport === 'runner' ? 1 : 0);
         } finally { await act(async () => settle({ status: 'stopped' })); await operation; }
     });
 });

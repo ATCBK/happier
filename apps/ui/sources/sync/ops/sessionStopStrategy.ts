@@ -9,6 +9,8 @@ import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runti
 import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { storage } from '@/sync/domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { serverFetch } from '@/sync/http/client';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
@@ -160,7 +162,58 @@ function readFallbackRpcErrorEnvelope(response: unknown): Readonly<{
     };
 }
 
+/** An issued Stop belongs to its original Home credentials, independently of its mounted observer. */
+async function observeSessionStopRequest<TResult>(params: Readonly<{
+    serverId: string;
+    signal?: AbortSignal;
+    onIssued?: () => void;
+    withdrawn: () => TResult;
+    request: (operation: Readonly<{ signal: AbortSignal; onIssued: () => void }>) => Promise<TResult>;
+}>): Promise<TResult> {
+    const observer = params.signal;
+    if (observer?.aborted) return params.withdrawn();
+    const beforeIssuance = new AbortController();
+    let issued = false;
+    const withdrawBeforeIssuance = () => { if (!issued) beforeIssuance.abort(); };
+    observer?.addEventListener('abort', withdrawBeforeIssuance, { once: true });
+    const operation = runWithHomeCredentialRequestSignal(params.serverId, async credentialSignal => {
+        const cancellation = mergeAbortSignals([credentialSignal, beforeIssuance.signal]);
+        try {
+            return await params.request({ signal: cancellation.signal, onIssued: () => {
+                issued = true;
+                observer?.removeEventListener('abort', withdrawBeforeIssuance);
+                params.onIssued?.();
+            } });
+        } finally { cancellation.dispose(); }
+    }).finally(() => observer?.removeEventListener('abort', withdrawBeforeIssuance));
+    if (!observer) return await operation;
+    return await new Promise<TResult>((resolve, reject) => {
+        const withdraw = () => { observer.removeEventListener('abort', withdraw); resolve(params.withdrawn()); };
+        observer.addEventListener('abort', withdraw, { once: true });
+        operation.then(result => { observer.removeEventListener('abort', withdraw); resolve(result); },
+            error => { observer.removeEventListener('abort', withdraw); reject(error); });
+        if (observer.aborted) withdraw();
+    });
+}
+
 export async function stopSessionViaDaemonMachineRpc(params: Readonly<{
+    machineId: string;
+    sessionId: string;
+    serverId?: string | null;
+    accountId?: string;
+    signal?: AbortSignal;
+    onIssued?: () => void;
+}>): Promise<DaemonMachineSessionStopAttempt> {
+    const serverId = params.serverId ?? getActiveServerSnapshot().serverId;
+    if (!serverId) return { type: 'failed', message: 'action_home_not_found', errorCode: 'action_home_not_found' };
+    return await observeSessionStopRequest<DaemonMachineSessionStopAttempt>({
+        serverId, signal: params.signal, onIssued: params.onIssued,
+        withdrawn: () => ({ type: 'failed', message: 'Session Stop observation was withdrawn', errorCode: 'MACHINE_RPC_ABORTED' }),
+        request: operation => requestDaemonMachineSessionStop({ ...params, serverId, ...operation }),
+    });
+}
+
+async function requestDaemonMachineSessionStop(params: Readonly<{
     machineId: string;
     sessionId: string;
     serverId?: string | null;
@@ -259,11 +312,28 @@ async function stopSessionViaRunnerRpc(params: Readonly<{
     scope?: ServerAccountScope;
     signal?: AbortSignal;
 }>): Promise<unknown> {
+    const serverId = params.scope?.serverId ?? params.serverId ?? getActiveServerSnapshot().serverId;
+    if (!serverId) return { success: false, message: 'action_home_not_found', errorCode: 'action_home_not_found' };
+    return await observeSessionStopRequest({
+        serverId, signal: params.signal,
+        withdrawn: () => ({ success: false, message: 'Session Stop observation was withdrawn', errorCode: 'SOCKET_RPC_ABORTED' }),
+        request: operation => requestRunnerSessionStop({ ...params, serverId, ...operation }),
+    });
+}
+
+async function requestRunnerSessionStop(params: Readonly<{
+    sessionId: string;
+    serverId?: string | null;
+    scope?: ServerAccountScope;
+    signal?: AbortSignal;
+    onIssued: () => void;
+}>): Promise<unknown> {
     try {
         const request = {
             sessionId: params.sessionId,
             method: 'killSession',
             payload: {},
+            onIssued: params.onIssued,
             ...(params.signal ? { signal: params.signal } : {}),
         };
         return params.scope
