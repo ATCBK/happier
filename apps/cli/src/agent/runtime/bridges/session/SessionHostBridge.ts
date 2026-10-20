@@ -65,6 +65,7 @@ import { configuration } from '@/configuration';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { logger } from '@/ui/logger';
+import { readSessionAttachFromEnv, readSessionAttachFromFile } from '@/agent/runtime/sessionAttach';
 
 type SessionHostRunOptions = Readonly<{
   beforeRuntimePlanCommit?: () => void | Promise<void>;
@@ -270,6 +271,17 @@ export class SessionHostBridge implements SessionHostBridgeContract {
     params: unknown,
     hostOptions?: SessionHostRunOptions,
   ) {
+    // Consume the protected attach once, before the runtime plan captures its
+    // input. Both native open and Session initialization use this same witness.
+    if (params && typeof params === 'object') {
+      const record = params as Readonly<Record<string, unknown>>;
+      if (typeof record.existingSessionId === 'string' && record.existingSessionId.trim() && !record.sessionAttachSecret) {
+        const attach = typeof record.sessionAttachFilePath === 'string' && record.sessionAttachFilePath.trim()
+          ? await readSessionAttachFromFile(record.sessionAttachFilePath)
+          : await readSessionAttachFromEnv();
+        if (attach) params = { ...record, sessionAttachSecret: attach, sessionAttachFilePath: undefined };
+      }
+    }
     const resolution = await resolveBackendEngineAdapterResolution(
       backendId,
       await this.resolveEngineResolutionParams(backendId, params, hostOptions),
