@@ -7,7 +7,7 @@ import type {
 } from '../../domains/state/storageTypes';
 import type { NormalizedMessage } from '../../typesRaw';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
-import type { SessionArchiveOperation, SessionArchiveOperations } from '../../domains/session/listing/sessionArchiveState';
+import { readSessionArchivePending, type SessionArchiveOperation, type SessionArchiveOperations } from '../../domains/session/listing/sessionArchiveState';
 import { readStoredSessionMessagesFromStateLike } from '../../domains/messages/readStoredSessionMessages';
 import { isTranscriptRenderableAggregate } from '../../domains/messages/transcriptRenderableAggregate';
 import {
@@ -76,6 +76,7 @@ import {
 } from '../../domains/session/attention/deriveSessionRuntimePresentationState';
 import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection, resolveSessionPresence } from '../../domains/session/sessionLifecycleProjection';
 import { setActiveServerSessionListCache, setServerSessionListCache } from '../sessionListCache';
+import { resolveSessionListCacheServerId } from '../../domains/session/listing/sessionListPresentation';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -584,7 +585,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const operation = { sessionId, serverId };
             let admitted = false;
             set((state) => {
-                if (state.sessionArchiveOperations[serverId]?.[sessionId]) return state;
+                if (readSessionArchivePending(state, sessionId, serverId)) return state;
                 admitted = true;
                 return {
                     ...state,
@@ -1372,7 +1373,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
 
             const targetServerId = serverId;
             if (targetServerId && targetServerId !== getActiveServerSnapshot().serverId) {
-                const cached = state.sessionListViewDataByServerId[targetServerId];
+                const cacheServerId = resolveSessionListCacheServerId(state.sessionListViewDataByServerId, targetServerId);
+                const cached = cacheServerId ? state.sessionListViewDataByServerId[cacheServerId] : null;
                 if (!cached) return state;
                 const renderables: Record<string, SessionListRenderableSession> = {};
                 for (const item of cached) {

@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
-import { setActiveServerId, upsertServerProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { useSessionArchivePending } from './useSessionArchivePending';
 
 describe('useSessionArchivePending', () => {
@@ -17,11 +17,14 @@ describe('useSessionArchivePending', () => {
     });
     afterEach(standardCleanup);
 
-    it('follows active-server fallback while explicit session scopes remain isolated', async () => {
+    it('follows active-server fallback across identity promotion while explicit scopes remain isolated', async () => {
         const operation = storage.getState().beginSessionArchive('same-id', firstServer.id);
         if (!operation) throw new Error('Expected archive admission');
         const fallback = await renderHook(() => useSessionArchivePending('same-id'));
         const scoped = await renderHook(() => useSessionArchivePending('same-id', firstServer.id));
+        expect(fallback.getCurrent()).toBe(true);
+        expect(scoped.getCurrent()).toBe(true);
+        await act(async () => { setServerProfileIdentityForUrl(firstServer.serverUrl, 'srv_pending_promoted'); });
         expect(fallback.getCurrent()).toBe(true);
         expect(scoped.getCurrent()).toBe(true);
         await act(async () => { setActiveServerId(secondServer.id); });

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { storage } from '@/sync/domains/state/storage';
-import { projectSessionArchivesToListViewData } from '@/sync/domains/session/listing/sessionArchiveState';
+import { projectSessionArchivesToListViewData, readSessionArchiveOperationsForServers } from '@/sync/domains/session/listing/sessionArchiveState';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { SessionListViewItem, useLocalSetting, useOpenApprovalSessionIds, useSessionListViewData, useSessionListViewDataByServerId, useSessionOrganizationProjection, useSetting } from '@/sync/domains/state/storage';
 import { buildSessionListShellViewItemSignature } from '@/sync/store/hooks';
@@ -816,7 +816,7 @@ function useSessionListDataState(
     const dataByServerId = useSessionListViewDataByServerId(selectedServerIdsForCache);
     const archiveOperations = storage(useShallow((state) => {
         const serverIds = selection.enabled ? selection.allowedServerIds : [selection.activeServerId];
-        return serverIds.flatMap((serverId) => Object.values(state.sessionArchiveOperations?.[serverId] ?? {}));
+        return readSessionArchiveOperationsForServers(state, serverIds);
     }));
 
     const source = React.useMemo(() => {

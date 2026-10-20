@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, standardCleanup } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { storage } from '@/sync/domains/state/storage';
+import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import {
     isSessionArchivePending,
     stopSessionAndMaybeArchive,
@@ -69,6 +70,33 @@ describe('stopSessionAndMaybeArchive', () => {
         archived.resolve({ success: true });
         await result;
         expect(isPending()).toBe(false);
+    });
+
+    it('retains admission when a feature response promotes the pending server identity', async () => {
+        const profile = upsertServerProfile({ serverUrl: 'https://archive-promotion.example' });
+        const canonicalId = 'srv_archive_promoted';
+        const stopped = createDeferred<{ success: boolean }>();
+        const stopSession = vi.fn(() => stopped.promise);
+        const first = stopSessionAndMaybeArchive(params({ serverId: profile.id, stopSession }));
+        expect(isSessionArchivePending(sessionId, profile.id)).toBe(true);
+        try {
+            setServerProfileIdentityForUrl(profile.serverUrl, canonicalId);
+            const pendingAfterPromotion = isSessionArchivePending(sessionId, canonicalId);
+            const duplicate = await stopSessionAndMaybeArchive(params({
+                serverId: canonicalId,
+                stopSession: async () => {
+                    stopSession();
+                    return { success: true };
+                },
+            }));
+            expect({ pendingAfterPromotion, duplicateSkipped: duplicate === false, stopRequests: stopSession.mock.calls.length })
+                .toEqual({ pendingAfterPromotion: true, duplicateSkipped: true, stopRequests: 1 });
+        } finally {
+            stopped.resolve({ success: true });
+            await first;
+        }
+        expect(isSessionArchivePending(sessionId, profile.id)).toBe(false);
+        expect(isSessionArchivePending(sessionId, canonicalId)).toBe(false);
     });
 
     it('clears pending and does not archive after stop fails', async () => {

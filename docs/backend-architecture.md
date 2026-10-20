@@ -251,9 +251,11 @@ the session store, keyed by server and session. Single-session and bulk actions
 claim the same operation after confirmation and before starting work. Rows and
 action controls derive pending status from that owner, so replacing a list row
 does not admit duplicate work or lose progress. Switching servers preserves
-pending operations; logging out clears them. Archive and unarchive success
-update the request's captured server scope, including when completion arrives
-after the user switches servers. A missing runner permits an archive attempt,
+pending operations; logging out clears them. Discovering a server identity while
+an archive is pending preserves progress and duplicate prevention across its
+equivalent profile identifiers. Archive and unarchive success update the request's
+captured server scope, including cached rows created before identity discovery
+and completion after the user switches servers. A missing runner permits an archive attempt,
 but a server `session_active` conflict still fails immediately; it is not proof
 that the session stopped.
 

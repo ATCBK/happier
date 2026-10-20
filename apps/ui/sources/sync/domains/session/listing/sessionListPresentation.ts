@@ -1,5 +1,20 @@
 import type { ServerSelectionPresentation } from '@/sync/domains/server/selection/serverSelectionTypes';
 import type { SessionListViewItem } from './sessionListViewData';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+
+/** Prefer current identity data, falling back to a snapshot produced before identity discovery. */
+export function resolveSessionListCacheServerId(
+    dataByServerId: Readonly<Record<string, SessionListViewItem[] | null | undefined>>,
+    requestedServerId: string,
+): string | null {
+    const canonicalServerId = resolveServerProfileScopeIdForIdentifier(requestedServerId);
+    if (Object.prototype.hasOwnProperty.call(dataByServerId, canonicalServerId)) return canonicalServerId;
+    if (Object.prototype.hasOwnProperty.call(dataByServerId, requestedServerId)) return requestedServerId;
+    for (const cachedServerId of Object.keys(dataByServerId)) {
+        if (areServerProfileIdentifiersEquivalent(cachedServerId, canonicalServerId)) return cachedServerId;
+    }
+    return null;
+}
 
 type ApplySessionListPresentationParams = Readonly<{
     enabled: boolean;
@@ -57,12 +72,16 @@ export function resolveSessionListSourceData(
     let hasResolvedSelectedSource = false;
 
     for (const serverId of selectedServerIds) {
-        const fromCache = scoped[serverId];
+        const cacheServerId = resolveSessionListCacheServerId(scoped, serverId);
+        const fromCache = cacheServerId ? scoped[cacheServerId] : null;
         const source = fromCache ?? (serverId === activeServerId ? params.activeData : null);
         if (!source) continue;
         hasResolvedSelectedSource = true;
         if (source.length === 0) continue;
-        merged.push(...source);
+        // Cached rows can predate identity discovery; presentation consumes current selected scopes.
+        for (const item of source) {
+            merged.push(item.serverId && item.serverId !== serverId ? { ...item, serverId } : item);
+        }
     }
 
     if (merged.length > 0) {

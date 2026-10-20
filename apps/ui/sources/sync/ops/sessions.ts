@@ -846,7 +846,8 @@ async function archiveRequestWithContext(params: Readonly<{
     });
 }
 
-async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null, serverId: string): Promise<void> {
+async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null, capturedServerId: string): Promise<void> {
+    const serverId = resolveSessionArchiveServerId(capturedServerId);
     const updatedAt = nowServerMs();
     const session = storage.getState().sessions[sessionId];
     if (session && areServerProfileIdentifiersEquivalent(serverId, getActiveServerSnapshot().serverId)) {
