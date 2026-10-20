@@ -32,6 +32,7 @@ export type {
   PluginSessionInputSourceV1,
   SessionInputAdmissionRejectionCodeV1,
   SessionInputAdmissionResultV1,
+  SessionInputEnqueueResultV1,
   SessionMessageProvenanceV1,
 } from './messages/sessionInputAdmission.js';
 export {

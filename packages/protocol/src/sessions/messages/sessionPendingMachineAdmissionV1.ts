@@ -5,7 +5,7 @@ import { SessionIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { PendingRequestedActionV1Schema } from '../pending/pendingRequestedActionV1.js';
 import {
-  SessionInputAdmissionResultV1Schema,
+  SessionInputEnqueueResultV1Schema,
   SessionInputRequestEqualityEvidenceV1Schema,
   SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
 } from './sessionInputAdmission.js';
@@ -66,7 +66,7 @@ export type SessionPendingEnqueueByMachineRequestV1 = z.infer<
 
 export const SessionPendingEnqueueByMachineResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  result: SessionInputAdmissionResultV1Schema,
+  result: SessionInputEnqueueResultV1Schema,
 }));
 export type SessionPendingEnqueueByMachineResponseV1 = z.infer<
   typeof SessionPendingEnqueueByMachineResponseV1Schema

@@ -7,9 +7,9 @@ import {
 } from '@happier-dev/agents';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
-import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta, readSessionInputAuthority, readSessionInputSenderSessionIdV1, deriveWorkflowSessionInputLocalIdV2, buildTrustedHostSessionInputAdmissionV1, type SessionInputReplyIntentV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_MESSAGE_PROVENANCE_META_KEY, SessionInputRequestSchema, SessionMessageProvenanceSchema, stripSessionInputProtectedMeta, readSessionInputAuthority, readSessionInputSenderSessionIdV1, deriveWorkflowSessionInputLocalIdV2, buildTrustedHostSessionInputAdmissionV1, type SessionInputReplyIntentV1, type SessionInputEnqueueResultV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { withSessionMessageModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
-import type { ProviderErrorV1, SessionInputRequest, SessionMessageProvenance, SessionInputAdmissionRejectionCodeV1, SessionInputAdmissionResultV1, SessionMessageSendResultV1, SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2, PendingRequestedActionV1, ParticipantRecipientV1, ExecutionRunInputTurnV1, ExecutionRunPublicState } from '@happier-dev/protocol';
+import type { ProviderErrorV1, SessionInputRequest, SessionMessageProvenance, SessionInputAdmissionRejectionCodeV1, SessionMessageSendResultV1, SessionPendingEnqueueByMachineRequestV1, SessionPendingExecutionRunEnqueueByMachineRequestV2, PendingRequestedActionV1, ParticipantRecipientV1, ExecutionRunInputTurnV1, ExecutionRunPublicState } from '@happier-dev/protocol';
 import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { normalizeParticipantRecipientRoutingIdentityV1, withParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { ExecutionRunGetResponseSchema, ExecutionRunInputTurnV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -89,7 +89,7 @@ export type SendSessionMessageResult =
       suppressed?: true;
       /** The exact localId is already terminal, so there is no Pending work to start. */
       terminal?: true;
-      admissionResult?: SessionInputAdmissionResultV1;
+      admissionResult?: SessionInputEnqueueResultV1;
       /** Admission intent only: Pending custody does not prove provider consumption. */
       receiverDelivery?: SessionReceiverDeliveryDecisionV1;
       receiverResumeFailure?: Extract<InactiveSessionResumeResult, { ok: false }>;
@@ -106,7 +106,7 @@ export type SendSessionMessageResult =
       candidates?: string[];
       message?: string;
       providerError?: ProviderErrorV1;
-      admissionResult?: SessionInputAdmissionResultV1;
+      admissionResult?: SessionInputEnqueueResultV1;
       /** Proven terminal settlement for one exact admitted Execution Run input. */
       settlementResult?: Extract<SessionMessageSendResultV1, { status: 'failed' | 'cancelled' }>;
     }>;
@@ -258,7 +258,7 @@ type SendSessionMessageParams = Readonly<{
   machineAdmissionTransport?: (
     request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2,
     options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number; callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1 }>,
-  ) => Promise<SessionInputAdmissionResultV1>;
+  ) => Promise<SessionInputEnqueueResultV1>;
   /** Exact creation target when admission precedes the Session metadata projection. */
   targetMachineId?: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
@@ -269,7 +269,7 @@ type SendProtectedSessionMessageParams = SendSessionMessageParams & Readonly<{
 }>;
 
 type SendProtectedSessionMessageResult = SendSessionMessageResult & Readonly<{
-  admissionResult: SessionInputAdmissionResultV1;
+  admissionResult: SessionInputEnqueueResultV1;
 }>;
 
 function parsePermissionIntentOrThrow(raw: string): PermissionIntent {
@@ -300,7 +300,7 @@ function cancelledBeforeAdmission(
 
 function rejectedProtectedInputBeforeAdmission(
   code: Extract<SendSessionMessageResult, Readonly<{ ok: false }>>['code'],
-): SessionInputAdmissionResultV1 {
+): SessionInputEnqueueResultV1 {
   if (code === 'session_archived') {
     return { status: 'rejected', code: 'session_input_archived' };
   }
@@ -1599,7 +1599,7 @@ export async function sendSessionMessage(
   }
 
   let enqueueResult: Awaited<ReturnType<typeof enqueuePendingQueueV2MessageViaHttp>>;
-  let admissionResult: SessionInputAdmissionResultV1 | undefined;
+  let admissionResult: SessionInputEnqueueResultV1 | undefined;
   let machineAdmissionInvoked = false;
   try {
     if (requiresMachineAdmission) {

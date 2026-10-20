@@ -1041,7 +1041,8 @@ export type SessionInputRequestEnvelopeDigestV1 = z.infer<typeof SessionInputReq
 export const SessionInputRequestEqualityEvidenceV1Schema = SessionMutationEqualityEvidenceV1Schema;
 export type SessionInputRequestEqualityEvidenceV1 = z.infer<typeof SessionInputRequestEqualityEvidenceV1Schema>;
 
-export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+/** Initial Pending custody; receiver policy holds belong to later settlement. */
+export const SessionInputEnqueueResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('accepted'),
     localId: PendingLocalIdSchema,
@@ -1055,14 +1056,19 @@ export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discrim
     code: SessionInputAdmissionRejectionCodeV1Schema,
   }),
   z.strictObject({
-    status: z.literal('held'),
-    localId: PendingLocalIdSchema,
-    code: z.enum(['autonomous_check_in', 'session_input_target_unavailable']),
-  }),
-  z.strictObject({
     status: z.literal('outcomeUnknown'),
     localId: PendingLocalIdSchema,
     code: preservedBoundedNfcString(128, 'Admission outcome codes'),
+  }),
+]));
+export type SessionInputEnqueueResultV1 = z.infer<typeof SessionInputEnqueueResultV1Schema>;
+
+export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  SessionInputEnqueueResultV1Schema,
+  z.strictObject({
+    status: z.literal('held'),
+    localId: PendingLocalIdSchema,
+    code: z.enum(['autonomous_check_in', 'session_input_target_unavailable']),
   }),
 ]));
 export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmissionResultV1Schema>;
