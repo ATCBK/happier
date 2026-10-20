@@ -109,6 +109,47 @@ const openableTarget = {
 };
 
 describe('DetectedLocalServicesPane', () => {
+    it('keeps one declared Service selected through native handoffs and phone recomposition', async () => {
+        const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-web', source: 'managed_service',
+            machineId: 'machine-a', title: 'Web', confidence: 'high', state: 'unavailable',
+            unavailableReason: 'launch_unavailable',
+            workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'source-ref', rootPath: '/source' },
+            declaration: { workspaceRefId: 'source-ref', selection: { kind: 'manifest', name: 'web' } } });
+        const worker = LocalServiceLaunchTargetV1Schema.parse({ ...declaration, id: 'worker-web', machineId: 'worker',
+            workspace: { ...declaration.workspace, machineId: 'worker', workspaceId: 'worker-ref', rootPath: '/copy' },
+            declaration: { workspaceRefId: 'worker-ref', selection: { kind: 'manifest', name: 'web' } },
+            sourceClass: { kind: 'managed_service', managedServiceId: 'worker-instance' },
+            state: 'available', unavailableReason: undefined, serviceState: 'running', actions: ['manage'] });
+        const pane = (target: typeof declaration) => <DetectedLocalServicesPane
+            inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+            launcherState={{ ...launcherStateWith([target]), rowIdsByTargetId: new Map([[target.id, declaration.id]]) }}
+            renderServicePlacement={() => <PlacementProbe />} testID="continuity" />;
+        deviceState.type = 'tablet';
+        const screen = await renderScreen(pane(declaration));
+        try {
+            await expandRow(screen, 'continuity-row:source-web');
+            expect(screen.findByTestId('placement-probe')).toBeTruthy();
+            await screen.update(pane(worker));
+            expect(screen.findByTestId('continuity-row:source-web-expansion')).toBeTruthy();
+            expect(screen.findByTestId('placement-probe')).toBeTruthy();
+            deviceState.type = 'phone';
+            await screen.update(pane(worker));
+            expect(screen.findByTestId('continuity-detail')).toBeTruthy();
+            expect(screen.findAllByTestId('placement-probe')).toHaveLength(1);
+            await screen.update(pane(declaration));
+            expect(screen.findByTestId('continuity-detail')).toBeTruthy();
+            deviceState.type = 'tablet';
+            await screen.update(pane(declaration));
+            expect(screen.findByTestId('continuity-row:source-web-expansion')).toBeTruthy();
+            expect(screen.findAllByTestId('placement-probe')).toHaveLength(1);
+            deviceState.type = 'phone';
+            await screen.update(pane(declaration));
+            await pressTestInstanceAsync(screen.findByTestId('continuity-detail-back'), 'back');
+            deviceState.type = 'tablet';
+            await screen.update(pane(declaration));
+            expect(screen.findByTestId('continuity-row:source-web-expansion')).toBeNull();
+        } finally { deviceState.type = 'tablet'; await screen.unmount(); }
+    });
     it('resolves the unavailable binding Machine through the real scoped row wiring', async () => {
         const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
         const home = await createPlainArtifactHomeFixture('https://service-binding-machine.test');

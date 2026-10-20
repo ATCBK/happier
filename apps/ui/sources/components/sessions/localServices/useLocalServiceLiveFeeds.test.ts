@@ -304,6 +304,10 @@ describe('Project Services source feed plus actual native binding', () => {
       workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace',
       inventoryState: createLocalServiceInventoryState(), launcherSnapshotClient: snapshotClient }));
     await vi.waitFor(() => expect([...hook.getCurrent().launcherState!.targetsById.values()]).toEqual([actual]));
+    const readRows = () => buildLocalServiceRows({ inventoryRows: [],
+      launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
+      rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
+    expect(readRows()[0]).toMatchObject({ id: declaration.id, target: actual });
     running = false;
     await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: 'worker' }, {
       v: 1, machineId: 'worker', generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
@@ -313,6 +317,7 @@ describe('Project Services source feed plus actual native binding', () => {
       sessionId: null, scope: 'workspace' })[0]).toMatchObject({ status: 'running' });
     await act(async () => { finishRefresh(); });
     await vi.waitFor(() => expect([...hook.getCurrent().launcherState!.targetsById.values()]).toEqual([declaration]));
+    expect(readRows()[0]).toMatchObject({ id: declaration.id, target: declaration });
     const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
       sessionId: null, scope: 'workspace' });
     expect(row).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start', target: declaration } });

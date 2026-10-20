@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol';
+import { LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { buildLocalServiceLauncherSnapshot } from './suggestions';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
@@ -57,6 +58,25 @@ function inventoryEntry(overrides: Partial<NormalizedLocalServiceInventoryEntry>
 
 
 describe('buildLocalServiceLauncherSnapshot', () => {
+    it.each([
+        { kind: 'short', command: 'python -m http.server 5173', expected: 'python -m http.server 5173' },
+        { kind: 'clipped Unicode', command: `printf '${'x'.repeat(LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH - 10)}😀more text'`,
+            expected: `printf '${'x'.repeat(LOCAL_SERVICE_LAUNCH_TARGET_COMMAND_PREVIEW_MAX_LENGTH - 10)}…` },
+    ])('publishes a $kind command preview for a project declaration', ({ command, expected }) => {
+        const snapshot = buildLocalServiceLauncherSnapshot({ machineId: 'machine-a', updatedAt: 1,
+            runTargets: [{ id: 'declared-web', cwd: '/repo', workspaceId: 'workspace-a',
+                workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: '/repo' },
+                declaration: { workspaceRefId: 'workspace-a', selection: { kind: 'manifest', name: 'web' } },
+                title: 'Web', displayMatch: { command, port: 5173 } }],
+            previewResources: [], inventoryEntries: [],
+        });
+        const parsed = LocalServiceLauncherSnapshotV1Schema.parse(snapshot);
+        const preview = parsed.targets[0]?.commandPreview;
+        expect(preview).toBe(expected);
+        expect(parsed.targets[0]).toMatchObject({ source: 'managed_service', declaration: {
+            workspaceRefId: 'workspace-a', selection: { kind: 'manifest', name: 'web' },
+        } });
+    });
     it.each(['listening', 'stale'] as const)('names a %s listener only from its associated nested accepted checkout and scoped declarations', state => {
         const parent = { id: 'parent', cwd: '/repo', workspaceId: 'workspace-a',
             workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: '/repo' },
