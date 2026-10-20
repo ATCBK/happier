@@ -302,6 +302,11 @@ describe('WidgetFrame', () => {
         const distinct = await renderFrame({ title: 'Latest runs', source: 'Automations' });
         expect(distinct.getTextContent()).toContain('Automations');
     });
+    it('ends the header with the ⋯ menu, then the move grip, the one order on every card', async () => {
+        const screen = await renderFrame({ menu: <Text testID="frame-menu">menu</Text>, grip: <Text testID="frame-grip">grip</Text> });
+        const order = screen.tree.findAllByType(Text).map((node) => node.props.testID).filter((id: unknown) => id === 'frame-menu' || id === 'frame-grip');
+        expect(order).toEqual(['frame-menu', 'frame-grip']);
+    });
     it('keeps the suffix that tells near-identical machines apart when a bound source is too long for its header', async () => {
         const screen = await renderFrame({ source: 'Following group · NLDW6-3-11-20 · 0371' });
         const runs = screen.tree.findAllByType(Text).map((node) => node.props.children).filter((child: unknown) => typeof child === 'string');

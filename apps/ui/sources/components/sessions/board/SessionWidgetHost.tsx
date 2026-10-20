@@ -54,6 +54,7 @@ import { useActiveServerAccountScope, useUser } from '@/sync/domains/state/stora
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { readWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
 import { resolveBoardWidgetProvenance } from '@/components/widgets/boardWidgetProvenance';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import type { SessionBoardHostActionBinding } from './sessionBoardHostActions';
@@ -319,6 +320,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         props.onHeadingFocusHandled?.(requestId);
     }, [props.focusHeadingRequestId, props.onHeadingFocusHandled]);
     const entityDrag = useSessionSurfaceEntityDrag(props.entityDrag ?? null);
+    const [hostWidth, setHostWidth] = React.useState(0);
+    const narrow = hostWidth > 0 && hostWidth < NARROW_CARD_WIDTH_PX;
+    const onHostLayout = React.useCallback((event: LayoutChangeEvent) => {
+        setHostWidth(Math.round(event.nativeEvent.layout.width));
+        entityDrag.onLayout();
+    }, [entityDrag]);
     const state = props.item.state;
     const mountMode = resolveSessionBoardMountMode({
         host: props.host,
@@ -345,7 +352,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             : {}),
     });
 
-    const title = resolveSessionBoardItemTitle(state);
+    // A configured widget's inputs: Edit inputs… in the menu and the card's repair line open the
+    // same step, for this copy only. The Board fills "This session" with its own Session.
+    const widgetInstance = state.kind === 'ready' && state.item.source.kind === 'widget' ? state.item.source.instance : null;
+    const installedDescriptor = React.useMemo(
+        () => (widgetInstance ? readWidgetDescriptor(appRuntime.pluginUiProjection, widgetInstance.definition) : null),
+        [appRuntime.pluginUiProjection, widgetInstance],
+    );
+    const boardSurface = useSessionWidgetSurface({ owner: 'sessionBoard', serverId: props.serverId, sessionId: props.sessionId, session: props.session ?? null });
+    const widgetDescriptor = useWidgetInstanceDescriptor(boardSurface.scope, widgetInstance, installedDescriptor);
+    // A widget card is named by the shared widget-name owner (its own name, else its definition's title) so an
+    // installed surface never shows its local id; the stored title is the fallback for every other source.
+    const title = (widgetInstance ? readWidgetInstanceName(widgetInstance, widgetDescriptor) : null) ?? resolveSessionBoardItemTitle(state);
     const sameHome = !!viewerScope && (!props.serverId || areServerProfileIdentifiersEquivalent(viewerScope.serverId, props.serverId));
     const poster = useUser(sameHome && state.kind === 'ready' ? state.item.snapshot?.postedByAccountId : undefined);
     const provenance = itemProvenance(props.item, props.pluginRuntime, sameHome ? viewerScope?.accountId : undefined,
@@ -379,15 +397,6 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     });
     const beginRename = rename.begin;
 
-    // A configured widget's inputs: Edit inputs… in the menu and the card's repair line open the
-    // same step, for this copy only. The Board fills "This session" with its own Session.
-    const widgetInstance = state.kind === 'ready' && state.item.source.kind === 'widget' ? state.item.source.instance : null;
-    const installedDescriptor = React.useMemo(
-        () => (widgetInstance ? readWidgetDescriptor(appRuntime.pluginUiProjection, widgetInstance.definition) : null),
-        [appRuntime.pluginUiProjection, widgetInstance],
-    );
-    const boardSurface = useSessionWidgetSurface({ owner: 'sessionBoard', serverId: props.serverId, sessionId: props.sessionId, session: props.session ?? null });
-    const widgetDescriptor = useWidgetInstanceDescriptor(boardSurface.scope, widgetInstance, installedDescriptor);
     const inputs = useWidgetInputsEditor({
         instance: widgetInstance,
         candidate: widgetDescriptor,
@@ -831,10 +840,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         </View>
     ) : null;
 
-    const controls = moveHandle || itemActions.length > 0 || props.headerAccessory ? (
+    const controls = itemActions.length > 0 || props.headerAccessory ? (
         // Edit inputs anchors here, at the ⋯.
         <View style={styles.controls} ref={inputs.anchorRef} collapsable={false}>
-            {moveHandle}
             {itemActions.length > 0 ? (
                 <ItemRowActions
                     title={title}
@@ -854,7 +862,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     ) : null;
 
     return (
-        <View ref={entityDrag.ref} onLayout={entityDrag.onLayout} collapsable={false}>
+        <View ref={entityDrag.ref} onLayout={onHostLayout} collapsable={false}>
             {/* The card's own region: Post a snapshot opens on its own card from here. */}
             <View ref={cardRegionRef} testID={`${testID}-card-region`} pointerEvents="none" style={styles.cardRegion} />
             <SessionSurfaceEntityTargetFeedback drag={entityDrag} testID={testID} />
@@ -880,8 +888,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                 mark={itemMark}
                 title={heading}
                 {...(source ? { source } : {})}
+                // A narrow card (the Board in a pane) reads its source whole, on its own line beneath the title; "Snapshot
+                // by you · as of 10:42" and a plugin's name are never squeezed out beside a long title.
+                {...(source && narrow ? { sourcePlacement: 'below' as const } : {})}
                 meta={meta}
                 menu={controls}
+                {...(moveHandle ? { grip: moveHandle } : {})}
                 fresh={props.fresh === true}
                 widgetPresentation={widgetPresentation}
                 {...(reply ? { bodyHeight: 'content' as const } : {})}
@@ -925,6 +937,9 @@ function sessionWidgetMark(state: SessionBoardItemProjection['state']): IconName
         case 'widget': return 'puzzle-piece';
     }
 }
+
+/** Below this card width the header's source goes on its own line (a title and a source no longer fit side by side). */
+const NARROW_CARD_WIDTH_PX = 520;
 
 const FULL_BLEED_BODY = Object.freeze({ paddingLeft: 0, paddingRight: 0, paddingBottom: 0 });
 

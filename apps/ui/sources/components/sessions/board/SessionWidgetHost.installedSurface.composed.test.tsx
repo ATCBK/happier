@@ -608,6 +608,14 @@ describe('SessionWidgetHost installed surface placements', () => {
         expect(state.activeMountKeys.has(String(physicalMount))).toBe(false);
     });
 
+    it('titles an unnamed installed widget by its contribution title, never by the local id an Action seeded as the item title', async () => {
+        if (item.state.kind !== 'ready') throw new Error('Expected readable native item');
+        item = { ...item, state: { kind: 'ready', item: { ...item.state.item, title: SURFACE.localId } } };
+        const screen = await renderPlacement({ host: 'details', primaryHost: 'details', density: 'full', width: 'medium' });
+        expect(screen.findByTestId('widget-title')?.props.children).toBe('Review status');
+        expect(screen.getTextContent()).not.toContain(SURFACE.localId);
+    });
+
     it.each([
         { mode: 'refused' as const, severity: 'error' as const },
         { mode: 'created' as const, severity: 'info' as const },

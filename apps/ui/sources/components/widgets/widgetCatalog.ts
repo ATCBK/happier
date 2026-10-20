@@ -131,11 +131,13 @@ export function isBuiltinWidgetSwitchedOff(definition: WidgetDefinitionRefV1, mo
 }
 
 function describeBuiltinWidgetCandidate(descriptor: BuiltinWidgetDescriptorV1): WidgetCandidate {
+    // A built-in with no purpose of its own has none: its title is never repeated as its description.
+    const description = descriptor.descriptionKey ? t(descriptor.descriptionKey)
+        : readWidgetInputTargetV1(descriptor).kind !== 'session' ? null
+        : t(`widgetAdd.nativeDescriptions.${descriptor.definition.id as 'session_summary' | 'agent_plan' | 'changes' | 'local_services'}`);
     return Object.freeze({ ...descriptor, title: t(descriptor.titleKey),
         inputs: descriptor.inputs ? localizeBuiltinInputHints(descriptor.inputs) : undefined,
-        description: descriptor.descriptionKey ? t(descriptor.descriptionKey)
-            : readWidgetInputTargetV1(descriptor).kind !== 'session' ? t(descriptor.titleKey)
-            : t(`widgetAdd.nativeDescriptions.${descriptor.definition.id as 'session_summary' | 'agent_plan' | 'changes' | 'local_services'}`),
+        ...(description === null ? {} : { description }),
         pluginName: t('widgetAdd.builtIn'), sharedPluginName: false });
 }
 
@@ -169,6 +171,15 @@ export function readWidgetDescriptor(
     }
     const surface = identity;
     return describeWidgetPlacements(projection, projection ? selectWidgetPlacementsBySurface(projection, surface) : [])[0] ?? null;
+}
+
+/**
+ * The plugin a widget card names as its source. A saved copy of an installed widget is named by that plugin
+ * (as the installed widget itself is), not by its own name, which is already the card's title.
+ */
+export function readWidgetSourcePluginName(projection: PluginUiProjectionModel | null | undefined, candidate: WidgetCandidate | null | undefined): string | undefined {
+    if (!candidate) return undefined;
+    return (candidate.sourceDefinition ? readWidgetDescriptor(projection, candidate.sourceDefinition)?.pluginName : undefined) ?? candidate.pluginName;
 }
 
 function describeWidgetPlacements(

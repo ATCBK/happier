@@ -120,6 +120,8 @@ export type WidgetFrameProps = Readonly<{
     sourcePlacement?: 'inline' | 'below';
     /** The widget's controls at the end of the header: its ⋯ menu. */
     menu?: React.ReactNode;
+    /** The card's move grip (Canvas, Session Board): always the last control of the header, after the ⋯ menu. */
+    grip?: React.ReactNode;
     /** The move handle, before the mark, while the widget's surface is being arranged. */
     leading?: React.ReactNode;
     /** Mounted viewer-local disclosure; never writes the layout or alters Resource activity. */
@@ -425,7 +427,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             meta={meta}
             {...(refreshingMark ? { compactMeta: refreshingMark } : {})}
             {...(props.leading ? { leading: props.leading } : {})}
-            accessory={props.menu}
+            accessory={props.grip ? <View style={styles.chrome}>{props.menu}{props.grip}</View> : props.menu}
             disclosure={props.disclosure}
             // The public driver erases Reanimated's host-private value types, as at the plugin presentation boundary.
             disclosureMotion={reanimatedDisclosureMotion as unknown as HappierDisclosureMotionDriver}
@@ -597,6 +599,11 @@ const stylesheet = StyleSheet.create((theme) => {
         },
         // Fills the fixed viewport (a state body keeps its room) and grows past it when the rows do.
         fixedBodyContent: { flexGrow: 1 },
+        chrome: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: theme.space.s2,
+        },
         titleWithMeta: {
             flexDirection: 'row',
             alignItems: 'baseline',

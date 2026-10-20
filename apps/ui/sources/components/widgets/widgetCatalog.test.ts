@@ -14,6 +14,7 @@ import {
     describeBuiltinWidgetInstance,
     describeWidgetDefinitionSummaryV1,
     isBuiltinWidgetSwitchedOff,
+    readWidgetSourcePluginName,
     selectBuiltinWidgetCandidates,
     selectCurrentSessionWidgetCandidates,
     selectWidgetCandidates as selectUniversalWidgetCandidates,
@@ -49,6 +50,11 @@ describe('Widget Add candidates', () => {
         expect(candidate).toMatchObject({ definition: { kind: 'artifact', artifactId: 'checks' }, title: 'Checks on main',
             inputs: { fields: [{ path: 'repo' }] }, target: 'app' });
         expect(candidate.authoredDefinition).toBeUndefined();
+    });
+    it('gives a built-in with no purpose of its own no description, instead of its title repeated', () => {
+        const checkouts = selectBuiltinWidgetCandidates().find(candidate => candidate.definition.kind === 'builtin' && candidate.definition.id === 'project_checkouts');
+        expect(checkouts?.title).toBeTruthy();
+        expect(checkouts?.description).toBeUndefined();
     });
     it('offers native glances through the universal catalog without a plugin occurrence or a fake plugin identity', () => {
         const candidates = selectUniversalWidgetCandidates(null);
@@ -94,6 +100,20 @@ describe('Widget Add candidates', () => {
             pluginName: 'Review Assistant',
             sharedPluginName: false,
         });
+    });
+
+    it('names a saved copy of an installed widget by that widget\u2019s plugin, not by its own name (already its title)', () => {
+        const projection = projectionOf(
+            [inlineEntry({ pluginId: 'acme.review', localId: 'review-status-widget', title: 'Review status' })],
+            { 'acme.review': installedPackage('acme.review', 'Review Assistant') },
+        );
+        const saved = describeWidgetDefinitionSummaryV1({ artifactId: 'copy', name: 'Review status', sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize },
+            bodyKind: 'installed', resources: [],
+            sourceDefinition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'review-status-widget' } } } as unknown as Parameters<typeof describeWidgetDefinitionSummaryV1>[0]);
+        expect(readWidgetSourcePluginName(projection, saved)).toBe('Review Assistant');
+        const plain = describeWidgetDefinitionSummaryV1({ artifactId: 'plain', name: 'Checks', sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize },
+            bodyKind: 'declarative', resources: [] });
+        expect(readWidgetSourcePluginName(projection, plain)).toBe('Checks');
     });
 
     it('never offers a role that merely shares the local id', () => {
