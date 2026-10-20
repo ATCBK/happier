@@ -33,6 +33,8 @@ export {
   type RemoteBootstrapCommandLabel,
 } from './ssh/remoteBootstrapCommandBuilder.js';
 export { isRemoteBootstrapUnauthenticatedCliResult, normalizeRemoteBootstrapCliJsonResult } from './executors/remoteSetupMachineRecipeExecutor.js';
+export { installRemoteFirstPartyComponentPayload } from './kinds/remoteFirstPartyPayloadInstaller.js';
+export { materializeSshIdentityPrivateKeyToTempFile } from './ssh/materializeSshIdentityPrivateKeyToTempFile.js';
 export {
   buildRemoteSelfDownloadFirstPartyInstallCommand,
   resolveRemoteSelfDownloadFirstPartyInstallPlan,

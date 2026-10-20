@@ -1,4 +1,4 @@
-import { parseEnvText } from './selfHostServerEnv.js';
+import { parseEnvText } from './parseEnvText.js';
 
 export const PERSONAL_HOME_SIGNUP_POLICY_ENV_KEY = 'AUTH_ANONYMOUS_SIGNUP_ENABLED';
 export const PERSONAL_HOME_SIGNUP_CLOSURE_ENV = Object.freeze({

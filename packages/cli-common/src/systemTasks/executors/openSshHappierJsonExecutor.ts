@@ -6,10 +6,10 @@ import { SystemTaskResultSchema } from '@happier-dev/protocol/system/tasks/spec'
 import type { SystemTaskJsonObject } from '@happier-dev/protocol';
 
 import type { SystemTaskSshConnectionConfig } from '../kinds/relayRuntimeKinds.js';
-import { resolveRemoteInstalledFirstPartyBinaryPath } from '../kinds/remoteFirstPartyPayloadInstaller.js';
+import { resolveRemoteInstalledFirstPartyBinaryPath } from '../ssh/remoteFirstPartyInstallPath.js';
 import { SystemTaskExecutionError } from '../runSystemTask.js';
 
-import { createHappierJsonExecutorFromTextRunner, type HappierJsonExecutor, type HappierTextResult, type RunHappierOptions } from './happierJsonExecutor.js';
+import { createHappierJsonExecutorFromTextRunner, type HappierJsonExecutor, type HappierTextResult, type RunHappierOptions } from './happierJsonExecutorFromTextRunner.js';
 
 function isSystemTaskJsonObject(value: unknown): value is SystemTaskJsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

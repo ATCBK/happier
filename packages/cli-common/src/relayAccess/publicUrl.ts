@@ -1,3 +1,5 @@
+import { normalizeRelayAccessCanonicalPublicServerUrl } from './normalizePublicServerUrl.js';
+export { normalizeRelayAccessCanonicalPublicServerUrl } from './normalizePublicServerUrl.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -15,27 +17,6 @@ type ResolveRelayAccessConfiguredCanonicalPublicServerUrlOptions = Readonly<{
 const defaultRelayAccessConfigEnv: RelayAccessConfigEnv = {};
 const defaultResolveRelayAccessConfiguredCanonicalPublicServerUrlOptions: ResolveRelayAccessConfiguredCanonicalPublicServerUrlOptions = {};
 
-function normalizeHttpUrl(raw: unknown): string | null {
-    const value = String(raw ?? '').trim();
-    if (!value) return null;
-
-    let parsed: URL;
-    try {
-        parsed = new URL(value);
-    } catch {
-        return null;
-    }
-
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    if (parsed.username || parsed.password) {
-        parsed.username = '';
-        parsed.password = '';
-    }
-    parsed.search = '';
-    parsed.hash = '';
-    return parsed.toString().replace(/\/+$/, '');
-}
-
 async function resolveRelayAccessStatusShareUrlWithEnv(
     config: RelayAccessConfig,
     env: NodeJS.ProcessEnv,
@@ -51,7 +32,7 @@ async function resolveRelayAccessStatusShareUrlWithEnv(
 }
 
 function resolveRelayAccessStatusShareUrlFromStatus(status: RelayAccessStatus): string | null {
-    return normalizeHttpUrl(status.shareUrl);
+    return normalizeRelayAccessCanonicalPublicServerUrl(status.shareUrl);
 }
 
 async function readPersistedRelayAccessConfigFromEnv(
@@ -126,8 +107,4 @@ export async function resolveRelayAccessConfiguredCanonicalPublicServerUrl(
     options: ResolveRelayAccessConfiguredCanonicalPublicServerUrlOptions = defaultResolveRelayAccessConfiguredCanonicalPublicServerUrlOptions,
 ): Promise<string | null> {
     return (await resolveRelayAccessConfiguredPublicAccess(env, options))?.shareUrl ?? null;
-}
-
-export function normalizeRelayAccessCanonicalPublicServerUrl(raw: unknown): string | null {
-    return normalizeHttpUrl(raw);
 }

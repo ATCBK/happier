@@ -300,6 +300,11 @@ export type RemoteHostTrustResolution =
     }>;
 
 export type RemoteSshBootstrapMachineDeps = Readonly<{
+  /** Host SSH transports materialize keys; native transports keep them in memory. */
+  materializeIdentityPrivateKey?: (params: Readonly<{ privateKey: string; prefix?: string }>) => Promise<Readonly<{
+    identityFilePath: string;
+    cleanup: () => Promise<void>;
+  }>>;
   onEnrollmentDeadline?: (deadlineMs: number) => void;
   assertManagedEnrollmentCurrent?: (correlation: ManagedEnrollmentCorrelationV1) => Promise<void>;
   resolveHostTrust: (params: Readonly<{
@@ -419,6 +424,7 @@ export function createRemoteSshBootstrapMachineTaskKind(
         const authResolution = await resolveRemoteSshAuth({
           ctx,
           parsedRemote,
+          materializeIdentityPrivateKey: deps.materializeIdentityPrivateKey,
         });
         cleanupTempIdentityFile = authResolution.cleanup;
         const auth = authResolution.auth;
@@ -664,6 +670,7 @@ function normalizeRemoteSshAuth(ssh: SystemTaskSshConnectionConfig): RemoteSshAu
 async function resolveRemoteSshAuth(params: Readonly<{
   ctx: Pick<Parameters<InteractiveSystemTaskKind['run']>[0], 'prompt'>;
   parsedRemote: RemoteBootstrapMachineParams;
+  materializeIdentityPrivateKey?: RemoteSshBootstrapMachineDeps['materializeIdentityPrivateKey'];
 }>): Promise<Readonly<{ auth: RemoteSshAuth; cleanup: (() => Promise<void>) | null }>> {
   const auth = normalizeRemoteSshAuth(params.parsedRemote.ssh);
 
@@ -714,8 +721,10 @@ async function resolveRemoteSshAuth(params: Readonly<{
       throw new SystemTaskExecutionError('invalid_params', 'Missing ssh.identityFile for keyfile auth.');
     }
 
-    const { materializeSshIdentityPrivateKeyToTempFile } = await import('../ssh/materializeSshIdentityPrivateKeyToTempFile.js');
-    const materialized = await materializeSshIdentityPrivateKeyToTempFile({
+    if (!params.materializeIdentityPrivateKey) {
+      throw new SystemTaskExecutionError('invalid_params', 'SSH private key materialization is unavailable for this transport.');
+    }
+    const materialized = await params.materializeIdentityPrivateKey({
       privateKey: privateKeyMaterial,
       prefix: 'happier-ssh-bootstrap-',
     });

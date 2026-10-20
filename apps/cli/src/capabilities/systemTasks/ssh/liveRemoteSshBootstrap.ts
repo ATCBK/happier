@@ -1002,6 +1002,7 @@ export function createLiveRemoteSshManageHostTaskKind() {
 export function createLiveRemoteSshBootstrapTaskKind(options: Pick<systemTasks.RemoteSshBootstrapMachineDeps, 'assertManagedEnrollmentCurrent' | 'onEnrollmentDeadline'> = {}) {
   const baseKind = systemTasks.createRemoteSshBootstrapMachineTaskKind({
     ...options,
+    materializeIdentityPrivateKey: systemTasks.materializeSshIdentityPrivateKeyToTempFile,
     resolveHostTrust: resolveLiveRemoteHostTrust,
     installRemoteCli: async ({ parsed, auth, knownHostsMode, signal }) => await installLiveRemoteCli({
       ssh: parsed.ssh, auth: auth as SshAuth, knownHostsMode, channel: parsed.channel ?? 'stable', signal,

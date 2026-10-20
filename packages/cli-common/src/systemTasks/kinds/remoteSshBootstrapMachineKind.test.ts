@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 
 import { createSystemTasksRunner } from '../interactiveTaskKinds.js';
 import { resolveHomeTargetFromDescriptor } from '../../homeTarget/homeTarget.js';
+import { materializeSshIdentityPrivateKeyToTempFile } from '../ssh/materializeSshIdentityPrivateKeyToTempFile.js';
 import {
   createRemoteSshBootstrapMachineTaskKind as createProductionRemoteSshBootstrapMachineTaskKind,
   createRemoteNativeBootstrapMachineTaskKind,
@@ -136,8 +137,9 @@ type RemoteSshBootstrapMachineTestDeps = RemoteSshBootstrapMachineDeps & Readonl
 
 function createRemoteSshBootstrapMachineTaskKind({
   remoteEnrollment,
-  ...deps
+  ...input
 }: RemoteSshBootstrapMachineTestDeps) {
+  const deps = { materializeIdentityPrivateKey: materializeSshIdentityPrivateKeyToTempFile, ...input };
   if (deps.createRemoteEnrollmentExecutor) {
     return createProductionRemoteSshBootstrapMachineTaskKind(deps);
   }

@@ -367,6 +367,12 @@
       "import": "./dist/relayAccess/index.js",
       "default": "./dist/relayAccess/index.js"
     },
+    "./relayAccess/normalizePublicServerUrl": {
+      "happier-source": "./src/relayAccess/normalizePublicServerUrl.ts",
+      "types": "./dist/relayAccess/normalizePublicServerUrl.d.ts",
+      "import": "./dist/relayAccess/normalizePublicServerUrl.js",
+      "default": "./dist/relayAccess/normalizePublicServerUrl.js"
+    },
     "./relayAccess/catalog": {
       "happier-source": "./src/relayAccess/catalog.ts",
       "types": "./dist/relayAccess/catalog.d.ts",
@@ -396,6 +402,12 @@
       "types": "./dist/systemTasks/index.d.ts",
       "import": "./dist/systemTasks/index.js",
       "default": "./dist/systemTasks/index.js"
+    },
+    "./systemTasks/interactiveTaskKinds": {
+      "happier-source": "./src/systemTasks/interactiveTaskKinds.ts",
+      "types": "./dist/systemTasks/interactiveTaskKinds.d.ts",
+      "import": "./dist/systemTasks/interactiveTaskKinds.js",
+      "default": "./dist/systemTasks/interactiveTaskKinds.js"
     },
     "./systemTasks/nativeRemoteSshBootstrap": {
       "happier-source": "./src/systemTasks/nativeRemoteSshBootstrap.ts",

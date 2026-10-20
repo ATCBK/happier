@@ -12,7 +12,6 @@ export {
   createRemoteNativeBootstrapMachineTaskKind,
   parseRemoteBootstrapMachineParams,
 } from './kinds/remoteSshBootstrapMachineKind.js';
-export { installRemoteFirstPartyComponentPayload } from './kinds/remoteFirstPartyPayloadInstaller.js';
 export {
   normalizeRemoteReleaseArch,
   normalizeRemoteReleaseOs,

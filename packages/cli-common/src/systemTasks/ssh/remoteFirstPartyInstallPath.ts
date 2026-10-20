@@ -1,7 +1,7 @@
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { quoteRemotePathWithHomeExpansion } from '../../ssh/shellQuote.js';
 import { resolveRetainedVersionIds } from '../../firstPartyRuntime/retentionPolicy.js';
-import { compareVersions } from '../../update/index.js';
+import { compareVersions } from '../../update/compareVersions.js';
 
 import {
   getFirstPartyComponentCatalogEntry,

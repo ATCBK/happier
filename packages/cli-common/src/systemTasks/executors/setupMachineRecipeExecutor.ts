@@ -3,8 +3,8 @@ import type { HappierJsonExecutor } from './happierJsonExecutor.js';
 import {
   scopeHappierJsonExecutor,
   type HappierServerScope,
-  type LocalServerProfileScope,
-} from './serverScope.js';
+} from './scopeHappierJsonExecutor.js';
+import type { LocalServerProfileScope } from './serverScope.js';
 
 import type {
   SetupMachineAuthStatus,
