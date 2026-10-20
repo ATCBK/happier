@@ -16,6 +16,7 @@ import type { EmbeddedTerminalPaneController } from '../embedded/types';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const appearance = vi.hoisted(() => ({ light: false }));
 
 const fitSpy = vi.fn();
 const focusSpy = vi.fn();
@@ -202,7 +203,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
+    const dark = await createUnistylesMock({
         theme: {
             colors: {
                 surface: { base: '#000000', selected: '#333333' },
@@ -210,6 +211,10 @@ vi.mock('react-native-unistyles', async () => {
             },
         },
     });
+    const light = await createUnistylesMock({ theme: { colors: {
+        surface: { base: '#ffffff', selected: '#dddddd' }, text: { primary: '#000000' },
+    } } });
+    return { ...dark, useUnistyles: () => (appearance.light ? light : dark).useUnistyles() };
 });
 
 describe('XtermTerminalView.web', () => {
@@ -218,6 +223,7 @@ describe('XtermTerminalView.web', () => {
     let originalGetBoundingClientRect: typeof HTMLElement.prototype.getBoundingClientRect;
 
     beforeEach(() => {
+        appearance.light = false;
         fitSpy.mockReset();
         focusSpy.mockReset();
         loadAddonSpy.mockReset();
@@ -290,7 +296,7 @@ describe('XtermTerminalView.web', () => {
             await new Promise((resolve) => setTimeout(resolve, 40));
         });
         const surface = container.querySelector('[data-testid="loaded-terminal-xterm"]');
-        expect(surface?.getAttribute('data-happier-terminal-text')).toContain('retained terminal output');
+        expect(surface?.getAttribute('data-happier-terminal-text') ?? '').toContain('retained terminal output');
         expect(document.activeElement).toBe(terminal.textarea);
         expect(onReady).toHaveBeenCalledWith(80, 24);
 
@@ -304,6 +310,25 @@ describe('XtermTerminalView.web', () => {
         expect(terminal.disposed).toBe(false);
         expect(ref.current?.find).toBe(find);
         expect(find?.query).toBe('retained query');
+        // A finished Script has no more stream data to repaint a reset renderer after resize.
+        await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
+            controller={{ ...controller, status: 'exited', readOnly: true, exitCode: 0 }} terminalRef={ref}
+            chrome="none" showQuickKeys focused testIdPrefix="loaded-terminal" />));
+        expect(ref.current).toBe(handle);
+        expect(container.querySelector('[data-testid="loaded-terminal-xterm"]')).toBe(surface);
+        expect(surface?.getAttribute('data-happier-terminal-text')).toContain('retained terminal output');
+        expect(terminal.disposed).toBe(false);
+        appearance.light = true;
+        await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
+            controller={{ ...controller, status: 'exited', readOnly: true, exitCode: 0 }} terminalRef={ref}
+            chrome="none" showQuickKeys focused testIdPrefix="loaded-terminal" />));
+        expect(ref.current).toBe(handle);
+        expect(surface?.getAttribute('data-happier-terminal-text') ?? '').toContain('retained terminal output');
+        expect(ref.current?.find).toBe(find);
+        expect(terminal.options.theme).toMatchObject({ foreground: '#000000' });
+        await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
+            controller={{ ...controller, status: 'exited', onInput: nextInput }} terminalRef={ref}
+            chrome="none" showQuickKeys={false} focused testIdPrefix="loaded-terminal" />));
         onDataSpy('continued input');
         expect(nextInput).toHaveBeenCalledWith('continued input');
         expect(onInput).not.toHaveBeenCalled();
@@ -636,7 +661,7 @@ describe('XtermTerminalView.web', () => {
         const onInput = vi.fn();
         deferWriteCallbacks = true;
         await act(async () => root.render(
-            <XtermTerminalView ref={ref} fontSize={14} onInput={onInput} onResize={() => {}} onReady={() => {}} />,
+            <XtermTerminalView key="first" ref={ref} fontSize={14} onInput={onInput} onResize={() => {}} onReady={() => {}} />,
         ));
         await act(async () => {
             requireTerminalHandle(ref).write('\u001b[c', { intent: 'replay' });
@@ -644,7 +669,7 @@ describe('XtermTerminalView.web', () => {
         });
         expect(pendingWriteCallbacks).toHaveLength(1);
         await act(async () => root.render(
-            <XtermTerminalView ref={ref} fontSize={15} onInput={onInput} onResize={() => {}} onReady={() => {}} />,
+            <XtermTerminalView key="replacement" ref={ref} fontSize={14} onInput={onInput} onResize={() => {}} onReady={() => {}} />,
         ));
         onDataSpy('fresh renderer input');
         expect(onInput).toHaveBeenCalledWith('fresh renderer input');

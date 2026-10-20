@@ -573,7 +573,10 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
             readyFitRetryCountRef.current = 0;
             lastReportedSizeRef.current = null;
         };
-    }, [ensureWriteQueue, fitTerminal, props.fontSize, props.maxPendingWriteBytes, resetWriteState, scheduleFlushWrites, theme.colors.surface.base, theme.colors.surface.selected, theme.colors.text.primary]);
+    // Appearance updates below change the existing terminal's options. Recreating it here
+    // discards retained output behind the same renderer handle, so the controller cannot
+    // distinguish the empty replacement from the renderer it has already hydrated.
+    }, [ensureWriteQueue, fitTerminal, props.maxPendingWriteBytes, resetWriteState, scheduleFlushWrites]);
 
     React.useEffect(() => {
         const term = terminalRef.current;
