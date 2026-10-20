@@ -278,6 +278,9 @@ export function buildExecutionRunConfiguration(input: Readonly<{
         ...(input.workspaceWrites !== undefined ? { workspaceWrites: input.workspaceWrites } : {}),
         ...(input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {}),
         ...(input.unlistedTools !== undefined ? { unlistedTools: input.unlistedTools } : {}),
+        // Permission intent alone cannot distinguish no-tools from read-only.
+        // The existing exclusive allowlist carries that ceiling to every Agent.
+        ...(input.permissionMode.trim() === 'no_tools' ? { allowedTools: [], unlistedTools: 'deny' } : {}),
         options: Object.fromEntries(
             Object.entries(
                 input.sessionConfigOptionOverrides?.overrides ?? {},

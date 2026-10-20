@@ -130,6 +130,46 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     } finally { await operations.disposeProviderSession(); }
   });
 
+  it.each([
+    { policy: 'no_tools', unlistedTools: 'deny' },
+    { policy: 'read_only', unlistedTools: 'ask' },
+    { policy: 'workspace_write', unlistedTools: 'ask' },
+    { policy: 'default', unlistedTools: 'ask' },
+  ] as const)('applies $policy tool availability before launching Claude ($unlistedTools)', async ({ policy, unlistedTools }) => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, happierSessionId: 'sdk-run-tool-policy',
+      permissionMode: policy === 'read_only' || policy === 'no_tools' ? 'read-only' : policy,
+      allowedTools: policy === 'no_tools' ? [] : ['Read', 'mcp__docs__*'],
+      unlistedTools: policy === 'no_tools' ? 'deny' : unlistedTools,
+      advancedOptions: { tools: ['default'] },
+      mcpServers: { docs: { command: 'docs-server' } },
+    });
+    try {
+      await operations.sendProviderTurnPrompt('Answer without using tools');
+      const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+      expect(args).toContain('--tools');
+      expect(args[args.indexOf('--tools') + 1]).toBe(policy === 'no_tools' ? '' : 'default');
+      if (policy === 'no_tools') {
+        expect(args).toContain('--strict-mcp-config');
+        expect(args).not.toContain('--mcp-config');
+        expect(args[args.indexOf('--allowedTools') + 1]).toBe('');
+        const terminal = await operations.prepareTerminalPresentation();
+        if (terminal.kind !== 'terminal_launch') throw new Error('Expected native terminal launch');
+        expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('');
+        expect(terminal.plan.argv).toContain('--strict-mcp-config');
+        expect(terminal.plan.argv).not.toContain('--mcp-config');
+      } else {
+        expect(args).not.toContain('--strict-mcp-config');
+        expect(args).toContain('--mcp-config');
+        expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,mcp__docs__*');
+      }
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it('rejects detached scoped tools before process creation when no Session permission hook exists', () => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
@@ -1088,7 +1128,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       ctx: { logger: fixture.logger, agentRuntime: { exec: exec.service, toolExecution: fixture.agentRuntime.toolExecution } },
       permissionEngine: createClaudeNativePermissionEngine({ services: { interactions: { requestApproval } } } as unknown as AgentSessionRuntimeContext),
       directory: '/tmp/claude-project', launchEnv: {}, executionRunId: 'workspace-mcp',
-      permissionMode: 'default', toolPermissionPolicy: 'workspace_write',
+      permissionMode: 'yolo',
       mcpServers: { first__team: { command: 'fixture-mcp' } },
       mcpToolPolicy: { first__team: { unlisted: 'ask', tools: { mutate: 'ask' } } },
     });
@@ -1125,9 +1165,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       ctx,
       directory: '/tmp/claude-project',
       launchEnv: {},
-      permissionMode: 'default',
+      permissionMode: 'yolo',
       happierSessionId: 'happy-tool-interception',
-      toolPermissionPolicy: 'workspace_write',
     });
 
     try {
@@ -1136,14 +1175,12 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).toEqual(expect.arrayContaining([
         '--permission-mode',
-        'default',
+        'bypassPermissions',
       ]));
       expect(exec.spawnClient.mock.calls[0]?.[0].launch.args.filter(
         (arg: string) => arg === '--permission-mode',
       )).toHaveLength(1);
-      await operations.updateProviderConfiguration({ permissionMode: 'yolo' });
-      expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).not.toContain('--allow-dangerously-skip-permissions');
-      expect(exec.written.filter(value => (value as { request?: { subtype?: string } }).request?.subtype === 'set_permission_mode')).toEqual([]);
+      expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).toContain('--allow-dangerously-skip-permissions');
       await exec.emit({
         type: 'control_request',
         request_id: 'permission-call-1',
