@@ -9,6 +9,8 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { useConfirmExperimentalProviderModel } from '@/providers/hooks/useConfirmExperimentalProviderModel';
+import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 
 import type { ExecutionRunLauncherBackendChoice } from './resolveExecutionRunLauncherBackendChoices';
 
@@ -19,6 +21,8 @@ export type ExecutionRunTeamCredentialModel = Readonly<{
     available: boolean;
     /** The picker, only when a Team offers models for the chosen Agent (or one is chosen). */
     picker: React.ReactNode;
+    /** Pending approval and refusal state for this Run's model choice. */
+    confirmation: ReturnType<typeof useConfirmExperimentalProviderModel>;
 }>;
 
 /**
@@ -30,6 +34,7 @@ export type ExecutionRunTeamCredentialModel = Readonly<{
 export function useExecutionRunTeamCredentialModel(params: Readonly<{
     sessionId: string | null;
     serverId: string | null;
+    machineId: string | null;
     selectedBackendChoice: ExecutionRunLauncherBackendChoice | null;
     hasBackendChoices: boolean;
     actionInput: Record<string, unknown>;
@@ -55,6 +60,8 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
     const catalogRef = React.useRef(catalog);
     catalogRef.current = catalog;
     const coordinate = useTeamCredentialSelectionCoordinator(serverId);
+    const confirmation = useConfirmExperimentalProviderModel({ enabled: credentialResourcesEnabled,
+        machineId: params.machineId, serverId, agentTargetKey: selectedAgentTargetKey, refresh: catalog.reload });
 
     const available = React.useMemo(() => {
         if (!selected) return true;
@@ -114,6 +121,13 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
             if (!confirmed) return;
         }
         if (!isStillOffered()) return;
+        const model = selectedResource.providerModels.find(candidate => (
+            sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(outcome.selection)
+        ));
+        if (!model) return;
+        let admitted = false;
+        await confirmation.confirm({ kind: 'team-model', model }, () => { admitted = true; });
+        if (!admitted || !isStillOffered()) return;
         onSelectionChange?.();
         setActionInput((previous) => {
             const next: Record<string, unknown> = {
@@ -136,7 +150,7 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
             delete next.modelSelection;
             return next;
         });
-    }, [catalog.current, catalog.currentResourceKeys, catalog.resources, coordinate, onSelectionChange, sessionId, setActionInput]);
+    }, [catalog.current, catalog.currentResourceKeys, catalog.resources, confirmation, coordinate, onSelectionChange, sessionId, setActionInput]);
 
     const onSelectNonTeamModel = React.useCallback((selection: unknown) => {
         if (selection !== null) return;
@@ -169,5 +183,5 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
         />
     ) : null;
 
-    return { selected, available, picker };
+    return { selected, available, picker, confirmation };
 }

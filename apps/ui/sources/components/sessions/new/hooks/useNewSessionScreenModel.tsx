@@ -233,6 +233,7 @@ import { captureActionAccountContext } from '@/sync/ops/actions/actionAccountCon
 import { resolveLaunchProfileAuthoringIntent } from '@/sync/domains/profiles/resolveLaunchProfileAuthoringIntent';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
 import { useConfirmExperimentalProviderModel } from '@/providers/hooks/useConfirmExperimentalProviderModel';
+import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import { hiddenModelVisibilityKeys } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
 import type { SessionModelPicker } from '@/components/sessions/modelPicker/SessionModelPicker';
 import { supportsFreeformModelSelectionForSession } from '@/sync/domains/models/modelOptions';
@@ -1698,6 +1699,22 @@ export function useNewSessionScreenModel(input?: Readonly<{
         setModelSelection(selection);
         rememberCurrentEngineSelection({ modelSelection: selection });
     }, [rememberCurrentEngineSelection, setModelSelection]);
+    const providerModelProjection = useProviderModelProjection({
+        // A machine RPC: an embedded composer asks only once the person reaches for it.
+        enabled: providersFeatureEnabled && selectedMachineId !== null && hostDemanded,
+        machineId: selectedMachineId,
+        serverId: capabilityServerId,
+        agentTargetKey: selectedBackendTargetKey,
+        favoriteSelections: favoriteModelSelections.map(favorite => favorite.selection.ref).filter(ref => ref.agentTargetKey === selectedBackendTargetKey),
+        ...(modelSelection ? { currentSelection: modelSelection.ref } : {}),
+    });
+    const confirmExperimentalProviderModel = useConfirmExperimentalProviderModel({
+        enabled: providersFeatureEnabled,
+        machineId: selectedMachineId,
+        serverId: capabilityServerId,
+        agentTargetKey: selectedBackendTargetKey,
+        refresh: providerModelProjection.refresh,
+    });
     const teamCredentialSelectionContextRef = useLatestRef({
         serverId: targetServerId ?? null,
         resources: teamCredentialCatalog.resources,
@@ -1740,6 +1757,13 @@ export function useNewSessionScreenModel(input?: Readonly<{
             );
             if (!confirmed || !stillCurrent()) return;
         }
+        const model = selectedResource.providerModels.find(candidate => (
+            sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(selectionOutcome.selection)
+        ));
+        if (!model) return;
+        let admitted = false;
+        await confirmExperimentalProviderModel.confirm({ kind: 'team-model', model }, () => { admitted = true; });
+        if (!admitted || !stillCurrent()) return;
         if (selectedResource.sessionUsePolicy !== 'personal_allowed') {
             accessDraftState.applyTeamCredentialPolicy(
                 selectedResource.teamId,
@@ -1756,7 +1780,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 modelId: selectionOutcome.selection.modelId,
             },
         });
-    }, [accessDraftState, coordinateTeamCredentialSelection, setModelSelection, teamCredentialSelectionContextRef]);
+    }, [accessDraftState, confirmExperimentalProviderModel, coordinateTeamCredentialSelection, setModelSelection, teamCredentialSelectionContextRef]);
     const teamCredentialProviderBinding = React.useMemo(() => selectedTeamCredentialModel
         ? sessionModelSelectionV2TeamBindingIntent({
             v: 2,
@@ -1811,15 +1835,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         [selectedMachine, machines],
     );
     const selectedMachineHomeDir = selectedMachine?.metadata?.homeDir ?? null;
-    const providerModelProjection = useProviderModelProjection({
-        // A machine RPC: an embedded composer asks only once the person reaches for it.
-        enabled: providersFeatureEnabled && selectedMachineId !== null && hostDemanded,
-        machineId: selectedMachineId,
-        serverId: capabilityServerId,
-        agentTargetKey: selectedBackendTargetKey,
-        favoriteSelections: favoriteModelSelections.map(favorite => favorite.selection.ref).filter(ref => ref.agentTargetKey === selectedBackendTargetKey),
-        ...(modelSelection ? { currentSelection: modelSelection.ref } : {}),
-    });
     // The "Runs through" popover names the selected Agent's Gateways and Providers from this projection.
     const newSessionRouteSources = React.useMemo(() => providersFeatureEnabled && selectedMachineId !== null ? {
         machineId: selectedMachineId,
@@ -1828,13 +1843,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         shownSources: providerModelProjection.data?.groups ?? EMPTY_ROUTE_SOURCES,
         hiddenSources: providerModelProjection.data?.hiddenSources ?? EMPTY_ROUTE_SOURCES,
     } : undefined, [capabilityServerId, providerModelProjection.data, providersFeatureEnabled, selectedBackendTargetKey, selectedMachineId]);
-    const confirmExperimentalProviderModel = useConfirmExperimentalProviderModel({
-        enabled: providersFeatureEnabled,
-        machineId: selectedMachineId,
-        serverId: capabilityServerId,
-        agentTargetKey: selectedBackendTargetKey,
-        refresh: providerModelProjection.refresh,
-    });
     const hiddenNativeModelKeys = React.useMemo(
         () => hiddenModelVisibilityKeys(
             providerSettingsForProfileIntent,

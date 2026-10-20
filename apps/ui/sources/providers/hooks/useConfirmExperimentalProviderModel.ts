@@ -1,5 +1,6 @@
 import * as React from 'react';
-import type { ProviderErrorV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import type { TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams';
 
 import type {
     SessionModelPickerExperimentalConfirmation,
@@ -11,14 +12,21 @@ import { providerErrorRequestsRetry } from '@/providers/connection/recovery';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
+type ConfirmationRequest = SessionModelPickerExperimentalConfirmation | Readonly<{
+    kind: 'team-model';
+    model: TeamCredentialProviderModelCatalogEntryV1;
+}>;
+
 export function useConfirmExperimentalProviderModel(input: Readonly<{
     enabled: boolean;
     machineId: string | null;
     serverId: string | null;
     agentTargetKey: string | null;
     refresh: () => Promise<unknown>;
-}>): SessionModelPickerExperimentalConfirmationController {
-    const { mutateProviderModelSettings, pendingApproval } = useProviderActionClient(input.serverId);
+}>): Omit<SessionModelPickerExperimentalConfirmationController, 'confirm'> & Readonly<{
+    confirm: (request: ConfirmationRequest, commitSelection: () => void) => Promise<boolean>;
+}> {
+    const { describeProviderModels, mutateProviderModelSettings, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const scopeKey = JSON.stringify([
         input.enabled,
@@ -36,7 +44,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         | Readonly<{
             error: ProviderErrorV1;
             retryAttempt: Readonly<{
-                confirmation: SessionModelPickerExperimentalConfirmation;
+                confirmation: ConfirmationRequest;
                 commitSelection: () => void;
             }>;
         }>
@@ -68,23 +76,21 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         };
     }, [accountLifetime, invocationLifetime, scopeKey]);
 
+    const isCurrentScope = React.useCallback(() => mounted.current
+        && activeScopeKey.current === scopeKey
+        && activeAccountLifetime.current === accountLifetime
+        && (accountLifetime?.isCurrent() ?? true), [accountLifetime, scopeKey]);
+
     const persist = React.useCallback(async (
         confirmation: SessionModelPickerExperimentalConfirmation,
         commitSelection: () => void,
+        retryAttempt: Readonly<{ confirmation: ConfirmationRequest; commitSelection: () => void }> = { confirmation, commitSelection },
     ): Promise<boolean> => {
         if (
             !input.enabled
             || !input.agentTargetKey
             || confirmation.agentTargetKey !== input.agentTargetKey
         ) return false;
-        const requestScopeKey = scopeKey;
-        const requestAccountLifetime = accountLifetime;
-        const isCurrentScope = () => (
-            mounted.current
-            && activeScopeKey.current === requestScopeKey
-            && activeAccountLifetime.current === requestAccountLifetime
-            && (requestAccountLifetime?.isCurrent() ?? true)
-        );
         if (!isCurrentScope()) return false;
         let result: Awaited<ReturnType<typeof mutateProviderModelSettings>>;
         try {
@@ -95,6 +101,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
                     ...(input.machineId ? { machineId: input.machineId } : {}),
                     connectionId: confirmation.connectionId,
                     ...(confirmation.connectedAccountTarget ? { connectedAccountTarget: confirmation.connectedAccountTarget } : {}),
+                    ...(confirmation.catalogSourceKey ? { catalogSourceKey: confirmation.catalogSourceKey } : {}),
                     expectedConnectionRevision: confirmation.expectedConnectionRevision,
                     agentTargetKey: confirmation.agentTargetKey,
                     modelId: confirmation.modelId,
@@ -117,14 +124,14 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
                 if (!isCurrentScope()) return false;
             }
             setFailure(providerErrorRequestsRetry(error)
-                ? { error, retryAttempt: { confirmation, commitSelection } }
+                ? { error, retryAttempt }
                 : { error });
             return false;
         }
         if (!isCurrentScope()) return false;
         if (result.status === 'error') {
             setFailure(providerErrorRequestsRetry(result.error)
-                ? { error: result.error, retryAttempt: { confirmation, commitSelection } }
+                ? { error: result.error, retryAttempt }
                 : { error: result.error });
             return false;
         }
@@ -135,10 +142,10 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         if (!isCurrentScope()) return false;
         commitSelection();
         return true;
-    }, [accountLifetime, invocationLifetime, mutateProviderModelSettings, input.agentTargetKey, input.enabled, input.machineId, input.refresh, input.serverId, scopeKey]);
+    }, [isCurrentScope, invocationLifetime, mutateProviderModelSettings, input.agentTargetKey, input.enabled, input.machineId, input.refresh, input.serverId]);
 
     const runPending = React.useCallback(async (
-        confirmation: SessionModelPickerExperimentalConfirmation,
+        confirmation: Readonly<{ modelName: string }>,
         operation: () => Promise<boolean>,
     ): Promise<boolean> => {
         const attemptId = pendingAttemptId.current + 1;
@@ -154,24 +161,75 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     }, []);
 
     const confirm = React.useCallback(async (
-        confirmation: SessionModelPickerExperimentalConfirmation,
+        confirmation: ConfirmationRequest,
         commitSelection: () => void,
     ): Promise<boolean> => {
-        if (!input.enabled || !input.agentTargetKey || confirmation.agentTargetKey !== input.agentTargetKey) return false;
-        return await runPending(confirmation, async () => {
+        const agentTargetKey = confirmation.kind === 'team-model' ? confirmation.model.selection.agentTargetKey : confirmation.agentTargetKey;
+        if (!input.enabled || !input.agentTargetKey || agentTargetKey !== input.agentTargetKey || !isCurrentScope()) return false;
+        const modelName = confirmation.kind === 'team-model'
+            ? confirmation.model.descriptor.name || confirmation.model.selection.modelId
+            : confirmation.modelName;
+        return await runPending({ modelName }, async () => {
             setFailure(null);
             // The Action's configurable approval default owns Ask first. A
             // second modal would ignore a waiver and ask twice otherwise.
-            return await persist(confirmation, commitSelection);
+            if (confirmation.kind === 'confirm-experimental') return await persist(confirmation, commitSelection);
+            const machineId = input.machineId;
+            if (!machineId) {
+                setFailure({ error: createProviderErrorV1('provider_machine_unavailable') });
+                return false;
+            }
+            const fail = (error: ProviderErrorV1) => setFailure(providerErrorRequestsRetry(error)
+                ? { error, retryAttempt: { confirmation, commitSelection } } : { error });
+            try {
+                // Home rows offer source facts. Only the selected worker's
+                // admitted adapter can decide compatibility and recipient consent.
+                const read = async () => {
+                    const result = await describeProviderModels({ serverId: input.serverId, machineId,
+                        agentTargetKey, teamCredentialModel: confirmation.model, refreshPolicy: 'current_only',
+                    }, { signal: invocationLifetime.controller.signal });
+                    if (!isCurrentScope()) return null;
+                    if (result.status === 'error') { fail(result.error); return null; }
+                    const entry = result.groups.flatMap(group => group.rows.map(row => ({ group, row }))).find(({ row }) => (
+                        row.ref.agentTargetKey === agentTargetKey && row.ref.modelId === confirmation.model.selection.modelId
+                    ));
+                    if (!entry?.row.confirmationSource) { fail(createProviderErrorV1('provider_catalog_unavailable')); return null; }
+                    if (!entry.group.authorization.authorized) { fail(entry.group.authorization.error); return null; }
+                    if (entry.row.compatibility.result.status === 'incompatible') {
+                        fail(createProviderErrorV1('provider_incompatible_with_agent')); return null;
+                    }
+                    return { ...entry, confirmationSource: entry.row.confirmationSource };
+                };
+                let entry = await read();
+                if (!entry) return false;
+                const { row } = entry;
+                if (row.compatibility.result.status === 'experimental' && !row.compatibility.confirmed) {
+                    const saved = await persist({ kind: 'confirm-experimental', ...entry.confirmationSource,
+                        expectedConnectionRevision: entry.group.connectionRevision, agentTargetKey,
+                        modelId: row.compatibility.result.confirmationScope.kind === 'model' ? row.ref.modelId : null,
+                        compatibilityFingerprint: row.compatibility.compatibilityFingerprint,
+                        providerName: entry.group.providerName, modelName: row.descriptor.name || row.ref.modelId,
+                    }, () => {}, { confirmation, commitSelection });
+                    if (!saved || !isCurrentScope()) return false;
+                    entry = await read();
+                    if (!entry) return false;
+                    if (entry.row.compatibility.result.status === 'experimental' && !entry.row.compatibility.confirmed) {
+                        fail(createProviderErrorV1('provider_compatibility_unverified')); return false;
+                    }
+                }
+                commitSelection();
+                return true;
+            } catch (caught) {
+                if (isCurrentScope()) fail(providerErrorFromRpcFailure(caught, { machineId }));
+                return false;
+            }
         });
-    }, [input.agentTargetKey, input.enabled, persist, runPending]);
+    }, [describeProviderModels, input.agentTargetKey, input.enabled, input.machineId, input.serverId,
+        invocationLifetime, isCurrentScope, persist, runPending]);
     const retry = React.useCallback(async (): Promise<boolean> => {
         if (!input.enabled || !failure?.retryAttempt) return false;
-        return await runPending(failure.retryAttempt.confirmation, () => persist(
-            failure.retryAttempt.confirmation,
-            failure.retryAttempt.commitSelection,
-        ));
-    }, [failure, input.enabled, persist, runPending]);
+        return await confirm(failure.retryAttempt.confirmation, failure.retryAttempt.commitSelection);
+    }, [confirm, failure, input.enabled]);
     const clear = React.useCallback(() => setFailure(null), []);
 
     return React.useMemo(() => ({

@@ -67,9 +67,10 @@ export type SessionModelPickerExperimentalConfirmation = Readonly<{
     kind: 'confirm-experimental';
     connectionId: string;
     connectedAccountTarget?: SessionModelProjectionGroup['connectedAccountTarget'];
+    catalogSourceKey?: string;
     expectedConnectionRevision: number;
     agentTargetKey: string;
-    modelId: string;
+    modelId: string | null;
     compatibilityFingerprint: string;
     providerName: string;
     modelName: string;
@@ -127,9 +128,10 @@ export function resolveSessionModelPickerSelection(input: Readonly<{
                 kind: 'confirm-experimental',
                 connectionId: group.connectionId,
                 ...(group.connectedAccountTarget ? { connectedAccountTarget: group.connectedAccountTarget } : {}),
+                ...(row.confirmationSource ? { catalogSourceKey: row.confirmationSource.catalogSourceKey } : {}),
                 expectedConnectionRevision: group.connectionRevision,
                 agentTargetKey: row.ref.agentTargetKey,
-                modelId: row.ref.modelId,
+                modelId: row.compatibility.result.confirmationScope.kind === 'model' ? row.ref.modelId : null,
                 compatibilityFingerprint: row.compatibility.compatibilityFingerprint,
                 providerName: group.providerName,
                 modelName: row.descriptor.name || row.ref.modelId,

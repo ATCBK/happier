@@ -78,14 +78,23 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
-    it('passes the exact Connected Account source to the existing experimental confirmation', () => {
+    it.each(['model', 'connection'] as const)('passes the exact source and worker scope to the existing experimental confirmation (%s)', scope => {
         const { selected, providerGroups } = experimentalProviderGroup('connected-source:catalog-a');
         const connectedAccountTarget = { kind: 'group' as const,
             service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+        const group = createProviderModelProjectionGroupFixture({ ...providerGroups[0]!, connectedAccountTarget, connectionRevision: 0,
+            rows: providerGroups[0]!.rows.map(row => ({ ...row,
+                confirmationSource: { connectionId: selected.providerConnectionId, catalogSourceKey: 's'.repeat(43) },
+                compatibility: { ...row.compatibility, result: { ...row.compatibility.result,
+                    confirmationScope: scope === 'connection' ? { kind: 'connection' } : { kind: 'model', modelId: selected.modelId },
+                } },
+            })),
+        });
         expect(resolveSessionModelPickerSelection({
-            groups: [{ ...providerGroups[0]!, connectedAccountTarget, connectionRevision: 0 }], ref: selected,
+            groups: [group], ref: selected,
         })).toMatchObject({ kind: 'confirm-experimental', connectedAccountTarget,
-            connectionId: selected.providerConnectionId, expectedConnectionRevision: 0 });
+            connectionId: selected.providerConnectionId, expectedConnectionRevision: 0,
+            catalogSourceKey: 's'.repeat(43), modelId: scope === 'model' ? selected.modelId : null });
     });
     it.each([false, true])('finds authoritative native models by exact id and label despite an unavailable Provider projection (favorite %s)', async (favorite) => {
         const agentTargetKey = 'agent:acme.agent/reviewer';

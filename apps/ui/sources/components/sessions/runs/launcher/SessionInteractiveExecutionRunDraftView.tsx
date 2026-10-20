@@ -324,6 +324,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     const teamCredential = useExecutionRunTeamCredentialModel({
         sessionId: props.sessionId,
         serverId,
+        machineId,
         selectedBackendChoice: options.selectedBackendChoice,
         hasBackendChoices: options.backendChoices.length > 0,
         actionInput,

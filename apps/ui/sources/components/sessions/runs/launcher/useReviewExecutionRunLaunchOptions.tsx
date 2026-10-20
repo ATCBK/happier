@@ -40,6 +40,7 @@ export function useReviewExecutionRunLaunchOptions(params: Readonly<{
         ? backendChoices.find((choice) => choice.backendId === params.engineIds[0] || choice.targetKey === params.engineIds[0]) ?? null
         : null;
     const teamCredential = useExecutionRunTeamCredentialModel({ sessionId: params.sessionId, serverId: params.serverId,
+        machineId,
         selectedBackendChoice: chosenBackend, hasBackendChoices: backendChoices.length > 0, actionInput: launchInput,
         setActionInput: setLaunchInput });
     const ready = Boolean(launcher.exactSettings && launcher.acpCatalogReady && launcher.profileCatalogReady && launcher.accountLifetime?.isCurrent()
