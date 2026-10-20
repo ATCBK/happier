@@ -218,6 +218,42 @@ async function createHarness(start = true, featureEnabled = true) {
 }
 
 describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it('retains the Agent Start approval default and an explicit person Ask-first preference', async () => {
+        const { lifecycle, serverId, artifacts } = await createHarness(false);
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const confirmation = vi.fn(async () => false);
+        const executor = createDefaultActionExecutor({ presentUserActionConfirmation: confirmation });
+        const input = { target: { kind: 'global' }, expectedAttempt: null };
+        const person = { surface: 'ui' as const, authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const }, serverId };
+        const cancellation = new AbortController();
+        const pending = executor.execute('ui.voice_global.start', input, { surface: 'agent', serverId,
+            defaultSessionId: 'session-original', defaultSessionMachineId: 'unreachable-origin-machine',
+            actionRequestId: 'voice-start-request', signal: cancellation.signal,
+            actionCaller: { kind: 'session', sessionId: 'session-original', starterDepth: 0, turnDepth: 0 } });
+        let settled: Awaited<typeof pending> | undefined;
+        void pending.then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => {
+                expect(settled).toBeUndefined();
+                expect(artifacts.list()).toHaveLength(1);
+            });
+            expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            const artifactId = artifacts.list()[0]!.id;
+            expect(await executor.execute('approval.request.decide', { artifactId, decision: 'cancel' }, person))
+                .toMatchObject({ ok: true });
+            expect(await pending).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(confirmation).not.toHaveBeenCalled();
+            storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                    'ui.voice_global.start': { approvalRequiredSurfaces: ['ui'] },
+                } }) } }));
+            expect(await executor.execute('ui.voice_global.start', input, person))
+                .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+            expect(confirmation).toHaveBeenCalledOnce();
+            expect(lifecycle.getSnapshot().status).toBe('disconnected');
+        } finally { cancellation.abort(); await pending; await lifecycle.dispose(); }
+    });
     it('admits a composer hold through Action policy and cancels an early gesture without committing', async () => {
         const { lifecycle, sent } = await createHarness();
         const { useVoiceAttemptControl } = await import('@/components/voice/attempt/useVoiceAttemptControl');
