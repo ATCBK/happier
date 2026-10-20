@@ -257,7 +257,8 @@ rendering performance. No second storage writer or profile migration is added.
 ## Native computer driver (0.3 development source)
 
 The built-in `computer-cua-driver` installable descriptor owns native driver
-0.31.0 asset/version pins. `apps/cli/src/packagedRuntime/installables/sourceAdapters/computerCuaDriver.ts`
+0.37.0 asset/version pins (`cua-driver-rs-v0.37.0`; macOS universal, Linux
+x86_64/arm64 and Windows x86_64/arm64 `-binary` archives, each SHA256-pinned). `apps/cli/src/packagedRuntime/installables/sourceAdapters/computerCuaDriver.ts`
 projects native launch and capability repair through the shared pinned-archive
 installer, checksum/version validation and executable resolution.
 Explicit repair uses the admitted `machines.capabilities.install`
@@ -268,6 +269,12 @@ after repair; successful installation alone never grants permission or input.
 `daemon/computer/driver/nativeTransport.ts` launches that installed absolute executable
 directly in embedded MCP mode; no system Node, package manager or second launcher is involved.
 X11 display/authentication/session variables are forwarded only on Linux, not macOS.
+The macOS bare `-binary` executable serves the embedded MCP line (observed on macOS 26 with 0.37.0:
+`initialize`, `tools/list` and tool calls work; the 0.36.0 "run `CuaDriver.app`" notice is not
+raised by that line, and embedded status reflects the host process's Screen Recording and
+Accessibility grants). The transport requires `initialize` to report exactly the pinned version. Accessibility-tree reads
+send `full_output: true`; since 0.37.0 the driver's default response omits the structured
+`elements` array and uses lower walk limits.
 On Linux, run the daemon in the intended X11 desktop session, with its `DISPLAY`
 and any required `XAUTHORITY` already set. A headless host needs an explicitly
 started X11 desktop, such as an operator-owned Xvfb fixture; installing the driver
