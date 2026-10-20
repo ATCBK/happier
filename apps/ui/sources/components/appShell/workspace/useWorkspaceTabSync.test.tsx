@@ -1,9 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { createStorageModuleMock, createUseSettingMock, createUseLocalSettingMock } from '@/dev/testkit/mocks/storage';
-import { createUseLocalSettingMutableMock } from '@/dev/testkit/runtime/storageRuntime';
+import { createStorageModuleMock, createUseSettingMock } from '@/dev/testkit/mocks/storage';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -37,13 +36,13 @@ vi.mock('@/sync/domains/state/storage', importOriginal => createStorageModuleMoc
     useIsDataReady: () => boundary.ready,
     useActiveServerAccountScope: () => boundary.scope,
     useSetting: createUseSettingMock({ values: { get workspaceTabsSyncEnabled() { return boundary.enabled; } } }),
-    useLocalSettingMutable: createUseLocalSettingMutableMock(createUseLocalSettingMock({ values: {
-        get workspaceLayoutV1() { return boundary.layouts; },
-    } }), { createMutableSetter: () => value => {
-        if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Expected a local layout record');
-        boundary.layouts = value as Record<string, unknown>;
-    } }),
 } }));
+Object.defineProperty(boundary, 'layouts', {
+    get: () => getStorage().getState().localSettings.workspaceLayoutV1,
+    set: (layouts: Record<string, unknown>) => getStorage().setState({
+        localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: layouts },
+    }),
+});
 const initialTab = { id: 'placeholder', target: { kind: 'newTab', params: {} }, pinned: false, preview: true };
 const tokenFor = (accountId: string) => `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
 const credentials = { token: tokenFor('alice') };
@@ -114,6 +113,7 @@ function Probe() {
 }
 
 describe('live workspace tab sync hook', () => {
+    beforeEach(() => { boundary.layouts = {}; });
     afterEach(async () => { vi.useRealTimers(); standardCleanup(); await connection?.dispose(); connection = null; restoreModuleLoader?.(); restoreModuleLoader = null; resetRuntimeFetch(); boundary.layouts = {}; boundary.enabled = true; boundary.ready = true; boundary.observations = []; boundary.catalog = []; });
     it.each(['workflows', 'plugin:acme.notes:notes'])('keeps retained %s contents while pin and later close reach the shared singleton', async kind => {
         const home = await mountHome('https://workspace-retained-singleton.test');

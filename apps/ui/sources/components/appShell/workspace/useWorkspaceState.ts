@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
-import { useActiveServerAccountScope, useIsDataReady, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScope, useIsDataReady, useLocalSetting } from '@/sync/domains/state/storage';
 import type { WorkspaceAction, WorkspaceTab, WorkspaceState } from './workspaceState';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { randomUUID } from '@/platform/randomUUID';
@@ -42,7 +42,7 @@ export function useWorkspaceState(input: Readonly<{
 }> {
     const scope = useActiveServerAccountScope();
     const isDataReady = useIsDataReady();
-    const [layouts, setLayouts] = useLocalSettingMutable('workspaceLayoutV1');
+    const layouts = useLocalSetting('workspaceLayoutV1');
     const [generatedWindowId] = React.useState(readOrCreateWindowId);
     const windowId = input.windowId ?? generatedWindowId;
     const scopeKey = scope && windowId
@@ -95,8 +95,8 @@ export function useWorkspaceState(input: Readonly<{
         if (!next || !scopeKey) return;
         const nextLayouts = writeScopedWorkspaceLayout(layoutsRef.current, scopeKey, next);
         layoutsRef.current = nextLayouts;
-        setLayouts(nextLayouts);
-    }, [isReady, update, scopeKey, setLayouts]);
+        getStorage().getState().applyLocalSettings({ workspaceLayoutV1: nextLayouts }, { source: 'ui' });
+    }, [isReady, update, scopeKey]);
     const restoreAction = React.useCallback((action: WorkspaceAction) => {
         update(reduceWorkspaceState(stateRef.current, action));
     }, [update]);

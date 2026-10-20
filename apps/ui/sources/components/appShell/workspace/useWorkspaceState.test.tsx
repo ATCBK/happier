@@ -26,12 +26,12 @@ const { getStorage } = await import('@/sync/domains/state/storage');
 const originalState = getStorage().getState();
 const storageState = {
     get ready() { return getStorage().getState().isDataReady; },
-    set ready(value: boolean) { getStorage().setState({ isDataReady: value }); },
+    set ready(value: boolean) { act(() => getStorage().setState({ isDataReady: value })); },
     get scope() { return getStorage().getState().profileScope!; },
-    set scope(value: { serverId: string; accountId: string }) { getStorage().setState({ profileScope: value }); },
+    set scope(value: { serverId: string; accountId: string }) { act(() => getStorage().setState({ profileScope: value })); },
     get layouts() { return getStorage().getState().localSettings.workspaceLayoutV1; },
     set layouts(value: Record<string, unknown>) {
-        getStorage().setState({ localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: value } });
+        act(() => getStorage().setState({ localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: value } }));
     },
 };
 let saveLayouts: MockInstance<StorageState['applyLocalSettings']>;
@@ -266,8 +266,8 @@ describe('useWorkspaceState', () => {
         expect(hook.getCurrent().state.tabs.new).toBeTruthy();
         expect(saveLayouts).not.toHaveBeenCalled();
 
-        storageState.ready = true;
         storageState.layouts = { [scopeKey]: createWorkspaceState(storedTab) };
+        storageState.ready = true;
         await hook.rerender(undefined);
         expect(hook.getCurrent().state.tabs['session-a']).toBeTruthy();
         expect(saveLayouts).not.toHaveBeenCalled();
