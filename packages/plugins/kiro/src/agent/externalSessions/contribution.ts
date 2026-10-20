@@ -32,6 +32,8 @@ function parseTranscriptCursor(cursor: string | undefined, snapshot: KiroTranscr
   return parsed.end;
 }
 
+type ReadAfterTranscriptValue = Awaited<ReturnType<AgentExternalSessionsContribution['readAfterTranscript']>> extends AgentExternalSessionsResult<infer V> ? V : never;
+
 export function createKiroExternalSessionsContribution(options: Readonly<{ env?: NodeJS.ProcessEnv }> = {}): AgentExternalSessionsContribution {
   const resolve = (source: Parameters<AgentExternalSessionsContribution['resolveSource']>[0]['source']) => resolveKiroChatSource(source, options.env ?? process.env);
   async function guarded<T>(request: AgentExternalSessionsInvocation, work: () => Promise<AgentExternalSessionsResult<T>>): Promise<AgentExternalSessionsResult<T>> {
@@ -169,7 +171,7 @@ export function createKiroExternalSessionsContribution(options: Readonly<{ env?:
       if (start === finish && snapshot.rows.length) return fail('agent_error', 'One Kiro transcript item exceeds the caller byte allowance.');
       return ok(build());
     }),
-    readAfterTranscript: request => guarded(request, async () => {
+    readAfterTranscript: request => guarded<ReadAfterTranscriptValue>(request, async () => {
       if (!positiveInteger(request.maxItems)) return fail('invalid_request', 'Kiro transcript count must be positive.');
       const source = await resolve(request.source);
       let snapshot: KiroTranscript | null;
@@ -197,4 +199,4 @@ export function createKiroExternalSessionsContribution(options: Readonly<{ env?:
   };
 }
 
-export const kiroExternalSessionsContribution = createKiroExternalSessionsContribution();
+export const kiroExternalSessionsContribution: AgentExternalSessionsContribution = createKiroExternalSessionsContribution();
