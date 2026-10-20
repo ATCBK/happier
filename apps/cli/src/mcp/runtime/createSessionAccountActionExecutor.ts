@@ -64,7 +64,9 @@ export function createSessionAccountActionExecutor(params: Readonly<{
           request => execute('action.spec.get', request, context, true));
         if (!actual) return await params.base.execute(actionId, input, context);
         if (!actual.ok) return actual.failure;
-        executionPlacement = actual.placement;
+        // Only Account placement changes this wrapper's incumbent routing.
+        // A client handler still follows its existing Machine/UI corridor.
+        if (actual.placement === 'account') executionPlacement = 'account';
       }
       const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
         && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;

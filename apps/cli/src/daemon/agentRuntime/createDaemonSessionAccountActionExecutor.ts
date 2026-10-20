@@ -238,7 +238,9 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
         request => reader.execute('action.spec.get', request, context));
       if (!actual) return { ok: false, errorCode: 'invalid_action_input', error: 'invalid_action_input' };
       if (!actual.ok) return actual.failure;
-      executionPlacement = actual.placement;
+      // Account custody is the sole new override. In particular, a client
+      // contribution retains the wrapper's incumbent Machine authorization.
+      if (actual.placement === 'account') executionPlacement = 'account';
       accountPluginActions = executionPlacement === 'account';
       const reason = await readCallerRefusal();
       if (reason) return refuse(reason, authority.signal?.aborted ? 'cancelled' : 'target_unavailable');
