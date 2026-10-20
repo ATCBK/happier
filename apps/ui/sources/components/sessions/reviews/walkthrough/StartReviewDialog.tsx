@@ -18,7 +18,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
-import type { CustomModalChromeConfig, CustomModalInjectedProps } from '@/modal/types';
+import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/modal/types';
 import type { ScmReviewComparisonSelector } from '@/sync/domains/scm/diffSummary/selection';
 import {
     isReviewWalkthroughEngineAvailable,
@@ -383,7 +383,7 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
 }
 
 /** The dialog's modal chrome: a card on wide screens, a sheet on a phone. One owner, also drawn by the dev specimen. */
-export function startReviewDialogChrome(): CustomModalChromeConfig {
+export function startReviewDialogChrome(): CustomModalChromeCardConfig {
     return {
         kind: 'card',
         header: 'none',
