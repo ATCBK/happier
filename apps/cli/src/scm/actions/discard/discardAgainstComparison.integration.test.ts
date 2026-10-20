@@ -1,0 +1,276 @@
+import { afterAll, describe, expect, it } from 'vitest';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { ScmChangeDiscardResponseSchema } from '@happier-dev/protocol/scm';
+import { applyInverseEdits } from '@happier-dev/protocol/diff/hunks';
+import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import type { FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { createScmBackendRegistry } from '@/scm/registry';
+import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
+import { createGitScmBackendRuntimeRegistration } from '../../../../../../packages/plugins/scm-git/src/backend';
+import { createScmHostingProviderRuntimeServicesForTest } from '../../../../../../packages/plugins/scm-git/src/testkit/scmRuntime.test-support';
+import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
+import { executeScmActionOperation } from '../executeScmActionOperation';
+import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints/refs';
+import { gitCheckpointAdapter } from '@/scm/checkpoints/gitCheckpointAdapter';
+import { retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessionEvidence';
+import { createTestGitRpcManager } from '@/scm/rpc/__tests__/testRpcHarness';
+import { prepareScmFileBytesExport } from '../deliverScmFileAtRevision';
+import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+
+const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+async function captureTurn(rootPath: string, writeAfter: () => Promise<void>) {
+  const sessionId = randomUUID();
+  const turnId = 'turn-1';
+  const scopeId = `${sessionId}:${rootPath}`;
+  const refs = buildRepositoryCheckpointRefs({ scopeId, turnId });
+  const context = { cwd: rootPath, projectKey: rootPath, detection: { isRepo: true, rootPath, mode: '.git' as const } };
+  const before = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnStart! });
+  if (!before.success) throw new Error('Turn start capture failed');
+  await writeAfter();
+  const after = await gitCheckpointAdapter.capture({ context, checkpointRef: refs.turnFinal! });
+  if (!after.success) throw new Error('Turn final capture failed');
+  await retainRepositoryCheckpointTurnEvidence({ cwd: rootPath, scopeId, turnChangeSet: {
+    sessionId, turnId, seqRange: { startSeqInclusive: 1, endSeqInclusive: 2 }, status: 'completed',
+    files: [], provider: 'agent', derivedAt: 1, repositoryCheckpoint: { version: 1, scopeId,
+      startRef: refs.turnStart!.ref, finalRef: refs.turnFinal!.ref, baseRefSource: 'turn_start',
+      contentConfidence: 'exact', attributionScope: 'shared_worktree', receipts: [...before.receipts, ...after.receipts] },
+  } });
+  const captured = await captureScmComparison({ cwd: rootPath, sessionId, source: { kind: 'turnCheckpoint', sessionId, turnId } });
+  expect(captured.comparison.inventory.state).toBe('complete');
+  return { ...captured, sessionId, turnId };
+}
+
+describe('comparison discard through the SCM Action executor', () => {
+  const registration = createGitScmBackendRuntimeRegistration();
+  const registry = createScmBackendRegistry([createRegisteredScmBackendAdapter({
+    definition: { id: 'git', kind: 'git' }, qualifiedId: 'happier.scm.backend.git/git',
+    executableDefinition: registration.runtime!, registration,
+    hostingProviderRuntimeServices: createScmHostingProviderRuntimeServicesForTest(),
+  })]);
+  const roots: string[] = [];
+  afterAll(async () => { await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); });
+
+  it.each(['lf', 'crlf', 'bom', 'no-final-newline'] as const)('reverts one captured hunk and returns an exact guarded Undo (%s)', async mode => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-comparison-' });
+    roots.push(fixture.rootPath);
+    const eol = mode === 'crlf' ? '\r\n' : '\n';
+    let before = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join(eol) + (mode === 'no-final-newline' ? '' : eol);
+    if (mode === 'bom') before = '\ufeff' + before;
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    await writeFile(file, before);
+    runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'comparison base']);
+    const after = before.replace('line 3', 'first change').replace('line 30', 'middle change').replace('line 58', 'last change');
+    const captured = await captureTurn(fixture.rootPath, async () => { await writeFile(file, after); });
+    const authority = { sessionId: captured.sessionId, authorizeSession: async (id: string) => id === captured.sessionId };
+    try {
+      const evidence = captured.comparison.inventory.files.find(value => value.path === fixture.trackedPath)!;
+      expect(evidence.occurrences).toHaveLength(3);
+      const input = { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
+        against: { source: captured.comparison.source, comparisonId: captured.comparison.id },
+        changeRefs: [evidence.occurrences[1]!.id], includeUndo: true, expectedHash: hash(Buffer.from(after)) }] };
+      const result = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry, workingDirectory: fixture.rootPath, ...authority }));
+      expect(result).toMatchObject({ success: true, entries: [{ status: 'reverted' }] });
+      const reverted = after.replace('middle change', 'line 30');
+      expect(await readFile(file, 'utf8')).toBe(reverted);
+      const entry = result.entries![0]!;
+      expect(entry.hashAfter).toBe(hash(Buffer.from(reverted)));
+      expect(applyInverseEdits(reverted, entry.inverseEdits!)).toEqual({ ok: true, text: after });
+      expect(JSON.stringify(entry.inverseEdits).length).toBeLessThan(after.length);
+      await writeFile(file, 'concurrent writer\n');
+      const refused = await executeScmActionOperation({ actionId: 'scm.change.discard', input, registry, workingDirectory: fixture.rootPath, ...authority });
+      expect(refused).toMatchObject({ success: false, errorCode: 'FILE_CHANGED' });
+      expect(await readFile(file, 'utf8')).toBe('concurrent writer\n');
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId }); }
+  });
+
+  it('sends one next-turn review note for two units and no note after a refused stale request', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-note-' });
+    roots.push(fixture.rootPath);
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    const before = Array.from({ length: 60 }, (_, index) => `line ${index + 1}\n`).join('');
+    await writeFile(file, before);
+    runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'review note base']);
+    const after = before.replace('line 3\n', 'first change\n').replace('line 58\n', 'last change\n');
+    await writeFile(file, after);
+    const diff = runScmExecutable(fixture.rootPath, 'git', ['diff', '--no-color', '-U3', 'HEAD', '--', fixture.trackedPath]);
+    const keys = buildReviewUnits(fixture.trackedPath, 'combined', diff).map(unit => unit.key);
+    expect(keys).toHaveLength(2);
+    const notes: (FileReviewNoteV1 & { sessionId: string })[] = [];
+    const input = { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
+      against: { source: { kind: 'workingTree' } }, changeKeys: keys, expectedHash: hash(Buffer.from(after)), includeUndo: true }] };
+    // These two ports are genuine Home authority and outward note-delivery boundaries.
+    const params = { actionId: 'scm.change.discard' as const, input, registry, workingDirectory: fixture.rootPath,
+      sessionId: 'review-session', authorizeSession: async (id: string) => id === 'review-session',
+      emitFileReviewNote: async (note: FileReviewNoteV1 & { sessionId: string }) => { notes.push(note); } };
+    const reverted = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation(params));
+    expect(reverted).toMatchObject({ success: true });
+    expect(await readFile(file, 'utf8')).toBe(before);
+    expect(applyInverseEdits(before, reverted.entries![0]!.inverseEdits!)).toEqual({ ok: true, text: after });
+    expect(notes).toEqual([{ action: 'discard', sessionId: 'review-session', paths: [fixture.trackedPath], changeCount: 2 }]);
+    expect(await executeScmActionOperation(params)).toMatchObject({ success: false, errorCode: 'FILE_CHANGED' });
+    expect(notes).toHaveLength(1);
+  });
+
+  it('refuses staged selections and invalid UTF-8 without changing bytes or the index', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-refusal-' });
+    roots.push(fixture.rootPath);
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    const before = await readFile(file, 'utf8');
+    const after = `${before}selected change\n`;
+    const captured = await captureTurn(fixture.rootPath, async () => { await writeFile(file, after); });
+    const evidence = captured.comparison.inventory.files.find(value => value.path === fixture.trackedPath)!;
+    const entry = { path: fixture.trackedPath, kind: 'comparison', against: {
+      source: captured.comparison.source, comparisonId: captured.comparison.id }, changeRefs: [evidence.occurrences[0]!.id], includeUndo: true };
+    try {
+      const invalid = Buffer.from([255, 254, 0]);
+      await writeFile(file, invalid);
+      expect(await executeScmActionOperation({ actionId: 'scm.change.discard', registry, workingDirectory: fixture.rootPath,
+        sessionId: captured.sessionId, authorizeSession: async () => true, input: { cwd: fixture.rootPath, entries: [entry] } }))
+        .toMatchObject({ success: false, errorCode: 'DISCARD_UNSUPPORTED' });
+      expect(await readFile(file)).toEqual(invalid);
+      await writeFile(file, after);
+      runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+      const index = runScmExecutable(fixture.rootPath, 'git', ['write-tree']);
+      const diff = runScmExecutable(fixture.rootPath, 'git', ['diff', '--cached', '--no-color', '-U3', '--', fixture.trackedPath]);
+      const keys = buildReviewUnits(fixture.trackedPath, 'combined', diff).map(unit => unit.key);
+      expect(await executeScmActionOperation({ actionId: 'scm.change.discard', registry, workingDirectory: fixture.rootPath,
+        input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison', against: { source: { kind: 'workingTree' } }, changeKeys: keys }] } }))
+        .toMatchObject({ success: false, errorCode: 'DISCARD_UNSUPPORTED' });
+      expect(await readFile(file, 'utf8')).toBe(after);
+      expect(runScmExecutable(fixture.rootPath, 'git', ['write-tree'])).toBe(index);
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId }); }
+  });
+
+  it('keeps a small unit inverse small in a multi-megabyte file', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-large-context-' });
+    roots.push(fixture.rootPath);
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    const before = `${'unchanged context\n'.repeat(200_000)}original tail\n`;
+    await writeFile(file, before);
+    runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'large context base']);
+    await writeFile(file, before.replace('original tail', 'changed tail'));
+    const diff = runScmExecutable(fixture.rootPath, 'git', ['diff', '--no-color', '-U3', 'HEAD', '--', fixture.trackedPath]);
+    const keys = buildReviewUnits(fixture.trackedPath, 'combined', diff).map(unit => unit.key);
+    const result = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', registry,
+      workingDirectory: fixture.rootPath, input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
+        against: { source: { kind: 'workingTree' } }, changeKeys: keys, includeUndo: true }] } }));
+    expect(result.success).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe(before);
+    expect(Buffer.byteLength(JSON.stringify(result.entries![0]!.inverseEdits))).toBeLessThan(512);
+  });
+
+  it('restores binary bytes, deletes only an untouched added file, recreates a deleted file, and enforces retained Session authority through encrypted RPC', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-file-states-' });
+    roots.push(fixture.rootPath);
+    const binary = Buffer.from([0, 255, 128, 13, 10]);
+    await writeFile(join(fixture.rootPath, 'image.bin'), binary);
+    await writeFile(join(fixture.rootPath, 'deleted.txt'), 'before deletion\n');
+    runScmExecutable(fixture.rootPath, 'git', ['add', '.']);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'file state base']);
+    const captured = await captureTurn(fixture.rootPath, async () => {
+      await writeFile(join(fixture.rootPath, 'image.bin'), Buffer.from([0, 254, 129]));
+      await writeFile(join(fixture.rootPath, 'added.txt'), 'added by turn\n');
+      await rm(join(fixture.rootPath, 'deleted.txt'));
+    });
+    const { call } = createTestGitRpcManager({ workingDirectory: fixture.rootPath });
+    const request = (path: string) => ({ cwd: fixture.rootPath, outcomeVersion: 1, entries: [{ path, kind: 'comparison',
+      against: { source: captured.comparison.source, comparisonId: captured.comparison.id }, includeUndo: true }] });
+    const authorization = { kind: 'session.write' as const, sessionId: captured.sessionId };
+    const indexBefore = runScmExecutable(fixture.rootPath, 'git', ['write-tree']);
+    try {
+      for (const scope of [undefined, { kind: 'session.write' as const, sessionId: 'different-session' }]) {
+        expect(await call('scm.change.discard', request('image.bin'), scope)).toMatchObject({ success: false, errorCode: 'COMPARISON_UNAVAILABLE' });
+      }
+      const previous = Buffer.from([0, 253, 130, 10]);
+      await writeFile(join(fixture.rootPath, 'image.bin'), previous);
+      expect(await call('scm.change.discard', request('image.bin'), authorization)).toMatchObject({ success: true, entries: [{ status: 'restored',
+        previous: { inlineBase64: previous.toString('base64') } }] });
+      expect(await readFile(join(fixture.rootPath, 'image.bin'))).toEqual(binary);
+      await writeFile(join(fixture.rootPath, 'added.txt'), 'edited after the turn\n');
+      expect(await call('scm.change.discard', request('added.txt'), authorization)).toMatchObject({ success: true, entries: [{ status: 'kept_edited' }] });
+      expect(await readFile(join(fixture.rootPath, 'added.txt'), 'utf8')).toBe('edited after the turn\n');
+      await writeFile(join(fixture.rootPath, 'added.txt'), 'added by turn\n');
+      expect(await call('scm.change.discard', request('added.txt'), authorization)).toMatchObject({ success: true, entries: [{ status: 'deleted', hashAfter: null,
+        previous: { inlineBase64: Buffer.from('added by turn\n').toString('base64') } }] });
+      await expect(stat(join(fixture.rootPath, 'added.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+      const recreated = ScmChangeDiscardResponseSchema.parse(await call('scm.change.discard', request('deleted.txt'), authorization));
+      expect(recreated).toMatchObject({ success: true, entries: [{ status: 'recreated', hashBefore: null }] });
+      expect(recreated.entries![0]).not.toHaveProperty('previous');
+      expect(recreated.entries![0]).not.toHaveProperty('inverseEdits');
+      expect(await readFile(join(fixture.rootPath, 'deleted.txt'), 'utf8')).toBe('before deletion\n');
+      expect(runScmExecutable(fixture.rootPath, 'git', ['write-tree'])).toBe(indexBefore);
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId }); }
+  });
+
+  it('exports previous bytes using the aggregate response budget before mutating any file', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-aggregate-undo-' });
+    roots.push(fixture.rootPath);
+    const paths = ['first.bin', 'second.bin'];
+    for (const path of paths) await writeFile(join(fixture.rootPath, path), Buffer.from([0, 1, 2]));
+    runScmExecutable(fixture.rootPath, 'git', ['add', '.']);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'aggregate restore base']);
+    // Each pre-image's base64 takes exactly half the raw response budget; its envelope pushes their aggregate over.
+    const previous = Buffer.alloc(Math.floor(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES * 3 / 8), 255);
+    const captured = await captureTurn(fixture.rootPath, async () => {
+      for (const path of paths) await writeFile(join(fixture.rootPath, path), previous);
+    });
+    const disposers: (() => void | Promise<void>)[] = [];
+    let published = false;
+    try {
+      const result = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', registry,
+        workingDirectory: fixture.rootPath, sessionId: captured.sessionId, authorizeSession: async id => id === captured.sessionId,
+        input: { cwd: fixture.rootPath, entries: paths.map(path => ({ path, kind: 'comparison',
+          against: { source: captured.comparison.source, comparisonId: captured.comparison.id }, includeUndo: true })) },
+        prepareFileBytesExport: async input => await prepareScmFileBytesExport({ ...input, lifecycle: {
+          clearPublishedTransfer: () => true,
+          publishTransferWhenReady: async input => {
+            // Publication is an external capability boundary. All file reads/writes and payload preparation stay real.
+            for (const path of paths) expect(await readFile(join(fixture.rootPath, path))).toEqual(previous);
+            const source = input.payloadSource;
+            if (!source || source.kind !== 'file') throw new Error('Prepared export must use its owned byte source');
+            expect(await readFile(source.filePath)).toEqual(previous);
+            if (source.dispose) disposers.push(source.dispose);
+            published = true;
+            return { transferId: input.transferId, transferToken: 'test-capability', endpointCandidates: [], expiresAt: Date.now() + 60_000 };
+          },
+        } }),
+      }));
+      expect(result.success).toBe(true);
+      expect(published).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES);
+      expect(result.entries?.some(entry => entry.previous && 'export' in entry.previous)).toBe(true);
+      for (const path of paths) expect(await readFile(join(fixture.rootPath, path))).toEqual(Buffer.from([0, 1, 2]));
+    } finally {
+      await Promise.all(disposers.map(dispose => dispose()));
+      await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: captured.comparison.id, sessionId: captured.sessionId });
+    }
+  });
+
+  it('refuses before mutation when unit Undo cannot fit the routed response budget', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-discard-large-unit-' });
+    roots.push(fixture.rootPath);
+    const file = join(fixture.rootPath, fixture.trackedPath);
+    const before = `${'a'.repeat(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES)}\n`;
+    const after = `${'b'.repeat(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES)}\n`;
+    await writeFile(file, before);
+    runScmExecutable(fixture.rootPath, 'git', ['add', fixture.trackedPath]);
+    runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'large unit base']);
+    await writeFile(file, after);
+    const diff = runScmExecutable(fixture.rootPath, 'git', ['diff', '--no-color', '-U3', 'HEAD', '--', fixture.trackedPath]);
+    const keys = buildReviewUnits(fixture.trackedPath, 'combined', diff).map(unit => unit.key);
+    const response = ScmChangeDiscardResponseSchema.parse(await executeScmActionOperation({ actionId: 'scm.change.discard', registry,
+      workingDirectory: fixture.rootPath, sessionId: 'review-session', authorizeSession: async () => true,
+      input: { cwd: fixture.rootPath, entries: [{ path: fixture.trackedPath, kind: 'comparison',
+        against: { source: { kind: 'workingTree' } }, changeKeys: keys, includeUndo: true }] } }));
+    expect(response).toMatchObject({ success: false, errorCode: 'COMPARISON_UNAVAILABLE' });
+    expect(await readFile(file, 'utf8')).toBe(after);
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES);
+  });
+});
