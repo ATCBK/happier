@@ -264,6 +264,7 @@ function BrowserActionWatchButton(props: Readonly<{
     const scopeId = useDestinationPaneScopeId(createSessionPaneScopeId(props.sessionId, serverId ?? undefined));
     const pane = useAppPaneScope(scopeId);
     const detailsAvailable = shouldRedirectDetailsRouteToPanes({
+        detailsAvailable: paneScopeLayout?.detailsAvailable,
         containerWidthPx: paneScopeLayout?.containerWidthPx ?? windowWidth,
         deviceType,
         multiPaneEnabled,

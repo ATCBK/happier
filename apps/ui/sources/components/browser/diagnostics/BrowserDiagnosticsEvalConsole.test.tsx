@@ -47,7 +47,7 @@ describe('BrowserDiagnosticsEvalConsole', () => {
                 name: `property_${i}`, value: { type: 'string' as const, value: 'value', preview: [] }, enumerable: true,
             })) } }, onExpandObject,
         })} />);
-        expect(JSON.stringify(screen.toJSON())).toContain('…');
+        expect(screen.getTextContent()).toContain('…');
         await act(async () => { screen.pressByTestId('diag-eval-result-eval_1-expand'); });
         expect(onExpandObject).toHaveBeenCalledWith('object_1', 'group_1');
         expect(screen.findByTestId('diag-eval-result-eval_1-property_100')).not.toBeNull();

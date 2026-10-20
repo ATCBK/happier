@@ -9,6 +9,7 @@ import { createBrowserDiagnosticsDaemonStore } from '../../diagnostics/store';
 import { createBrowserContextDiagnosticsSummarySource } from '../diagnostics/summary';
 import type { BrowserSidecarContextCaptureSurface } from '../../sidecar/controlAdapter';
 import type { TransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
+import { buildSidecarSummaryContextItem } from '../../sidecar/context/capture';
 
 const VIEW = { browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 3 } as const;
 
@@ -49,10 +50,13 @@ describe('sidecar cdp browser context source (production wiring)', () => {
     it('serves diagnostics summaries from the store-backed summary source when present', async () => {
         const store = createBrowserDiagnosticsDaemonStore({ machineId: 'machine_1' });
         store.publishEvent(networkEvent());
+        for (let ordinal = 2; ordinal <= 600; ordinal += 1) {
+            const event = networkEvent();
+            store.publishEvent({ ...event, eventId: `summary_event_${ordinal}`, capturedAtMs: 9_900 + ordinal,
+                data: { ...event.data, url: { origin: 'https://api.test', path: `/items-${ordinal}`, queryKeys: [] } } });
+        }
         const summaries = createBrowserContextDiagnosticsSummarySource({
             store,
-            now: () => 10_000,
-            windowMs: 5_000,
         });
 
         const source = createSidecarCdpBrowserContextSource({
@@ -68,6 +72,11 @@ describe('sidecar cdp browser context source (production wiring)', () => {
         if (!result.ok) return;
         expect(result.summary).toContain('https://api.test/items');
         expect(result.summary).toContain('200');
+        expect(result.summary.endsWith('https://api.test/items-600')).toBe(true);
+        expect(buildSidecarSummaryContextItem({ contextId: 'summary', sourceViewId: VIEW.viewId,
+            capturedAtMs: 10_000, navigationGeneration: VIEW.navigationGeneration,
+            kind: 'browserNetworkSummary', summary: result.summary, truncated: result.truncated }))
+            .toMatchObject({ lifecycleState: 'available', truncated: true });
     });
 
     it('fails closed for diagnostics summaries without a summary source', async () => {

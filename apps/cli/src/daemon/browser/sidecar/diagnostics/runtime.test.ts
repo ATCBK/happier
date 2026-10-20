@@ -127,7 +127,7 @@ describe('createSidecarCdpDiagnosticsRuntime', () => {
         expect(serialized).not.toContain('token=secret');
 
         // The store is now non-empty: the context captureSummary path returns a redacted network summary.
-        const networkSummary = await summaryContextSource(createBrowserContextDiagnosticsSummarySource({ store, now: () => 9_000 })).captureSummary({
+        const networkSummary = await summaryContextSource(createBrowserContextDiagnosticsSummarySource({ store })).captureSummary({
             kind: 'browserNetworkSummary',
             ...VIEW,
             navigationGeneration: 0,
@@ -161,7 +161,7 @@ describe('createSidecarCdpDiagnosticsRuntime', () => {
         });
 
         expect(store.getSnapshot().events).toEqual([]);
-        expect(createBrowserContextDiagnosticsSummarySource({ store, now: () => 9_000 })
+        expect(createBrowserContextDiagnosticsSummarySource({ store })
             .summarize({ ...VIEW, navigationGeneration: 0, kind: 'browserNetworkSummary' })?.summary).toBe('');
         runtime.dispose();
     });
