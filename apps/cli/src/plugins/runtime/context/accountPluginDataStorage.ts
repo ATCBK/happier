@@ -307,6 +307,9 @@ function requestConfig(credentials: StoredCredentials, signal: AbortSignal): Rea
             Authorization: `Bearer ${credentials.token}`,
             'Content-Type': 'application/json',
         },
+        // POST bodies have already passed the owning serializer. Axios's
+        // default string transform would parse the same bytes again.
+        transformRequest: [],
         validateStatus: () => true,
         signal,
     };
@@ -762,12 +765,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     const result = await http.post(
                         `${resolveBaseUrl()}${input.path}`,
                         encodedBody,
-                        {
-                            ...requestConfig(input.credentials, signal),
-                            // These bytes have already passed the owning serializer.
-                            // Axios's default string transform reparses them otherwise.
-                            transformRequest: [],
-                        },
+                        requestConfig(input.credentials, signal),
                     );
                     diagnostic.httpStatus = result.status;
                     return result;

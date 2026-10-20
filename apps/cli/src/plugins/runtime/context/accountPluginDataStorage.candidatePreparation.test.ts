@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { readFileSync } from 'node:fs';
 import tweetnacl from 'tweetnacl';
 import { PLUGIN_MANIFEST as CHANNELS_MANIFEST, collectionMigrations as channelsMigrations } from '@happier-dev/plugins-channels/manifest';
@@ -763,11 +764,14 @@ describe('Account Data Collection candidate preparation', () => {
             encryption: null,
         } satisfies StoredCredentials;
         let activeCredentials: StoredCredentials = accountA;
+        const encodedBodies: string[] = [];
+        const adapterBodies: unknown[] = [];
         const post = vi.fn(async (
             url: string,
-            _body: string,
+            body: string,
             config: Readonly<Record<string, unknown>>,
         ) => {
+            adapterBodies.push(body);
             if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
                 return {
                     status: 200,
@@ -785,6 +789,13 @@ describe('Account Data Collection candidate preparation', () => {
             }
             throw new Error(`Unexpected candidate-preparation request: ${url}`);
         });
+        const transport = axios.create({
+            adapter: async config => {
+                if (typeof config.data !== 'string') throw new Error('Expected preencoded Account Data bytes');
+                const response = await post(config.url ?? '', config.data, { ...config });
+                return { ...response, config, headers: {}, statusText: '' };
+            },
+        });
         const host = createAccountPluginDataStorageHost({
             contracts: [targetContract],
             readCredentials: async () => activeCredentials,
@@ -794,7 +805,10 @@ describe('Account Data Collection candidate preparation', () => {
             resolveAccountEncryptionCurrentness: currentEncryption,
             http: {
                 get: async () => ({ status: 200, data: { mode: 'plain', updatedAt: 1 } }),
-                post,
+                post: async (url, body, config) => {
+                    encodedBodies.push(body);
+                    return await transport.post(url, body, config);
+                },
             },
             randomBytes: (length) => new Uint8Array(length).fill(7),
         });
@@ -815,9 +829,17 @@ describe('Account Data Collection candidate preparation', () => {
             isOccurrenceCurrent: () => true,
         });
 
-        await expect(candidate.prepare()).resolves.toBeUndefined();
-        activeCredentials = accountB;
+        const parse = vi.spyOn(JSON, 'parse');
+        try {
+            await expect(candidate.prepare()).resolves.toBeUndefined();
+            activeCredentials = accountB;
 
-        await expect(candidate.retire()).resolves.toBeUndefined();
+            await expect(candidate.retire()).resolves.toBeUndefined();
+            expect(encodedBodies).toHaveLength(3);
+            expect(adapterBodies).toEqual(encodedBodies);
+            expect(parse.mock.calls.filter(([value]) => encodedBodies.includes(value))).toHaveLength(0);
+        } finally {
+            parse.mockRestore();
+        }
     });
 });

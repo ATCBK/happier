@@ -2389,6 +2389,43 @@ describe('Account plugin Data storage host', () => {
         });
     });
 
+    it('sends preencoded Account KV bytes without transport reparsing and rejects a retired Account', async () => {
+        let current = true;
+        const encodedBodies: string[] = [];
+        const adapterBodies: unknown[] = [];
+        const transport = axios.create({
+            adapter: async config => {
+                adapterBodies.push(config.data);
+                return { config, headers: {}, statusText: '', status: 200,
+                    data: { status: 'updated', revision: 0 } };
+            },
+        });
+        const parse = vi.spyOn(JSON, 'parse');
+        try {
+            const account = bindHost({
+                isCurrentAccount: () => current,
+                get: async () => ({ status: 200, data: { status: 'absent' } }),
+                post: async (url, body, config) => {
+                    encodedBodies.push(body);
+                    return await transport.post(url, body, config);
+                },
+            });
+
+            await expect(account.kv.set('checkpoint', { attempt: 1 }, { expectedVersion: 'absent' }))
+                .resolves.toEqual({ version: 0 });
+            expect(encodedBodies).toHaveLength(1);
+            expect(adapterBodies).toEqual(encodedBodies);
+            expect(parse.mock.calls.filter(([value]) => encodedBodies.includes(value))).toHaveLength(0);
+
+            current = false;
+            await expect(account.kv.set('checkpoint', { attempt: 2 }, { expectedVersion: 'absent' }))
+                .rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' } satisfies Partial<PluginError>);
+            expect(adapterBodies).toHaveLength(1);
+        } finally {
+            parse.mockRestore();
+        }
+    });
+
     it('classifies a transport RangeError after an issued Account KV write as an unknown outcome', async () => {
         const account = bindHost({
             get: async () => ({ status: 200, data: { status: 'absent' } }),
