@@ -1057,9 +1057,6 @@ export function resolveMachineRpcRoutePolicy(method: string): MachineRpcRoutePol
 export function resolveMachineRpcExternalActionEffectV1(method: string,
   binding?: ExternalActionExecutionAuthorizationV1['binding'],
   selectedTarget?: Readonly<{ machineId: string; installationId: string }>): string | null {
-  // Archiving an active Session stops it before retrying the archive write;
-  // this consumed phase retains the original archive root and its approval.
-  if (binding?.actionId === 'session.archive' && method === RPC_METHODS.STOP_SESSION) return binding.actionId;
   if (method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN) {
     return binding && (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec'
       || binding.actionId === 'projects.service.relocate')

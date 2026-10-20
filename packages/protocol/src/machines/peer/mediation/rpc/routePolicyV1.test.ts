@@ -127,6 +127,15 @@ describe('MachineRpcRoutePolicyV1', () => {
     expect(resolve(RPC_METHODS.SESSION_SPAWN_NEW, binding)).not.toBe('session.agent.transition');
     expect(resolve(RPC_METHODS.STOP_SESSION)).not.toBe('session.agent.transition');
   });
+  it('keeps physical Stop as the effect when Archive is the retained root', async () => {
+    const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'archive-root', binding: {
+      accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'machine', installationId: 'installation', actionId: 'session.archive',
+      requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } }).binding;
+    expect(resolve(RPC_METHODS.STOP_SESSION, binding)).toBe('session.stop');
+  });
   it('admits versioned inactive goal wake only as its canonical Session Action', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
     const method = RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2;
