@@ -288,6 +288,7 @@ export type SkillAddTranslation = Readonly<{
     failed: string;
     addSelected: (params: Count) => string;
     selectAll: string;
+    openOne: string;
   }>;
   upload: Readonly<{
     title: string;
@@ -295,6 +296,7 @@ export type SkillAddTranslation = Readonly<{
     dropHere: string;
     chooseZip: string;
     chooseFolder: string;
+    neverRuns: string;
     reading: string;
     invalidName: (params: Readonly<{ file: string }>) => string;
     unreadable: (params: Readonly<{ file: string }>) => string;
@@ -380,6 +382,7 @@ const enSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Add 1 skill' : `Add ${count} skills`,
     selectAll: 'Select all',
+    openOne: 'Open one to see what it installs.',
   },
   upload: {
     title: 'Upload',
@@ -387,6 +390,7 @@ const enSkillAdd: SkillAddTranslation = {
     dropHere: 'Drop a folder or a .zip here',
     chooseZip: 'Choose a .zip',
     chooseFolder: 'Choose a folder',
+    neverRuns: 'Uploads are checked here and never run.',
     reading: 'Reading…',
     invalidName: ({ file }) =>
       `“${file}” has a name that can’t be saved on every machine. Rename it and try again.`,
@@ -664,6 +668,7 @@ const caSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Afegeix 1 habilitat' : `Afegeix ${count} habilitats`,
     selectAll: 'Selecciona-ho tot',
+    openOne: 'Obre’n un per veure què instal·la.',
   },
   upload: {
     title: 'Puja',
@@ -671,6 +676,7 @@ const caSkillAdd: SkillAddTranslation = {
     dropHere: 'Deixa aquí una carpeta o un .zip',
     chooseZip: 'Tria un .zip',
     chooseFolder: 'Tria una carpeta',
+    neverRuns: 'Les pujades es comproven aquí i no s’executen mai.',
     reading: 'Llegint…',
     invalidName: ({ file }) =>
       `«${file}» té un nom que no es pot desar a totes les màquines. Canvia-li el nom i torna-ho a provar.`,
@@ -892,6 +898,7 @@ const deSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Einen Skill hinzufügen' : `${count} Skills hinzufügen`,
     selectAll: 'Alle auswählen',
+    openOne: 'Öffne einen, um zu sehen, was er installiert.',
   },
   upload: {
     title: 'Hochladen',
@@ -899,6 +906,7 @@ const deSkillAdd: SkillAddTranslation = {
     dropHere: 'Ordner oder .zip hier ablegen',
     chooseZip: '.zip auswählen',
     chooseFolder: 'Ordner auswählen',
+    neverRuns: 'Uploads werden hier geprüft und nie ausgeführt.',
     reading: 'Wird gelesen…',
     invalidName: ({ file }) =>
       `„${file}“ hat einen Namen, der nicht auf jeder Maschine gespeichert werden kann. Benenne sie um und versuche es erneut.`,
@@ -1112,6 +1120,7 @@ const esSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Añadir 1 habilidad' : `Añadir ${count} habilidades`,
     selectAll: 'Seleccionar todo',
+    openOne: 'Abre uno para ver qué instala.',
   },
   upload: {
     title: 'Subir',
@@ -1119,6 +1128,7 @@ const esSkillAdd: SkillAddTranslation = {
     dropHere: 'Suelta aquí una carpeta o un .zip',
     chooseZip: 'Elegir un .zip',
     chooseFolder: 'Elegir una carpeta',
+    neverRuns: 'Las subidas se revisan aquí y nunca se ejecutan.',
     reading: 'Leyendo…',
     invalidName: ({ file }) =>
       `«${file}» tiene un nombre que no se puede guardar en todas las máquinas. Cámbiale el nombre y vuelve a intentarlo.`,
@@ -1337,6 +1347,7 @@ const frSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Ajouter 1 skill' : `Ajouter ${count} skills`,
     selectAll: 'Tout sélectionner',
+    openOne: 'Ouvrez-en un pour voir ce qu’il installe.',
   },
   upload: {
     title: 'Importer',
@@ -1344,6 +1355,7 @@ const frSkillAdd: SkillAddTranslation = {
     dropHere: 'Déposez un dossier ou un .zip ici',
     chooseZip: 'Choisir un .zip',
     chooseFolder: 'Choisir un dossier',
+    neverRuns: 'Les imports sont vérifiés ici et ne s’exécutent jamais.',
     reading: 'Lecture…',
     invalidName: ({ file }) =>
       `« ${file} » a un nom qui ne peut pas être enregistré sur toutes les machines. Renommez-le et réessayez.`,
@@ -1555,6 +1567,7 @@ const itSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Aggiungi 1 skill' : `Aggiungi ${count} skill`,
     selectAll: 'Seleziona tutto',
+    openOne: 'Aprine uno per vedere cosa installa.',
   },
   upload: {
     title: 'Carica',
@@ -1562,6 +1575,7 @@ const itSkillAdd: SkillAddTranslation = {
     dropHere: 'Trascina qui una cartella o uno .zip',
     chooseZip: 'Scegli uno .zip',
     chooseFolder: 'Scegli una cartella',
+    neverRuns: 'I caricamenti vengono controllati qui e non vengono mai eseguiti.',
     reading: 'Lettura…',
     invalidName: ({ file }) =>
       `«${file}» ha un nome che non può essere salvato su ogni macchina. Rinominalo e riprova.`,
@@ -1773,6 +1787,7 @@ const jaSkillAdd: SkillAddTranslation = {
       'このリンクを読み込めませんでした。確認してからもう一度お試しください。',
     addSelected: ({ count }) => `スキルを ${count} 件追加`,
     selectAll: 'すべて選択',
+    openOne: '開くと、インストールされる内容を確認できます。',
   },
   upload: {
     title: 'アップロード',
@@ -1780,6 +1795,7 @@ const jaSkillAdd: SkillAddTranslation = {
     dropHere: 'フォルダーまたは .zip をここにドロップ',
     chooseZip: '.zip を選択',
     chooseFolder: 'フォルダーを選択',
+    neverRuns: 'アップロードはここで確認され、実行されることはありません。',
     reading: '読み込み中…',
     invalidName: ({ file }) =>
       `「${file}」はすべてのマシンで保存できない名前です。名前を変えてからもう一度お試しください。`,
@@ -2023,6 +2039,7 @@ const plSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Dodaj 1 umiejętność' : `Dodaj ${count} umiejętności`,
     selectAll: 'Zaznacz wszystko',
+    openOne: 'Otwórz jeden, aby zobaczyć, co instaluje.',
   },
   upload: {
     title: 'Prześlij',
@@ -2030,6 +2047,7 @@ const plSkillAdd: SkillAddTranslation = {
     dropHere: 'Upuść tu folder lub plik .zip',
     chooseZip: 'Wybierz plik .zip',
     chooseFolder: 'Wybierz folder',
+    neverRuns: 'Przesłane pliki są sprawdzane tutaj i nigdy nie są uruchamiane.',
     reading: 'Odczytywanie…',
     invalidName: ({ file }) =>
       `„${file}” ma nazwę, której nie da się zapisać na każdej maszynie. Zmień ją i spróbuj ponownie.`,
@@ -2243,6 +2261,7 @@ const ptSkillAdd: SkillAddTranslation = {
     addSelected: ({ count }) =>
       count === 1 ? 'Adicionar 1 habilidade' : `Adicionar ${count} habilidades`,
     selectAll: 'Selecionar tudo',
+    openOne: 'Abra um para ver o que ele instala.',
   },
   upload: {
     title: 'Enviar',
@@ -2250,6 +2269,7 @@ const ptSkillAdd: SkillAddTranslation = {
     dropHere: 'Solte uma pasta ou um .zip aqui',
     chooseZip: 'Escolher um .zip',
     chooseFolder: 'Escolher uma pasta',
+    neverRuns: 'Os envios são verificados aqui e nunca são executados.',
     reading: 'Lendo…',
     invalidName: ({ file }) =>
       `“${file}” tem um nome que não pode ser salvo em todas as máquinas. Renomeie e tente de novo.`,
@@ -2506,6 +2526,7 @@ const ruSkillAdd: SkillAddTranslation = {
         many: `Добавить ${count} скиллов`,
       }),
     selectAll: 'Выбрать все',
+    openOne: 'Откройте любой, чтобы увидеть, что он устанавливает.',
   },
   upload: {
     title: 'Загрузить',
@@ -2513,6 +2534,7 @@ const ruSkillAdd: SkillAddTranslation = {
     dropHere: 'Перетащите сюда папку или .zip',
     chooseZip: 'Выбрать .zip',
     chooseFolder: 'Выбрать папку',
+    neverRuns: 'Загрузки проверяются здесь и никогда не запускаются.',
     reading: 'Читаем…',
     invalidName: ({ file }) =>
       `У «${file}» имя, которое нельзя сохранить на всех машинах. Переименуйте и повторите попытку.`,
@@ -2721,6 +2743,7 @@ const zhHansSkillAdd: SkillAddTranslation = {
     failed: '无法读取此链接。请检查后重试。',
     addSelected: ({ count }) => `添加 ${count} 个技能`,
     selectAll: '全选',
+    openOne: '打开一个即可查看它会安装什么。',
   },
   upload: {
     title: '上传',
@@ -2728,6 +2751,7 @@ const zhHansSkillAdd: SkillAddTranslation = {
     dropHere: '将文件夹或 .zip 拖到这里',
     chooseZip: '选择 .zip',
     chooseFolder: '选择文件夹',
+    neverRuns: '上传内容只在这里检查，绝不会运行。',
     reading: '正在读取…',
     invalidName: ({ file }) =>
       `“${file}”的名称无法在所有机器上保存。请重命名后重试。`,
@@ -2929,6 +2953,7 @@ const zhHantSkillAdd: SkillAddTranslation = {
     failed: '無法讀取此連結。請檢查後重試。',
     addSelected: ({ count }) => `新增 ${count} 個技能`,
     selectAll: '全選',
+    openOne: '開啟一個即可查看它會安裝什麼。',
   },
   upload: {
     title: '上傳',
@@ -2936,6 +2961,7 @@ const zhHantSkillAdd: SkillAddTranslation = {
     dropHere: '將資料夾或 .zip 拖曳到這裡',
     chooseZip: '選擇 .zip',
     chooseFolder: '選擇資料夾',
+    neverRuns: '上傳內容只在這裡檢查，絕不會執行。',
     reading: '正在讀取…',
     invalidName: ({ file }) =>
       `「${file}」的名稱無法在所有機器上儲存。請重新命名後重試。`,

@@ -136,8 +136,10 @@ it('shows a few addable skills found on the machines from the last known scan, w
         await act(async () => screen.pressByTestId('skills.home.needs.masked'));
         expect(navigation.push).toHaveBeenLastCalledWith('/settings/skills/found');
         expect(screen.findByTestId('skills.home.needs.broken')).not.toBeNull();
-        // A skill with no readable title is never named by its id.
-        expect(screen.getTextContent()).not.toContain('736cb1a6');
+        // A skill with no readable title is identified by the first block of its id, never as unnamed or by the whole id.
+        expect(screen.getTextContent()).toContain('Skill 736cb1a6');
+        expect(screen.getTextContent()).not.toContain('736cb1a6-6067');
+        expect(screen.getTextContent()).not.toMatch(/unnamed/i);
         expect(screen.findByTestId('skills.home.needs.on')).toBeNull();
         await screen.update(<SkillsHomepage library={library([])} />);
         // An empty library offers Add and Write, and anticipates the found skills in one line.

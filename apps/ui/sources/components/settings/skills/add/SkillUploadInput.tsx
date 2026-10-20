@@ -1,15 +1,14 @@
 import * as React from 'react';
-import { Platform, ScrollView, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
   SkillFileInputV1,
   SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
+import { useAddDialogEdge, type CapabilityAddInputContext } from '@/components/capabilities/add/CapabilityAddModal';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import {
@@ -23,9 +22,8 @@ import { applyWebDirectoryInputAttributes } from '@/utils/files/applyWebDirector
 import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
-import { SkillPreviewRows } from './SkillPreviewRows';
-import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
-import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
+import { previewSkillInstall } from './skillInstall';
+import { SkillFoundAdd } from './SkillFoundAdd';
 
 function describeUploadError(error: SkillUploadError): string {
   switch (error.code) {
@@ -58,12 +56,16 @@ function chooseWebFiles(kind: 'zip' | 'folder'): Promise<readonly File[]> {
 
 /**
  * Upload (lab sa U): a skill folder or a .zip, read here (`readSkillUpload`, nothing leaves the device until Add),
- * previewed by `skills.install { upload, dryRun }`, then added. A refusal names the file.
+ * previewed by `skills.install { upload, dryRun }`, then the same list + details as a link: one skill opens its
+ * details straight away (Where it's on, Add to library); several are a checklist. A refusal names the file.
  */
 export function SkillUploadInput(
   props: Readonly<{
+    ctx: CapabilityAddInputContext;
     execute: MountedAuthoringActionExecute;
     onAdded: (skillId: string) => void;
+    /** A detail's Add closed the dialog: the page selects that skill. */
+    onSelectAdded: (skillId: string) => void;
     /** Closes the dialog (the footer's Done when everything found is already held). */
     onDone: () => void;
     testID: string;
@@ -71,6 +73,7 @@ export function SkillUploadInput(
 ) {
   const { theme } = useUnistyles();
   const edge = useAddDialogEdge();
+  const { ctx } = props;
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
     | Readonly<{ kind: 'reading' }>
@@ -81,18 +84,12 @@ export function SkillUploadInput(
       }>
     | Readonly<{ kind: 'error'; message: string }>
   >({ kind: 'idle' });
-  const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set());
-  const [adding, setAdding] = React.useState(false);
-  // A failed Add keeps the preview and the ticks: the footer says so and the same Add retries the same selection.
-  const [addError, setAddError] = React.useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = React.useState<SkillInstallAcknowledgment | null>(null);
   const [dragging, setDragging] = React.useState(false);
 
   const accept = React.useCallback(
     async (source: UploadSource) => {
-      if (acknowledged || adding) return;
+      ctx.openDetail(null);
       setState({ kind: 'reading' });
-      setAddError(null);
       const read = await readSkillUpload(source);
       if (!read.ok) {
         setState({ kind: 'error', message: describeUploadError(read.error) });
@@ -109,10 +106,11 @@ export function SkillUploadInput(
         });
         return;
       }
-      setTicked(tickAllSkillPreviews(preview.items));
       setState({ kind: 'ready', files: read.files, items: preview.items });
+      // One skill is the details themselves: Where it's on, then Add.
+      if (preview.items.length === 1) ctx.openDetail(preview.items[0]!.path);
     },
-    [acknowledged, adding, props.execute],
+    [ctx, props.execute],
   );
 
   const acceptWebFiles = React.useCallback(
@@ -143,7 +141,7 @@ export function SkillUploadInput(
   );
 
   const drop = useWebFileDropZone({
-    enabled: Platform.OS === 'web' && !adding && acknowledged === null,
+    enabled: Platform.OS === 'web',
     onFileDragActiveChange: setDragging,
     onFilesDropped: async (event) => {
       const transfer = event.dataTransfer as DataTransfer | null | undefined;
@@ -190,168 +188,96 @@ export function SkillUploadInput(
     [accept, acceptWebFiles],
   );
 
-  const previewRows = (items: readonly SkillInstallPreviewV1[], ticks: ReadonlySet<string> | null) => (
-    <SkillPreviewRows
-      testID={`${props.testID}.preview`}
-      items={items}
-      ticked={ticks}
-      onToggle={(path) => {
-        if (acknowledged || adding) return;
-        setAddError(null);
-        setTicked((previous) => toggleSkillPreview(items, previous, path));
-      }}
-      onOpen={props.onAdded}
-      facts={(item) => ({
-        presentation: 'row',
-        source: { kind: 'you' },
-        trust: item.trust,
-        cost: { tokensWhenUsed: item.cost.bodyTokens },
-      })}
-    />
-  );
-
-  const add = React.useCallback(async () => {
-    if (state.kind !== 'ready') return;
-    setAdding(true);
-    setAddError(null);
-    // One skill is added as it is; a folder of several adds the ticked ones.
-    const several = state.items.length > 1;
-    const outcome = acknowledged ? await retrySkillInstallRules(props.execute, acknowledged) : await installSkills(props.execute, {
-      source: { kind: 'upload', files: state.files },
-      ...(several ? { selectPaths: state.items.filter((item) => ticked.has(item.path)).map((item) => item.path) } : {}),
-    });
-    setAdding(false);
-    if (!outcome.ok) {
-      setAddError(t('capabilities.add.addFailed'));
-      return;
-    }
-    setAcknowledged(outcome);
-    if (outcome.incomplete.length > 0) {
-      setAddError(t('capabilities.skillAdd.partial.rules'));
-      return;
-    }
-    props.onAdded(outcome.skillIds[0]!);
-  }, [acknowledged, props, state, ticked]);
-
-  const allHeld = state.kind === 'ready' ? readAllHeldFooter(state.items) : null;
-  return (
-    <View style={styles.fill}>
-      <ScrollView style={styles.fill} contentContainerStyle={[styles.body, edge]}>
-        <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
-          {t('capabilities.skillAdd.upload.body')}
-        </Text>
-        <View
-          {...(drop as object)}
-          testID={`${props.testID}.drop`}
-          style={[
-            styles.drop,
-            {
-              borderColor: dragging
-                ? theme.colors.border.focus
-                : theme.colors.border.default,
-            },
-          ]}
-        >
-          <Icon
-            name="upload"
-            size={ICON_SIZE.lg}
-            color={theme.colors.text.secondary}
-          />
-          <Text variant="body" style={{ color: theme.colors.text.secondary }}>
-            {state.kind === 'reading'
-              ? t('capabilities.skillAdd.upload.reading')
-              : t('capabilities.skillAdd.upload.dropHere')}
-          </Text>
-          <View style={styles.chooseRow}>
-            <RoundButton
-              size="small"
-              display="secondary"
-              title={t('capabilities.skillAdd.upload.chooseZip')}
-              disabled={adding || acknowledged !== null}
-              onPress={() => void choose('zip')}
-              testID={`${props.testID}.zip`}
-            />
-            {Platform.OS === 'web' ? (
-              <RoundButton
-                size="small"
-                display="secondary"
-                title={t('capabilities.skillAdd.upload.chooseFolder')}
-                disabled={adding || acknowledged !== null}
-                onPress={() => void choose('folder')}
-                testID={`${props.testID}.folder`}
-              />
-            ) : null}
-          </View>
-        </View>
-        {state.kind === 'error' ? (
-          <Text
-            variant="meta"
-            style={{ color: theme.colors.status.error }}
-            testID={`${props.testID}.error`}
-          >
-            {state.message}
-          </Text>
-        ) : null}
-        {state.kind === 'ready' ? (
-          state.items.length > 1 ? (
-            <ItemGroup title={t('capabilities.skillAdd.upload.found', { count: state.items.length })} surface="none">
-              {previewRows(state.items, ticked)}
-            </ItemGroup>
-          ) : (
-            // The one skill found stands in the same bare section as several, so its row has the same hairline extent.
-            <ItemGroup surface="none" header="none">
-              {previewRows(state.items, null)}
-            </ItemGroup>
-          )
-        ) : null}
-      </ScrollView>
-      {state.kind === 'ready' ? (
-        <CapabilityAddFooter
-          testID={`${props.testID}.footer`}
-          start={
-            addError ? (
-              <Text variant="meta" style={{ color: theme.colors.status.error }} testID={`${props.testID}.add-error`}>
-                {addError}
-              </Text>
-            ) : null
-          }
-        >
-          {allHeld?.kind === 'open' ? (
-            <RoundButton
-              size="normal"
-              title={t('capabilities.skillAdd.open')}
-              onPress={() => props.onAdded(allHeld.skillId)}
-              testID={`${props.testID}.add`}
-            />
-          ) : allHeld?.kind === 'done' ? (
-            <RoundButton
-              size="normal"
-              title={t('capabilities.add.done')}
-              onPress={props.onDone}
-              testID={`${props.testID}.done`}
-            />
-          ) : (
-            <RoundButton
-              size="normal"
-              title={
-                acknowledged ? t('capabilities.skillAdd.partial.tryAgain') : state.items.length > 1
-                  ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
-                  : t('capabilities.skillAdd.addToLibrary')
-              }
-              loading={adding}
-              disabled={adding || (state.items.length > 1 && ticked.size === 0)}
-              onPress={() => void add()}
-              testID={`${props.testID}.add`}
-            />
-          )}
-        </CapabilityAddFooter>
+  const choosers = (size: 'small' | 'normal') => (
+    <View style={styles.chooseRow}>
+      <RoundButton
+        size={size}
+        display="secondary"
+        title={t('capabilities.skillAdd.upload.chooseZip')}
+        onPress={() => void choose('zip')}
+        testID={`${props.testID}.zip`}
+      />
+      {Platform.OS === 'web' ? (
+        <RoundButton
+          size={size}
+          display="secondary"
+          title={t('capabilities.skillAdd.upload.chooseFolder')}
+          onPress={() => void choose('folder')}
+          testID={`${props.testID}.folder`}
+        />
       ) : null}
     </View>
+  );
+
+  const ready = state.kind === 'ready' ? state : null;
+  return (
+    <SkillFoundAdd
+      // Another upload is a new set to choose from: its ticks, adds and details start over.
+      key={ready ? String(ready.files.length) + ready.items.map((item) => item.path).join('|') : ''}
+      ctx={ctx}
+      execute={props.execute}
+      source={ready ? { kind: 'upload', files: ready.files } : null}
+      items={ready?.items ?? null}
+      // Once something is read, choosing again stands where Browse has its search.
+      {...(ready ? { field: choosers('small') } : {})}
+      empty={
+        <View style={[styles.body, edge]}>
+          <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
+            {t('capabilities.skillAdd.upload.body')}
+          </Text>
+          <View
+            {...(drop as object)}
+            testID={`${props.testID}.drop`}
+            style={[
+              styles.drop,
+              {
+                borderColor: dragging
+                  ? theme.colors.border.focus
+                  : theme.colors.border.default,
+              },
+            ]}
+          >
+            <Icon
+              name="upload"
+              size={ICON_SIZE.lg}
+              color={theme.colors.text.secondary}
+            />
+            <Text variant="body" style={{ color: theme.colors.text.secondary }}>
+              {state.kind === 'reading'
+                ? t('capabilities.skillAdd.upload.reading')
+                : t('capabilities.skillAdd.upload.dropHere')}
+            </Text>
+            {choosers('small')}
+          </View>
+          {state.kind === 'error' ? (
+            <Text
+              variant="meta"
+              style={{ color: theme.colors.status.error }}
+              testID={`${props.testID}.error`}
+            >
+              {state.message}
+            </Text>
+          ) : null}
+        </View>
+      }
+      factsSource={() => ({ kind: 'you' })}
+      note={
+        <>
+          <Icon name="lock" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+          <Text variant="meta" numberOfLines={1} style={styles.noteText}>
+            {t('capabilities.skillAdd.upload.neverRuns')}
+          </Text>
+        </>
+      }
+      onAdded={props.onAdded}
+      onSelectAdded={props.onSelectAdded}
+      onDone={props.onDone}
+      testID={props.testID}
+    />
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  fill: { flex: 1, minHeight: 0 },
   body: {
     paddingTop: theme.space.s16,
     paddingBottom: theme.space.s24,
@@ -367,4 +293,5 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
   },
   chooseRow: { flexDirection: 'row', gap: theme.space.s8 },
+  noteText: { flexShrink: 1, color: theme.colors.text.secondary },
 }));

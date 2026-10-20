@@ -32,8 +32,32 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 export type CapabilityAddInputContext = Readonly<{
-  /** Hand a parsed item to the catalog details column (From a link, Paste a config). */
-  showDetail: (itemKey: string) => void;
+  /** The dialog's tools band: the mode tabs, then `field` where Browse has its search (a link field, a chosen upload). */
+  tools: (field?: React.ReactNode) => React.ReactNode;
+  /**
+   * What the input found, in Browse's own list and details: the same rows, the same details beside the list (pushed
+   * on a phone) with their pinned footer. The tools band leads it.
+   */
+  renderFound: <Found>(found: CapabilityAddFound<Found>) => React.ReactElement;
+  /** Opens one found item's details (one uploaded skill goes straight to them); `null` closes them. */
+  openDetail: (itemKey: string | null) => void;
+}>;
+
+/** An input mode's results, shown and added through the dialog's one list + details path. */
+export type CapabilityAddFound<Found> = Readonly<{
+  /** Stands where Browse has its search, after the mode tabs. */
+  field?: React.ReactNode;
+  items: readonly Found[];
+  itemKey: (item: Found) => string;
+  groups?: CapabilityAddModalConfig<Found>['catalog']['groups'];
+  anatomy: CollectionAnatomy<Found>;
+  /** The body before anything is found (what to paste or drop, and why). */
+  empty: React.ReactNode;
+  /** The list's pinned footer while no details are open (Add the ticked ones); drawn as given. */
+  footer?: React.ReactNode;
+  renderDetail: CapabilityAddModalConfig<Found>['renderDetail'];
+  detailFooter: CapabilityAddModalConfig<Found>['detailFooter'];
+  onAdded?: (result: Readonly<{ itemId: string }>) => void;
 }>;
 
 export type CapabilityAddMode =
@@ -44,6 +68,8 @@ export type CapabilityAddMode =
       icon: IconName;
       kind: 'input';
       renderBody: (ctx: CapabilityAddInputContext) => React.ReactNode;
+      /** The body places the tools band itself (`ctx.tools`, or through `ctx.renderFound`). */
+      ownsTools?: boolean;
     }>
   | Readonly<{
       key: string;
@@ -263,32 +289,6 @@ export function CapabilityAddModalBody<Item>(
     });
   }, [config.sources, config.testID, config.title, detailBackInHeader, registries, setChrome]);
 
-  const groups = React.useMemo(() => {
-    const declared = catalog.groups;
-    if (declared === undefined) return undefined;
-    const groupOf = new Map<string, string>();
-    for (const group of declared)
-      for (const key of group.itemKeys) groupOf.set(key, group.key);
-    return {
-      axis: declared.map((group) => ({ key: group.key, title: group.title })),
-      groupOf: (item: Item) =>
-        groupOf.get(catalog.itemKey(item)) ?? declared[0]!.key,
-    };
-  }, [catalog]);
-
-  const model = useHappierCollection<Item>({
-    items: catalog.items,
-    keyOf: catalog.itemKey,
-    ...(groups === undefined ? {} : { groups }),
-    openKey,
-    onOpenChange: setOpenKey,
-  });
-
-  const itemsByKey = React.useMemo(
-    () => new Map(catalog.items.map((item) => [catalog.itemKey(item), item])),
-    [catalog],
-  );
-
   const selectMode = React.useCallback(
     (key: string) => {
       const next = config.modes.find((candidate) => candidate.key === key);
@@ -298,6 +298,8 @@ export function CapabilityAddModalBody<Item>(
         next.onSelect();
         return;
       }
+      // Details belong to the mode that opened them.
+      setOpenKey(null);
       setModeKey(key);
     },
     [config.modes, onClose],
@@ -314,35 +316,19 @@ export function CapabilityAddModalBody<Item>(
       {config.sources === undefined || mode?.kind !== 'catalog'
         ? null
         : config.sources.renderSelect({ openRegistries: setRegistries })}
-      <View style={styles.search}>{search}</View>
+      {search === null || search === undefined ? null : <View style={styles.search}>{search}</View>}
     </View>
   );
 
-  const renderDetail = (
-    key: string,
-    context: CollectionDetailRenderContext,
-  ) => {
-    const item = itemsByKey.get(key);
-    if (item === undefined) return null;
-    return (
-      <CapabilityAddDetail
-        item={item}
-        itemKey={key}
-        config={config}
-        pushed={context.pushed}
-        added={added.has(key)}
-        onCloseDetail={() => setOpenKey(null)}
-        onCloseDialog={onClose}
-        onPrimaryDone={(result) => {
-          if (result.then === 'stay') {
-            setAdded((previous) => new Set(previous).add(key));
-            return;
-          }
-          onClose();
-          config.onAdded?.({ itemId: result.itemId });
-        }}
-      />
-    );
+  const shared = {
+    title: config.title,
+    testID: config.testID,
+    openKey,
+    onOpenChange: setOpenKey,
+    added,
+    onStay: (key: string) => setAdded((previous) => new Set(previous).add(key)),
+    onClose,
+    detailBackInHeader,
   };
 
   if (registries !== null && config.sources !== undefined) {
@@ -357,20 +343,34 @@ export function CapabilityAddModalBody<Item>(
   }
 
   if (mode?.kind === 'input') {
+    const body = mode.renderBody({
+      tools: (field) => <View style={[styles.toolsBand, edge]}>{tools(field ?? null)}</View>,
+      renderFound: (found) => (
+        <AddCollection
+          {...shared}
+          items={found.items}
+          itemKey={found.itemKey}
+          {...(found.groups === undefined ? {} : { groups: found.groups })}
+          anatomy={found.anatomy}
+          loading={false}
+          empty={found.empty}
+          header={() => tools(found.field ?? null)}
+          renderDetail={found.renderDetail}
+          detailFooter={found.detailFooter}
+          {...(found.onAdded === undefined ? {} : { onAdded: found.onAdded })}
+          footer={found.footer === undefined ? null : found.footer}
+        />
+      ),
+      openDetail: setOpenKey,
+    });
+    if (mode.ownsTools === true) return <View style={styles.fill}>{body}</View>;
     return (
       <View style={styles.fill}>
         <View style={[styles.toolsBand, edge]}>{tools(null)}</View>
         <View style={styles.fill}>
           {/* An input mode's body is a contained column like the details: sections keep its edge, not a page's. */}
           <ListPresentationProvider value="page" pageInsets="contained">
-          {mode.renderBody({
-            showDetail: (key) => {
-              setModeKey(
-                config.modes.find((m) => m.kind === 'catalog')?.key ?? modeKey,
-              );
-              setOpenKey(key);
-            },
-          })}
+            {body}
           </ListPresentationProvider>
         </View>
       </View>
@@ -397,42 +397,147 @@ export function CapabilityAddModalBody<Item>(
   );
 
   return (
+    <AddCollection
+      {...shared}
+      items={catalog.items}
+      itemKey={catalog.itemKey}
+      {...(catalog.groups === undefined ? {} : { groups: catalog.groups })}
+      anatomy={catalog.anatomy}
+      loading={catalog.loading}
+      empty={onlyFailures ? failureLines : catalog.empty}
+      search={{
+        label: t('capabilities.add.searchLabel'),
+        value: catalog.query,
+        onValueChange: catalog.onQueryChange,
+        placeholder: catalog.searchPlaceholder,
+        width: 'fill',
+        testID: `${config.testID}:search`,
+      }}
+      header={(search) => <>{tools(search)}{onlyFailures ? null : failureLines}</>}
+      renderDetail={config.renderDetail}
+      detailFooter={config.detailFooter}
+      {...(config.onAdded === undefined ? {} : { onAdded: config.onAdded })}
+      footer={catalog.footer === undefined ? null : (
+        <View style={[styles.listFooter, edge]} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
+      )}
+    />
+  );
+}
+
+/**
+ * The dialog's one list + details: the public `Collection` (list, `detail: 'auto'`) at the catalog size role, its
+ * header in the tools band, details beside the list (pushed on a phone) and the list's footer pinned while no details
+ * are open. Browse's catalog and an input mode's results (a link's skills, an upload) both render through it.
+ */
+function AddCollection<Item>(
+  props: Readonly<{
+    title: string;
+    testID: string;
+    items: readonly Item[];
+    itemKey: (item: Item) => string;
+    groups?: CapabilityAddModalConfig<Item>['catalog']['groups'];
+    anatomy: CollectionAnatomy<Item>;
+    loading: boolean;
+    empty: React.ReactNode;
+    search?: NonNullable<React.ComponentProps<typeof Collection>['search']>;
+    header: (search: React.ReactNode) => React.ReactNode;
+    renderDetail: CapabilityAddModalConfig<Item>['renderDetail'];
+    detailFooter: CapabilityAddModalConfig<Item>['detailFooter'];
+    onAdded?: (result: Readonly<{ itemId: string }>) => void;
+    footer: React.ReactNode;
+    openKey: string | null;
+    onOpenChange: (key: string | null) => void;
+    added: ReadonlySet<string>;
+    onStay: (key: string) => void;
+    onClose: () => void;
+    detailBackInHeader: boolean;
+  }>,
+): React.ReactElement {
+  const onPhone = useDeviceType() === 'phone';
+  const { items, itemKey, openKey, onOpenChange } = props;
+  const declared = props.groups;
+  const groups = React.useMemo(() => {
+    if (declared === undefined) return undefined;
+    const groupOf = new Map<string, string>();
+    for (const group of declared)
+      for (const key of group.itemKeys) groupOf.set(key, group.key);
+    return {
+      axis: declared.map((group) => ({ key: group.key, title: group.title })),
+      groupOf: (item: Item) =>
+        groupOf.get(itemKey(item)) ?? declared[0]!.key,
+    };
+  }, [declared, itemKey]);
+
+  const model = useHappierCollection<Item>({
+    items,
+    keyOf: itemKey,
+    ...(groups === undefined ? {} : { groups }),
+    openKey,
+    onOpenChange,
+  });
+
+  const itemsByKey = React.useMemo(
+    () => new Map(items.map((item) => [itemKey(item), item])),
+    [items, itemKey],
+  );
+
+  const renderDetail = (
+    key: string,
+    context: CollectionDetailRenderContext,
+  ) => {
+    const item = itemsByKey.get(key);
+    if (item === undefined) return null;
+    return (
+      <CapabilityAddDetail
+        item={item}
+        itemKey={key}
+        renderDetail={props.renderDetail}
+        detailFooter={props.detailFooter}
+        testID={props.testID}
+        pushed={context.pushed}
+        added={props.added.has(key)}
+        onCloseDetail={() => onOpenChange(null)}
+        onCloseDialog={props.onClose}
+        onPrimaryDone={(result) => {
+          if (result.then === 'stay') {
+            props.onStay(key);
+            return;
+          }
+          props.onClose();
+          props.onAdded?.({ itemId: result.itemId });
+        }}
+      />
+    );
+  };
+
+  return (
     <CoreCollectionScope>
       {/* The dialog's list keeps one rhythm: the same ruled rows and insets at rest, beside the details and loading. */}
       <HappierCollectionRestingRowsContext.Provider value={onPhone ? 'ruled-page' : 'ruled'}>
-        <HappierCollectionNavigationBackClosesDetailContext.Provider value={detailBackInHeader}>
+        <HappierCollectionNavigationBackClosesDetailContext.Provider value={props.detailBackInHeader}>
         <View style={styles.fill}>
           <Collection<Item>
             model={model}
-            anatomy={catalog.anatomy}
-            accessibilityLabel={config.title}
+            anatomy={props.anatomy}
+            accessibilityLabel={props.title}
             presentation="list"
             detail="auto"
             renderDetail={renderDetail}
             minListWidth={CATALOG_SURFACE_LIST_ROLE.minListWidthPx}
             minDetailWidth={CATALOG_SURFACE_LIST_ROLE.minDetailWidthPx}
             preferredListRatio={CATALOG_SURFACE_LIST_ROLE.preferredListRatio}
-            loading={catalog.loading}
-            empty={onlyFailures ? failureLines : catalog.empty}
-            search={{
-              label: t('capabilities.add.searchLabel'),
-              value: catalog.query,
-              onValueChange: catalog.onQueryChange,
-              placeholder: catalog.searchPlaceholder,
-              width: 'fill',
-              testID: `${config.testID}:search`,
-            }}
-            header={(slots) => <CatalogToolsBand open={openKey !== null}>{tools(slots.search)}{onlyFailures ? null : failureLines}</CatalogToolsBand>}
-            testID={`${config.testID}:collection`}
-            listTestID={`${config.testID}:list`}
-            detailTestID={`${config.testID}:detail`}
+            loading={props.loading}
+            empty={props.empty}
+            {...(props.search === undefined ? {} : { search: props.search })}
+            header={(slots) => <CatalogToolsBand open={openKey !== null}>{props.header(slots.search)}</CatalogToolsBand>}
+            testID={`${props.testID}:collection`}
+            listTestID={`${props.testID}:list`}
+            detailTestID={`${props.testID}:detail`}
           />
         </View>
         </HappierCollectionNavigationBackClosesDetailContext.Provider>
       </HappierCollectionRestingRowsContext.Provider>
-      {catalog.footer === undefined || openKey !== null ? null : (
-        <View style={[styles.listFooter, edge]} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
-      )}
+      {openKey !== null ? null : props.footer}
     </CoreCollectionScope>
   );
 }
@@ -559,7 +664,9 @@ function CapabilityAddDetail<Item>(
   props: Readonly<{
     item: Item;
     itemKey: string;
-    config: CapabilityAddModalConfig<Item>;
+    renderDetail: CapabilityAddModalConfig<Item>['renderDetail'];
+    detailFooter: CapabilityAddModalConfig<Item>['detailFooter'];
+    testID: string;
     pushed: boolean;
     added: boolean;
     onCloseDetail: () => void;
@@ -571,7 +678,7 @@ function CapabilityAddDetail<Item>(
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const edge = useAddDialogEdge();
-  const footer = props.config.detailFooter(props.item);
+  const footer = props.detailFooter(props.item);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -607,7 +714,7 @@ function CapabilityAddDetail<Item>(
             props.onCloseDialog();
             afterAdd.open?.onPress();
           }}
-          testID={`${props.config.testID}:open-added`}
+          testID={`${props.testID}:open-added`}
         />
       )}
       {slot(
@@ -617,7 +724,7 @@ function CapabilityAddDetail<Item>(
             props.onCloseDialog();
             afterAdd.onDone?.();
           }}
-          testID={`${props.config.testID}:done`}
+          testID={`${props.testID}:done`}
         />,
       )}
     </View>
@@ -634,7 +741,7 @@ function CapabilityAddDetail<Item>(
       onPress={() => {
         void press();
       }}
-      testID={`${props.config.testID}:primary`}
+      testID={`${props.testID}:primary`}
     />
   );
   const footerRow = (
@@ -648,7 +755,7 @@ function CapabilityAddDetail<Item>(
           <Text
             variant="meta"
             style={{ color: theme.colors.status.error }}
-            testID={`${props.config.testID}:primary-error`}
+            testID={`${props.testID}:primary-error`}
           >
             {error}
           </Text>
@@ -661,7 +768,7 @@ function CapabilityAddDetail<Item>(
   return (
     <View
       style={styles.detail}
-      testID={`${props.config.testID}:detail:${props.itemKey}`}
+      testID={`${props.testID}:detail:${props.itemKey}`}
     >
       {/* Pushed, the Collection leads the page with the one way back; beside the list the details close here. */}
       {props.pushed ? null : (
@@ -671,14 +778,14 @@ function CapabilityAddDetail<Item>(
             variant="plain"
             accessibilityLabel={t('capabilities.add.closeDetails')}
             onPress={props.onCloseDetail}
-            testID={`${props.config.testID}:close-detail`}
+            testID={`${props.testID}:close-detail`}
           />
         </View>
       )}
       <ScrollView style={styles.fill} contentContainerStyle={[styles.detailBody, edge, props.pushed ? styles.detailBodyPushed : null]}>
         {/* The details are a detail page: sections read their description above the rows, in the body's own inset. */}
         <ListPresentationProvider value="page" pageInsets="contained">
-          {props.config.renderDetail(props.item, {
+          {props.renderDetail(props.item, {
             pushed: props.pushed,
             added: props.added,
           })}

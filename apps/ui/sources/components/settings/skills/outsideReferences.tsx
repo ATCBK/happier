@@ -42,37 +42,6 @@ export function remainingOutsideReferences(
   );
 }
 
-/**
- * A previewed skill's instructions point at other files: the siblings the person keeps ("Also adds X, which it refers
- * to") and the relative files its bundle will not have (an advisory, never a block). On a preview row it is quiet
- * lines under the facts, through `CapabilityRow` `note`.
- */
-export function skillReferencesNote(
-  item: Pick<SkillInstallPreviewV1, 'name' | 'path' | 'outsideReferences' | 'siblingSkills'>,
-  included: ReadonlySet<string>,
-  nameByPath: ReadonlyMap<string, string>,
-  testID: string,
-  held: ReadonlySet<string> = none,
-): React.ReactElement | undefined {
-  const siblings = (item.siblingSkills ?? []).filter((sibling) => included.has(sibling.path));
-  const remaining = remainingOutsideReferences(item, included, held);
-  if (siblings.length === 0 && remaining.length === 0) return undefined;
-  return (
-    <View style={styles.notes}>
-      {siblings.map((sibling) => (
-        <SkillAlsoAddsNote
-          key={sibling.path}
-          name={nameByPath.get(sibling.path) ?? sibling.path}
-          testID={`${testID}.sibling.${sibling.path}`}
-        />
-      ))}
-      {remaining.length > 0 ? (
-        <SkillOutsideReferencesNote count={remaining.length} testID={`${testID}.outsideReferences`} />
-      ) : null}
-    </View>
-  );
-}
-
 /** "Also adds <name>, which it refers to": the one line that says why a sibling comes along. */
 export function SkillAlsoAddsNote(props: Readonly<{ name: string; testID: string }>) {
   const { theme } = useUnistyles();
@@ -81,18 +50,6 @@ export function SkillAlsoAddsNote(props: Readonly<{ name: string; testID: string
       <Icon name="plus-circle" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
       <Text variant="meta" style={styles.noteText}>
         {t('capabilities.skillAdd.alsoAdds', { name: props.name })}
-      </Text>
-    </View>
-  );
-}
-
-function SkillOutsideReferencesNote(props: Readonly<{ count: number; testID: string }>) {
-  const { theme } = useUnistyles();
-  return (
-    <View style={styles.note} testID={props.testID}>
-      <Icon name="link-break" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
-      <Text variant="meta" style={styles.noteText}>
-        {t('capabilities.skillAdd.outsideReferences', { count: props.count })}
       </Text>
     </View>
   );
@@ -128,7 +85,6 @@ export function SkillOutsideReferencesItem(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  notes: { gap: theme.space.s4, minWidth: 0 },
   note: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -56,9 +56,70 @@ const execute: MountedAuthoringActionExecute = async (_actionId, input) => {
   return answer;
 };
 
+/** The Upload mode inside the real Add dialog body, as the Skills page opens it. */
+async function renderUpload(answer: MountedAuthoringActionExecute, onSelectAdded: (id: string) => void = () => {}) {
+  const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
+  const { SkillUploadInput } = await import('./SkillUploadInput');
+  const onClose = vi.fn();
+  const config = {
+    title: 'Add a skill',
+    testID: 'skills.add',
+    initialModeKey: 'upload',
+    modes: [
+      {
+        key: 'upload',
+        label: 'Upload',
+        icon: 'upload' as const,
+        kind: 'input' as const,
+        ownsTools: true,
+        renderBody: (ctx: never) => (
+          <SkillUploadInput ctx={ctx} execute={answer} onAdded={() => {}} onSelectAdded={onSelectAdded} onDone={() => {}} testID="upload" />
+        ),
+      },
+    ],
+    catalog: { query: '', onQueryChange: () => {}, searchPlaceholder: '', items: [], itemKey: () => '', anatomy: {}, loading: false, empty: null },
+    renderDetail: () => null,
+    detailFooter: () => ({ primary: { label: '', onPress: async () => null } }),
+  };
+  const screen = await renderScreen(<CapabilityAddModalBody config={config as never} onClose={onClose} />);
+  await act(async () => {
+    await drop.onFilesDropped?.({ dataTransfer: {} });
+  });
+  const pressPrimary = async () => {
+    const button = screen.findAll((node) => node.props?.testID === 'skills.add:primary' && typeof node.props?.onPress === 'function')[0];
+    if (!button) throw new Error('primary is not pressable');
+    await act(async () => {
+      await button.props.onPress();
+    });
+  };
+  return { screen, pressPrimary, onClose };
+}
+
 describe('SkillUploadInput', () => {
+  it('opens one uploaded skill straight in its details and adds it with the Where picked there (G8)', async () => {
+    const installs: Record<string, unknown>[] = [];
+    const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
+      if ((input as { dryRun?: boolean }).dryRun) return { ok: true, result: { items: [PREVIEW] } };
+      installs.push(input as Record<string, unknown>);
+      return { ok: true, result: { skillIds: ['uploaded'], includedInSessionId: null } };
+    };
+    const selected: string[] = [];
+    const { screen, pressPrimary, onClose } = await renderUpload(answer, (id) => selected.push(id));
+    expect(screen.findByTestId('upload.detail.title')).not.toBeNull();
+    const { WhereItsOnControl } = await import('@/components/capabilities/where/WhereItsOnControl');
+    const narrowed = { kind: 'write', write: { place: { t: 'machine', machineId: 'machine-1' }, state: 'on' } } as const;
+    await act(async () => {
+      await screen.findByType(WhereItsOnControl).props.onChange(narrowed);
+    });
+    await pressPrimary();
+    expect(installs).toHaveLength(1);
+    expect(installs[0]).toMatchObject({ source: { kind: 'upload' }, where: narrowed });
+    expect(installs[0]).not.toHaveProperty('selectPaths');
+    expect(onClose).toHaveBeenCalled();
+    expect(selected).toEqual(['uploaded']);
+  });
+
   it('keeps an acknowledged upload open and retries its rules without another install', async () => {
-    const onAdded = vi.fn();
     const writes: string[] = [];
     const answer: MountedAuthoringActionExecute = async (actionId, input) => {
       if (actionId === 'skills.install' && (input as { dryRun?: boolean }).dryRun)
@@ -68,30 +129,24 @@ describe('SkillUploadInput', () => {
         ? { ok: false, error: 'rules unavailable', errorCode: 'skill_rules_write_failed', details: { skillIds: ['uploaded'], incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
         : { ok: true, result: { ok: true, revision: 2, items: [{ skillId: 'uploaded', previous: [], rules: [] }] } };
     };
-    const { SkillUploadInput } = await import('./SkillUploadInput');
-    const screen = await renderScreen(<SkillUploadInput execute={answer} onAdded={onAdded} onDone={() => {}} testID="upload" />);
-    await act(async () => { await drop.onFilesDropped?.({ dataTransfer: {} }); });
-    await screen.pressByTestIdAsync('upload.add');
-    expect(onAdded).not.toHaveBeenCalled();
-    expect(screen.findByTestId('upload.preview')).not.toBeNull();
-    expect(screen.findByTestId('upload.add-error')).not.toBeNull();
-    await screen.pressByTestIdAsync('upload.add');
-    expect(onAdded).toHaveBeenCalledExactlyOnceWith('uploaded');
+    const selected: string[] = [];
+    const { screen, pressPrimary, onClose } = await renderUpload(answer, (id) => selected.push(id));
+    await pressPrimary();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.findByTestId('upload.detail.title')).not.toBeNull();
+    expect(screen.findByTestId('skills.add:primary-error')).not.toBeNull();
+    await pressPrimary();
+    expect(selected).toEqual(['uploaded']);
     expect(writes).toEqual(['skills.install', 'skills.rules.set']);
   });
 
-  it('keeps the preview and its Add after a failed Add, with the failure beside it', async () => {
-    const { SkillUploadInput } = await import('./SkillUploadInput');
-    const screen = await renderScreen(<SkillUploadInput execute={execute} onAdded={() => {}} onDone={() => {}} testID="upload" />);
-    await act(async () => {
-      await drop.onFilesDropped?.({ dataTransfer: {} });
-    });
-    expect(screen.findByTestId('upload.add')).toBeTruthy();
-    await screen.pressByTestIdAsync('upload.add');
-    // The same selection is still there to retry, and nothing else says the Add failed.
-    expect(screen.findByTestId('upload.add')).toBeTruthy();
-    expect(screen.findByTestId('upload.preview')).toBeTruthy();
-    expect(screen.findByTestId('upload.add-error')).toBeTruthy();
+  it('keeps the details and their Add after a failed Add, with the failure beside it', async () => {
+    const { screen, pressPrimary, onClose } = await renderUpload(execute);
+    await pressPrimary();
+    // The same skill is still there to retry, and nothing else says the Add failed.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.findByTestId('upload.detail.title')).toBeTruthy();
+    expect(screen.findByTestId('skills.add:primary-error')).toBeTruthy();
     expect(screen.findByTestId('upload.error')).toBeNull();
   });
 });

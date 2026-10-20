@@ -19,44 +19,27 @@ import {
   openCapabilityAddModalHost,
   type CapabilityAddModalConfig,
 } from '@/components/capabilities/add/CapabilityAddModal';
-import {
-  CapabilityFacts,
-  type CapabilityTrust,
-} from '@/components/capabilities/facts/CapabilityFacts';
+import type { CapabilityTrust } from '@/components/capabilities/facts/CapabilityFacts';
 import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
-import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import {
-  useDraftReachRules,
-  WhereItsOnControl,
-} from '@/components/capabilities/where/WhereItsOnControl';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { Item } from '@/components/ui/lists/Item';
-import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { useRegistryItem } from '@/registries/useRegistryItem';
 import { useRegistryItems } from '@/registries/useRegistryItems';
 import { useRegistrySources } from '@/registries/useRegistrySources';
 import { useRegistrySourcesSlot } from '@/registries/useRegistrySourcesSlot';
-import {
-  projectReachOnMachines,
-  type ReachMachine,
-} from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
-import { remainingOutsideReferences, SkillAlsoAddsNote, SkillOutsideReferencesItem } from '../outsideReferences';
-import { useSkillPlaces } from '../useSkillPlaces';
 import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
-import { heldSkillRowProps, SkillInLibraryMark } from './SkillPreviewRows';
+import { SkillInLibraryMark } from './SkillPreviewRows';
+import { SkillAddDetailBody, useSkillSiblingChoice } from './SkillAddDetailBody';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 
 export type SkillAddModeKey = 'browse' | 'link' | 'upload' | 'write';
@@ -402,12 +385,18 @@ export function SkillAddModal(
           label: t('capabilities.skillAdd.modes.link'),
           icon: 'link',
           kind: 'input',
-          renderBody: () => (
+          ownsTools: true,
+          renderBody: (ctx) => (
             <SkillLinkInput
+              ctx={ctx}
               execute={execute}
               onAdded={(skillId) => {
                 library.retry();
                 props.onClose();
+                params.onAdded?.(skillId);
+              }}
+              onSelectAdded={(skillId) => {
+                library.retry();
                 params.onAdded?.(skillId);
               }}
               onDone={props.onClose}
@@ -420,12 +409,18 @@ export function SkillAddModal(
           label: t('capabilities.skillAdd.modes.upload'),
           icon: 'upload',
           kind: 'input',
-          renderBody: () => (
+          ownsTools: true,
+          renderBody: (ctx) => (
             <SkillUploadInput
+              ctx={ctx}
               execute={execute}
               onAdded={(skillId) => {
                 library.retry();
                 props.onClose();
+                params.onAdded?.(skillId);
+              }}
+              onSelectAdded={(skillId) => {
+                library.retry();
                 params.onAdded?.(skillId);
               }}
               onDone={props.onClose}
@@ -632,21 +627,7 @@ function SkillAddDetail(
   React.useEffect(() => {
     if (read.item) onRead(key, read.item);
   }, [key, onRead, read.item]);
-  const places = useSkillPlaces();
-  const draftReach = useDraftReachRules('skill');
-  React.useEffect(() => {
-    onWhereChange(key, draftReach.where);
-  }, [draftReach.where, key, onWhereChange]);
-  const projection = React.useMemo(
-    () =>
-      projectReachOnMachines(
-        draftReach.rules,
-        places.machines as readonly ReachMachine[],
-        undefined,
-        places.workspaceRefs,
-      ),
-    [draftReach.rules, places.machines, places.workspaceRefs],
-  );
+  const onWhere = React.useCallback((where: ReachRulesChangeV1 | undefined) => onWhereChange(key, where), [key, onWhereChange]);
 
   const skill =
     read.item?.payload.kind === 'skill' ? read.item.payload.skill : null;
@@ -671,10 +652,8 @@ function SkillAddDetail(
   const version = read.item?.summary.version;
   const primaryPath = skill?.ref.path;
   const [offered, setOffered] = React.useState<Readonly<{ primary: SkillInstallPreviewV1; siblings: readonly SkillInstallPreviewV1[] }> | null>(null);
-  const [unticked, setUnticked] = React.useState<ReadonlySet<string>>(() => new Set());
   React.useEffect(() => {
     setOffered(null);
-    setUnticked(new Set());
     if (!version) {
       onHeld(key, undefined);
       return;
@@ -703,283 +682,87 @@ function SkillAddDetail(
       current = false;
     };
   }, [execute, key, onHeld, primaryPath, props.row.itemId, props.row.sourceId, version]);
-  const heldSiblings = React.useMemo(
-    () => new Set((offered?.siblings ?? []).filter((item) => item.inLibrary !== undefined).map((item) => item.path)),
-    [offered],
-  );
-  const keptSiblings = React.useMemo(
-    () =>
-      new Set(
-        (offered?.siblings ?? []).map((item) => item.path).filter((path) => !unticked.has(path) && !heldSiblings.has(path)),
-      ),
-    [heldSiblings, offered, unticked],
-  );
+  const siblingChoice = useSkillSiblingChoice({
+    primary: offered?.primary ?? null,
+    siblings: offered?.siblings ?? NO_PREVIEWS,
+    outsideReferences,
+    onOpenHeld: props.onOpenHeld,
+    testID: `${TEST_ID}.detail`,
+  });
   React.useEffect(() => {
-    onSelectionChange(key, offered && primaryPath !== undefined ? [primaryPath, ...keptSiblings] : undefined);
-  }, [key, keptSiblings, offered, onSelectionChange, primaryPath]);
-  const stillOutside = React.useMemo(
-    () =>
-      offered
-        ? remainingOutsideReferences(
-            { path: offered.primary.path, outsideReferences, siblingSkills: offered.primary.siblingSkills },
-            keptSiblings,
-            heldSiblings,
-          )
-        : outsideReferences,
-    [heldSiblings, keptSiblings, offered, outsideReferences],
-  );
+    onSelectionChange(key, siblingChoice.selectPaths);
+  }, [key, onSelectionChange, siblingChoice.selectPaths]);
   const ref = skill
     ? skill.ref.commit.slice(0, 7)
     : shortRef(read.item?.summary.version);
   const repo = skill
     ? (repositoryLabel(skill.ref.repo) ?? skill.ref.repo)
     : repositoryLabel(props.row.links?.repository);
-  const scripts = skill
-    ? skill.files.filter((file) => file.unixMode === 0o755).length
-    : 0;
   const problem = read.item?.summary.problem ?? props.row.problem;
-  const tokens = (count: number) =>
-    count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
   const purpose = (read.item ? rowDescription(read.item.summary) : null) ?? rowDescription(props.row);
 
   return (
-    <View style={styles.detail}>
-      <ItemGroup surface="none">
-        <BareSectionContent>
-        <View style={styles.head}>
-        <Text
-          variant="title"
-          emphasis="semiBold"
-          style={{ color: theme.colors.text.primary }}
-          testID={`${TEST_ID}.detail.title`}
-        >
-          {props.row.title}
-        </Text>
-        {purpose ? (
-          <Text
-            variant="reading"
-            style={{ color: theme.colors.text.secondary }}
-          >
-            {purpose}
-          </Text>
-        ) : null}
-        <CapabilityFacts
-          presentation="row"
-          {...(repo
-            ? {
-                source: {
-                  kind: 'git' as const,
-                  label: repo,
-                  ...(ref ? { ref } : {}),
-                },
-              }
-            : {})}
-          {...(trust ? { trust } : {})}
-          {...(cost ? { cost: { tokensWhenUsed: cost.bodyTokens } } : {})}
-        />
-        {problem ? (
-          <Text variant="meta" style={{ color: theme.colors.state.warning.textForeground }}>
-            {problem.code === 'too_large'
-              ? t('capabilities.skillAdd.detail.problemTooLarge')
-              : problem.code === 'removed_from_source'
-                ? t('capabilities.skillAdd.detail.problemRemoved')
-                : t('capabilities.skillAdd.detail.problemUnsupported')}
-          </Text>
-        ) : null}
-        {read.error && !read.item ? (
-          <View style={styles.partial} testID={`${TEST_ID}.detail.failure`}>
-            <Text variant="meta" style={{ flexShrink: 1, color: read.status?.state === 'rate_limited' || read.status?.state === 'needs_machine'
-              ? theme.colors.state.warning.textForeground : theme.colors.status.error }}>
-              {read.status ? describeRegistrySourceStatus(read.status) : t('capabilities.skillAdd.detail.loadFailed')}
+    <SkillAddDetailBody
+      testID={`${TEST_ID}.detail`}
+      title={props.row.title}
+      purpose={purpose}
+      facts={{
+        presentation: 'row',
+        ...(repo ? { source: { kind: 'git' as const, label: repo, ...(ref ? { ref } : {}) } } : {}),
+        ...(trust ? { trust } : {}),
+        ...(cost ? { cost: { tokensWhenUsed: cost.bodyTokens } } : {}),
+      }}
+      notice={
+        <>
+          {problem ? (
+            <Text variant="meta" style={{ color: theme.colors.state.warning.textForeground }}>
+              {problem.code === 'too_large'
+                ? t('capabilities.skillAdd.detail.problemTooLarge')
+                : problem.code === 'removed_from_source'
+                  ? t('capabilities.skillAdd.detail.problemRemoved')
+                  : t('capabilities.skillAdd.detail.problemUnsupported')}
             </Text>
-            <RoundButton size="small" display="secondary" title={t('capabilities.skillAdd.partial.tryAgain')}
-              onPress={() => void read.refresh()} testID={`${TEST_ID}.detail.retry`} />
-          </View>
-        ) : null}
-        </View>
-        </BareSectionContent>
-      </ItemGroup>
-      <WhereItsOnControl
-        testID={`${TEST_ID}.detail.where`}
-        kind="skill"
-        presentation="pick"
-        rules={draftReach.rules}
-        status="ready"
-          projection={projection}
-        places={{
-          agentIds: places.agentIds,
-          machines: places.placeMachines,
-          projects: places.projects,
-        }}
-        agentTakes={places.agentTakes}
-        onChange={draftReach.onChange}
-      />
-      {skill ? (
-      <ItemGroup
-        title={t('capabilities.skillAdd.detail.installsTitle')}
-        surface="none"
-      >
-        <Item
-          icon={
-            <Icon
-              name={
-                trust === 'runs_scripts'
-                  ? 'terminal'
-                  : trust === 'has_files'
-                    ? 'folder'
-                    : 'file-text'
-              }
-              size={ICON_SIZE.md}
-              color={theme.colors.text.secondary}
-            />
-          }
-          title={
-            trust === 'runs_scripts'
-              ? t('capabilities.facts.runsScripts')
-              : trust === 'has_files'
-                ? t('capabilities.facts.hasFiles')
-                : t('capabilities.facts.textOnly')
-          }
-          subtitle={
-            trust === 'runs_scripts'
-              ? t('capabilities.skillAdd.detail.runsScriptsBody', {
-                  count: scripts,
-                })
-              : trust === 'has_files'
-                ? t('capabilities.skillAdd.detail.hasFilesBody', {
-                    count: Math.max(0, (skill?.files.length ?? 1) - 1),
-                  })
-                : t('capabilities.skillAdd.detail.textOnlyBody')
-          }
-        />
-        <SkillOutsideReferencesItem
-          references={stillOutside}
-          testID={`${TEST_ID}.detail.outsideReferences`}
-        />
-        {cost ? (
-          <Item
-            icon={
-              <Icon
-                name="chat-circle"
-                size={ICON_SIZE.md}
-                color={theme.colors.text.secondary}
-              />
+          ) : null}
+          {read.error && !read.item ? (
+            <View style={styles.partial} testID={`${TEST_ID}.detail.failure`}>
+              <Text variant="meta" style={{ flexShrink: 1, color: read.status?.state === 'rate_limited' || read.status?.state === 'needs_machine'
+                ? theme.colors.state.warning.textForeground : theme.colors.status.error }}>
+                {read.status ? describeRegistrySourceStatus(read.status) : t('capabilities.skillAdd.detail.loadFailed')}
+              </Text>
+              <RoundButton size="small" display="secondary" title={t('capabilities.skillAdd.partial.tryAgain')}
+                onPress={() => void read.refresh()} testID={`${TEST_ID}.detail.retry`} />
+            </View>
+          ) : null}
+        </>
+      }
+      installs={
+        skill && trust && cost
+          ? {
+              trust,
+              scripts: skill.files.filter((file) => file.unixMode === 0o755).length,
+              files: skill.files,
+              cost,
+              ...(repo
+                ? {
+                    source: {
+                      icon: 'github-logo' as const,
+                      title: repo,
+                      subtitle: t('capabilities.skillAdd.detail.sourceBody', { source: props.sourceTitle, ref }),
+                    },
+                  }
+                : {}),
             }
-            title={t('capabilities.skillAdd.detail.tokensWhenUsed', {
-              count: tokens(cost.bodyTokens),
-            })}
-            subtitle={t('capabilities.skillAdd.detail.alwaysOnBody', {
-              count: String(cost.descriptionTokens),
-            })}
-          />
-        ) : null}
-        {repo ? (
-          <Item
-            icon={
-              <Icon
-                name="github-logo"
-                size={ICON_SIZE.md}
-                color={theme.colors.text.secondary}
-              />
-            }
-            title={repo}
-            subtitle={t('capabilities.skillAdd.detail.sourceBody', {
-              source: props.sourceTitle,
-              ref,
-            })}
-          />
-        ) : null}
-        {offered?.siblings.map((sibling) =>
-          sibling.inLibrary !== undefined ? (
-            <CapabilityRow
-              key={sibling.path}
-              testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
-              title={sibling.name}
-              description={sibling.description}
-              facts={{
-                presentation: 'row',
-                trust: sibling.trust,
-                cost: { tokensWhenUsed: sibling.cost.bodyTokens },
-              }}
-              {...heldSkillRowProps(sibling.inLibrary, props.onOpenHeld, `${TEST_ID}.detail.sibling.${sibling.name}`)}
-            />
-          ) : (
-          <CapabilityRow
-            key={sibling.path}
-            testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
-            title={sibling.name}
-            description={sibling.description}
-            facts={{
-              presentation: 'row',
-              trust: sibling.trust,
-              cost: { tokensWhenUsed: sibling.cost.bodyTokens },
-            }}
-            checked={keptSiblings.has(sibling.path)}
-            note={
-              keptSiblings.has(sibling.path) ? (
-                <SkillAlsoAddsNote
-                  name={sibling.name}
-                  testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
-                />
-              ) : undefined
-            }
-            onPress={() =>
-              setUnticked((previous) => {
-                const next = new Set(previous);
-                if (!next.delete(sibling.path)) next.add(sibling.path);
-                return next;
-              })
-            }
-          />
-          ),
-        )}
-      </ItemGroup>
-      ) : null}
-      <ItemGroup
-        title={t('capabilities.skillAdd.detail.nextTitle')}
-        surface="none"
-      >
-        <BareSectionContent>
-        <View style={styles.steps}>
-          {[
-            t('capabilities.skillAdd.detail.next1'),
-            t('capabilities.skillAdd.detail.next2'),
-            t('capabilities.skillAdd.detail.next3'),
-          ].map((line, index) => (
-            <Text
-              key={line}
-              variant="body"
-              style={{ color: theme.colors.text.primary }}
-            >{`${index + 1}. ${line}`}</Text>
-          ))}
-        </View>
-        </BareSectionContent>
-      </ItemGroup>
-      {skill && skill.files.length > 0 ? (
-        <ItemGroup
-          title={t('capabilities.skillAdd.detail.filesTitle', {
-            count: skill.files.length,
-          })}
-          surface="none"
-          density="compact"
-        >
-          {skill.files.map((file) => (
-            <Item
-              key={file.path}
-              title={file.path}
-              titleStyle={styles.mono}
-              detail={
-                file.size >= 1024
-                  ? `${(file.size / 1024).toFixed(1)} KB`
-                  : `${file.size} B`
-              }
-            />
-          ))}
-        </ItemGroup>
-      ) : null}
-    </View>
+          : null
+      }
+      outsideReferences={siblingChoice.stillOutside}
+      siblings={siblingChoice.rows}
+      onWhereChange={onWhere}
+    />
   );
 }
+
+const NO_PREVIEWS: readonly SkillInstallPreviewV1[] = [];
+
 
 const styles = StyleSheet.create((theme) => ({
   provenance: {
@@ -987,14 +770,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: 'center',
     gap: theme.space.s8,
   },
-  mono: { ...Typography.mono() },
   empty: {
     alignItems: 'center',
     gap: theme.space.s12,
     paddingVertical: theme.space.s32,
   },
-  detail: { gap: theme.space.s24 },
-  head: { gap: theme.space.s8 },
   partial: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1002,6 +782,5 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
     marginTop: theme.space.s4,
   },
-  steps: { gap: theme.space.s8, paddingTop: theme.space.s4 },
 }));
 
