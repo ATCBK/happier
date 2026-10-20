@@ -111,7 +111,9 @@ it('keeps the presented Ask launch model quiet across unrelated resource publica
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://ask-tick-locality.example.test', serverIdentityId: serverId });
     onTestFinished(() => connection.dispose());
     const sampledAt = Date.now();
-    const machine = createMachineFixture({ id: 'ask-tick-locality', active: true, activeAt: sampledAt, metadata: {
+    const machine = createMachineFixture({ id: 'ask-tick-locality', active: true, activeAt: sampledAt, daemonStateVersion: 1,
+      keyBasis: { dataEncryptionKey: null, metadataVersion: 1, daemonStateVersion: 1 },
+      daemonState: { contributionRegistryProjectionRevision: 1 }, metadata: {
         ...createMachineFixture().metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: false } } }),
     } });
     storage.setState({ isDataReady: true, isSessionDraftsReady: true, machines: { [machine.id]: machine },
@@ -167,7 +169,11 @@ it('keeps the presented Ask launch model quiet across unrelated resource publica
     // Exercise production publication: the canonical writer owns heartbeat retention,
     // while FX84/FX86's launch selectors retain unchanged launch choices.
     for (let index = 1; index <= 5; index++) {
-        await act(async () => storage.getState().applyMachines([{ ...machine, activeAt: sampledAt + index }], false, { sourceServerId: serverId }));
+        const current = storage.getState().machines[machine.id]!;
+        await act(async () => storage.getState().applyMachines([{ ...current, seq: current.seq + 1,
+            daemonStateVersion: current.daemonStateVersion + 1,
+            keyBasis: { ...current.keyBasis!, daemonStateVersion: current.daemonStateVersion + 1 },
+            activeAt: sampledAt + index, updatedAt: sampledAt + index }], false, { sourceServerId: serverId }));
     }
     const heartbeatRenders = model.mock.calls.length;
     model.mockClear();

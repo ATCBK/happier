@@ -209,13 +209,13 @@ it('keeps Collection row owners quiet across unchanged Machine publications and 
   const alpha = machine('a', 'Alpha', 'alpha.local');
   alpha.keyBasis = { dataEncryptionKey: alpha.dataEncryptionKey ?? null,
     metadataVersion: alpha.metadataVersion, daemonStateVersion: alpha.daemonStateVersion };
-  await setMachines([{ serverId: 'home-a', serverName: 'Home A', status: 'idle', machines: [
+  await setMachines([{ serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [
     alpha, machine('b', 'Beta', 'beta.local'),
   ] }]);
   const tree = await renderPage();
   const owners = tree.root.findAll(node => typeof node.type === 'function' && node.type.name === 'VirtualizedListRow');
   expect(owners.length).toBeGreaterThanOrEqual(2);
-  const rowType = owners[0]!.type as React.ComponentClass;
+  const rowType = owners[0]!.type as React.ComponentClass<{ itemKey: string }>;
   const renders: string[] = [];
   const original = rowType.prototype.render;
   // Call-through instrumentation at the real List row boundary; no domain logic is replaced.
@@ -237,8 +237,8 @@ it('keeps Collection row owners quiet across unchanged Machine publications and 
     await act(async () => storage.getState().applyMachines([{ ...current, metadataVersion: current.metadataVersion + 1,
       metadata: { ...current.metadata!, displayName: 'Alpha renamed' } }], false, { sourceServerId: serverId }));
     await flushHookEffects();
-    expect(renders).toContain('machine:home-a:a');
-    expect(renders).not.toContain('machine:home-a:b');
+    expect(renders).toContain('machine:srv_a:a');
+    expect(renders).not.toContain('machine:srv_a:b');
   } finally { spy.mockRestore(); }
 });
 
