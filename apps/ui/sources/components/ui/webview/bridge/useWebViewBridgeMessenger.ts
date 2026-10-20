@@ -50,7 +50,9 @@ export type UseWebViewBridgeMessengerParams = Readonly<{
     createMessageId?: () => string;
 }>;
 
-const DEFAULT_MAX_CHUNK_BYTES = 64_000;
+/** One injected WebView message's payload size, shared by every host→page transport over `injectJavaScript`. */
+export const WEBVIEW_INJECTED_MESSAGE_MAX_BYTES = 64_000;
+const DEFAULT_MAX_CHUNK_BYTES = WEBVIEW_INJECTED_MESSAGE_MAX_BYTES;
 
 function defaultCreateMessageId(): string {
     return Math.random().toString(36).slice(2);
