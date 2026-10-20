@@ -2,7 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { View, Linking } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/context/AuthContext';
-import { getUserProfile, sendFriendRequest, removeFriend } from '@/sync/api/social/apiFriends';
+import { getUserProfile } from '@/sync/api/social/apiFriends';
+import { readFriendMutationProfile } from '@/sync/ops/friends';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import type { UserProfile } from '@/sync/domains/social/friendTypes';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { Avatar } from '@/components/ui/avatar/Avatar';
@@ -32,6 +35,8 @@ const USERNAME_PREFIX = '@';
 export default function UserProfileScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const { credentials } = useAuth();
+    const { serverId } = useActiveServerSnapshot();
+    const { execute } = useMountedActionExecution(serverId);
     const router = useRouter();
     const navigateToSession = useNavigateToSession();
     const { theme } = useUnistyles();
@@ -72,7 +77,9 @@ export default function UserProfileScreen() {
         if (!credentials || !userProfile) return;
 
         try {
-            const updatedProfile = await sendFriendRequest(credentials, userProfile.id);
+            const updatedProfile = readFriendMutationProfile(
+                await execute('friends.add', { uid: userProfile.id }),
+            );
             if (updatedProfile) {
                 trackFriendsConnect();
                 setUserProfile(updatedProfile);
@@ -100,27 +107,9 @@ export default function UserProfileScreen() {
     const [removingFriend, handleRemoveFriend] = useHappyAction(async () => {
         if (!credentials || !userProfile) return;
 
-        if (userProfile.status === 'friend') {
-            // Removing a friend
-            const confirmed = await Modal.confirm(
-                t('friends.removeFriend'),
-                t('friends.removeFriendConfirm', { name: formatAccountDisplayName(userProfile) ?? t('accountDisplay.unnamed') }),
-                { confirmText: t('friends.remove'), destructive: true }
-            );
-
-            if (!confirmed) return;
-        } else if (userProfile.status === 'requested') {
-            // Canceling a sent request
-            const confirmed = await Modal.confirm(
-                t('friends.cancelRequest'),
-                t('friends.cancelRequestConfirm', { name: formatAccountDisplayName(userProfile) ?? t('accountDisplay.unnamed') }),
-                { confirmText: t('common.yes'), destructive: false }
-            );
-
-            if (!confirmed) return;
-        }
-
-        const updatedProfile = await removeFriend(credentials, userProfile.id);
+        const updatedProfile = readFriendMutationProfile(
+            await execute('friends.remove', { uid: userProfile.id }),
+        );
         if (updatedProfile) {
             setUserProfile(updatedProfile);
         }

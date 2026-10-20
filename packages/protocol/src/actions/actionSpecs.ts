@@ -65,6 +65,7 @@ import { AgentsAcpBackendsInstallFromRegistryInputV1Schema, AgentsAcpBackendsIns
 import { CAPABILITY_RULES_ACTION_SPECS_V1 } from './specs/capabilityRules.js';
 import { SESSION_CAPABILITIES_ACTION_SPECS_V1 } from './specs/sessionCapabilities.js';
 import { SESSION_ACCESS_DISCOVERY_ACTION_SPECS_V1 } from './specs/sessionAccessDiscovery.js';
+import { FRIENDS_ACTION_SPECS } from './specs/friends.js';
 import { SKILL_ACTION_SPECS_V1 } from './specs/skills.js';
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1, type McpServerActionIdV1 } from '../mcp/servers/serverActionsV1.js';
 import { PROVIDER_ACTION_SPECS_V1 } from './specs/providers.js';
@@ -5189,6 +5190,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof USAGE_COACH_ACTION_SPECS)[number]
   | (typeof HOME_GOVERNANCE_ACTION_SPECS)[number]
   | (typeof ACCOUNT_PROFILE_ACTION_SPECS_V1)[number]
+  | (typeof FRIENDS_ACTION_SPECS)[number]
   | (typeof ACCOUNT_LIFECYCLE_ACTION_SPECS)[number]
   | (typeof HOME_IDENTITY_ACTION_SPECS)[number]
   | (typeof SESSION_ORGANIZATION_RESOURCE_ACTION_SPECS)[number]
@@ -5229,6 +5231,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...USAGE_COACH_ACTION_SPECS,
   ...HOME_GOVERNANCE_ACTION_SPECS,
   ...ACCOUNT_PROFILE_ACTION_SPECS_V1,
+  ...FRIENDS_ACTION_SPECS,
   ...ACCOUNT_LIFECYCLE_ACTION_SPECS,
   ...HOME_IDENTITY_ACTION_SPECS,
   ...SESSION_ORGANIZATION_RESOURCE_ACTION_SPECS,

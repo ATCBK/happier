@@ -136,7 +136,6 @@ export async function getUserProfile(
 
     return await backoff(run);
 }
-
 /**
  * Get multiple user profiles by IDs (fetches individually)
  */
@@ -155,63 +154,6 @@ export async function getUserProfiles(
     
     return profiles.filter((profile): profile is UserProfile => profile !== null);
 }
-
-/**
- * Add a friend (send request or accept existing request)
- */
-export async function sendFriendRequest(
-    credentials: AuthCredentials,
-    recipientId: string
-): Promise<UserProfile | null> {
-    const request = createServerFetchForActiveServer();
-    return await backoff(async () => {
-        const response = await request('/v1/friends/add', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ uid: recipientId }),
-        }, { includeAuth: false });
-
-        if (!response.ok) {
-            if (response.status === 404) {
-                return null;
-            }
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                let message = 'Failed to add friend';
-                try {
-                    const error = await response.json();
-                    if (error?.error) message = error.error;
-                } catch {
-                    // ignore
-                }
-                if (response.status === 400 && message === 'provider-required') {
-                    throw new HappyError(message, false, { status: 400, kind: 'auth' });
-                }
-                if (response.status === 400 && message === 'username-required') {
-                    throw new HappyError(message, false, { status: 400, kind: 'auth' });
-                }
-                throw new HappyError(message, false);
-            }
-            throw new Error(`Failed to add friend: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const parsed = UserResponseSchema.safeParse(data);
-        if (!parsed.success) {
-            throw new HappyError('Invalid friend response', false, { kind: 'server' });
-        }
-
-        return parsed.data.user;
-    });
-}
-
-// Note: respondToFriendRequest and getPendingFriendRequests have been removed
-// The new API handles friend requests differently:
-// - Use sendFriendRequest (which calls /v1/friends/add) to both send and accept requests
-// - Use removeFriend to reject or cancel requests
-// - Use getFriendsList to get all friends including pending requests
 
 /**
  * Get friends list (includes all statuses: friend, pending, requested)
@@ -263,49 +205,4 @@ export async function getFriendsList(
     }
 
     return await backoff(run);
-}
-
-/**
- * Remove a friend (or reject/cancel friend request)
- */
-export async function removeFriend(
-    credentials: AuthCredentials,
-    friendId: string
-): Promise<UserProfile | null> {
-    const request = createServerFetchForActiveServer();
-    return await backoff(async () => {
-        const response = await request('/v1/friends/remove', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ uid: friendId }),
-        }, { includeAuth: false });
-
-        if (!response.ok) {
-            if (response.status === 404) {
-                return null;
-            }
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                let message = 'Failed to remove friend';
-                try {
-                    const error = await response.json();
-                    if (error?.error) message = error.error;
-                } catch {
-                    // ignore
-                }
-                throw new HappyError(message, false);
-            }
-            throw new Error(`Failed to remove friend: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const parsed = UserResponseSchema.safeParse(data);
-        if (!parsed.success) {
-            throw new HappyError('Invalid friend response', false, { kind: 'server' });
-        }
-
-        return parsed.data.user;
-    });
 }
