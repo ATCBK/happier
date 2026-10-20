@@ -139,9 +139,9 @@ export type WorkItem = Readonly<{
     agentId: string | null;
     /** Quiet secondary facts in reading order (engine · machine, "Reports to …", "7 of 12"). */
     facts: readonly string[];
-    /** The item this one belongs under inside the projection (report Sessions or workflow commands). */
+    /** The nearest visible item this belongs under (archived Session intermediates are presented separately). */
     parentKey: string | null;
-    /** 0 for a direct report, 1 for a report of a report, … */
+    /** Visible report depth: 0 under the lead, 1 under another visible report, … */
     level: number;
     status: WorkStatus;
     /** Workflow progress, when a source reported one. */
@@ -202,7 +202,7 @@ export type WorkReportSessionSource = Readonly<{
 }>;
 
 export type WorkManagedRunSource = Readonly<{
-    run: Pick<WorkflowRunSummaryV1, 'id' | 'state'>;
+    run: Pick<WorkflowRunSummaryV1, 'id' | 'state' | 'workflowCustodyState'>;
     title: string;
     /** The run's state word (`describeWorkflowRunState`). */
     word: string;
@@ -255,6 +255,7 @@ function classifyManagedRun(source: WorkManagedRunSource): WorkStatus {
         kind: 'workflow_run',
         facts: {
             state: source.run.state,
+            workflowCustodyState: source.run.workflowCustodyState,
             inAttentionWindow: source.needsAttention,
             word: source.word,
         },
@@ -290,10 +291,6 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{
     for (const source of input.reportSessions) {
         const lead = normalizeId(source.managerSessionId);
         if (!lead || source.sessionId === input.sessionId) continue;
-        if (source.archived) {
-            if (lead === input.sessionId) archived.push(archivedWorkItem(source));
-            continue;
-        }
         const siblings = childrenByLead.get(lead);
         if (siblings) siblings.push(source);
         else childrenByLead.set(lead, [source]);
@@ -307,6 +304,13 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{
         for (const source of childrenByLead.get(managerSessionId) ?? []) {
             if (visited.has(source.sessionId)) continue;
             visited.add(source.sessionId);
+            if (source.archived) {
+                if (managerSessionId === input.sessionId) archived.push(archivedWorkItem(source));
+                // Archived presentation does not sever manager ancestry. Live descendants keep
+                // their nearest visible lead and contribute to that lead's outstanding work.
+                outstanding += walk(source.sessionId, parentKey, level);
+                continue;
+            }
             const key = `session:${source.sessionId}`;
             const slot = items.length;
             const subtreeOutstanding = walk(source.sessionId, key, level + 1);

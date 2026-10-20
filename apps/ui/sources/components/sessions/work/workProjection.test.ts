@@ -10,6 +10,8 @@ vi.mock('@/text', async () => {
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
+import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import { NO_SESSION_AGENT_ACTIVITY_ATTENTION } from '@/sync/domains/session/agentActivity';
 import { createActionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
@@ -69,7 +71,7 @@ function agentEntry(overrides: Partial<AgentActivityEntry> & Pick<AgentActivityE
 }
 
 function managed(id: string, state: WorkManagedRunSource['run']['state'], needsAttention = false): WorkManagedRunSource {
-    return { run: { id, state }, title: `Run ${id}`, word: state, needsAttention };
+    return { run: { id, state, workflowCustodyState: null }, title: `Run ${id}`, word: state, needsAttention };
 }
 
 function headline(runId: string, completedAgents: number, totalAgents: number): SessionWorkflowRunHeadlineV1 {
@@ -347,6 +349,49 @@ describe('projectWork', () => {
             ],
         }));
         expect(projection.sessions.map((item) => item.key)).toEqual(['session:a', 'session:b']);
+    });
+
+    it('keeps live grandchildren reachable through archived intermediates without counting archived work', () => {
+        const projection = projectWork(input({ reportSessions: [
+            report({ sessionId: 'api', managerSessionId: 'lead', statusFacts: settledFacts }),
+            report({ sessionId: 'old-worker', managerSessionId: 'api', archived: true }),
+            report({ sessionId: 'approval', managerSessionId: 'old-worker', statusFacts: needsYouFacts }),
+            report({ sessionId: 'old-direct', managerSessionId: 'lead', archived: true }),
+            report({ sessionId: 'live-worker', managerSessionId: 'old-direct' }),
+            // An archived edge may participate in the same transient cycles as live edges.
+            report({ sessionId: 'old-direct', managerSessionId: 'live-worker', archived: true }),
+        ] }));
+        expect(projection.sessions.map(item => [item.key, item.parentKey, item.level, item.status.bucket])).toEqual([
+            ['session:api', null, 0, 'idle'],
+            ['session:approval', 'session:api', 1, 'needs_you'],
+            ['session:live-worker', null, 0, 'working'],
+        ]);
+        expect(projection.archivedSessions.map(item => item.key)).toEqual(['session:old-direct']);
+        expect(projection.summary).toMatchObject({ sessions: 3, outstanding: 2, needsYou: 1 });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection });
+        expect(map.nodesById.get('session:approval')?.parentNodeId).toBe('session:api');
+        expect(map.nodesById.get('session:live-worker')?.parentNodeId).toBe('session:lead');
+    });
+
+    it('agrees with History while Stop custody is pending and after it settles', () => {
+        const run = createWorkflowRunSummaryFixture({ id: 'stopping', state: 'cancelled', workflowCustodyState: 'pending' });
+        const read = (workflowCustodyState: typeof run.workflowCustodyState) => {
+            const current = { ...run, workflowCustodyState };
+            const history = describeWorkflowRunState(current.state, { workflowCustodyState });
+            const projection = projectWork(input({ managedRuns: [{
+                run: current, title: 'Stopping run', word: history.label, needsAttention: false,
+            }] }));
+            expect(projection.workflows[0]?.status.word).toBe(history.label);
+            return { history, projection, groups: groupWorkByState(projection) };
+        };
+        const pending = read('pending');
+        expect(pending.history.terminal).toBe(false);
+        expect(pending.groups.working.map(item => item.key)).toEqual(['run:stopping']);
+        expect(pending.projection.summary.outstanding).toBe(1);
+        const settled = read('settled');
+        expect(settled.history.terminal).toBe(true);
+        expect(settled.groups.recent.map(item => item.key)).toEqual(['run:stopping']);
+        expect(settled.projection.summary.outstanding).toBe(0);
     });
 
     it('classifies each report from the Session owner\'s work-status facts, with no settled rule of its own', () => {

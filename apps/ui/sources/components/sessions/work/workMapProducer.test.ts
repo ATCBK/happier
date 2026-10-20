@@ -45,7 +45,7 @@ describe('projectSessionWorkMap', () => {
     it('places reports under their lead and runs under the lead, through the one map contract', () => {
         const projection = projectWork(input({
             reportSessions: [report('api', 'lead'), report('ledger', 'api')],
-            managedRuns: [{ run: { id: 'run-1', state: 'running' }, title: 'Review each file', word: 'Running', needsAttention: false }],
+            managedRuns: [{ run: { id: 'run-1', state: 'running', workflowCustodyState: null }, title: 'Review each file', word: 'Running', needsAttention: false }],
             agentEntries: [{
                 id: 'run:scout', kind: 'execution_run', status: 'running', title: 'Scout', metaDetail: null,
                 startedAtMs: null, endedAtMs: null, provenance: 'local', detailState: 'loaded', parentId: null,
@@ -81,7 +81,7 @@ describe('finished work folds out of the map (lab session-A2 / B / C)', () => {
     it('leaves finished leaves out of the map and lists them as folded, while List keeps them', () => {
         const projection = projectWork(input({
             reportSessions: [report('api', 'lead'), finished('runbook', 'lead')],
-            managedRuns: [{ run: { id: 'run-done', state: 'succeeded' }, title: 'Review each file', word: 'Completed', needsAttention: false }],
+            managedRuns: [{ run: { id: 'run-done', state: 'succeeded', workflowCustodyState: null }, title: 'Review each file', word: 'Completed', needsAttention: false }],
         }));
         const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
         expect(map.nodesById.get('session:lead')?.childNodeIds).toEqual(['session:api']);
