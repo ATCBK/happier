@@ -407,15 +407,24 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         testID,
     });
 
-    // About this widget, Save as your widget and Post a snapshot (lab dagent G2/G3, dscope VS):
-    // one shared owner, anchored at the same ⋯ as Edit inputs.
+    // About this widget, Save as your widget and Post a snapshot (lab dagent G2/G3, dscope VS): one shared owner. They open
+    // on this card (`card`); only Edit inputs anchors at the ⋯.
     const readyItem = state.kind === 'ready' ? state.item : null;
+    const cardRegionRef = React.useRef<View>(null);
+    const card = React.useMemo(() => ({
+        anchorRef: cardRegionRef,
+        // Web scrolls the card to the top of the pane so a flow opens downward over its own card.
+        reveal: () => {
+            const node: unknown = cardRegionRef.current;
+            if (Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && node instanceof HTMLElement) node.scrollIntoView({ block: 'start' });
+        },
+    }), []);
     const [copyFlow, setCopyFlow] = React.useState<'save' | 'share' | null>(null);
     const closeCopyFlow = React.useCallback(() => setCopyFlow(null), []);
     const copyAccount = boardSurface.scope && viewerScope?.serverId === boardSurface.scope.serverId ? viewerScope : null;
     const copyable = Boolean(readyItem && canPromoteSessionWidgetDefinitionSourceV1(readyItem.source) && copyAccount);
-    const saveHtml = React.useMemo(() => copyable && readyItem?.source.kind === 'hostedHtml' ? () => setCopyFlow('save') : undefined, [copyable, readyItem?.source.kind]);
-    const shareVisual = React.useMemo(() => copyable ? () => setCopyFlow('share') : undefined, [copyable]);
+    const saveHtml = React.useMemo(() => copyable && readyItem?.source.kind === 'hostedHtml' ? () => { card.reveal(); setCopyFlow('save'); } : undefined, [card, copyable, readyItem?.source.kind]);
+    const shareVisual = React.useMemo(() => copyable ? () => { card.reveal(); setCopyFlow('share'); } : undefined, [card, copyable]);
     // The source's own mark (a widget's glyph), the same on the card and in its flows.
     const itemMark = widgetDescriptor?.icon ?? sessionWidgetMark(state);
     const sessionItem = React.useMemo((): WidgetDefinitionSessionItem | null => {
@@ -442,20 +451,11 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         recordRevision={props.item.revision} testID={`${testID}.save.widget`} /> : null,
         };
     }, [props.canEdit, props.density, props.item.itemId, props.item.revision, props.sessionId, readyItem, title, widgetDescriptor, appRuntime, boardSurface.scope, testID, itemMark]);
-    const cardRegionRef = React.useRef<View>(null);
-    const snapshotCard = React.useMemo(() => ({
-        anchorRef: cardRegionRef,
-        // Web scrolls the card to the top of the pane so the panel opens downward over its own card.
-        reveal: () => {
-            const node: unknown = cardRegionRef.current;
-            if (Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && node instanceof HTMLElement) node.scrollIntoView({ block: 'start' });
-        },
-    }), []);
     const definitionFlows = useWidgetDefinitionFlows({
         instance: widgetInstance,
         scope: boardSurface.scope,
         anchorRef: inputs.anchorRef,
-        snapshotCard,
+        card,
         editInputs: inputs.editInputs,
         sessionItem,
         providedContext: boardSurface.scope ? readSessionWidgetProvidedContext({ serverId: boardSurface.scope.serverId, sessionId: props.sessionId, session: props.session }) : {},
@@ -863,12 +863,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
 
     return (
         <View ref={entityDrag.ref} onLayout={onHostLayout} collapsable={false}>
-            {/* The card's own region: Post a snapshot opens on its own card from here. */}
+            {/* The card's own region: every flow the card opens (Save as your widget, About, Post a snapshot) opens on its own card from here. */}
             <View ref={cardRegionRef} testID={`${testID}-card-region`} pointerEvents="none" style={styles.cardRegion} />
             <SessionSurfaceEntityTargetFeedback drag={entityDrag} testID={testID} />
             {inputs.popover}
             {definitionFlows.panel}
-            {copyFlow && readyItem && copyAccount ? <WidgetFlowShell anchorRef={inputs.anchorRef}
+            {copyFlow && readyItem && copyAccount ? <WidgetFlowShell anchorRef={card.anchorRef}
                 title={t('widgetDefinition.visualSaveTitle')}
                 onRequestClose={closeCopyFlow} testID={`${testID}.copyShell`}>
                 <SessionVisualCopyPanel account={copyAccount} item={readyItem} itemId={props.item.itemId}

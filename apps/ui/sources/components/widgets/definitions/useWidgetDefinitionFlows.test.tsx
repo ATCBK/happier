@@ -815,7 +815,8 @@ describe('widget definition flows', () => {
                 bindings: { session: { kind: 'value', value: { serverId, sessionId: 'shared' } } } } } });
         const screen = await renderScreen(React.createElement(SessionWidgetHost, { serverId, sessionId: 'shared', session,
             item: { itemId: 'shared-copy', revision: 'r1', state: { kind: 'ready', item } }, host: 'details', primaryHost: 'details', density: 'full',
-            canEdit: true, executableCurrentness: 'current', heightBounds: { min: 96, max: 520 }, testID: 'sessionCopy' }));
+            canEdit: true, executableCurrentness: 'current', heightBounds: { min: 96, max: 520 }, testID: 'sessionCopy' }),
+            { createNodeMock: element => ({ testID: element.props.testID ?? null }) });
         try {
             const save = screen.tree.root.findAllByType(ItemRowActions).flatMap(menu => menu.props.actions)
                 .find((action: { id: string }) => action.id === 'saveAsYours');
@@ -823,6 +824,10 @@ describe('widget definition flows', () => {
             const onPress = save?.onPress;
             if (!onPress) throw new Error('Missing Save as yours widget action handler');
             await act(async () => { onPress(); });
+            // Every flow a Session card opens (Save as your widget, About, Add to, Post a snapshot) opens on its own card, the one
+            // anchor Post a snapshot already uses, so it never lands on a sibling or off the pane from a ⋯ measured elsewhere.
+            const { WidgetFlowShell } = await import('@/components/widgets/flow/WidgetFlowShell');
+            expect(screen.tree.root.findByType(WidgetFlowShell).props.anchorRef.current).toEqual({ testID: 'sessionCopy-card-region' });
             const panel = screen.tree.root.findByType(SaveAsWidgetPanel);
             expect(panel.props.converted).toEqual([{ path: 'session', title: 'Read Session', becomes: 'context' }]);
             const preview = screen.findByTestId('sessionCopy.save.preview');
