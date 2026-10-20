@@ -1,8 +1,10 @@
 import type { ShikiScopeToken } from '@/components/ui/code/highlighting/shiki/shikiTokenTypes';
 import { isCodeIdentifier } from '@happier-dev/protocol/machines/codeIntelligenceFallback';
 import { readCodeLineIdentifiers } from './codeIdentifiers';
+import type { LanguageIntelligenceDocumentSymbol, LanguageIntelligenceServerState } from '@happier-dev/protocol/machines/languageIntelligence';
 
 export type DocumentOutlineEntry = Readonly<{
+    serverId?: string;
     name: string;
     kind: string;
     line: number;
@@ -20,6 +22,41 @@ export type DocumentOutlineBaselineInput = Readonly<{
 export type DocumentOutlineBaselineResult =
     | Readonly<{ status: 'ok'; symbols: readonly DocumentOutlineEntry[] }>
     | Readonly<{ status: 'unavailable'; reason: 'grammar_engine_unavailable' }>;
+
+export type DocumentOutlineServerAnswer = Readonly<{
+    capable: boolean;
+    state: LanguageIntelligenceServerState;
+    loading: boolean;
+    symbols: readonly LanguageIntelligenceDocumentSymbol[];
+}>;
+
+// LSP SymbolKind values (1-based); unknown extensions retain a generic symbol kind.
+const serverSymbolKinds = [
+    'file', 'module', 'namespace', 'package', 'class', 'method', 'property', 'field', 'constructor',
+    'enum', 'interface', 'function', 'variable', 'constant', 'string', 'number', 'boolean', 'array',
+    'object', 'key', 'null', 'enumMember', 'struct', 'event', 'operator', 'typeParameter',
+] as const;
+
+export function selectDocumentOutline(input: Readonly<{
+    baseline: DocumentOutlineBaselineResult;
+    server?: DocumentOutlineServerAnswer | null;
+}>): DocumentOutlineBaselineResult {
+    const server = input.server;
+    if (!server?.capable || (server.state !== 'ready' && server.state !== 'starting' && server.state !== 'restarting')
+        || (server.symbols.length === 0 && (server.state !== 'ready' || server.loading))) return input.baseline;
+    const symbols: DocumentOutlineEntry[] = [];
+    const append = (items: readonly LanguageIntelligenceDocumentSymbol[], depth: number) => {
+        for (const symbol of items) {
+            symbols.push({
+                serverId: symbol.serverId, name: symbol.name, kind: serverSymbolKinds[symbol.kind - 1] ?? 'symbol',
+                line: symbol.selectionRange.start.line + 1, column: symbol.selectionRange.start.character, depth,
+            });
+            if (symbol.children) append(symbol.children, depth + 1);
+        }
+    };
+    append(server.symbols, 0);
+    return { status: 'ok', symbols };
+}
 
 function declarationKind(scopes: readonly string[]): string | null {
     // TextMate also uses entity.name for calls and type references. Declaration

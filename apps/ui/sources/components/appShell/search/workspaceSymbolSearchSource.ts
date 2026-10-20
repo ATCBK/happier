@@ -1,5 +1,6 @@
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { loadDocumentOutlineBaseline } from '@/sync/domains/workspaces/languageIntelligence/loadDocumentOutlineBaseline';
+import { selectDocumentOutline, type DocumentOutlineServerAnswer } from '@/sync/domains/workspaces/languageIntelligence/documentOutline';
 import { buildUniversalSearchScopeKey, type UniversalSearchResult, type UniversalSearchTarget } from './universalSearchResult';
 import { buildUniversalSearchSymbolResults } from './workspaceSymbolSearchResults';
 
@@ -8,6 +9,8 @@ export type WorkspaceSymbolSearchInput = Readonly<{
     resolverKey: string;
     getText(): string;
     flushPendingChange(): void | Promise<void>;
+    /** Reads an already activated controller only; this must never open a server session. */
+    getServerOutline?(signal: AbortSignal): Promise<DocumentOutlineServerAnswer | null>;
     isCurrent(): boolean;
     accountLifetime: ServerAccountScopeLifetime;
     language: string;
@@ -44,15 +47,19 @@ export function createWorkspaceSymbolSearchSource(input: WorkspaceSymbolSearchIn
             await input.flushPendingChange();
             assertCurrent();
             const text = input.getText();
-            const outline = await loadDocumentOutlineBaseline({
-                lines: text.split(/\r\n|\r|\n/u), language: input.language, isDark: input.isDark, colors: input.colors,
-            });
+            const [baseline, server] = await Promise.all([
+                loadDocumentOutlineBaseline({
+                    lines: text.split(/\r\n|\r|\n/u), language: input.language, isDark: input.isDark, colors: input.colors,
+                }),
+                input.getServerOutline?.(signal).catch(() => null) ?? null,
+            ]);
             assertCurrent();
             if (input.getText() !== text) {
                 const error = new Error('Active file changed during symbol search');
                 error.name = 'AbortError';
                 throw error;
             }
+            const outline = selectDocumentOutline({ baseline, server });
             if (outline.status === 'unavailable') return { results: [], emptyHint: input.unavailableHint };
             const needle = query.trim().toLocaleLowerCase();
             return {

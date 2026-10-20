@@ -1,11 +1,15 @@
 import * as React from 'react';
 
-import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import type { TextEditorHandle, EditorDecoration, Rect } from '@/components/ui/code/editor/codeEditorTypes';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { machineCodeIntelligenceFallback } from '@/sync/ops/machineLanguageIntelligence';
+import { machineCodeIntelligenceFallback, machineLanguageIntelligenceSync, machineLanguageIntelligenceQuery,
+    machineLanguageIntelligenceWatch, machineLanguageIntelligenceRestartAction } from '@/sync/ops/machineLanguageIntelligence';
+import { useWorkspaceFileWriteSettlements } from '@/sync/domains/session/changes/hooks/useWorkspaceFileWriteSettlements';
+import { bindCodeDiagnosticDecorations } from './codeDiagnostics';
+import { forwardCodeIntelligenceSettlements } from './codeIntelligenceSettlements';
 import { bindCodeIntelligenceEditor } from './bindCodeIntelligenceEditor';
 import type { CodeIntelligenceController, CodeIntelligenceControllerInput, CodeIntelligenceSnapshot } from './createCodeIntelligenceController';
 import { useCodeIntelligenceController } from './useCodeIntelligenceController';
@@ -14,12 +18,18 @@ export type UseCodeIntelligenceInput = Readonly<{
     scope: WorkspaceScopeBase | null;
     path: string;
     languageId: string | null;
+    /** Command focus only; the mounted File page owns the document lifetime. */
     active: boolean;
     /** P4 owns the buffer; this hook never subscribes the File page to keystrokes. */
-    liveValue: Readonly<{ get(): string }>;
-    editorHandleRef?: React.RefObject<CodeEditorHandle | null>;
+    liveValue: Readonly<{ get(): string; subscribe?(listener: () => void): () => void }>;
+    unsaved?: boolean;
+    /** Prefer P4 readSnapshot().dirty so the first edit is fenced before a React commit. */
+    getUnsaved?(): boolean;
+    editorHandleRef?: React.RefObject<TextEditorHandle | null>;
     accountLifetime?: ServerAccountScopeLifetime | null;
     openLocation: CodeIntelligenceControllerInput['openLocation'];
+    showProblems?(): void;
+    onDiagnosticPress?(item: Extract<EditorDecoration, { severity: string }>, rect: Rect | null): void;
 }>;
 
 const INACTIVE_SNAPSHOT: CodeIntelligenceSnapshot = Object.freeze({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
@@ -34,35 +44,54 @@ export function useCodeIntelligenceSnapshot(controller: CodeIntelligenceControll
 export function useCodeIntelligence(input: UseCodeIntelligenceInput) {
     const latest = React.useRef(input);
     latest.current = input;
-    const lifetime = input.active && input.scope
+    const lifetime = input.scope
         ? input.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : input.accountLifetime
         : null;
     const serverId = input.scope?.serverId;
     const machineId = input.scope?.machineId;
     const rootPath = input.scope?.rootPath;
     const controllerInput = React.useMemo<CodeIntelligenceControllerInput | null>(() => {
-        if (!input.active || !serverId || !machineId || !rootPath || !lifetime) return null;
+        if (!serverId || !machineId || !rootPath || !lifetime) return null;
         return {
             scope: { serverId, machineId, rootPath }, path: input.path, languageId: input.languageId, accountLifetime: lifetime,
             getText: () => latest.current.liveValue.get(),
+            getUnsaved: () => latest.current.getUnsaved?.() ?? latest.current.unsaved === true,
+            subscribeText: listener => latest.current.liveValue.subscribe?.(listener) ?? (() => undefined),
             flushPendingChange: async () => { await latest.current.editorHandleRef?.current?.flushPendingChange(); },
             query: (request, signal) => machineCodeIntelligenceFallback(machineId, request, { serverId, accountId: lifetime.scope.accountId, signal }),
+            languageServer: {
+                sync: (request, signal) => machineLanguageIntelligenceSync(machineId, request, { serverId, accountId: lifetime.scope.accountId, signal }),
+                query: (request, signal) => machineLanguageIntelligenceQuery(machineId, request, { serverId, accountId: lifetime.scope.accountId, signal }),
+                watch: (request, signal) => machineLanguageIntelligenceWatch(machineId, request, { serverId, accountId: lifetime.scope.accountId, signal }),
+                restart: signal => machineLanguageIntelligenceRestartAction(machineId, { rootPath }, { serverId, accountId: lifetime.scope.accountId, signal }),
+            },
             openLocation: location => latest.current.openLocation(location),
         };
-    }, [input.active, input.path, input.languageId, serverId, machineId, rootPath, lifetime]);
+    }, [input.path, input.languageId, input.liveValue, serverId, machineId, rootPath, lifetime]);
     const controller = useCodeIntelligenceController(controllerInput);
+    useWorkspaceFileWriteSettlements(input.scope, paths => { void forwardCodeIntelligenceSettlements(paths, {
+        acceptsExternalChanges: () => controller?.getSnapshot().capabilities?.acceptsExternalChanges === true,
+        syncExternal: paths => controller?.external(paths) ?? Promise.resolve(),
+    }); });
 
     const editorBinding = React.useRef<(() => void) | null>(null);
     const bindEditor = React.useCallback(() => {
         editorBinding.current?.();
         const editor = latest.current.editorHandleRef?.current;
-        editorBinding.current = controller && editor ? bindCodeIntelligenceEditor(controller, editor) : null;
+        if (!controller || !editor) { editorBinding.current = null; return; }
+        const stopPosition = bindCodeIntelligenceEditor(controller, editor);
+        const stopDiagnostics = editor.setDecorations ? bindCodeDiagnosticDecorations({ handle: { setDecorations: editor.setDecorations }, path: latest.current.path,
+            getProjection: controller.getDiagnosticsProjection, subscribe: controller.subscribe }) : () => undefined;
+        const stopDecoration = editor.onDecorationPress?.((layer, item) => {
+            if (layer === 'diagnostic' && 'severity' in item) latest.current.onDiagnosticPress?.(item, editor.getLineRect?.(item.startLine) ?? null);
+        });
+        editorBinding.current = () => { stopPosition(); stopDiagnostics(); stopDecoration?.(); };
     }, [controller]);
     React.useEffect(() => {
         bindEditor();
         return () => { editorBinding.current?.(); editorBinding.current = null; };
     }, [bindEditor]);
-    const runAtCursor = React.useCallback((kind: 'definition' | 'references') => {
+    const runAtCursor = React.useCallback((kind: 'hover' | 'definition' | 'references') => {
         if (!controller) return 'pass' as const;
         const cursor = latest.current.editorHandleRef?.current?.getCursorPosition?.();
         const position = cursor ? { line: cursor.line - 1, character: cursor.character } : controller.getSnapshot().selection?.position;
@@ -70,10 +99,21 @@ export function useCodeIntelligence(input: UseCodeIntelligenceInput) {
         void controller[kind](position);
         return 'handled' as const;
     }, [controller]);
+    const runProblem = React.useCallback((direction: 1 | -1) => {
+        if (!controller || !controller.getSnapshot().diagnostics?.items.length) return 'pass' as const;
+        const cursor = latest.current.editorHandleRef?.current?.getCursorPosition?.();
+        void controller.problem(direction, cursor ? { line: cursor.line - 1, character: cursor.character } : undefined);
+        return 'handled' as const;
+    }, [controller]);
     useKeyboardShortcutHandlers(React.useMemo(() => input.active && controller ? {
         'code.goToDefinition': () => runAtCursor('definition'),
         'code.findReferences': () => runAtCursor('references'),
-    } : {}, [input.active, controller, runAtCursor]));
+        'code.showInfo': () => runAtCursor('hover'),
+        'code.showProblems': () => { latest.current.showProblems?.(); void controller.checkProblems(); return 'handled' as const; },
+        'code.problem.next': () => runProblem(1),
+        'code.problem.previous': () => runProblem(-1),
+        'code.restart': () => { void controller.restart(); return 'handled' as const; },
+    } : {}, [input.active, controller, runAtCursor, runProblem]));
 
     return React.useMemo(() => ({ controller, bindEditor }), [controller, bindEditor]);
 }

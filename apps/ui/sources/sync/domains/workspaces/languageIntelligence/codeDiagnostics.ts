@@ -1,0 +1,79 @@
+import type { LanguageIntelligenceDiagnostic, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { CodeEditorHandle, EditorDecoration } from '@/components/ui/code/editor/codeEditorTypes';
+
+type Watch = Extract<LanguageIntelligenceWatchResult, { status: 'ok' }>;
+export type CodeDiagnosticsProjection = Readonly<{ revision: number; entries: Watch['diagnostics'] }>;
+export type CodeDiagnosticsFence = Readonly<{ documentVersions: ReadonlyMap<string, number>; serverGenerations: ReadonlyMap<string, string> }>;
+export const EMPTY_CODE_DIAGNOSTICS: CodeDiagnosticsProjection = { revision: -1, entries: {} };
+export function mergeCodeDiagnostics(previous: CodeDiagnosticsProjection, update: Watch, fence: CodeDiagnosticsFence): CodeDiagnosticsProjection {
+    if (update.revision < previous.revision) return previous;
+    type Entry = Watch['diagnostics'][string][string];
+    const current = (path: string, serverId: string, entry: Entry) => {
+        const version = fence.documentVersions.get(path);
+        return (version === undefined || version === entry.version) && fence.serverGenerations.get(serverId) === entry.generation;
+    };
+    const failed = new Set(update.servers.filter((server) => fence.serverGenerations.get(server.serverId) === server.generation
+        && (server.state === 'crashed' || server.state === 'stopped' || server.state === 'unavailable')).map((server) => server.serverId));
+    const paths = new Map<string, Map<string, Entry>>();
+    for (const [path, servers] of Object.entries(previous.entries)) {
+        const entries = new Map(Object.entries(servers).filter(([serverId, entry]) => !failed.has(serverId) && current(path, serverId, entry)));
+        if (entries.size) paths.set(path, entries);
+    }
+    for (const [path, servers] of Object.entries(update.diagnostics)) {
+        for (const [serverId, entry] of Object.entries(servers)) {
+            if (failed.has(serverId) || !current(path, serverId, entry)) continue;
+            let entries = paths.get(path);
+            if (!entries) { entries = new Map(); paths.set(path, entries); }
+            entries.set(serverId, entry);
+        }
+    }
+    return { revision: update.revision, entries: Object.fromEntries([...paths].map(([path, servers]) => [path, Object.fromEntries(servers)])) };
+}
+
+function diagnosticKey(item: LanguageIntelligenceDiagnostic): string {
+    return JSON.stringify([item.path, item.range.start.line, item.range.start.character, item.range.end.line, item.range.end.character,
+        item.severity, item.code ?? null, item.message]);
+}
+
+export function selectCodeDiagnostics(projection: CodeDiagnosticsProjection, path?: string): Readonly<{
+    state: 'idle' | 'ready' | 'checking' | 'unavailable'; items: readonly LanguageIntelligenceDiagnostic[]; count: number | null;
+}> {
+    const entries = (path === undefined ? Object.keys(projection.entries).sort() : [path])
+        .flatMap((filePath) => Object.entries(projection.entries[filePath] ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([, entry]) => entry));
+    const state = !entries.length ? 'idle' : entries.some((entry) => entry.state === 'checking') ? 'checking'
+        : entries.some((entry) => entry.state === 'unavailable') ? 'unavailable' : 'ready';
+    const items = [...new Map(entries.flatMap((entry) => entry.items).map((item) => [diagnosticKey(item), item])).values()];
+    return { state, items, count: state === 'ready' ? items.length : null };
+}
+
+export function projectCodeDiagnosticDecorations(projection: CodeDiagnosticsProjection, path: string): readonly EditorDecoration[] {
+    return selectCodeDiagnostics(projection, path).items.map((item) => ({
+        layer: 'diagnostic', id: diagnosticKey(item), severity: item.severity,
+        startLine: item.range.start.line + 1, startCharacter: item.range.start.character,
+        endLine: item.range.end.line + 1, endCharacter: item.range.end.character,
+        message: item.message, ...(item.code === undefined ? {} : { code: item.code }), ...(item.source ? { source: item.source } : {}),
+    }));
+}
+
+export function bindCodeDiagnosticDecorations(input: Readonly<{
+    handle: Pick<CodeEditorHandle, 'setDecorations'>; path: string;
+    getProjection(): CodeDiagnosticsProjection; subscribe(listener: () => void): () => void;
+}>): () => void {
+    let previous: CodeDiagnosticsProjection | null = null;
+    let disposed = false;
+    const publish = () => {
+        if (disposed) return;
+        const projection = input.getProjection();
+        if (previous === projection) return;
+        previous = projection;
+        input.handle.setDecorations('diagnostic', projectCodeDiagnosticDecorations(projection, input.path));
+    };
+    const unsubscribe = input.subscribe(publish);
+    publish();
+    return () => {
+        if (disposed) return;
+        disposed = true;
+        unsubscribe();
+        input.handle.setDecorations('diagnostic', []);
+    };
+}

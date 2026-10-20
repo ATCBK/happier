@@ -1,8 +1,12 @@
 import type { CodeIntelligenceFallbackInput, CodeIntelligenceFallbackLocation, CodeIntelligenceFallbackResult } from '@happier-dev/protocol/machines/codeIntelligenceFallback';
+import type { LanguageIntelligenceQueryResult, LanguageIntelligenceServerStatus, LanguageIntelligenceCapabilities } from '@happier-dev/protocol/machines/languageIntelligence';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { Rect } from '@/components/ui/code/editor/codeEditorTypes';
 import { readCodeLineIdentifiers, resolveCodeIdentifier, type CodeIdentifier, type CodeIntelligencePosition } from './codeIdentifiers';
+import { createCodeIntelligenceDocument, type CodeIntelligenceServerPort } from './codeIntelligenceDocument';
+import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics, selectCodeDiagnostics } from './codeDiagnostics';
+import type { DocumentOutlineServerAnswer } from './documentOutline';
 
 export type CodeIntelligenceSelection = Readonly<{
     position: CodeIntelligencePosition;
@@ -12,13 +16,16 @@ export type CodeIntelligenceSelection = Readonly<{
 }>;
 type InspectionPosition = CodeIntelligencePosition & Readonly<{ anchor?: Rect }>;
 export type CodeIntelligenceSnapshot = Readonly<{
-    mode: 'fallback';
-    status: 'idle' | 'searching' | 'ready' | 'unavailable';
+    mode: 'fallback' | 'server';
+    status: 'idle' | 'searching' | 'loading' | 'ready' | 'unavailable';
     selection: CodeIntelligenceSelection | null;
     /** The result's name stays fixed while the pointer inspects other names. */
     querySelection: CodeIntelligenceSelection | null;
-    kind: 'definition' | 'references' | null;
-    result: Extract<CodeIntelligenceFallbackResult, { status: 'ok' }> | null;
+    kind: 'hover' | 'definition' | 'references' | 'diagnostics' | null;
+    result: Extract<CodeIntelligenceFallbackResult | LanguageIntelligenceQueryResult, { status: 'ok' }> | null;
+    servers?: readonly LanguageIntelligenceServerStatus[];
+    capabilities?: LanguageIntelligenceCapabilities;
+    diagnostics?: ReturnType<typeof selectCodeDiagnostics>;
     reason?: string;
 }>;
 export type CodeIntelligenceControllerInput = Readonly<{
@@ -27,9 +34,12 @@ export type CodeIntelligenceControllerInput = Readonly<{
     languageId: string | null;
     accountLifetime: ServerAccountScopeLifetime;
     getText(): string;
+    getUnsaved?(): boolean;
+    subscribeText?(listener: () => void): () => void;
     flushPendingChange?(): Promise<void>;
     query(input: CodeIntelligenceFallbackInput, signal: AbortSignal): Promise<CodeIntelligenceFallbackResult>;
-    openLocation(location: CodeIntelligenceFallbackLocation): void | Promise<void>;
+    openLocation(location: Pick<CodeIntelligenceFallbackLocation, 'path' | 'range'> & Readonly<{ lineText?: string }>): void | Promise<void>;
+    languageServer?: CodeIntelligenceServerPort;
 }>;
 
 export function createCodeIntelligenceController(input: CodeIntelligenceControllerInput) {
@@ -38,6 +48,8 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     let pending: AbortController | null = null;
     let disposed = false;
     let lastInspectedText: string | null = null;
+    let diagnostics = EMPTY_CODE_DIAGNOSTICS;
+    let loadingQuery: { kind: 'hover' | 'definition' | 'references' | 'diagnostics'; position?: CodeIntelligencePosition } | null = null;
 
     function publish(next: CodeIntelligenceSnapshot): void {
         if (disposed || next === snapshot) return;
@@ -47,6 +59,7 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     function abortPending(): void {
         pending?.abort();
         pending = null;
+        loadingQuery = null;
     }
     function sameSelection(left: CodeIntelligenceSelection | null, right: CodeIntelligenceSelection | null): boolean {
         return left === right || Boolean(left && right && left.position.line === right.position.line
@@ -68,13 +81,44 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     function available(): boolean {
         return !disposed && input.accountLifetime.isCurrent() && input.accountLifetime.scope.serverId === input.scope.serverId;
     }
+    function becameReady(previous: readonly LanguageIntelligenceServerStatus[] | undefined, next: readonly LanguageIntelligenceServerStatus[] | undefined): boolean {
+        return next?.some(server => {
+            if (server.state !== 'ready' || server.loading) return false;
+            const before = previous?.find(candidate => candidate.serverId === server.serverId);
+            return !before || before.state !== 'ready' || before.loading || before.generation !== server.generation;
+        }) ?? false;
+    }
     function retire(): void {
         abortPending();
+        document?.dispose();
+        diagnostics = EMPTY_CODE_DIAGNOSTICS;
         publish({ mode: 'fallback', status: 'unavailable', selection: null, querySelection: null, kind: null, result: null, reason: 'account_unavailable' });
     }
+    const document: ReturnType<typeof createCodeIntelligenceDocument> | null = input.languageServer ? createCodeIntelligenceDocument({
+        rootPath: input.scope.rootPath, path: input.path, languageId: input.languageId ?? 'text', port: input.languageServer,
+        getText: input.getText, getUnsaved: () => input.getUnsaved?.() ?? false, isCurrent: available,
+        onSync: response => publish({ ...snapshot, mode: 'server', servers: response.servers, capabilities: response.capabilities }),
+        onWatch: response => {
+            const previousServers = snapshot.servers;
+            const acknowledged = document?.getAcknowledged();
+            diagnostics = mergeCodeDiagnostics(diagnostics, response, {
+                documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
+                serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
+            });
+            publish({ ...snapshot, servers: response.servers, diagnostics: selectCodeDiagnostics(diagnostics) });
+            if (becameReady(previousServers, response.servers) && loadingQuery) {
+                const retry = loadingQuery; loadingQuery = null;
+                void query(retry.kind, retry.position);
+            }
+        },
+        onUnavailable: reason => publish({ ...snapshot, status: reason === 'loading' ? 'loading' : 'unavailable', reason }),
+    }) : null;
     const retirement = input.accountLifetime.onRetire(retire);
+    const stopText = input.subscribeText?.(() => { void document?.synchronize().catch(() => {
+        if (available()) publish({ ...snapshot, status: 'unavailable', reason: 'transport_failed' });
+    }); });
 
-    async function query(kind: 'definition' | 'references', position: CodeIntelligencePosition): Promise<void> {
+    async function query(kind: 'hover' | 'definition' | 'references' | 'diagnostics', position?: CodeIntelligencePosition): Promise<void> {
         if (!available()) { if (!disposed) retire(); return; }
         abortPending();
         const request = new AbortController();
@@ -83,13 +127,48 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             if (input.flushPendingChange) await input.flushPendingChange();
             if (request.signal.aborted || !available()) return;
             const text = input.getText();
-            const selection = select(text, position);
-            if (!selection) {
-                publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
+            const selection = position ? select(text, position) : null;
+            if (!selection && kind !== 'diagnostics') {
+                publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined });
                 return;
             }
             const prior = sameSelection(snapshot.querySelection, selection) && snapshot.kind === kind ? snapshot.result : null;
-            publish({ mode: 'fallback', status: 'searching', selection, querySelection: selection, kind, result: prior });
+            publish({ ...snapshot, status: 'searching', selection, querySelection: selection, kind, result: prior });
+            if (document) {
+                const serversAtIssue = snapshot.servers;
+                const response = await document.query(kind, position, request.signal);
+                if (request.signal.aborted || !available()) return;
+                if (text !== input.getText()) { publish({ ...snapshot, status: 'idle', result: null }); return; }
+                if (response?.status === 'ok') {
+                    publish({ ...snapshot, mode: 'server', status: 'ready', kind, result: response, reason: undefined });
+                    if (response.kind === 'definition') {
+                        const target = response.locations.find(location => !location.outsideWorkspace);
+                        if (target) await input.openLocation(target);
+                    }
+                    return;
+                }
+                if (response?.status === 'loading') {
+                    loadingQuery = { kind, position };
+                    publish({ ...snapshot, mode: 'server', status: 'loading', result: null });
+                    // Progress can end before the response that was issued while loading.
+                    if (becameReady(serversAtIssue, snapshot.servers)) {
+                        loadingQuery = null;
+                        void query(kind, position);
+                    }
+                    return;
+                }
+                if (response?.status === 'error' && (response.errorCode === 'stale_query' || response.errorCode === 'cancelled')) {
+                    publish({ ...snapshot, status: 'idle', result: null }); return;
+                }
+                if (response?.status !== 'unavailable' || response.reason !== 'no_capable_server' || (kind !== 'definition' && kind !== 'references')) {
+                    if (response) publish({ ...snapshot, mode: 'server', status: 'unavailable', result: null,
+                        reason: response.status === 'error' ? response.errorCode : response.status === 'unavailable' ? response.reason : 'session_unavailable' });
+                    return;
+                }
+            }
+            if ((kind !== 'definition' && kind !== 'references') || !position || !selection) {
+                publish({ ...snapshot, mode: 'fallback', status: 'unavailable', result: null, reason: 'no_capable_server' }); return;
+            }
             const response = await input.query({
                 rootPath: input.scope.rootPath, path: input.path, kind,
                 line: position.line + 1, symbol: selection.identifier.symbol,
@@ -97,14 +176,14 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             }, request.signal);
             if (request.signal.aborted || !available()) return;
             if (text !== input.getText()) {
-                publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
+                publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined });
                 return;
             }
             if (response.status !== 'ok') {
-                publish({ mode: 'fallback', status: 'unavailable', selection: snapshot.selection, querySelection: selection, kind, result: null, reason: response.reason });
+                publish({ ...snapshot, mode: 'fallback', status: 'unavailable', selection: snapshot.selection, querySelection: selection, kind, result: null, reason: response.reason });
                 return;
             }
-            publish({ mode: 'fallback', status: 'ready', selection: snapshot.selection, querySelection: selection, kind, result: response });
+            publish({ ...snapshot, mode: 'fallback', status: 'ready', selection: snapshot.selection, querySelection: selection, kind, result: response, reason: undefined });
             if (kind === 'definition' && response.locations[0]) await input.openLocation(response.locations[0]);
         } catch {
             if (!request.signal.aborted && available()) publish({ ...snapshot, status: 'unavailable', kind, result: null, reason: 'transport_failed' });
@@ -129,9 +208,43 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
         },
         definition: (position: CodeIntelligencePosition) => query('definition', position),
         references: (position: CodeIntelligencePosition) => query('references', position),
-        cancel: (): void => { abortPending(); if (snapshot.status === 'searching') publish({ ...snapshot, status: snapshot.result ? 'ready' : 'idle' }); },
-        dismiss: (): void => { abortPending(); publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null }); },
-        dispose: (): void => { abortPending(); retirement.dispose(); disposed = true; listeners.clear(); },
+        hover: (position: CodeIntelligencePosition) => query('hover', position),
+        checkProblems: () => query('diagnostics'),
+        syncDocument: () => document?.synchronize() ?? Promise.resolve(null),
+        external: (paths: readonly string[]) => snapshot.capabilities?.acceptsExternalChanges ? document?.external(paths) ?? Promise.resolve() : Promise.resolve(),
+        getDiagnosticsProjection: () => diagnostics,
+        async problem(direction: 1 | -1, position?: CodeIntelligencePosition): Promise<boolean> {
+            if (!available()) return false;
+            const items = [...selectCodeDiagnostics(diagnostics).items].sort((left, right) => (
+                left.path < right.path ? -1 : left.path > right.path ? 1
+                    : left.range.start.line - right.range.start.line || left.range.start.character - right.range.start.character
+            ));
+            if (!items.length) return false;
+            const anchor = position ?? snapshot.selection?.position;
+            const after = (item: typeof items[number]) => item.path > input.path || (item.path === input.path && anchor !== undefined
+                && (item.range.start.line > anchor.line || (item.range.start.line === anchor.line && item.range.start.character > anchor.character)));
+            const before = (item: typeof items[number]) => item.path < input.path || (item.path === input.path && anchor !== undefined
+                && (item.range.start.line < anchor.line || (item.range.start.line === anchor.line && item.range.start.character < anchor.character)));
+            const target = !anchor ? direction === 1 ? items[0] : items[items.length - 1]
+                : direction === 1 ? items.find(after) ?? items[0] : [...items].reverse().find(before) ?? items[items.length - 1];
+            await input.openLocation(target);
+            return true;
+        },
+        async outline(signal = new AbortController().signal): Promise<DocumentOutlineServerAnswer | null> {
+            if (!document?.isActivated() || !available() || !snapshot.capabilities?.documentSymbol) return null;
+            if (input.flushPendingChange) await input.flushPendingChange();
+            const text = input.getText();
+            const response = await document.query('documentSymbols', undefined, signal, false);
+            if (!available() || signal.aborted || input.getText() !== text || response?.status !== 'ok' || response.kind !== 'documentSymbols') return null;
+            // This is the answer's authority context, not the root's runtime state:
+            // queryAll returns ok for nonempty symbols or a confirmed empty answer.
+            // An unrelated incapable/failed server must not overturn that decision.
+            return { capable: true, symbols: response.symbols, state: 'ready', loading: false };
+        },
+        restart: () => document?.restart() ?? Promise.resolve({ status: 'unavailable' as const, reason: 'session_unavailable' as const }),
+        cancel: (): void => { abortPending(); if (snapshot.status === 'searching' || snapshot.status === 'loading') publish({ ...snapshot, status: snapshot.result ? 'ready' : 'idle' }); },
+        dismiss: (): void => { abortPending(); publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined }); },
+        dispose: (): void => { abortPending(); stopText?.(); document?.dispose(); retirement.dispose(); disposed = true; listeners.clear(); },
     };
 }
 export type CodeIntelligenceController = ReturnType<typeof createCodeIntelligenceController>;

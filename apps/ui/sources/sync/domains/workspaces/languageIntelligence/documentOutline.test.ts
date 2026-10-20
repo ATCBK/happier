@@ -1,8 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
 import { loadDocumentOutlineBaseline } from './loadDocumentOutlineBaseline';
+import { selectDocumentOutline, type DocumentOutlineBaselineResult, type DocumentOutlineServerAnswer } from './documentOutline';
+
+const baseline: DocumentOutlineBaselineResult = { status: 'ok', symbols: [
+    { name: 'Approximate', kind: 'class', line: 1, column: 0, depth: 0 },
+] };
+const server: DocumentOutlineServerAnswer = {
+    capable: true, state: 'ready', loading: false,
+    symbols: [{ serverId: 'language-server', name: 'Accurate', kind: 5,
+        range: { start: { line: 0, character: 0 }, end: { line: 8, character: 1 } },
+        selectionRange: { start: { line: 2, character: 3 }, end: { line: 2, character: 11 } },
+        children: [{ serverId: 'language-server', name: 'read', kind: 6,
+            range: { start: { line: 3, character: 0 }, end: { line: 7, character: 1 } },
+            selectionRange: { start: { line: 4, character: 8 }, end: { line: 4, character: 12 } } }],
+    }],
+};
 
 describe('document outline', () => {
+    it('prefers nonempty server symbols while loading and flattens selection positions and hierarchy', () => {
+        expect(selectDocumentOutline({ baseline, server: { ...server, state: 'starting', loading: true } })).toEqual({
+            status: 'ok', symbols: [
+                { serverId: 'language-server', name: 'Accurate', kind: 'class', line: 3, column: 3, depth: 0 },
+                { serverId: 'language-server', name: 'read', kind: 'method', line: 5, column: 8, depth: 1 },
+            ],
+        });
+    });
+
+    it('keeps authoritative empty answers empty, including when the grammar is unavailable', () => {
+        expect(selectDocumentOutline({ baseline, server: { ...server, symbols: [] } })).toEqual({ status: 'ok', symbols: [] });
+        expect(selectDocumentOutline({ baseline: { status: 'unavailable', reason: 'grammar_engine_unavailable' }, server })).toMatchObject({
+            status: 'ok', symbols: [{ name: 'Accurate' }, { name: 'read' }],
+        });
+    });
+
+    it('retains the baseline for cold, loading, failed, missing or incapable server answers', () => {
+        for (const answer of [
+            null, { ...server, state: 'starting' as const, symbols: [] },
+            { ...server, loading: true, symbols: [] }, { ...server, state: 'crashed' as const },
+            { ...server, state: 'unavailable' as const }, { ...server, capable: false },
+        ]) expect(selectDocumentOutline({ baseline, server: answer })).toBe(baseline);
+    });
+
     it('reads the grammar whose includeExplanation projection throws in Shiki 3.22', async () => {
         const { shikiTokenizeScopeLines } = await import('@/components/ui/code/highlighting/shiki/shikiTokenize');
         const lines = ['class Example {}', 'function sample() {}'];
