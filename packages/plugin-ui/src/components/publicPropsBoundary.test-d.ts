@@ -52,7 +52,8 @@ type _AuthorCollectionKeysAreCurated = Assert<IsEqual<keyof CollectionProps<unkn
   | 'minListWidth' | 'minDetailWidth' | 'preferredListRatio' | 'minCardWidth' | 'groupAction'
   | 'scroll' | 'virtualizer' | 'loading' | 'useRowActions' | 'selection' | 'search' | 'empty' | 'header' | 'footer'
   | 'windowStatement' | 'testID' | 'listTestID' | 'detailTestID'
-  | 'sort' | 'summaryRows'
+  | 'sort' | 'summaryRows' | 'labels'
+  | 'listWidthPx' | 'onListWidthChange' | 'onListWidthCommit' | 'onListWidthReset' | 'resizeKey'
 >>;
 type _AuthorCollectionAnatomyKeysAreCurated = Assert<IsEqual<keyof CollectionAnatomy<unknown>,
   | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'titleControls' | 'leadingControl' | 'where' | 'byline'
