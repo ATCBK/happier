@@ -22,5 +22,8 @@ export const CODEBUDDY_ACP_RUNTIME_DECLARATION = {
       plan: 'plan',
     },
     mcp: { policy: 'pass_through' },
+    skills: { sessionDelivery: {
+      kind: 'env_path_list', envKey: 'CODEBUDDY_PLUGIN_DIRS', separator: 'path_delimiter', value: 'plugin_root',
+    } },
   },
 } as const satisfies CodeBuddyHostOwnedAcpRuntime;

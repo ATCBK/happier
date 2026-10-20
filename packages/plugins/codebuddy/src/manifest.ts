@@ -5,6 +5,7 @@ import { CODEBUDDY_ACP_RUNTIME_DECLARATION } from './agent/acp/runtimeDeclaratio
 import { CODEBUDDY_TERMINAL_SURFACE } from './agent/terminal/contribution.js';
 import { CODEBUDDY_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 import { CODEBUDDY_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
+import { codeBuddyExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const { id: settingsId, ...settingsDeclaration } = CODEBUDDY_AGENT_SETTINGS_CONTRIBUTION;
 
@@ -40,15 +41,29 @@ export const CODEBUDDY_PLUGIN = definePlugin({
       primary: 'sessions',
       catalog: { acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds], vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+        surfaces: ['externalSessions'],
+        skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
           nativeRoots: { user: [['.codebuddy', 'skills']], project: [['.codebuddy', 'skills']] } },
         sessions: {
           open: ['create', 'resume'], delivery: ['newTurn', 'followUp'], cancel: true,
           configuration: true, executionRunContext: { versions: [1] },
         },
       }),
+      surfaces: { externalSession: {
+        externalLinkedTakeover: { writerSafety: 'unsupported' },
+        sources: [{ sourceKind: 'codebuddyHome', contentSearch: true,
+          schema: { fields: [
+            { kind: 'literal', name: 'kind', value: 'codebuddyHome' },
+            { kind: 'string', name: 'homeDir', min: 1, max: 10_000, nullish: true },
+            { kind: 'string', name: 'sessionFile', min: 1, max: 10_000, nullish: true },
+          ] },
+          key: { segments: [{ kind: 'literal', value: 'codebuddyHome' }, { kind: 'field', field: 'homeDir' }] },
+          instances: [{ kind: 'default', constants: {} }],
+        }],
+      } },
     } satisfies PluginHostOwnedAgentDeclaration,
     terminal: CODEBUDDY_TERMINAL_SURFACE,
+    externalSessions: codeBuddyExternalSessionsContribution,
   } },
   systemTools: { 'codebuddy-cli': { title: 'CodeBuddy Code CLI', executableNames: ['codebuddy'] } },
   settings: { [settingsId]: settingsDeclaration },

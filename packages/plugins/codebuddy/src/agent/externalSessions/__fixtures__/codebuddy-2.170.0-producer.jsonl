@@ -1,0 +1,6 @@
+{"id":"u1","type":"message","role":"user","content":[{"type":"input_text","text":"A quiet harbor question: café 東京.\nThe path is C:\\garden\\note.txt and a \"quoted phrase\"."}],"timestamp":1788851508705,"cwd":"/fixture/workspace","providerData":{"skipRun":true}}
+{"id":"a1","parentId":"u1","type":"message","role":"assistant","content":[{"type":"output_text","text":"The riverglass reply is readable."}],"status":"completed","timestamp":1788851508805,"cwd":"/fixture/workspace","providerData":{"model":"fixture-model"}}
+{"id":"call1","parentId":"a1","type":"function_call","name":"Read","callId":"call-1","arguments":"{\"path\":\"tool-metadata-only\"}","timestamp":1788851508905,"cwd":"/fixture/workspace"}
+{"id":"result1","parentId":"call1","type":"function_call_result","callId":"call-1","output":"A settled tool output.","timestamp":1788851509005,"cwd":"/fixture/workspace"}
+{"id":"title1","type":"ai-title","aiTitle":"A small garden","sessionId":"fixture-session","timestamp":1788851509105}
+{"id":"summary1","type":"summary","summary":"Garden notes","timestamp":1788851509205}
