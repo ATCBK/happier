@@ -196,9 +196,9 @@ describe('retained vitals readings', () => {
     layout(400);
     const network = screen.findByType(NetworkTile);
     layout(0);
-    expect(screen.findByType(NetworkTile)).toBe(network);
+    expect(screen.findByType(NetworkTile) === network).toBe(true);
     layout(400);
-    expect(screen.findByType(NetworkTile)).toBe(network);
+    expect(screen.findByType(NetworkTile) === network).toBe(true);
   });
   it('shows the history mean and maximum as separate lens facts on CPU and both memory scales', async () => {
     const timeline = buildMachineVitalsTimeline({
