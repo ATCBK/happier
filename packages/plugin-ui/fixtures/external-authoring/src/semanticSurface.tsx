@@ -13,6 +13,7 @@ import {
   Item,
   ItemGroup,
   List,
+  ListDetailLayout,
   Select,
   Stack,
   Status,
@@ -257,6 +258,12 @@ function ExternalAuthoringSemanticSurface() {
           await composer.setDecorations('external-review', null);
           setComposerDecorationStatus('Cleared external composer decorations');
         }}
+      />
+      <ListDetailLayout
+        testID="external-resizable-collection" listTestID="external-resizable-list" detailTestID="external-resizable-detail"
+        resizeKey="external-reviews" minListWidth={200} minDetailWidth={400} preferredListRatio={0.3}
+        labels={{ resize: 'Resize external reviews' }}
+        list={<Text value="External review rail" />} detail={<Text value="External review detail" />}
       />
       <List
         accessibilityLabel="External reviews"

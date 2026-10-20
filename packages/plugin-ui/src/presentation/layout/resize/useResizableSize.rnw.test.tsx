@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useResizableSize, type ResizableSizeInput, type ResizableSizeResult } from './useResizableSize.js';
+import { useResizableListDetailGeometry } from '../../collection/useResizableListDetailGeometry.js';
 
 let root: Root | undefined;
 afterEach(async () => { await act(async () => root?.unmount()); vi.unstubAllGlobals(); });
@@ -32,6 +33,38 @@ async function mount(options: Partial<ResizableSizeInput> = {}) {
 }
 
 describe('shared resize gesture', () => {
+  it('exposes current rail overshoot to its wrapper and clears it at release, cancellation and reset', async () => {
+    let current!: ReturnType<typeof useResizableListDetailGeometry>;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(1, callback); return 1; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
+    function Rail() {
+      current = useResizableListDetailGeometry({ availableWidth: 1000, minListWidth: 200,
+        minDetailWidth: 400, preferredListRatio: 0.3, gap: 0, listWidthPx: 300 });
+      return null;
+    }
+    root = createRoot(document.createElement('div'));
+    await act(async () => root!.render(<Rail />));
+    const move = async (x: number) => {
+      await act(async () => window.dispatchEvent(new MouseEvent('pointermove', { clientX: x })));
+      await act(async () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(0)); });
+    };
+    for (const finish of ['pointerup', 'pointercancel', 'reset']) {
+      await act(async () => current.resize.webHandleProps.onPointerDown({ clientX: 300 }));
+      await move(150);
+      expect(current.dragMeta).toEqual(expect.objectContaining({ overshootPx: -50, collapseArmed: false }));
+      await move(220);
+      expect(current.dragMeta).toEqual(expect.objectContaining({ overshootPx: 0, collapseArmed: false }));
+      await move(150);
+      await act(async () => {
+        if (finish === 'reset') current.resize.webHandleProps.onDoubleClick();
+        else window.dispatchEvent(new MouseEvent(finish));
+      });
+      expect(current.dragMeta).toBeNull();
+      if (finish === 'reset') await act(async () => window.dispatchEvent(new MouseEvent('pointercancel')));
+    }
+  });
+
   it('uses only the current move for overshoot and collapse, including a reversal before release', async () => {
     const drag = await mount({ collapse: true });
     await drag.move(99);

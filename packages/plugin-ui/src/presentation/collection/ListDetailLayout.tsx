@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react';
-import { View, type ViewStyle } from 'react-native';
+import { Platform, View, type ViewStyle } from 'react-native';
+import { HappierResizeHandle } from '../layout/resize/HappierResizeHandle.js';
+import { useResizableListDetailGeometry, type HappierCollectionRailSizingProps } from './useResizableListDetailGeometry.js';
 
 import type { HappierLayoutChangeEvent, HappierStyleProp } from '../portableTypes.js';
 import {
@@ -8,13 +10,13 @@ import {
   resolveHappierCollectionLayoutState,
 } from './collectionLayout.js';
 import {
-  resolveHappierListDetailGeometry,
   type HappierListDetailLayoutState,
 } from './listDetailGeometry.js';
 
 export type { HappierListDetailLayoutState } from './listDetailGeometry.js';
 
-export type HappierListDetailLayoutProps = Readonly<{
+export type HappierListDetailLayoutProps = HappierCollectionRailSizingProps & Readonly<{
+  labels?: Readonly<{ resize: string; resizeHint?: string; resizeValue?: (px: number) => string }>;
   /** Receives the same measured layout used by the panes; null before measurement. */
   list: ReactNode | ((layout: HappierListDetailLayoutState | null) => ReactNode);
   detail: ReactNode;
@@ -70,15 +72,17 @@ export function HappierListDetailLayout({
   style,
   listStyle,
   detailStyle,
+  labels,
+  ...sizing
 }: HappierListDetailLayoutProps): ReactElement {
   const [availableWidth, setAvailableWidth] = useState<number | null>(null);
   const onLayout = useCallback((event: HappierLayoutChangeEvent) => {
     const width = event.nativeEvent.layout.width;
     setAvailableWidth((current) => current === width ? current : width);
   }, []);
-  const layout = useMemo(() => availableWidth === null ? null : resolveHappierListDetailGeometry({
-    availableWidth, minListWidth, minDetailWidth, preferredListRatio, gap,
-  }), [availableWidth, minListWidth, minDetailWidth, preferredListRatio, gap]);
+  const { layout, resize } = useResizableListDetailGeometry({
+    ...sizing, availableWidth, minListWidth, minDetailWidth, preferredListRatio, gap,
+  });
   const collectionLayout = useMemo(() => resolveHappierCollectionLayoutState(layout), [layout]);
   const idle = !detailActive && idleDetail !== undefined && idleDetail !== null && layout?.mode === 'split';
   const split = (detailActive || idle) && layout?.mode === 'split' ? layout : null;
@@ -96,6 +100,14 @@ export function HappierListDetailLayout({
           style={[fillStyle, listStyle, { flex: split?.listRatio ?? 1 }, !listVisible && hiddenStyle]}
         >
           {typeof list === 'function' ? list(layout) : list}
+          {split && resize.canResize && labels ? <HappierResizeHandle
+            axis="x" edge="end" labels={{ label: labels.resize, hint: labels.resizeHint, value: labels.resizeValue }}
+            testID={testID ? `${testID}-resize-handle` : undefined}
+            interactionProps={Platform.OS === 'web' ? resize.webHandleProps : resize.panHandlers}
+            accessibilityHandleProps={resize.accessibilityHandleProps}
+            showIndicator={false}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, zIndex: 1000 }}
+          /> : null}
         </View>
         <View
           testID={detailTestID}

@@ -64,7 +64,9 @@ import {
   type HappierCollectionTransitionPlan,
 } from '../presentation/collection/collectionTable.js';
 import { HappierDisclosure } from '../presentation/collection/Disclosure.js';
-import { resolveHappierListDetailGeometry } from '../presentation/collection/listDetailGeometry.js';
+import { useResizableListDetailGeometry, type HappierCollectionRailSizingProps } from '../presentation/collection/useResizableListDetailGeometry.js';
+import { HappierResizeHandle } from '../presentation/layout/resize/HappierResizeHandle.js';
+import { useCollectionRailLabels, useCollectionRailSizing } from './collectionRailSizing.js';
 import { useHappierCollectionViewport, type HappierCollectionModel, type HappierCollectionViewport } from '../presentation/collection/useCollection.js';
 import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import type { HappierLayoutChangeEvent, HappierPortableStyle } from '../presentation/portableTypes.js';
@@ -331,7 +333,8 @@ export type CollectionSingleChoice<Item> = Omit<ListSingleChoiceCapabilityProps<
   unavailableReason?: (item: Item) => string | null;
 }>;
 
-export type CollectionProps<Item> = Readonly<{
+export type CollectionProps<Item> = HappierCollectionRailSizingProps & Readonly<{
+  labels?: Readonly<{ resize: string; resizeHint?: string; resizeValue?: (px: number) => string }>;
   model: HappierCollectionModel<Item>;
   anatomy: CollectionAnatomy<Item>;
   accessibilityLabel: string;
@@ -1500,13 +1503,16 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // The page stage grows with its rows. Loading placeholders fill the bounded viewport,
   // never that content height (which would grow the placeholders on every layout).
   const viewportHeight = pageScroll ? pageViewportHeight : size?.height ?? null;
-  const geometry = useMemo(() => size === null ? null : resolveHappierListDetailGeometry({
-    availableWidth: size.width,
+  const railSizing = useCollectionRailSizing(props);
+  const railLabels = useCollectionRailLabels(props.labels);
+  const { layout: geometry, resize: railResize } = useResizableListDetailGeometry({
+    ...railSizing,
+    availableWidth: size?.width ?? null,
     minListWidth: props.minListWidth,
     minDetailWidth: props.minDetailWidth,
     preferredListRatio: props.preferredListRatio,
     gap: 0,
-  }), [props.minDetailWidth, props.minListWidth, props.preferredListRatio, size]);
+  });
   const openKey = model.openKey;
   // Choose the container on open and retain it across resizing. A fresh phone open pushes in-page;
   // an already-open app pane fills the viewport without reparenting the detail's local owners.
@@ -2336,6 +2342,14 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
               </CollectionStageContext.Provider>
               )}
             </View>
+            {composition === 'split' && !overlayDetail && railResize.canResize ? <HappierResizeHandle
+              axis="x" edge="end" labels={{ label: railLabels.resize, hint: railLabels.resizeHint, value: railLabels.resizeValue }}
+              testID={props.testID ? `${props.testID}-resize-handle` : undefined}
+              interactionProps={Platform.OS === 'web' ? railResize.webHandleProps : railResize.panHandlers}
+              accessibilityHandleProps={railResize.accessibilityHandleProps}
+              showIndicator={false}
+              style={{ position: 'absolute', left: (size?.width ?? 0) * listRatio - 10, top: 0, bottom: 0, width: 10, zIndex: 1000 }}
+            /> : null}
             <driver.AnimatedView
               value={progress}
               tracks={detailTracks}

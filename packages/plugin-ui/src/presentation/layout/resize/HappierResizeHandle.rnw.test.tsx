@@ -19,6 +19,29 @@ afterEach(async () => {
 });
 
 describe('HappierResizeHandle', () => {
+    it('delivers browser double-click reset to the current owner and removes it on unmount', async () => {
+        const { HappierResizeHandle } = await import('./HappierResizeHandle.js');
+        container = document.createElement('div');
+        document.body.appendChild(container);
+        root = createRoot(container);
+        const first = vi.fn();
+        const current = vi.fn();
+        const render = (onDoubleClick: () => void) => act(async () => root!.render(
+            <HappierResizeHandle labels={{ label: 'Resize' }} axis="x" testID="handle"
+                interactionProps={{ onDoubleClick }} />,
+        ));
+        await render(first);
+        const handle = container.querySelector<HTMLElement>('[data-testid="handle"]')!;
+        await render(current);
+        act(() => handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+        expect(first).not.toHaveBeenCalled();
+        expect(current).toHaveBeenCalledOnce();
+        await act(async () => root!.unmount());
+        root = null;
+        act(() => handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+        expect(current).toHaveBeenCalledOnce();
+    });
+
     it('announces the current pane size and updates the range and spoken value after resizing', async () => {
         const { HappierResizeHandle } = await import('./HappierResizeHandle.js');
         container = document.createElement('div');

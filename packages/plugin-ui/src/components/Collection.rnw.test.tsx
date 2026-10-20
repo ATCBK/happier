@@ -387,6 +387,9 @@ type HarnessOptions = Readonly<{
   sort?: CollectionProps<Entry>['sort'];
   renderDetail?: CollectionProps<Entry>['renderDetail'];
   title?: CollectionProps<Entry>['title'];
+  listWidthPx?: number;
+  onListWidthCommit?: (widthPx: number) => void;
+  resizeKey?: string;
 }>;
 
 type HarnessProps = HarnessOptions &
@@ -434,6 +437,9 @@ function Harness(props: HarnessProps): ReactElement {
       minListWidth={240}
       minDetailWidth={400}
       preferredListRatio={0.3}
+      listWidthPx={props.listWidthPx}
+      onListWidthCommit={props.onListWidthCommit}
+      resizeKey={props.resizeKey}
       renderDetail={
         props.renderDetail ??
         ((key) => <Text testID={`detail:${key}`}>{`Detail ${key}`}</Text>)
@@ -583,6 +589,27 @@ function headerTitles(container: HTMLElement): readonly string[] {
 }
 
 describe('Collection table', () => {
+  it('resizes the split geometry while preserving its open detail and composition', () => {
+    const motion = createManualMotion();
+    const commit = vi.fn();
+    const view = mount({ openKey: 'a', motion: motion.driver, listWidthPx: 300, onListWidthCommit: commit });
+    try {
+      view.measure(1000);
+      const detail = view.query('detail:a');
+      const handle = view.query('collection-resize-handle');
+      expect(handle).not.toBeNull();
+      const animations = motion.animations.length;
+      act(() => handle!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 300 })));
+      act(() => window.dispatchEvent(new MouseEvent('mousemove', { clientX: 400 })));
+      act(() => window.dispatchEvent(new MouseEvent('mouseup', { clientX: 400 })));
+      expect(commit).toHaveBeenLastCalledWith(400);
+      expect(view.query('detail:a')).toBe(detail);
+      expect(visible(view.query('collection-list'))).toBe(true);
+      expect(visible(view.query('collection-detail'))).toBe(true);
+      expect(view.openChanges).toEqual([]);
+      expect(motion.animations).toHaveLength(animations);
+    } finally { view.unmount(); }
+  });
   it.each([1440, 390])(
     'windows a large single-choice catalog in the page and reveals keyboard focus at width %s',
     async (width) => {
@@ -2285,7 +2312,8 @@ describe('detail auto beside the host details pane', () => {
 
   it('recomposes the narrowed table into the two-line list beside the pane, the same rows, the open one marked', async () => {
     const pane = createPaneHost();
-    const view = mount({ pane });
+    const commit = vi.fn();
+    const view = mount({ pane, listWidthPx: 300, resizeKey: 'hosted-entries', onListWidthCommit: commit });
     view.measure(1440);
     const wideColumns = headerTitles(view.container);
     expect(wideColumns).toContain('Where');
@@ -2299,6 +2327,12 @@ describe('detail auto beside the host details pane', () => {
     view.measure(760);
     expect(within(view.query('host-pane'), 'detail:b')).toBe(true);
     expect(visible(view.query('collection-detail'))).toBe(false);
+    const hostedDetail = view.query('detail:b');
+    await view.update({ listWidthPx: 900 });
+    expect(view.query('detail:b')).toBe(hostedDetail);
+    expect(within(view.query('host-pane'), 'detail:b')).toBe(true);
+    expect(view.query('collection-resize-handle')).toBeNull();
+    expect(commit).not.toHaveBeenCalled();
     expect(headerTitles(view.container)).not.toContain('Where');
     // One message per state: the window's coverage is said once, in the footer, not again in the list's bar.
     const statements =

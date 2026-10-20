@@ -128,6 +128,9 @@ In unreleased 0.3 development, that role supplies the default rather than a fixe
 width between the row-derived list minimum and the remaining detail budget; resizing does not
 change the Collection's presentation target. Rails use Plugin UI's shared resize handle, reset to
 their owner default on double-click, and never collapse when dragged below minimum.
+These width props govern the layout's own list/detail split. When a Collection opens detail in
+the host pane, that pane retains its existing width and placement authority and uses the shared
+host-pane handle; a collection resize key does not override host geometry.
 The app's `useCollectionRailWidth` stores widths in device-local `collectionRailWidthsV1`, keyed
 by the collection's stable resize key. Plugin-authored layouts can supply `resizeKey`; the optional
 presentation-host `panelSizing` binding namespaces it with the plugin id and uses the same record.

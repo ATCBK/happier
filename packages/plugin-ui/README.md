@@ -152,6 +152,10 @@ requested width clamps to the existing list/detail minima without changing
 when the composition stacks. `labels` can supply `resize`, `resizeHint` and
 `resizeValue` for the handle.
 
+These controls apply to the component's own split. A `Collection` whose detail
+opens in the app's details pane keeps that host placement and its existing pane
+width; `listWidthPx` and `resizeKey` do not override the app pane's sizing.
+
 Use `Columns` with `Column` children for a wrapping layout of up to four columns
 per row. `minColumnWidth` determines how many columns fit in the measured
 container, `columns` requests their maximum count, and `span` assigns a child

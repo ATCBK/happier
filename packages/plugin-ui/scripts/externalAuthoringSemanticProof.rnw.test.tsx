@@ -70,6 +70,33 @@ describe('external author semantic proof', () => {
     })).toThrow('Expected the loaded external authoring semantic view');
   });
 
+  it('resizes and resets an externally authored own-split layout through the installed surface path', async () => {
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-resize', mountNonce: 'fixture-resize' },
+      authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
+      surface: externalAuthoringSemanticSurface,
+      surfaceContext: createSurfaceContextFixture({ locale: 'en-GB' }),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async () => null },
+    });
+    try {
+      const layout = document.querySelector('[data-testid="external-resizable-collection"]');
+      expect(layout).not.toBeNull();
+      const measure = Reflect.get(layout!, '__reactLayoutHandler') as (event: unknown) => void;
+      act(() => measure({ nativeEvent: { layout: { x: 0, y: 0, width: 1000, height: 600 } } }));
+      const handle = document.querySelector('[data-testid="external-resizable-collection-resize-handle"]') as HTMLElement;
+      const detail = document.querySelector('[data-testid="external-resizable-detail"]');
+      expect(handle.getAttribute('aria-valuenow')).toBe('300');
+      act(() => handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 300 })));
+      act(() => window.dispatchEvent(new MouseEvent('mousemove', { clientX: 400 })));
+      act(() => window.dispatchEvent(new MouseEvent('mouseup', { clientX: 400 })));
+      expect(handle.getAttribute('aria-valuenow')).toBe('400');
+      expect(document.querySelector('[data-testid="external-resizable-detail"]')).toBe(detail);
+      act(() => handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      expect(handle.getAttribute('aria-valuenow')).toBe('300');
+    } finally { await fixture.dispose(); }
+  });
+
   it('renders a Source-free Project widget and companion from the actual Project area input admission', async () => {
     const ui = externalAuthoringPlugin.manifest.contributes.ui;
     const widget = ui.views?.find(view => view.id === 'external-project-checkout');

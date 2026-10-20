@@ -243,6 +243,7 @@ function LeadSession() {
       fallback={<Text tone="muted" value="Open this lead's chat in Happier" />}
     >
       <ListDetailLayout
+        resizeKey="lead-session"
         minListWidth={240}
         minDetailWidth={360}
         preferredListRatio={0.35}

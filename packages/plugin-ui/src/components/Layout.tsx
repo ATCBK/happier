@@ -23,6 +23,7 @@ import {
 } from '../presentation/collection/ListDetailLayout.js';
 import { HappierColumn, HappierColumns } from '../presentation/layout/Columns.js';
 import { usePluginTheme } from './PluginUiProvider.js';
+import { useCollectionRailLabels, useCollectionRailSizing } from './collectionRailSizing.js';
 import {
   type PluginUiFocusTarget,
   usePluginUiFocusTargetBindingInternal,
@@ -135,7 +136,9 @@ export function Row({ gap = 'medium', focusTarget, ...props }: RowProps): ReactE
 }
 
 export function ListDetailLayout({ gap = 'none', ...props }: ListDetailLayoutProps): ReactElement {
-  return <HappierListDetailLayout {...props} gap={useGap(gap)} />;
+  const sizing = useCollectionRailSizing(props);
+  const labels = useCollectionRailLabels(props.labels);
+  return <HappierListDetailLayout {...props} {...sizing} labels={labels} gap={useGap(gap)} />;
 }
 
 export function Columns({ minColumnWidth, gap = 'medium', rowGap = 'medium', ...props }: ColumnsProps): ReactElement {
