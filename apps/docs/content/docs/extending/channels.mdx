@@ -154,8 +154,11 @@ Shared-space proof and pairing-based router setup are development changes for
 0.3; their setup UI and loaded-provider validation are being integrated. They
 are not stable-release availability claims.
 
-Private proof remains the default: send the token to the bot in a private
-message while linking the destination you selected. For shared proof, explicitly
+A direct destination is always proved privately: send the token to the bot in
+a private message. For a shared destination, setup asks where the code is sent:
+the conversation itself (the default), one of its topics or threads (thread
+routers only), or a private message to the bot, which uses the private proof
+path with its link and QR code. For shared proof, explicitly
 select a provider-verified shared location before creating the challenge. Send
 the manual `/pair <code>` command at that exact location. The challenge cannot
 be redeemed privately, in a sibling topic, or through another connection. A

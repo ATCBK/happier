@@ -5504,7 +5504,7 @@ function BindingCreateJourney(props: Readonly<{
   // An optional thread of a shared router parent where the pairing code is
   // accepted instead of the parent itself. Unset means the parent.
   const [proofThread, setProofThread] = React.useState<BindingCreateProofThread | undefined>();
-  const [proofLocationKind, setProofLocationKind] = React.useState<'destination' | 'thread'>('destination');
+  const [proofLocationKind, setProofLocationKind] = React.useState<'destination' | 'thread' | 'private'>('destination');
   const [proofThreadQuery, setProofThreadQuery] = React.useState('');
   const [proofThreadCandidates, setProofThreadCandidates] = React.useState<
     readonly BindingCreateEndpointCandidate[] | undefined
@@ -5574,16 +5574,31 @@ function BindingCreateJourney(props: Readonly<{
   // issue is itself a leaf.
   const routerParentSelected = endpointSelection?.selected.kind === 'direct'
     || endpointSelection?.selected.kind === 'shared';
-  // A shared destination is proved by a message posted where its people can see
-  // it: the destination itself, or (for a router) one of its own threads. A
-  // direct destination keeps the private proof path and its link.
-  const sharedProof = pairingRequired && endpointSelection?.selected.audience === 'shared';
-  const proofThreadsAvailable = sharedProof && target?.kind === 'threadRouter' && routerParentSelected;
+  // A shared destination is proved, by the owner's choice, either by a message
+  // posted where its people can see it (the destination itself or, for a
+  // router, one of its own threads) or by the private message to the bot. A
+  // direct destination keeps the private proof path and its link, no choice.
+  const sharedDestinationPairing = pairingRequired && endpointSelection?.selected.audience === 'shared';
+  const sharedProof = sharedDestinationPairing && proofLocationKind !== 'private';
+  const proofThreadsAvailable = sharedDestinationPairing && target?.kind === 'threadRouter' && routerParentSelected;
   const selectedProofThread = proofThreadsAvailable && proofLocationKind === 'thread' ? proofThread : undefined;
   // Choosing "one of its topics" is an optional step: until one is chosen the
   // challenge cannot be created, and switching back restores the default.
   const proofLocationIncomplete = proofThreadsAvailable && proofLocationKind === 'thread' && proofThread === undefined;
   const proofEndpointSelection = sharedProof ? selectedProofThread?.selection ?? endpointSelection : undefined;
+  // Each place is named by its title; what happens there is its description.
+  const proofDestinationHint = props.t(
+    'plugins.channels.surface.bindingCreateProofDestinationHint',
+    'Post it in {place} as a new message, not a reply',
+    { place: endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation') },
+  );
+  const proofThreadHint = proofLocationKind === 'thread' && proofThread !== undefined
+    ? pairingPlaceLabel(proofThread.candidate, props.t)
+    : props.t('plugins.channels.surface.bindingCreateProofThreadNone', 'Find the topic or thread below');
+  const proofPrivateHint = props.t(
+    'plugins.channels.surface.bindingCreateProofPrivateHint',
+    'Open a private chat from a link or QR code. Only you see the code.',
+  );
   const bindingCreateOutcomeUnknown = createAction.execution.status === 'outcomeUnknown';
   const pairingCreateOutcomeUnknown = pairingAction.execution.status === 'outcomeUnknown';
   const newSessionRecipeSelection = useBindingNewSessionRecipeSelection({
@@ -6683,89 +6698,91 @@ function BindingCreateJourney(props: Readonly<{
                 visible to everyone there, which the description says before
                 the challenge exists.
               */}
-              {!sharedProof ? null : (
+              {!sharedDestinationPairing ? null : (
                 <ItemGroup
                   testID="channels-binding-create-proof-location"
                   title={props.t('plugins.channels.surface.bindingCreateProofTitle', 'Where to send the code')}
                   description={props.t(
-                    'plugins.channels.surface.bindingCreateProofDescription',
-                    'Post /pair and the code there as a new message, not a reply. Anyone there can see the code, so whoever sends it first is proposed. You check who it was before anything is turned on.',
+                    'plugins.channels.surface.bindingCreateProofChoiceDescription',
+                    'Connecting {destination}. The pairing code proves who you are; you check who sent it before anything is turned on.',
+                    { destination: endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation') },
+                  )}
+                  accessibilityRole="radiogroup"
+                >
+                  <Item
+                    testID="channels-binding-create-proof-kind:destination"
+                    accessibilityRole="radio"
+                    selected={proofLocationKind === 'destination'}
+                    disabled={actionLocked}
+                    title={props.t('plugins.channels.surface.bindingCreateProofDestination', 'This conversation')}
+                    accessibilityLabel={props.t('plugins.channels.surface.bindingCreateProofDestination', 'This conversation')}
+                    subtitle={proofDestinationHint}
+                    accessibilityHint={proofDestinationHint}
+                    onPress={() => setProofLocationKind('destination')}
+                  />
+                  {!proofThreadsAvailable ? null : (
+                    <Item
+                      testID="channels-binding-create-proof-kind:thread"
+                      accessibilityRole="radio"
+                      selected={proofLocationKind === 'thread'}
+                      disabled={actionLocked}
+                      title={props.t('plugins.channels.surface.bindingCreateProofThread', 'One of its topics')}
+                      accessibilityLabel={props.t('plugins.channels.surface.bindingCreateProofThread', 'One of its topics')}
+                      subtitle={proofThreadHint}
+                      accessibilityHint={proofThreadHint}
+                      onPress={() => setProofLocationKind('thread')}
+                    />
+                  )}
+                  <Item
+                    testID="channels-binding-create-proof-kind:private"
+                    accessibilityRole="radio"
+                    selected={proofLocationKind === 'private'}
+                    disabled={actionLocked}
+                    title={props.t('plugins.channels.surface.bindingCreateProofPrivate', 'A private message to the bot')}
+                    accessibilityLabel={props.t('plugins.channels.surface.bindingCreateProofPrivate', 'A private message to the bot')}
+                    subtitle={proofPrivateHint}
+                    accessibilityHint={proofPrivateHint}
+                    onPress={() => setProofLocationKind('private')}
+                  />
+                </ItemGroup>
+              )}
+              {!proofThreadsAvailable || proofLocationKind !== 'thread' ? null : (
+                <ItemGroup
+                  testID="channels-binding-create-proof-thread"
+                  title={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
+                  description={props.t(
+                    'plugins.channels.surface.bindingCreateProofThreadDescription',
+                    'Search the topics and threads of {parent} by name or ID.',
+                    { parent: endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation') },
                   )}
                 >
                   <Item
-                    title={props.t('plugins.channels.surface.bindingCreateProofConnecting', 'Connecting')}
-                    subtitle={endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')}
-                  />
-                  {!proofThreadsAvailable ? (
-                    <Item
-                      testID="channels-binding-create-proof-place"
-                      title={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
-                      subtitle={endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')}
-                    />
-                  ) : (
-                    <Item
-                      testID="channels-binding-create-proof-place"
-                      title={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
-                      subtitle={proofLocationKind === 'destination'
-                        ? endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')
-                        : proofThread === undefined
-                          ? props.t('plugins.channels.surface.bindingCreateProofThreadNone', 'Find the topic or thread below')
-                          : pairingPlaceLabel(proofThread.candidate, props.t)}
-                      accessoryWraps
-                      accessoryOutsidePressable
-                      accessory={(
-                        <Form.Select
-                          testID="channels-binding-create-proof-kind"
-                          presentation="segmented"
-                          label={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
-                          options={[
-                            {
-                              value: 'destination',
-                              label: props.t('plugins.channels.surface.bindingCreateProofDestination', 'This conversation'),
-                            },
-                            {
-                              value: 'thread',
-                              label: props.t('plugins.channels.surface.bindingCreateProofThread', 'One of its topics'),
-                            },
-                          ]}
-                          value={proofLocationKind}
+                    title={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
+                    accessoryWraps
+                    accessoryOutsidePressable
+                    accessory={(
+                      <Row gap="small" align="center" wrap>
+                        <Form.TextField
+                          testID="channels-binding-create-proof-thread-query"
+                          label={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
+                          presentation="field"
+                          value={proofThreadQuery}
+                          autoCapitalize="none"
                           disabled={actionLocked}
-                          onChange={(next) => {
-                            if (next === 'destination' || next === 'thread') setProofLocationKind(next);
-                          }}
+                          onChange={setProofThreadQuery}
                         />
-                      )}
-                    />
-                  )}
-                  {!proofThreadsAvailable || proofLocationKind !== 'thread' ? null : (
-                    <Item
-                      title={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
-                      accessoryWraps
-                      accessoryOutsidePressable
-                      accessory={(
-                        <Row gap="small" align="center" wrap>
-                          <Form.TextField
-                            testID="channels-binding-create-proof-thread-query"
-                            label={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
-                            presentation="field"
-                            value={proofThreadQuery}
-                            autoCapitalize="none"
-                            disabled={actionLocked}
-                            onChange={setProofThreadQuery}
-                          />
-                          <Button
-                            testID="channels-binding-create-proof-thread-search"
-                            variant="secondary"
-                            title={props.t('plugins.channels.surface.bindingCreateProofThreadSearch', 'Find')}
-                            busy={resolveAction.execution.status === 'pending'}
-                            disabled={actionLocked || proofThreadQuery.trim() === ''}
-                            onPress={searchProofThreads}
-                          />
-                        </Row>
-                      )}
-                    />
-                  )}
-                  {!proofThreadsAvailable || proofLocationKind !== 'thread' || proofThreadCandidates === undefined
+                        <Button
+                          testID="channels-binding-create-proof-thread-search"
+                          variant="secondary"
+                          title={props.t('plugins.channels.surface.bindingCreateProofThreadSearch', 'Find')}
+                          busy={resolveAction.execution.status === 'pending'}
+                          disabled={actionLocked || proofThreadQuery.trim() === ''}
+                          onPress={searchProofThreads}
+                        />
+                      </Row>
+                    )}
+                  />
+                  {proofThreadCandidates === undefined
                     ? null
                     : proofThreadCandidates.length === 0 ? (
                       <Item
@@ -6794,6 +6811,23 @@ function BindingCreateJourney(props: Readonly<{
                       />
                     ))}
                 </ItemGroup>
+              )}
+              {!sharedProof || proofLocationIncomplete ? null : (
+                <Banner
+                  testID="channels-binding-create-proof-race"
+                  tone="secondary"
+                  title={props.t(
+                    'plugins.channels.surface.bindingCreatePairingSharedRaceTitle',
+                    'Anyone in {place} can see this code',
+                    { place: selectedProofThread === undefined
+                      ? endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')
+                      : pairingPlaceLabel(selectedProofThread.candidate, props.t) },
+                  )}
+                  description={props.t(
+                    'plugins.channels.surface.bindingCreatePairingSharedRaceDescription',
+                    'Whoever sends it first is proposed. You see who it was, and nothing is turned on until you approve them.',
+                  )}
+                />
               )}
               <Banner
                 testID="channels-binding-create-privacy-disclosure"

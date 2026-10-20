@@ -263,7 +263,7 @@ describe('Channels first-party provider composition', () => {
         overlapSafety: 'providerExclusive',
         replayContinuity: 'checkpointed',
         recommendedMaximumObservationAgeMs: 86_400_000,
-        outboundTextLimit: { maximum: 4_096, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 4_096, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
         // This fixture's `getMe` reports group privacy enabled, so Telegram
         // cannot deliver ordinary shared-conversation messages and preparation
         // must carry that authenticated truth rather than drop it.
@@ -337,7 +337,7 @@ describe('Channels first-party provider composition', () => {
         overlapSafety: 'safe',
         replayContinuity: 'sessionBound',
         recommendedMaximumObservationAgeMs: 30 * 86_400_000,
-        outboundTextLimit: { maximum: 2_000, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 2_000, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
         destinationLabel: 'Happier',
         // The provider-neutral setup guidance is the only way the generated
         // invite URL and the permissions it asks for reach the person doing
@@ -416,7 +416,7 @@ describe('Channels first-party provider composition', () => {
         overlapSafety: 'safe',
         replayContinuity: 'checkpointed',
         recommendedMaximumObservationAgeMs: 30 * 86_400_000,
-        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
         destinationLabel: 'happier-bot',
       });
       expect(githubAccounts.materialize).toHaveBeenCalledWith(

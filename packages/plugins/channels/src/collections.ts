@@ -1435,14 +1435,14 @@ const STATE_RECORDS: readonly StateRecordDefinition[] = [
 
 
 /**
- * One strict V9 Account Collection contract for all Channels configuration,
+ * One strict V10 Account Collection contract for all Channels configuration,
  * ingress, checkpoint, projection-frontier, and rotation state. Every row
  * family remains explicit; no later core phase gets an opaque escape hatch.
  */
 export const CHANNEL_STATE_COLLECTION = defineAccountCollection({
   id: CHANNEL_STATE_COLLECTION_ID,
-  schemaVersion: 9,
-  readableSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8],
+  schemaVersion: 10,
+  readableSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9],
   schema: {
     type: 'object',
     properties: {

@@ -99,6 +99,31 @@ function findChannelStateRecordPayload(recordKind: string): PluginJsonSchema | u
 }
 
 describe('Channels collection declarations', () => {
+  it('migrates the retained v9 native-limit contract without rewriting connection or checkpoint data', async () => {
+    const historical = JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV9.json', import.meta.url), 'utf8'));
+    const v8 = JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV8.json', import.meta.url), 'utf8'));
+    const source = compilePluginJsonSchema(historical.collection.schema);
+    const target = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+    const connection = { ...v8.connection, payload: { ...v8.connection.payload, configurationRevision: 14 } };
+    // The old strict native-limit object rejects the new provider fact even
+    // though existing retained rows need no logical transformation.
+    const formatted = { ...connection, payload: { ...connection.payload, outboundTextLimit: {
+      maximum: 2_000, unit: 'utf16CodeUnits', formatting: 'preservesNativeUnits',
+    } } };
+    expect(isValidPluginJsonSchemaValue(source, connection)).toBe(true);
+    expect(isValidPluginJsonSchemaValue(source, formatted)).toBe(false);
+    expect(isValidPluginJsonSchemaValue(target, formatted)).toBe(true);
+    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBeGreaterThan(historical.collection.schemaVersion);
+    const edge = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find(step => step.fromSchemaVersion === 9);
+    expect(edge).toMatchObject({ toSchemaVersion: CHANNEL_STATE_COLLECTION.schemaVersion });
+    if (!edge) throw new Error('Missing retained v9 native-limit migration');
+    for (const row of [connection, v8.checkpoint]) {
+      expect(isValidPluginJsonSchemaValue(source, row)).toBe(true);
+      const migrated = await edge.migrate(row, { currentRevision: 14 });
+      expect(migrated).toEqual(row);
+      expect(isValidPluginJsonSchemaValue(target, migrated)).toBe(true);
+    }
+  });
   it('migrates the provenance-pinned v6 declaration and admits exact source custody only at v7', async () => {
     const retained = JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV6.json', import.meta.url), 'utf8'));
     const parsed = parsePluginManifest({ ...PLUGIN_MANIFEST, contributes: {
@@ -440,7 +465,7 @@ describe('Channels collection declarations', () => {
     ]);
   });
 
-  it('declares the V8 routing state contract and its ordered retained-row migrations', () => {
+  it('declares the current state contract and its ordered retained-row migrations', () => {
     const censusPayload = findChannelStateRecordPayload(
       CHANNEL_STATE_RECORD_KIND.ingressCensus,
     );
@@ -465,8 +490,8 @@ describe('Channels collection declarations', () => {
       },
     } as const;
 
-    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(9);
-    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(10);
+    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(JSON.parse(JSON.stringify(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS)))
       .toEqual(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS);
     expect(staticDeclaration?.migrations).toEqual([{
@@ -497,6 +522,8 @@ describe('Channels collection declarations', () => {
       id: 'channel-state-v7-to-v8', fromSchemaVersion: 7, toSchemaVersion: 8,
     }, {
       id: 'channel-state-v8-to-v9', fromSchemaVersion: 8, toSchemaVersion: 9,
+    }, {
+      id: 'channel-state-v9-to-v10', fromSchemaVersion: 9, toSchemaVersion: 10,
     }]);
     expect(staticDeclaration).not.toHaveProperty('migrations.0.migrate');
     expect(censusPayload?.required).toContain('conflict');

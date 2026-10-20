@@ -240,6 +240,13 @@ export const CHANNEL_COLLECTION_MIGRATIONS = {
       if (!isChannelStateJsonRecord(value.payload)) throw new Error('V8 Channels connection has malformed payload.');
       return { ...value, payload: { ...value.payload, configurationRevision: context.currentRevision } };
     },
+  }, {
+    id: 'channel-state-v9-to-v10',
+    fromSchemaVersion: 9,
+    toSchemaVersion: 10,
+    // Optional native-limit formatting widens a branch of the strict row
+    // union. Data requires a versioned update; retained logical rows are valid.
+    migrate: (value) => value,
   }],
   [CHANNEL_DELIVERIES_COLLECTION_ID]: [{
     id: 'channel-deliveries-v1-to-v2',
