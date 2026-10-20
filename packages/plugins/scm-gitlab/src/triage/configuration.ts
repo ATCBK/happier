@@ -32,7 +32,9 @@ const storedConfiguration = createProtocolStoredReadSchema(GitlabConfigurationRe
 /** The closed source-owned configured-instance record. */
 export type GitlabConfigurationRecord = Readonly<{ v: 1; selection: TriageSourceScopeSelectionV1; units?: readonly TriageSourceScopeUnitV1[] }>;
 
-export const GITLAB_CONFIGURATION_RECORD_V1: GitlabConfigurationRecord = Object.freeze({ v: 1, selection: { kind: 'all' } });
+export const GITLAB_CONFIGURATION_RECORD_V1: GitlabConfigurationRecord = Object.freeze({
+  v: 1, selection: { kind: 'all' },
+} satisfies GitlabConfigurationRecord);
 
 export function encodeGitlabConfiguration(
   record: GitlabConfigurationRecord | Readonly<{ v: 1 }>,

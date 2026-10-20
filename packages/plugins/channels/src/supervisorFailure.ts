@@ -7,6 +7,11 @@ export type SupervisorFailureClassification = Readonly<{
   sessionSpawnReason?: string;
 }>;
 
+/** `Array.isArray` does not narrow a readonly array arm, so the record test is explicit. */
+function isDetailsRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * The redaction-safe classification of a supervisor work failure, shared by the
  * two core-owned background services so one rule decides what a failure record
@@ -29,8 +34,7 @@ export function classifySupervisorFailure(
   error: unknown,
 ): SupervisorFailureClassification | undefined {
   if (!isPluginError(error)) return undefined;
-  const details = error.code === 'channels_thread_spawn_failed' && error.details
-    && typeof error.details === 'object' && !Array.isArray(error.details) ? error.details : undefined;
+  const details = error.code === 'channels_thread_spawn_failed' && isDetailsRecord(error.details) ? error.details : undefined;
   return Object.freeze({ code: error.code, retryable: error.retryable,
     ...(typeof details?.sessionSpawnCode === 'string' ? { sessionSpawnCode: details.sessionSpawnCode } : {}),
     ...(typeof details?.sessionSpawnReason === 'string' ? { sessionSpawnReason: details.sessionSpawnReason } : {}),

@@ -92,7 +92,12 @@ export async function scanGitlabTriageSource(
     instance: input.scan.instance,
     selection: configuration.selection,
     page: input.scan.page,
-    scan: (projectId, page) => scanGitlabScope({ ...input, scan: { ...input.scan, page } }, projectId),
+    scan: (projectId, page) => {
+      const scan: TriageScanInputV1 = page.kind === 'initial'
+        ? { ...input.scan, page }
+        : { ...input.scan, page };
+      return scanGitlabScope({ ...input, scan }, projectId);
+    },
   });
 }
 
