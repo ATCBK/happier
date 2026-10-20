@@ -144,10 +144,18 @@ describe('Home Discussion resource transport', () => {
     });
     const executor = createActionExecutor({ discussionAction: action() });
     const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
-    const created = await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context);
+    expect(await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context))
+      .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
+    // This fixture tests concrete transport after the caller's persisted CLI
+    // waiver; UI direct admission must not silently waive the CLI danger floor.
+    const transportContext = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { 'discussion.create': ['cli'], 'discussion.invite': ['cli'] },
+    }) };
+    const created = await executor.execute('discussion.create', { ...createInput, participants: [participant] }, transportContext);
     expect(created.ok, JSON.stringify(created)).toBe(true);
     expect(created).toMatchObject({ ok: true, result: { discussion: { id: 'discussion-1' } } });
-    expect(await executor.execute('discussion.invite', { discussionId: 'discussion-1', participant }, context))
+    expect(await executor.execute('discussion.invite', { discussionId: 'discussion-1', participant }, transportContext))
       .toMatchObject({ ok: true, result: { changed: true } });
     const writes = axiosRequest.mock.calls.map(([request]) => request)
       .filter(request => request.method === 'POST').map(request => ({ path: new URL(request.url).pathname, body: JSON.parse(request.data) }));
