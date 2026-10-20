@@ -140,7 +140,7 @@ test('background readiness still awaits an ordinarily requested daemon', async (
   }
 });
 
-for (const scriptPath of ['run.mjs', 'dev.mjs']) {
+for (const [scriptPath, runtimeMode] of [['run.mjs', 'source-snapshot'], ['dev.mjs', 'source']]) {
   test(`background ${scriptPath} readiness accepts the supervised remote daemon without local daemon state`, async t => {
     const fixture = await createTempFixture(t, { prefix: 'hstack-background-remote-ready-' });
     const runtimeStatePath = fixture.path('stack.runtime.json');
@@ -153,18 +153,27 @@ for (const scriptPath of ['run.mjs', 'dev.mjs']) {
       const statePath = ${JSON.stringify(runtimeStatePath)};
       const started = await recordStackRuntimeStart(statePath, {
         stackName: 'remote-ready', script: ${JSON.stringify(scriptPath)}, ownerPid: process.pid,
-        runtimeMode: 'source-snapshot', placement: { daemon: 'target' },
+        runtimeMode: ${JSON.stringify(runtimeMode)}, placement: { daemon: 'target' },
         sourceRuntimeIdentities: {},
       });
+      const initialStatus = ${JSON.stringify(runtimeMode === 'source-snapshot' ? 'running' : 'starting')};
       await recordStackRuntimeUpdate(statePath, {
-        sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } },
-        remoteTargets: { target: { services: { daemon: true }, status: 'running',
-          serviceStatus: { daemon: 'running' }, runtimeMode: 'source-snapshot',
-          sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } } } },
+        sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: null } },
+        remoteTargets: { target: { services: { daemon: true }, status: initialStatus,
+          serviceStatus: { daemon: initialStatus }, runtimeMode: ${JSON.stringify(runtimeMode)},
+          sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: null } } } },
       });
       const server = http.createServer((_req, res) => {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ status: 'ok', service: 'happier-server' }));
+      });
+      process.on('message', async () => {
+        await recordStackRuntimeUpdate(statePath, {
+          sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } },
+          remoteTargets: { target: { status: 'running', serviceStatus: { daemon: 'running' },
+            sourceRuntimeIdentities: { daemon: { selected: 'replacement', loaded: 'replacement' } } } },
+        });
+        process.send({ ready: true });
       });
       server.listen(0, '127.0.0.1', () => process.send({ port: server.address().port, started }));
     `], { env: sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root }),
@@ -179,13 +188,22 @@ for (const scriptPath of ['run.mjs', 'dev.mjs']) {
       once(child, 'message'),
       once(child, 'exit').then(() => { throw new Error('disposable target exited before publication'); }),
     ]);
-    await waitForBackgroundStackReadiness({
+    const readiness = {
       stackName: 'remote-ready', scriptPath,
       env: { HAPPIER_STACK_CLI_HOME_DIR: fixture.path('cli'), HAPPIER_STACK_REPO_DIR: fixture.root },
       runtimeStatePath, internalServerUrl: `http://127.0.0.1:${published.port}`, timeoutMs: 750,
       sourceDaemonLaunchAttempt: { ownerPid: child.pid, ownerStartedAt: published.started.startedAt },
       isRunnerAlive: () => child.exitCode == null && child.signalCode == null,
-    });
+    };
+    await assert.rejects(waitForBackgroundStackReadiness({ ...readiness, timeoutMs: 50 }),
+      { code: 'ESTACKREADINESSPENDING' }, 'worker startup and healthy HTTP do not prove daemon readiness');
+    const ready = once(child, 'message');
+    child.send('ready');
+    await ready;
+    await waitForBackgroundStackReadiness(readiness);
+    await assert.rejects(waitForBackgroundStackReadiness({ ...readiness, timeoutMs: 50,
+      sourceDaemonLaunchAttempt: { ...readiness.sourceDaemonLaunchAttempt, ownerPid: process.pid },
+    }), { code: 'ESTACKREADINESSPENDING' }, 'a different controller cannot authenticate this launch');
   });
 }
 
@@ -552,8 +570,6 @@ test('background readiness rejects a stale target worker projection after child 
     }),
   );
 
-  let localDaemonProbes = 0;
-  let runnerAlive = true;
   await recordStackRuntimeStart(runtimeStatePath, {
     stackName,
     script: 'dev.mjs',
@@ -573,18 +589,11 @@ test('background readiness rejects a stale target worker projection after child 
       runtimeStatePath,
       expectedRuntimeState,
       internalServerUrl: 'http://127.0.0.1:1',
-      timeoutMs: 1_200,
+      timeoutMs: 50,
       waitForServerReadyImpl: async () => {},
       isDaemonPreparationActiveImpl: () => false,
-      checkDaemonStateImpl: async () => {
-        localDaemonProbes += 1;
-        runnerAlive = false;
-        return { status: 'stopped', pid: null };
-      },
-      isRunnerAlive: () => runnerAlive,
-    }), /runner exited before requested daemon readiness was published/);
-
-    assert.equal(localDaemonProbes, 1);
+      isRunnerAlive: () => true,
+    }), { code: 'ESTACKREADINESSPENDING' });
   } finally {
     await temp.cleanup();
   }
@@ -626,8 +635,6 @@ test('background readiness does not treat an unverified target worker as daemon 
   const runtimeAfterWorkerSpawn = await readStackRuntimeStateFile(runtimeStatePath);
   assert.equal(runtimeAfterWorkerSpawn?.remoteTargets?.mac?.status, 'running');
 
-  let localDaemonProbes = 0;
-  let runnerAlive = true;
   try {
     await assert.rejects(waitForBackgroundStackReadiness({
       stackName,
@@ -636,18 +643,11 @@ test('background readiness does not treat an unverified target worker as daemon 
       runtimeStatePath,
       expectedRuntimeState,
       internalServerUrl: 'http://127.0.0.1:1',
-      timeoutMs: 1_200,
+      timeoutMs: 50,
       waitForServerReadyImpl: async () => {},
       isDaemonPreparationActiveImpl: () => false,
-      checkDaemonStateImpl: async () => {
-        localDaemonProbes += 1;
-        if (localDaemonProbes >= 2) runnerAlive = false;
-        return { status: 'stopped', pid: null };
-      },
-      isRunnerAlive: () => runnerAlive,
-    }), /runner exited before requested daemon readiness was published/);
-
-    assert.equal(localDaemonProbes, 2);
+      isRunnerAlive: () => true,
+    }), { code: 'ESTACKREADINESSPENDING' });
   } finally {
     await temp.cleanup();
   }
