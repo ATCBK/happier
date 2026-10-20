@@ -1,7 +1,7 @@
 {
   "v": 1,
   "contributionKey": "happier.provider.minimax/minimax-cn",
-  "reviewedAt": "2026-07-30",
+  "reviewedAt": "2026-10-20",
   "sources": [
     {
       "id": "anthropic-api",
@@ -30,6 +30,27 @@
       "locator": "packages/protocol/src/providers/claude/builtInBackendProfiles.ts",
       "accessedAt": "2026-07-30",
       "revision": "remote-dev@22cd233a3-minimax-built-in-profiles"
+    },
+    {
+      "id": "flash-model",
+      "kind": "official-doc",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
+      "accessedAt": "2026-10-20",
+      "revision": "current-2026-10-20"
+    },
+    {
+      "id": "flash-profile-defaults",
+      "kind": "repository-history",
+      "locator": "packages/protocol/src/providers/claude/builtInBackendProfiles.ts",
+      "accessedAt": "2026-10-20",
+      "revision": "PR625@2881122c0b12b473dfeb99684da2961f2fa65932"
+    },
+    {
+      "id": "flash-claude-setup",
+      "kind": "official-doc",
+      "url": "https://platform.minimax.io/docs/m-plan/claude-code",
+      "accessedAt": "2026-10-20",
+      "revision": "current-2026-10-20"
     }
   ],
   "facts": [
@@ -194,28 +215,28 @@
     {
       "path": "legacyProfileMigrations.minimax-cn.primaryModel",
       "sourceIds": [
-        "legacy-profile"
+        "flash-profile-defaults"
       ],
       "status": "verified"
     },
     {
       "path": "legacyProfileMigrations.minimax-cn.retainedEnvironmentVariables.ANTHROPIC_DEFAULT_HAIKU_MODEL",
       "sourceIds": [
-        "legacy-profile"
+        "flash-profile-defaults"
       ],
       "status": "verified"
     },
     {
       "path": "legacyProfileMigrations.minimax-cn.retainedEnvironmentVariables.ANTHROPIC_DEFAULT_OPUS_MODEL",
       "sourceIds": [
-        "legacy-profile"
+        "flash-profile-defaults"
       ],
       "status": "verified"
     },
     {
       "path": "legacyProfileMigrations.minimax-cn.retainedEnvironmentVariables.ANTHROPIC_DEFAULT_SONNET_MODEL",
       "sourceIds": [
-        "legacy-profile"
+        "flash-profile-defaults"
       ],
       "status": "verified"
     },
@@ -244,6 +265,14 @@
       "path": "websiteUrl",
       "sourceIds": [
         "claude-code-setup"
+      ],
+      "status": "verified"
+    },
+    {
+      "path": "catalog.staticModels.MiniMax-M3.1-Flash",
+      "sourceIds": [
+        "flash-model",
+        "flash-claude-setup"
       ],
       "status": "verified"
     }

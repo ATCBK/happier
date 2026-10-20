@@ -809,6 +809,13 @@ The canonical model catalog merges sources in this order:
 
 The merger preserves provenance. A model that disappears from a current probe leaves normal picker results but remains renderable when referenced by a favorite, draft, or historical session. Missing definitions and tombstoned connections produce explicit stale states and actionable errors; they never trigger a native fallback.
 
+In 0.3 development, both regional MiniMax contributions list M3.1 Flash first,
+followed by M3 and M2.7. This catalog order does not hide older models or replace
+an existing selection. Importing an unpersisted built-in MiniMax profile uses
+Flash for the implicit model and newly materialized tier defaults. Explicit
+model aliases, completed model selections and saved custom profile bodies retain
+their existing values; historical source-recognition expressions stay unchanged.
+
 Model visibility has one owner, keyed by structured model reference:
 
 - native models can be hidden per Agent;

@@ -5,6 +5,7 @@ import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/co
 import { migrateLegacyAiLaunchProfilesV1 } from '@happier-dev/protocol/providers/migrations/legacyProfilesV1';
 
 import { buildLegacyProfileMigrationContext } from './buildContext';
+import { MINIMAX_CN_PROVIDER_CONTRIBUTION, MINIMAX_PROVIDER_CONTRIBUTION } from '../../../../../packages/plugins/minimax/src/provider/contribution';
 
 const contribution = ProviderContributionV1Schema.parse({
   v: 1,
@@ -531,5 +532,103 @@ describe('buildLegacyProfileMigrationContext', () => {
     });
     expect(context.pendingCustomProfileIds).toEqual(['company']);
     expect(context.candidates).toEqual([]);
+  });
+});
+
+const miniMaxRegions = [
+  { id: 'minimax', prefix: 'MINIMAX', contribution: MINIMAX_PROVIDER_CONTRIBUTION },
+  { id: 'minimax-cn', prefix: 'MINIMAX_CN', contribution: MINIMAX_CN_PROVIDER_CONTRIBUTION },
+] as const;
+
+describe('MiniMax source defaults migration', () => {
+  it.each(miniMaxRegions)('imports an unpersisted $id built-in as Flash while retaining all catalog choices', ({ id, prefix, contribution }) => {
+    const rawSettings = { favoriteProfiles: [id],
+      secretBindingsByProfileId: { [id]: { [`${prefix}_AUTH_TOKEN`]: 'same-minimax-secret' } } };
+    const context = buildLegacyProfileMigrationContext({ providerSettings: DEFAULT_PROVIDER_SETTINGS_V1,
+      rawSettings, authoringMemory: { lastUsedProfile: null },
+      providersByContributionKey: new Map([[`happier.provider.minimax/${id}`, { definition: ProviderContributionV1Schema.parse(contribution) }]]),
+      allocatedConnectionIdsBySourceProfileId: { [id]: `pc-${id}` }, migratedAt: 20,
+    });
+    expect(context.candidates[0]).toMatchObject({ kind: 'connection',
+      selectedModel: { modelId: 'MiniMax-M3.1-Flash' }, selectedModelOrigin: 'implicit_default',
+      secretBindings: { account: { apiKey: 'same-minimax-secret' } },
+    });
+    const result = migrateLegacyAiLaunchProfilesV1(rawSettings, DEFAULT_PROVIDER_SETTINGS_V1, context, { lastUsedProfile: null });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected MiniMax migration');
+    expect(result.outcomes).toMatchObject([{ sourceProfileId: id,
+      modelSelection: { modelId: 'MiniMax-M3.1-Flash', providerConnectionId: `pc-${id}` } }]);
+    expect(result.settings).toMatchObject({
+      favoriteModelSelectionsV1: [{ selection: { ref: { modelId: 'MiniMax-M3.1-Flash' } } }],
+      profiles: [{ id, extraEnvironmentVariables: expect.arrayContaining([
+        { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${' + prefix + '_HAIKU_MODEL:-MiniMax-M3.1-Flash}' },
+      ]) }],
+    });
+    expect(contribution.catalog.staticModels.map(model => model.id)).toEqual([
+      'MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7',
+    ]);
+  });
+
+  it.each(miniMaxRegions)('preserves explicit and completed $id model selections', ({ id, prefix, contribution }) => {
+    const input = { rawSettings: { favoriteProfiles: [id] }, authoringMemory: { lastUsedProfile: null },
+      providersByContributionKey: new Map([[`happier.provider.minimax/${id}`, { definition: ProviderContributionV1Schema.parse(contribution) }]]),
+      allocatedConnectionIdsBySourceProfileId: { [id]: `pc-${id}` }, migratedAt: 20,
+    };
+    for (const modelId of ['MiniMax-M2.7', 'MiniMax-M3[1m]']) {
+      const explicit = buildLegacyProfileMigrationContext({ ...input,
+        providerSettings: DEFAULT_PROVIDER_SETTINGS_V1, processEnv: { [`${prefix}_MODEL`]: modelId } });
+      expect(explicit.candidates[0]).toMatchObject({ selectedModel: { modelId }, selectedModelOrigin: 'explicit_process_environment' });
+    }
+    const providerSettings = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
+      migration: { v: 1, migratedAt: 1, completedSources: [{ sourceProfileId: id, kind: 'connection',
+        connectionId: `pc-existing-${id}`, modelSelectionOrigin: 'implicit_default',
+        modelSelection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: `pc-existing-${id}`, modelId: 'MiniMax-M3' },
+      }], pendingCustomProfileIds: [], pendingConflicts: [] },
+    });
+    const completed = buildLegacyProfileMigrationContext({ ...input, providerSettings,
+      processEnv: { [`${prefix}_MODEL`]: 'MiniMax-M3.1-Flash' } });
+    expect(completed.candidates[0]).toMatchObject({ connection: { id: `pc-existing-${id}` },
+      selectedModel: { modelId: 'MiniMax-M3' } });
+  });
+
+  it.each(miniMaxRegions)('retains saved $id tier values and recognizes the historical source expression', ({ id, prefix, contribution }) => {
+    const rawSettings = { favoriteProfiles: [id], profiles: [{ id, name: 'Saved MiniMax',
+      environmentVariables: [
+        ...contribution.legacyProfileMigrations[0]!.migratedEnvironmentVariables,
+        { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: 'MiniMax-M2.7' },
+      ], envVarRequirements: [], createdAt: 1, updatedAt: 1,
+    }] };
+    const context = buildLegacyProfileMigrationContext({ rawSettings, providerSettings: DEFAULT_PROVIDER_SETTINGS_V1,
+      authoringMemory: { lastUsedProfile: null },
+      providersByContributionKey: new Map([[`happier.provider.minimax/${id}`, { definition: ProviderContributionV1Schema.parse(contribution) }]]),
+      allocatedConnectionIdsBySourceProfileId: { [id]: `pc-${id}` }, migratedAt: 20,
+      processEnv: { [`${prefix}_MODEL`]: 'MiniMax-M3' },
+    });
+    expect(context.candidates[0]).toMatchObject({ kind: 'connection', selectedModel: { modelId: 'MiniMax-M3' },
+      retainedLaunchProfile: { extraEnvironmentVariables: [{ name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: 'MiniMax-M2.7' }] } });
+  });
+
+  it.each(miniMaxRegions)('preserves UUID custom $id profile bodies with either source fallback', ({ id, prefix, contribution }) => {
+    // Both 0.2 UI save paths convert built-ins to a new UUID before persisting their body.
+    for (const modelId of ['MiniMax-M3', 'MiniMax-M3.1-Flash']) {
+      const profileId = '8a272a75-6d34-4084-bca8-512733d09d60';
+      const profile = { id: profileId, name: 'Custom MiniMax', environmentVariables: [
+        { name: 'ANTHROPIC_BASE_URL', value: '${' + prefix + '_BASE_URL:-' + contribution.endpointTemplates[0]!.baseUrl + '}' },
+        { name: 'ANTHROPIC_MODEL', value: '${' + prefix + '_MODEL:-' + modelId + '}' },
+        { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${' + prefix + '_HAIKU_MODEL:-' + modelId + '}' },
+      ], envVarRequirements: [], isBuiltIn: false, createdAt: 1, updatedAt: 1 };
+      const rawSettings = { favoriteProfiles: [profileId], profiles: [profile] };
+      const context = buildLegacyProfileMigrationContext({ rawSettings, providerSettings: DEFAULT_PROVIDER_SETTINGS_V1,
+        authoringMemory: { lastUsedProfile: null },
+        providersByContributionKey: new Map([[`happier.provider.minimax/${id}`, { definition: ProviderContributionV1Schema.parse(contribution) }]]),
+        allocatedConnectionIdsBySourceProfileId: { [id]: `pc-${id}` }, migratedAt: 20,
+      });
+      expect(context.candidates).toEqual([]);
+      expect(context.pendingCustomProfileIds).toEqual([profileId]);
+      const result = migrateLegacyAiLaunchProfilesV1(rawSettings, DEFAULT_PROVIDER_SETTINGS_V1, context, { lastUsedProfile: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected custom MiniMax profile preservation');
+      expect(result.settings.profiles).toEqual([profile]);
+    }
   });
 });

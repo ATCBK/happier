@@ -10,6 +10,14 @@ import type { ProviderContribution as ProviderContributionV1 } from '@happier-de
 
 const MINIMAX_MODELS = [
   {
+    id: 'MiniMax-M3.1-Flash',
+    name: 'MiniMax M3.1 Flash',
+    aliases: ['MiniMax-M3.1-Flash[1m]'] as string[],
+    contextWindowTokens: 1_000_000,
+    extendedContextModelId: 'MiniMax-M3.1-Flash[1m]',
+    capabilities: { toolRoundTrips: 'supported' },
+  },
+  {
     id: 'MiniMax-M3',
     name: 'MiniMax M3',
     aliases: ['MiniMax-M3[1m]'] as string[],
@@ -93,7 +101,7 @@ export const MINIMAX_PROVIDER_CONTRIBUTION = {
     credentialBinding: { legacyEnvVarName: 'MINIMAX_AUTH_TOKEN', credentialSlotId: 'apiKey' },
     primaryModel: {
       agentTargetKey: 'agent:claude', legacyEnvVarName: 'ANTHROPIC_MODEL',
-      legacyProcessEnvAlias: 'MINIMAX_MODEL', defaultModelId: 'MiniMax-M3',
+      legacyProcessEnvAlias: 'MINIMAX_MODEL', defaultModelId: 'MiniMax-M3.1-Flash',
     },
     migratedEnvironmentVariables: [
       { name: 'ANTHROPIC_BASE_URL', value: '${MINIMAX_BASE_URL:-https://api.minimax.io/anthropic}' },
@@ -103,9 +111,9 @@ export const MINIMAX_PROVIDER_CONTRIBUTION = {
     retainedEnvironmentVariables: [
       { name: 'API_TIMEOUT_MS', value: '${MINIMAX_API_TIMEOUT_MS:-600000}' },
       { name: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', value: '${MINIMAX_AUTO_COMPACT_WINDOW:-1000000}' },
-      { name: 'ANTHROPIC_DEFAULT_OPUS_MODEL', value: '${MINIMAX_OPUS_MODEL:-MiniMax-M3[1m]}' },
-      { name: 'ANTHROPIC_DEFAULT_SONNET_MODEL', value: '${MINIMAX_SONNET_MODEL:-MiniMax-M3[1m]}' },
-      { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${MINIMAX_HAIKU_MODEL:-MiniMax-M2.7}' },
+      { name: 'ANTHROPIC_DEFAULT_OPUS_MODEL', value: '${MINIMAX_OPUS_MODEL:-MiniMax-M3.1-Flash}' },
+      { name: 'ANTHROPIC_DEFAULT_SONNET_MODEL', value: '${MINIMAX_SONNET_MODEL:-MiniMax-M3.1-Flash}' },
+      { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${MINIMAX_HAIKU_MODEL:-MiniMax-M3.1-Flash}' },
       { name: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', value: '${MINIMAX_CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}' },
     ],
   }],
@@ -167,7 +175,7 @@ export const MINIMAX_CN_PROVIDER_CONTRIBUTION = {
     credentialBinding: { legacyEnvVarName: 'MINIMAX_CN_AUTH_TOKEN', credentialSlotId: 'apiKey' },
     primaryModel: {
       agentTargetKey: 'agent:claude', legacyEnvVarName: 'ANTHROPIC_MODEL',
-      legacyProcessEnvAlias: 'MINIMAX_CN_MODEL', defaultModelId: 'MiniMax-M3',
+      legacyProcessEnvAlias: 'MINIMAX_CN_MODEL', defaultModelId: 'MiniMax-M3.1-Flash',
     },
     migratedEnvironmentVariables: [
       { name: 'ANTHROPIC_BASE_URL', value: '${MINIMAX_CN_BASE_URL:-https://api.minimaxi.com/anthropic}' },
@@ -177,9 +185,9 @@ export const MINIMAX_CN_PROVIDER_CONTRIBUTION = {
     retainedEnvironmentVariables: [
       { name: 'API_TIMEOUT_MS', value: '${MINIMAX_CN_API_TIMEOUT_MS:-600000}' },
       { name: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', value: '${MINIMAX_CN_AUTO_COMPACT_WINDOW:-1000000}' },
-      { name: 'ANTHROPIC_DEFAULT_OPUS_MODEL', value: '${MINIMAX_CN_OPUS_MODEL:-MiniMax-M3[1m]}' },
-      { name: 'ANTHROPIC_DEFAULT_SONNET_MODEL', value: '${MINIMAX_CN_SONNET_MODEL:-MiniMax-M3[1m]}' },
-      { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${MINIMAX_CN_HAIKU_MODEL:-MiniMax-M2.7}' },
+      { name: 'ANTHROPIC_DEFAULT_OPUS_MODEL', value: '${MINIMAX_CN_OPUS_MODEL:-MiniMax-M3.1-Flash}' },
+      { name: 'ANTHROPIC_DEFAULT_SONNET_MODEL', value: '${MINIMAX_CN_SONNET_MODEL:-MiniMax-M3.1-Flash}' },
+      { name: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: '${MINIMAX_CN_HAIKU_MODEL:-MiniMax-M3.1-Flash}' },
       { name: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', value: '${MINIMAX_CN_CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}' },
     ],
   }],
