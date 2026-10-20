@@ -77,4 +77,22 @@ describe('FieldTextInput', () => {
         expect(await minHeightOn('android')).toBe(48);
         expect(await minHeightOn('web')).toBeLessThan(44);
     });
+    it('grows a multiline field with its text only when asked, so a whole decision stays visible', async () => {
+        const { FieldTextInput } = await import('./FieldTextInput');
+        const { flattenTestStyle } = await import('@/dev/testkit');
+        const { act } = await import('react-test-renderer');
+        const heightAfterResize = async (growWithText: boolean) => {
+            const screen = await renderScreen(
+                <FieldTextInput testID="field" value="A long decision that wraps" onChangeText={() => {}}
+                    accessibilityLabel="Decision" multiline minLines={2} growWithText={growWithText} />,
+            );
+            const input = screen.findByTestId('field')!;
+            await act(async () => { input.props.onContentSizeChange?.({ nativeEvent: { contentSize: { height: 96 } } }); });
+            const style = flattenTestStyle(screen.findByTestId('field')!.props.style);
+            await screen.unmount();
+            return style.height;
+        };
+        expect(await heightAfterResize(true)).toBe(96);
+        expect(await heightAfterResize(false)).toBeUndefined();
+    });
 });

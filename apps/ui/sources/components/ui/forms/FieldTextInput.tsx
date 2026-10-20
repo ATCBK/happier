@@ -34,6 +34,8 @@ export type FieldTextInputProps = Readonly<{
     multiline?: boolean;
     /** A multiline field's minimum height, in lines (default 3): a JSON document needs more room than a note. */
     minLines?: number;
+    /** A multiline field grows with its text so the whole value stays visible (a decision, a title); `document` always does. */
+    growWithText?: boolean;
     /** `false` shows a value that can be read, selected and copied but not changed (an export). */
     editable?: boolean;
     /** Commands, identifiers and paths read better in the monospace face. */
@@ -80,7 +82,7 @@ export const FieldTextInput = React.memo(React.forwardRef<React.ElementRef<typeo
         const presentation = props.presentation ?? 'field';
         const colors = resolveFieldBoxColors(theme, invalid ? 'invalid' : 'idle', presentation);
         // A document grows with its text instead of scrolling inside a fixed box.
-        const grows = presentation === 'document' && props.multiline === true;
+        const grows = (presentation === 'document' || props.growWithText === true) && props.multiline === true;
         const [contentHeight, setContentHeight] = React.useState<number | null>(null);
         const handleContentSizeChange = React.useCallback((event: Readonly<{ nativeEvent: Readonly<{ contentSize?: Readonly<{ height?: number }> }> }>) => {
             const height = event.nativeEvent.contentSize?.height;
