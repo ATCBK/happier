@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, stat, unlink, writeFile, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 import { inspectDependencyRefresh } from '../proc/dependency_refresh.mjs';
@@ -89,6 +90,46 @@ if (args[0] === 'install') {
     'failed UI preparation must not certify the re-extracted tree as ready');
   await install();
   assert.equal(await readFile(workerOutput, 'utf8'), 'recovered worker\n');
+});
+
+test('guarded installs keep first-party workspace builds out of the dependency writer lock', {
+  skip: process.platform === 'win32' ? 'fake package-manager executable uses a POSIX shebang' : false,
+}, async (t) => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-yarn-install-scope-' });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+  await writeFile(join(root, 'yarn.lock'), '# workspace fixture\n');
+  const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const gatePath = join(repoRoot, 'scripts', 'postinstall', 'shouldRunPostinstall.cjs');
+  const dependencyRefreshUrl = new URL('../proc/dependency_refresh.mjs', import.meta.url).href;
+
+  // Yarn is the process boundary. Its install runs a first-party workspace postinstall exactly like
+  // packages/protocol: the real scope gate decides, and an admitted build takes non-waiting read
+  // custody of the real dependency lock. While the guard holds that lock as writer, a build that
+  // reaches it would wait for the install that is waiting for it.
+  const { binDir } = writeFakeBin({ root, name: 'yarn', content: `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === '--version') process.exit(0);
+if (args[0] !== 'install') process.exit(42);
+fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
+const gate = require(${JSON.stringify(gatePath)});
+if (!gate.shouldRunPostinstall({ workspace: 'protocol', scope: process.env.HAPPIER_INSTALL_SCOPE || '' })) process.exit(0);
+import(${JSON.stringify(dependencyRefreshUrl)})
+  .then(({ withDependencyConsumption }) => withDependencyConsumption({ installDir: process.cwd(), wait: false }, async () => {}))
+  .then(() => process.exit(0), () => process.exit(45));
+` });
+  const env = buildStackHarnessEnv({ binDirs: [binDir], baseEnv: buildStackFixtureEnv({
+    stripStackEnv: true, homeDir: join(root, 'home'),
+    extraEnv: { HAPPIER_STACK_STACKS_DIR: join(root, 'stacks'), HAPPIER_STACK_ENV_FILE: '', npm_execpath: '' },
+  }) });
+  delete env.HAPPIER_INSTALL_SCOPE;
+
+  const outcome = await withYarnInstallGuard({ installDir: root, componentDir: root, quiet: true, env },
+    ({ env: installEnv }) => run('yarn', ['install', '--frozen-lockfile'], { cwd: root, env: installEnv, stdio: 'ignore' }));
+
+  assert.equal(outcome.refreshed, true);
+  assert.equal((await inspectDependencyRefresh({ installDir: root })).required, false);
 });
 
 test('shouldRunYarnInstall returns true when node_modules is missing', async (t) => {

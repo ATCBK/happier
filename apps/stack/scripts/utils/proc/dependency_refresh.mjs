@@ -66,6 +66,18 @@ export function callerHoldsDependencyConsumption(env = process.env) {
     && readInheritedDependencyCustody(custody[0], env) !== null;
 }
 
+/**
+ * Environment for a package-manager install that runs under the dependency writer lock.
+ * First-party workspace postinstall builds take read custody of that same lock, so an install
+ * that ran them would wait on itself. Only the CLI postinstall, which owns real runtime
+ * prerequisites, runs as an install side effect; owners prepare other component outputs
+ * explicitly. An explicit caller scope is preserved.
+ */
+export function resolveLockedInstallEnv(env = process.env) {
+  if (String(env.HAPPIER_INSTALL_SCOPE ?? '').trim()) return env;
+  return { ...env, HAPPIER_INSTALL_SCOPE: 'cli' };
+}
+
 // Parallel compiler children consume one containing finite build. Reuse its
 // live lock identity instead of queuing them behind their own parent. Writers
 // must prepare before this consumption rather than upgrade inherited reads.
@@ -455,7 +467,8 @@ export async function withDependencyRefresh({
           if (error?.code !== 'ENOENT') throw error;
         });
         const didRefresh = (force || beforeMutation.required) && refreshExisting;
-        if (didRefresh) await refresh({});
+        // The refresh runs under this writer lock; its installer spawns with this environment.
+        if (didRefresh) await refresh({ env: resolveLockedInstallEnv(env) });
         if (onDependenciesReady) await onDependenciesReady();
         // Ready-only repairs preserve callers' explicit no-install policy.
         // They cannot certify stale dependency inputs as newly installed.

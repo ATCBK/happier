@@ -19,8 +19,8 @@ export async function withYarnInstallGuard({ installDir, componentDir = installD
   return await withDependencyRefresh({
     installDir, componentDir, env,
     onDependenciesReady: () => ensureUiPostinstallOutputs(uiDir, installDir, { env, quiet, force: refreshed }),
-  }, async () => {
-    await install();
+  }, async ({ env: installEnv }) => {
+    await install({ env: installEnv });
     // Yarn may reuse lifecycle admission after replacing dependency bytes.
     // Complete the same mandatory UI preparation as the PM refresh owner
     // before it publishes readiness for this installed tree.

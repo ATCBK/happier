@@ -89,7 +89,7 @@ export async function resolveDefaultRemoteBranch() {
 `),
     './utils/worktrees/yarn_install_guard.mjs': toDataUrl(`
 export async function shouldRunYarnInstall() { return true; }
-export async function withYarnInstallGuard(_options, install) { return await install(); }
+export async function withYarnInstallGuard(options, install) { return await install({ env: options.env }); }
 `),
     './utils/proc/pm.mjs': toDataUrl(`
 export async function applyStackCacheEnv(env) { return env; }
