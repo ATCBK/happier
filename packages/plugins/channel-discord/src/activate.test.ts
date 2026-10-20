@@ -21,6 +21,7 @@ const DISCORD_CHANNEL_ACTION_IDS = Object.freeze({
   connectionTest: 'discord/inspect-connection',
   endpointResolve: 'discord/choose-channel',
   messageDeliver: 'discord/post-message',
+  attachmentFetch: 'discord/fetch-attachment',
   connectionStop: 'discord/halt-gateway',
 });
 
@@ -30,6 +31,7 @@ const DISCORD_CHANNEL_PROVIDER_OPERATIONS = Object.freeze({
   endpointResolve: DISCORD_CHANNEL_ACTION_IDS.endpointResolve,
   automationEventAdmit: DISCORD_AUTOMATION_MESSAGE_ADMIT_ACTION_ID,
   messageDeliver: DISCORD_CHANNEL_ACTION_IDS.messageDeliver,
+  attachmentFetch: DISCORD_CHANNEL_ACTION_IDS.attachmentFetch,
   connectionStop: DISCORD_CHANNEL_ACTION_IDS.connectionStop,
 });
 
@@ -139,6 +141,7 @@ describe('Discord Channel plugin activation', () => {
         { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.endpointResolve },
         { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.messageDeliver },
         { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.connectionStop },
+        { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.attachmentFetch },
         { family: 'backgroundServices', localId: DISCORD_GATEWAY_BACKGROUND_SERVICE_ID },
         { family: 'events', localId: 'connections-invalidated-v1' },
         { family: 'connectedAccountDescriptors', localId: DISCORD_BOT_CONNECTED_ACCOUNT_ID },

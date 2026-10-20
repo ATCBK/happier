@@ -1,4 +1,5 @@
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
+import { rethrowConversationProviderLifecycleFailureV1 } from '@happier-dev/channels-protocol/v1';
 
 import {
   boundedDiscordRetryAfterMs,
@@ -7,6 +8,7 @@ import {
   type DiscordMessageCreatePayload,
 } from './discordDelivery.js';
 import type { DiscordKnownChannel } from './discordEndpointResolution.js';
+import { readDiscordNativeAttachments, type DiscordNativeAttachment } from './discordMessage.js';
 import {
   normalizeDiscordGatewayUrl,
   parseDiscordGatewaySessionStartLimit,
@@ -57,7 +59,7 @@ export type DiscordGuildMemberRoleEvidence = Readonly<{
 
 export type DiscordApiFailure = Readonly<{
   kind: 'notReady';
-  reason: 'credentialInvalid' | 'permissionMissing' | 'network' | 'rateLimited' | 'invalidConfiguration';
+  reason: 'credentialInvalid' | 'permissionMissing' | 'network' | 'rateLimited' | 'invalidConfiguration' | 'unsupported';
   retryAfterMs?: number;
   diagnostic?: string;
 }>;
@@ -66,6 +68,14 @@ export type DiscordBotApi = Readonly<{
   getIdentity(options?: DiscordRequestOptions): Promise<DiscordBotIdentity | DiscordApiFailure>;
   getGatewayBot(options?: DiscordRequestOptions): Promise<DiscordGatewayBotInfo | DiscordApiFailure>;
   getChannel(input: Readonly<{ channelId: string }>, options?: DiscordRequestOptions): Promise<DiscordKnownChannel | null | DiscordApiFailure>;
+  getMessageAttachments(
+    input: Readonly<{ channelId: string; messageId: string }>,
+    options?: DiscordRequestOptions,
+  ): Promise<readonly DiscordNativeAttachment[] | null | DiscordApiFailure>;
+  downloadAttachment(
+    input: Readonly<{ channelId: string; attachment: DiscordNativeAttachment }>,
+    options?: DiscordRequestOptions,
+  ): Promise<Readonly<{ kind: 'downloaded'; bytes: Uint8Array }> | DiscordApiFailure>;
   getGuildMember(
     input: Readonly<{ guildId: string; userId: string }>,
     options?: DiscordRequestOptions,
@@ -350,7 +360,7 @@ export function createDiscordBotApi(input: Readonly<{
       }, options);
       return { status: response.status, body: parseJson(response.body) };
     } catch (error) {
-      if (options?.signal?.aborted) throw error;
+      rethrowConversationProviderLifecycleFailureV1(error, options?.signal);
       return null;
     }
   };
@@ -430,6 +440,52 @@ export function createDiscordBotApi(input: Readonly<{
         reason: 'invalidConfiguration',
         diagnostic: 'Discord returned invalid current bot-member role evidence.',
       };
+    },
+
+    async getMessageAttachments(inputValue, options) {
+      const response = await requestJson(
+        `/channels/${encodeURIComponent(inputValue.channelId)}/messages/${encodeURIComponent(inputValue.messageId)}`,
+        'GET', undefined, options,
+      );
+      options?.signal?.throwIfAborted();
+      if (!response) return { kind: 'notReady', reason: 'network' };
+      if (response.status === 404) return null;
+      if (response.status < 200 || response.status >= 300) return failureFromResponse(response.status, response.body);
+      if (!isRecord(response.body)
+        || response.body.id !== inputValue.messageId
+        || response.body.channel_id !== inputValue.channelId
+        || !Array.isArray(response.body.attachments)) {
+        return { kind: 'notReady', reason: 'invalidConfiguration', diagnostic: 'Discord returned a different or invalid message.' };
+      }
+      return readDiscordNativeAttachments(response.body.attachments)
+        ?? { kind: 'notReady', reason: 'invalidConfiguration', diagnostic: 'Discord returned invalid attachment metadata.' };
+    },
+
+    async downloadAttachment(inputValue, options) {
+      // REST v10 refreshes signed CDN URLs when their owning message is fetched.
+      // Only the native attachment's exact channel/file CDN path may be read;
+      // bot credentials never cross to the CDN and redirects are forbidden.
+      let url: URL;
+      try { url = new URL(inputValue.attachment.url); } catch {
+        return { kind: 'notReady', reason: 'unsupported' };
+      }
+      const path = url.pathname.split('/');
+      if (url.origin !== 'https://cdn.discordapp.com' || url.username || url.password
+        || path.length !== 5 || path[1] !== 'attachments'
+        || path[2] !== encodeURIComponent(inputValue.channelId)
+        || path[3] !== encodeURIComponent(inputValue.attachment.id) || !path[4]) {
+        return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord attachment URL does not match its native identity.' };
+      }
+      try {
+        const response = await input.http.request({ url: url.href, method: 'GET', redirect: 'error' }, options);
+        options?.signal?.throwIfAborted();
+        if (response.status === 404) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord attachment is no longer available.' };
+        if (response.status < 200 || response.status >= 300) return failureFromResponse(response.status, parseJson(response.body));
+        return { kind: 'downloaded', bytes: response.body };
+      } catch (error) {
+        rethrowConversationProviderLifecycleFailureV1(error, options?.signal);
+        return { kind: 'notReady', reason: 'network' };
+      }
     },
 
     async getGuildRoles(inputValue, options) {

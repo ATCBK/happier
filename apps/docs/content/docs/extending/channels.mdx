@@ -119,20 +119,25 @@ rather than at the first silent failure:
   connection time. Replies post as issue comments, so the credential needs
   write access to that same collection.
 
-### Telegram inbound files (unreleased development contract)
+### Telegram and Discord inbound files (unreleased development contract)
 
-The unreleased Telegram implementation retains file descriptors for photos,
+In unreleased development source, Telegram retains file descriptors for photos,
 documents, audio, voice messages, videos and animations, together with their
-captions. Channels downloads the bytes when the Session materializes the
-files, through the same attachment path used by Email. Validation of this
-development implementation is incomplete; this is not an availability claim.
+captions. Discord retains native message attachments and message text; embeds
+are not input. Channels downloads the bytes when the Session materializes the
+files, through the same attachment path used by Email. Loaded-provider QA is
+still pending; this is not a released availability claim.
 
 Files are available on the connection's machine in this version. A Session on
 another machine receives inline text from text files and PDFs, with explicit
 file unavailability. Telegram's cloud Bot API has a
 [20 MB download limit](https://core.telegram.org/bots/api#getfile); a larger
 file stays attached and is reported unavailable rather than disappearing.
-A deleted file, expired download or failed fetch is reported unavailable.
+Telegram requests a fresh file path on each materialization. Discord's
+[signed attachment URLs expire](https://docs.discord.com/developers/reference#signed-attachment-cdn-urls),
+so it fetches the owning message for a refreshed URL before downloading.
+A deleted file, expired download or failed fetch is reported unavailable. One
+failed file makes the requested attachment batch unavailable.
 Sending files back to the conversation is not supported.
 
 Linking a Discord or Telegram conversation uses a **pairing challenge** when

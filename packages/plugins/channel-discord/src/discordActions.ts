@@ -1,5 +1,9 @@
 import {
   assertConversationChannelsCoreCallerV1,
+  ConversationAttachmentFetchInputV1Schema,
+  ConversationAttachmentFetchResultV1Schema,
+  encodeConversationAttachmentBytesV1,
+  readConversationAttachmentIdV1,
   ConversationConnectionTestInputV1Schema,
   classifyConversationProviderMaterializationFailureV1,
   ConversationConnectionTestResultV1Schema,
@@ -10,6 +14,7 @@ import {
   ConversationProviderConnectionInputV1Schema,
   ConversationProviderSetupResultV1Schema,
   type ConversationConnectionTestResultV1,
+  type ConversationAttachmentFetchResultV1,
   type ConversationDeliveryResultV1,
   type ConversationEndpointResolveResultV1,
   type ConversationProviderFailureV1,
@@ -512,4 +517,38 @@ export async function deliverDiscordMessage(input: unknown, context: PluginInvoc
     return { kind: 'outcomeUnknown' };
   }
   return ConversationDeliveryResultV1Schema.parse(resolveDeliveryResult(result));
+}
+
+/** Fetch live bytes only when the core attachment owner consumes an admitted descriptor. */
+export async function fetchDiscordAttachment(input: unknown, context: PluginInvocationContext): Promise<ConversationAttachmentFetchResultV1> {
+  assertDiscordChannelsCoreCaller(context);
+  const request = ConversationAttachmentFetchInputV1Schema.parse(input);
+  const references: { attachmentId: string; channelId: string; nativeAttachmentId: string }[] = [];
+  for (const attachmentId of request.attachmentIds) {
+    const parts = readConversationAttachmentIdV1(attachmentId, 'discord');
+    if (parts?.length !== 3 || !nonEmptyString(parts[0]) || parts[1] !== request.messageId || !nonEmptyString(parts[2])) {
+      return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord attachment does not belong to this message.' };
+    }
+    references.push({ attachmentId, channelId: parts[0], nativeAttachmentId: parts[2] });
+  }
+  const channelId = references[0]!.channelId;
+  if (references.some(reference => reference.channelId !== channelId)) {
+    return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord attachments must belong to one native message.' };
+  }
+  const ready = await readyConnection(context, request);
+  if ('kind' in ready) return ready;
+  const native = await ready.api.getMessageAttachments({ channelId, messageId: request.messageId }, { signal: context.signal });
+  context.signal.throwIfAborted();
+  if (native === null) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord message is no longer available.' };
+  if ('kind' in native) return failureFromApi(native);
+  const attachments: { attachmentId: string; base64: string }[] = [];
+  for (const reference of references) {
+    const attachment = native.find(candidate => candidate.id === reference.nativeAttachmentId);
+    if (attachment === undefined) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'Discord attachment is no longer part of this message.' };
+    const downloaded = await ready.api.downloadAttachment({ channelId, attachment }, { signal: context.signal });
+    context.signal.throwIfAborted();
+    if (downloaded.kind === 'notReady') return failureFromApi(downloaded);
+    attachments.push({ attachmentId: reference.attachmentId, base64: encodeConversationAttachmentBytesV1(downloaded.bytes) });
+  }
+  return ConversationAttachmentFetchResultV1Schema.parse({ kind: 'fetched', attachments });
 }

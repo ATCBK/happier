@@ -137,7 +137,7 @@ describe('Discord Channels provider Actions', () => {
     expect(request.mock.calls.map(([request]) => request.url)).toContain('https://discord.com/api/v10/channels/channel-1/messages/message-1');
     const download = request.mock.calls.at(-1)?.[0];
     expect(download).toMatchObject({ url: freshAttachment.url, method: 'GET', redirect: 'error' });
-    expect(download?.headers).not.toHaveProperty('authorization');
+    expect(download?.headers ?? {}).not.toHaveProperty('authorization');
     expect(download).not.toHaveProperty('timeoutMs');
   });
 
@@ -175,7 +175,7 @@ describe('Discord Channels provider Actions', () => {
     const { context, request, materialize } = attachmentContext();
     await expect(fetchDiscordAttachment({}, { ...context, surface: 'cli' })).rejects.toMatchObject({ code: 'discord_channels_core_caller_required' });
     await expect(fetchDiscordAttachment({ ...attachmentInput, credentialRef: {
-      ...credentialRef, service: { ...credentialRef.service, pluginId: 'other' },
+      ...credentialRef, service: { ...credentialRef.service, pluginId: 'other.plugin' },
     } }, context)).resolves.toMatchObject({ kind: 'notReady', reason: 'credentialInvalid' });
     expect(materialize).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();

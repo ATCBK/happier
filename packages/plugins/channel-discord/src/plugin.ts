@@ -21,6 +21,7 @@ import {
 } from './discordPluginConstants.js';
 import {
   deliverDiscordMessage,
+  fetchDiscordAttachment,
   resolveDiscordEndpoint,
   setupDiscordChannels,
   testDiscordConnection,
@@ -52,6 +53,7 @@ const discordProviderOperations = discordProviderProtocol.operations;
 const connectionTestOperation = discordProviderOperations.connectionTest;
 const endpointResolveOperation = discordProviderOperations.endpointResolve;
 const messageDeliverOperation = discordProviderOperations.messageDeliver;
+const attachmentFetchOperation = discordProviderOperations.attachmentFetch;
 const connectionStopOperation = discordProviderOperations.connectionStop;
 const automationEventAdmitOperation = discordProviderOperations.automationEventAdmit;
 
@@ -159,6 +161,15 @@ function createDiscordPlugin() {
           // The REST codec issues GET reads and POST sends only; it never
           // PATCHes (archived threads rely on the core-owned recovery outcome).
           methods: ['GET', 'POST'],
+        },
+      },
+      {
+        id: 'discord-attachments',
+        capability: 'network',
+        reason: 'Download admitted Discord files from refreshed native attachment URLs.',
+        scope: {
+          targets: [{ kind: 'fixedOrigin', origin: 'https://cdn.discordapp.com' }],
+          methods: ['GET'],
         },
       },
       {
@@ -344,6 +355,17 @@ function createDiscordPlugin() {
       hostAccess: ['discord-gateway', 'discord-rest', DISCORD_BOT_CREDENTIAL_PURPOSE],
       run: gatewayActivationBindings.stop,
     },
+    [DISCORD_CHANNEL_ACTION_IDS.attachmentFetch]: {
+      title: 'Fetch Discord attachments',
+      description: 'Fetches native files for an admitted Discord message at Session materialization.',
+      surfaces: attachmentFetchOperation.declaration.surfaces,
+      dangerLevel: attachmentFetchOperation.declaration.dangerLevel,
+      inputSchema: attachmentFetchOperation.declaration.input.schema.jsonSchema,
+      resultSchema: attachmentFetchOperation.declaration.resultSchema.jsonSchema,
+      hostAccess: ['discord-rest', 'discord-attachments', DISCORD_BOT_CREDENTIAL_PURPOSE],
+      connectedAccountPurposeBindings: [{ path: 'credentialRef', purpose: DISCORD_BOT_CREDENTIAL_PURPOSE }],
+      run: fetchDiscordAttachment,
+    },
   },
   events: {
     'connections-invalidated-v1': {
@@ -401,6 +423,7 @@ function createDiscordPlugin() {
               DISCORD_AUTOMATION_MESSAGE_ADMIT_ACTION_ID,
             ),
             messageDeliver: discordProviderOperations.messageDeliver.bind(DISCORD_CHANNEL_ACTION_IDS.messageDeliver),
+            attachmentFetch: attachmentFetchOperation.bind(DISCORD_CHANNEL_ACTION_IDS.attachmentFetch),
             connectionStop: discordProviderOperations.connectionStop.bind(DISCORD_CHANNEL_ACTION_IDS.connectionStop),
           },
         }),

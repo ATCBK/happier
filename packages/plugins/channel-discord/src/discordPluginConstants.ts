@@ -19,6 +19,7 @@ export const DISCORD_CHANNEL_ACTION_IDS = Object.freeze({
   connectionTest: 'discord/inspect-connection',
   endpointResolve: 'discord/choose-channel',
   messageDeliver: 'discord/post-message',
+  attachmentFetch: 'discord/fetch-attachment',
   connectionStop: 'discord/halt-gateway',
 });
 

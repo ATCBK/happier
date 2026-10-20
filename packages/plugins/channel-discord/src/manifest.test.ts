@@ -168,6 +168,7 @@ describe('Discord Channels manifest', () => {
     expectProtocolDefinedRole(DISCORD_CHANNEL_ACTION_IDS.endpointResolve, providers.endpointResolve);
     expectProtocolDefinedRole(DISCORD_AUTOMATION_MESSAGE_ADMIT_ACTION_ID, providers.automationEventAdmit);
     expectProtocolDefinedRole(DISCORD_CHANNEL_ACTION_IDS.messageDeliver, providers.messageDeliver);
+    expectProtocolDefinedRole(DISCORD_CHANNEL_ACTION_IDS.attachmentFetch, providers.attachmentFetch);
     expectProtocolDefinedRole(DISCORD_CHANNEL_ACTION_IDS.connectionStop, providers.connectionStop);
     // Discord cannot truthfully resolve a selected endpoint's participant: its
     // former action returned the integration bot regardless of that endpoint.
@@ -176,7 +177,7 @@ describe('Discord Channels manifest', () => {
     expect(actions.get(DISCORD_GATEWAY_WORKER_ATTEMPT_ACTION_ID)).toMatchObject({
       execution: { target: 'daemon' },
     });
-    expect(actions.size).toBe(8);
+    expect(actions.size).toBe(9);
   });
 
   it('keeps the Gateway worker Account binding on an object-root wrapper without widening the core reconciliation union', () => {

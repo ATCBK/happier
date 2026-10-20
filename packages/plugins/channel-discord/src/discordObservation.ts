@@ -78,7 +78,11 @@ export function mapDiscordMessageToSocketIngress(input: Readonly<{
     kind: 'fullText',
     observation: {
       ...shell,
-      message: { ...shell.message, text: evidence.message.text },
+      message: {
+        ...shell.message,
+        text: evidence.message.text,
+        ...(evidence.message.attachments === undefined ? {} : { attachments: evidence.message.attachments }),
+      },
     },
   });
 }

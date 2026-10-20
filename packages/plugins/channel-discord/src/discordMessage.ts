@@ -1,7 +1,9 @@
 import type {
   ConversationObservationAddressingEvidenceV1,
   ConversationResolvedEndpointV1,
+  ConversationMessageAttachmentV1,
 } from '@happier-dev/channels-protocol/v1';
+import { createConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import { createDiscordChannelEndpointId } from './discordPluginConstants.js';
 
@@ -46,6 +48,7 @@ export type DiscordInboundMessageEvidence = DiscordInboundMessageRoutingEvidence
   kind: 'message';
   message: DiscordInboundMessageRoutingEvidence['message'] & Readonly<{
     text: string;
+    attachments?: readonly ConversationMessageAttachmentV1[];
   }>;
 }>;
 
@@ -76,6 +79,37 @@ function readNonEmptyString(value: unknown): string | null {
 
 function readNonNegativeInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export type DiscordNativeAttachment = Readonly<{
+  id: string;
+  name: string;
+  mediaType: string;
+  byteLength: number;
+  url: string;
+}>;
+
+/** Shared native metadata codec for Gateway observations and renewed REST reads. */
+export function readDiscordNativeAttachments(value: unknown): readonly DiscordNativeAttachment[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const attachments: DiscordNativeAttachment[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!isRecord(raw)) return null;
+    const id = readNonEmptyString(raw.id);
+    const name = readNonEmptyString(raw.filename);
+    const url = readNonEmptyString(raw.url);
+    const byteLength = readNonNegativeInteger(raw.size);
+    if (id === null || name === null || url === null || byteLength === null || seen.has(id)) return null;
+    const mediaType = raw.content_type === undefined
+      ? 'application/octet-stream'
+      : readNonEmptyString(raw.content_type);
+    if (mediaType === null) return null;
+    seen.add(id);
+    attachments.push({ id, name, url, mediaType, byteLength });
+  }
+  return attachments;
 }
 
 function hasEntries(value: unknown): value is readonly unknown[] {
@@ -311,10 +345,11 @@ export function parseDiscordMessageDispatch(input: Readonly<{
   if (messageType !== 0 && messageType !== 19) {
     return { ...routingEvidence, kind: 'routableNonAdmission', reason: 'unsupportedContent' };
   }
+  const attachments = readDiscordNativeAttachments(payload.attachments);
   if (
     forwardedSnapshot.kind === 'unsupported'
-    || hasEntries(payload.attachments)
-    || hasEntries(payload.embeds)
+    || attachments === null
+    || (attachments.length === 0 && hasEntries(payload.embeds))
   ) {
     return { ...routingEvidence, kind: 'routableNonAdmission', reason: 'unsupportedContent' };
   }
@@ -324,7 +359,8 @@ export function parseDiscordMessageDispatch(input: Readonly<{
       ? payload.content
       : null;
   if (
-    !content
+    content === null
+    || (!content && attachments.length === 0)
     || (!input.context.messageContentIntentEnabled && !isAllowedWithoutMessageContent(endpoint, addressingEvidence))
   ) {
     return { ...routingEvidence, kind: 'routableNonAdmission', reason: 'unsupportedContent' };
@@ -335,6 +371,12 @@ export function parseDiscordMessageDispatch(input: Readonly<{
     kind: 'message',
     message: {
       text: content,
+      ...(attachments.length === 0 ? {} : { attachments: attachments.map(attachment => ({
+        attachmentId: createConversationAttachmentIdV1('discord', [input.channel.channelId, messageId, attachment.id]),
+        name: attachment.name,
+        mediaType: attachment.mediaType,
+        byteLength: attachment.byteLength,
+      })) }),
       ...routingEvidence.message,
     },
   };
