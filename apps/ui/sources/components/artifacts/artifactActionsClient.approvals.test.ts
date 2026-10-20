@@ -4,15 +4,18 @@ import {
     ArtifactActionOutputSchemasV1,
     decodePlainArtifactStoredContent,
     normalizeActionsSettingsV1,
+    ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema,
+    MACHINE_PLAIN_DATA_KEY_MARKER,
 } from '@happier-dev/protocol';
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
 import { storage } from '@/sync/domains/state/storageStore';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 const transport = vi.hoisted(() => ({ download: vi.fn() }));
 // Machine byte transfer is the boundary; the Action executor, source admission and Artifact writer remain real.
@@ -27,15 +30,19 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal'))
 const { createArtifactActionsClient } = await import('./artifactActionsClient');
 const { useSaveWorkspaceFileAsArtifact } = await import('@/components/workspaces/files/file/useSaveWorkspaceFileAsArtifact');
 let served: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
+let machineRoute: ((request: ServedHomeRequest) => Promise<Response | undefined>) | undefined;
+let disposeSourceAccount: (() => void) | undefined;
 
-async function serveArtifactAccount(serverUrl: string, actionId?: string) {
+async function serveArtifactAccount(serverUrl: string, actionId?: string, exactMachineApproval = false) {
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'owner-1', encryptionMode: 'plain' });
-    served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl, accountId: 'owner-1', currentAccount: true,
+    served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl,
+        ...(exactMachineApproval ? { serverIdentityId: 'srv_artifact-approval' } : {}), accountId: 'owner-1', currentAccount: true,
         ...(actionId ? { settings: { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
             actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }) } } : {}),
-    }], route: request => request.path === '/v1/features' || request.path === '/v1/features/authenticated'
-        ? Response.json(createRootLayoutFeaturesResponse())
-        : artifacts.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
+    }], route: async request => await machineRoute?.(request)
+        ?? (request.path === '/v1/features' || request.path === '/v1/features/authenticated'
+            ? Response.json(createRootLayoutFeaturesResponse())
+            : artifacts.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined) });
     await served.restoreActiveConnection();
     if (actionId) await vi.waitFor(() => expect(
         storage.getState().settings.actionsSettingsV1.actions[actionId]?.approvalRequiredSurfaces,
@@ -46,8 +53,10 @@ async function serveArtifactAccount(serverUrl: string, actionId?: string) {
 describe('Artifact surface pending approvals', () => {
     afterEach(async () => {
         standardCleanup();
+        disposeSourceAccount?.(); disposeSourceAccount = undefined;
         await served?.dispose();
         served = undefined;
+        machineRoute = undefined;
         transport.download.mockReset();
     });
 
@@ -132,12 +141,43 @@ describe('Artifact surface pending approvals', () => {
     });
 
     it('keeps the mounted workspace publication pending until approval delivers its real receipt', async () => {
-        const { serverId, artifacts } = await serveArtifactAccount('https://file-copy-dialog-approval.test', 'artifact.publish_from_file');
+        const { serverId, artifacts } = await serveArtifactAccount('https://file-copy-dialog-approval.test', 'artifact.publish_from_file', true);
         storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'source-machine' })] } });
         transport.download.mockImplementation(async (request: { destination: { writeBytes(bytes: Uint8Array): Promise<void> } }) => {
             await request.destination.writeBytes(new TextEncoder().encode('Approved bytes'));
             return { ok: true, name: 'note.txt', sizeBytes: 14 };
         });
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { createUiArtifactAction } = await import('@/sync/ops/actions/artifactActionDeps');
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const account = await captureLazyActionAccountContext(serverId);
+        disposeSourceAccount = () => account.dispose();
+        const sourceAction = createUiArtifactAction(account);
+        const machine = ExternalActionMachineBootstrapV1Schema.parse({ id: 'source-machine', kind: 'persistent', active: true,
+            revokedAt: null, replacedByMachineId: null, installationId: 'source-installation',
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'owner-1', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } });
+        machineRoute = async request => {
+            if (request.method === 'POST' && request.path.startsWith('/v1/artifacts/')) {
+                const response = await artifacts.handle(request.path, { method: request.method, body: JSON.stringify(request.body) });
+                // The HTTP Home boundary also delivers the external change wake
+                // a remote daemon's accepted write sends to this mounted client.
+                if (response?.ok) publishHomeAccountChange(serverId, [request.path.split('/').at(-1)!], { changeKinds: ['artifact'] });
+                return response ?? undefined;
+            }
+            if (request.path === '/v1/machines') return Response.json([machine]);
+            if (request.path === '/v1/machines/source-machine') return Response.json({ machine });
+            if (request.path !== '/v1/actions/approval.request.decide') return undefined;
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
+            expect(envelope.target).toMatchObject({ kind: 'machine', machineId: 'source-machine' });
+            const args = getActionSpec('approval.request.decide').inputSchema.parse(envelope.input);
+            if (!args || typeof args !== 'object' || !('artifactId' in args) || typeof args.artifactId !== 'string')
+                throw new Error('Approval Artifact identity is required');
+            const execution = await replayApprovedAsDaemon({ serverId, machineId: 'source-machine', artifactId: args.artifactId,
+                decision: 'approve', artifactAction: sourceAction });
+            return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+                requestId: envelope.requestId, execution }));
+        };
         const hook = await renderHook(() => useSaveWorkspaceFileAsArtifact({ scope: { serverId, accountId: 'owner-1' },
             sourceSessionId: null, sourceWorkspace: { machineId: 'source-machine', rootPath: '/repo' }, filePath: 'docs/note.txt' }));
         let operation: Promise<string | null> | undefined;
@@ -153,11 +193,16 @@ describe('Artifact surface pending approvals', () => {
         expect(hook.getCurrent().canSubmit).toBe(false);
         expect(hook.getCurrent().status.kind).toBe('publishing');
         const approvalId = hook.getCurrent().approval.approvalId!;
-        expect(await decideApprovalAsInbox(serverId, approvalId, 'approve')).toMatchObject({ ok: true });
+        const decision = decideApprovalAsInbox(serverId, approvalId, 'approve');
+        await vi.waitFor(() => {
+            const request = ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(approvalId)!));
+            expect(request.status, JSON.stringify(request)).toBe('executed');
+        });
+        expect(await decision).toMatchObject({ ok: true });
         let created: string | null = null;
         await act(async () => { created = await operation!; });
         expect(settled).toBe(true);
-        expect(hook.getCurrent().status).toMatchObject({ kind: 'saved', receipt: { artifactId: created } });
+        expect(hook.getCurrent().status, JSON.stringify(hook.getCurrent().status)).toMatchObject({ kind: 'saved', receipt: { artifactId: created } });
         expect(artifacts.readPlainBody(created!)).toBe('Approved bytes');
         expect(artifacts.list()).toHaveLength(2);
         await hook.unmount();

@@ -85,6 +85,7 @@ export async function replayApprovedAsDaemon(input: Readonly<{
     signal?: AbortSignal;
     /** Runtime-native Actions use their real owner over the caller's daemon IO boundary. */
     runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
+    artifactAction?: import('@happier-dev/protocol/actions/executor/types').ActionExecutorDeps['artifactAction'];
     /** The Home external-Action ingress decides before replaying at that daemon. */
     decision?: 'approve';
 }>): Promise<ExecuteResult> {
@@ -115,6 +116,7 @@ export async function replayApprovedAsDaemon(input: Readonly<{
             ...createMachineConnectionActionDeps(),
             resolveServerProfileScopeId: resolveServerProfileScopeIdForIdentifier,
             ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
+            ...(input.artifactAction ? { artifactAction: input.artifactAction } : {}),
             connectedServiceAction: createUiConnectedServiceAction(account),
             providerActionExecute: createUiProviderActionExecuteV1(account),
             projectWorkerAction: createUiProjectWorkerActionV1(account),

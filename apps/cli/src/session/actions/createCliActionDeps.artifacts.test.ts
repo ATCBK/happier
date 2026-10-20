@@ -40,9 +40,15 @@ import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
 vi.mock('axios', () => ({ default: http }));
+const machineTransport = vi.hoisted(() => ({ exact: vi.fn() }));
+vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
+  ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(), callExactMachineRpc: machineTransport.exact,
+}));
 
 describe('Account Artifact Actions through the real CLI host composition', () => {
   let root: string;
@@ -51,6 +57,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     root = await mkdtemp(join(tmpdir(), 'cli-artifact-actions-'));
     await mkdir(join(root, 'workspace'));
     http.get.mockReset(); http.post.mockReset(); http.put.mockReset(); http.delete.mockReset(); http.request.mockReset();
+    machineTransport.exact.mockReset();
     // Machine identity is persistent machine-local configuration, a system boundary.
     await persistence.writeSettings({ schemaVersion: persistence.SUPPORTED_SCHEMA_VERSION,
       onboardingCompleted: true, machineIdByServerId: { [configuration.activeServerId]: 'local-machine' } });
@@ -899,17 +906,55 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
 
   it('never falls back to the ambient Session for an explicit workspace publication source', async () => {
     await writeFile(join(root, 'workspace', 'result.txt'), 'Ambient Session bytes');
+    const selectedRoot = join(root, 'selected-workspace');
+    await mkdir(selectedRoot);
+    await writeFile(join(selectedRoot, 'result.txt'), 'Selected Machine bytes');
     http.get.mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
+    http.post.mockImplementation(async (_url: string, wire: unknown) => ({ status: 200,
+      data: { ...readCarrierMutation(wire), headerVersion: 1, bodyVersion: 1 } }));
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const remote = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null });
+    // Exact-Machine RPC and machine-local identity are system boundaries.
+    // Both hosts retain the actual source, transfer and publication owners.
+    machineTransport.exact.mockImplementation(async ({ machineId, method, request: input }: { machineId: string; method: string; request: unknown }) => {
+        expect(machineId).toBe('other-machine');
+        expect(method).toBe(getActionSpec('artifact.publish_from_file').bindings?.rpcMethod);
+        const request = TargetedActionRpcRequestV1Schema.parse(input);
+        expect(request.target).toMatchObject({ kind: 'machine', machineId: 'other-machine' });
+        await persistence.writeSettings({ schemaVersion: persistence.SUPPORTED_SCHEMA_VERSION,
+          onboardingCompleted: true, machineIdByServerId: { [configuration.activeServerId]: 'other-machine' } });
+        return await remote.artifactAction!({ actionId: 'artifact.publish_from_file', input: request.input,
+          context: { surface: 'rpc', runtimeAccountId: 'owner', externalActionTarget: request.target,
+            ...(request.defaultSessionId ? { defaultSessionId: request.defaultSessionId } : {}) } });
+      });
     const host = createCliActionDeps({ token, credentials: { token, encryption: null },
       sessionId: 'session', mode: 'plain', ctx: null,
-      rawSession: { machineId: 'local-machine', path: join(root, 'workspace') } });
+      rawSession: { machineId: 'local-machine', path: join(root, 'workspace') },
+    });
     const context = { surface: 'cli' as const,
       actionCaller: { kind: 'session' as const, sessionId: 'session', starterDepth: 0, turnDepth: 0 },
       defaultSessionId: 'session', presentUserConfirmation: { actionId: 'artifact.publish_from_file' as const } };
-    await expect(host.artifactAction?.({ actionId: 'artifact.publish_from_file',
-      input: { path: 'result.txt', workspace: { machineId: 'other-machine', rootPath: '/other-workspace' } }, context }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
-    expect(http.post.mock.calls.filter(([url]) => !String(url).endsWith('/v2/sessions/lookup-by-tags'))).toEqual([]);
+      await expect(host.artifactAction?.({ actionId: 'artifact.publish_from_file',
+        input: { path: 'result.txt', workspace: { machineId: 'other-machine', rootPath: selectedRoot } }, context }))
+        .resolves.toMatchObject({ artifactId: expect.any(String) });
+      const written = readCarrierMutation(http.post.mock.calls[0]?.[1]);
+      expect(decodePlainArtifactStoredContent(String(written.body))).toEqual({ body: 'Selected Machine bytes' });
+      expect(decodePlainArtifactStoredContent(String(written.provenance))).toMatchObject({ provenance: {
+        source: { machineId: 'other-machine', rootPath: selectedRoot, path: 'result.txt' },
+      } });
+      expect(decodePlainArtifactStoredContent(String(written.provenance))).not.toHaveProperty('provenance.source.sessionId');
+  });
+  it('refuses a received workspace publication when local Machine authority is unavailable instead of forwarding again', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const invoke = vi.fn();
+    const host = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'selected-machine', invoke } });
+    expect(await host.artifactAction!({ actionId: 'artifact.publish_from_file',
+      input: { path: 'result.txt', workspace: { machineId: 'selected-machine', rootPath: '/selected' } },
+      context: { surface: 'rpc', runtimeAccountId: 'owner', externalActionTarget: { kind: 'machine', machineId: 'selected-machine' } },
+    })).toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(machineTransport.exact).not.toHaveBeenCalled();
+    expect(http.post).not.toHaveBeenCalled();
   });
 });
