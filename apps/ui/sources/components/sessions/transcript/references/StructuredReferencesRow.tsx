@@ -1,23 +1,18 @@
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from 'react';
-import { Pressable, View, useWindowDimensions } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
-import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { shouldRedirectDetailsRouteToPanes } from '@/components/ui/panels/shouldRedirectDetailsRouteToPanes';
-import { useDeviceType } from '@/utils/platform/responsive';
-import { useLocalSetting, useSessionReferenceTarget } from '@/sync/domains/state/storage';
+import { useSessionReferenceTarget } from '@/sync/domains/state/storage';
 import { Icon } from '@/components/ui/icons/Icon';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { TranscriptStructuredReference } from './messageStructuredReferences';
-import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
-import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useTranscriptFileLinks } from '../useTranscriptFileLinks';
 
 /**
  * The transcript's structured-references row (D-6). It presents every reference a message
@@ -26,13 +21,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
  * `LinkedWorkspaceFilesRow` rather than sitting beside it, so the transcript keeps exactly one
  * reference-presentation owner.
  *
- * Navigation goes through the transcriptSource / pane deep-link the rest of the app uses, never through
- * an agent action: `session.open` is `surfaces.session_agent: false` on purpose, because the
- * agent does not drive the user's navigation.
- *
- * The file-open dependencies stay row-level so a message with several file references keeps
- * one pane/layout subscription, exactly as it did before sessions joined the row. Only a
- * session chip subscribes per reference, because only it depends on a per-id store entry.
+ * Session references keep the transcript navigation owner; files enter the shared workspace Action.
  */
 
 const REFERENCE_PREFIX = '@';
@@ -42,6 +31,8 @@ export type StructuredReferencesRowProps = Readonly<{
     serverId?: string | null;
     references: readonly TranscriptStructuredReference[];
     fileOpenEnabled: boolean;
+    routeMessageId?: string | null;
+    seq?: number | null;
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -166,40 +157,11 @@ export const StructuredReferencesRow = React.memo((props: StructuredReferencesRo
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const transcriptSource = useSessionTranscriptSource();
-    const { width: windowWidth } = useWindowDimensions();
-    const deviceType = useDeviceType();
-    const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
-    const paneScopeLayout = useOptionalAppPaneScopeLayout();
-
-    const scopeId = useDestinationPaneScopeId(createSessionPaneScopeId(props.sessionId, props.serverId));
-    const pane = useAppPaneScope(scopeId);
-
-    const openFile = React.useCallback((path: string) => {
-        const containerWidthPx = paneScopeLayout?.containerWidthPx ?? windowWidth;
-        const shouldOpenInDetailsPane = shouldRedirectDetailsRouteToPanes({
-            containerWidthPx,
-            deviceType,
-            multiPaneEnabled,
-        });
-
-        if (!shouldOpenInDetailsPane) {
-            const href = buildScopedSessionRouteHref({
-                sessionId: props.sessionId,
-                serverId: props.serverId,
-                suffix: '/file',
-                query: { path },
-            });
-            transcriptSource.navigate?.(href);
-            return;
-        }
-
-        pane.openDetailsTab({
-            key: `file:${path}`,
-            kind: 'file',
-            title: getBasename(path),
-            resource: { kind: 'file', path },
-        });
-    }, [deviceType, multiPaneEnabled, pane, paneScopeLayout?.containerWidthPx, props.serverId, props.sessionId, transcriptSource, windowWidth]);
+    const { openPath: openFile } = useTranscriptFileLinks({
+        sessionId: props.sessionId, serverId: props.serverId,
+        workspacePath: transcriptSource.useWorkspacePath(), canOpenFiles: props.fileOpenEnabled,
+        routeMessageId: props.routeMessageId, seq: props.seq,
+    });
 
     if (props.references.length === 0) return null;
 
@@ -231,7 +193,7 @@ export const StructuredReferencesRow = React.memo((props: StructuredReferencesRo
                     <Pressable
                         key={`file:${path}`}
                         testID={`linked-workspace-file:${path}`}
-                        onPress={() => openFile(path)}
+                        onPress={(event) => { openFile(path, { event }); }}
                         style={({ pressed }) => [styles.chip, pressed ? styles.chipPressed : null]}
                         accessibilityRole="button"
                     >

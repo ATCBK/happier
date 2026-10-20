@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { createSessionFileDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { useOpenSessionCollaboration } from './useOpenSessionCollaboration';
 import { consumeSessionCollaborationIntent, resetSessionCollaborationIntentsForTests } from './sessionCollaborationIntent';
 
@@ -76,7 +76,7 @@ describe('open Session Collaboration', () => {
                 open: useOpenSessionCollaboration({ target: { serverId: 'home-b', sessionId: 'same-id' }, pane, focusTarget: 'access' }),
             };
         }, { wrapper: PaneWrapper });
-        await act(async () => hook.getCurrent().pane.openDetailsTab(createSessionFileDetailsTab('src/index.ts')));
+        await act(async () => hook.getCurrent().pane.openDetailsTab(createWorkspaceFileDetailsTab('src/index.ts')));
         const detailsBefore = hook.getCurrent().pane.scopeState?.details;
         await act(async () => hook.getCurrent().open());
         expect(hook.getCurrent().pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'collaboration' });

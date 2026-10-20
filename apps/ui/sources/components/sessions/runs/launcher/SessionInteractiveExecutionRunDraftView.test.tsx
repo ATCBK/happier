@@ -351,6 +351,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 return { type: 'success', sessionId: 'session_1' };
             }
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return await (listResult ?? { runs: listedRuns });
+            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND) return { ok: true };
             if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                 protocolVersion: 1,
                 projection: pluginProjection ? { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
@@ -362,6 +363,14 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             homes: [{ key: 'home', serverUrl: `https://launcher-${++sequence}.example.test`, serverIdentityId: `srv_launcher_${sequence}`,
                 accountId: 'account_1', currentAccount: true }],
             route: async (request) => {
+                if (request.path === '/v1/actions/execution.run.start') {
+                    const body = record(request.body);
+                    emittedStarts.push(record(body.input));
+                    return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
+                        v: 1, actionId: 'execution.run.start', requestId: body.requestId,
+                        execution: { ok: true, result: await (startResults.shift() ?? started()) },
+                    }));
+                }
                 if (request.path === '/v1/actions/review.engines.list') return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
                     v: 1, actionId: 'review.engines.list', requestId: record(request.body).requestId,
                     execution: { ok: true, result: { items: Object.keys(backends).map((engineId) => ReviewEngineListItemSchema.parse({
@@ -433,6 +442,41 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
     });
     afterEach(async () => { await disconnectActiveServerConnection(); await standardCleanup(); await home?.dispose(); });
+
+    it('starts a quote-seeded detached conversation on the file Machine without a Session', async () => {
+        const opened = vi.fn();
+        const { createWorkspaceDetailsSurfaceRenderers } = await import('@/components/projects/panes/details/surfaces/workspaceDetailsSurfaceRenderers');
+        const { createInteractiveExecutionRunDraftDetailsTab } = await import('./executionRunLauncherModel');
+        const scope = { kind: 'project' as const, workspaceRefId: 'workspace_1', serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo' };
+        const tab = { ...createInteractiveExecutionRunDraftDetailsTab({ initialText: 'src/app.ts:3\n```\nselected code\n```' }), isPinned: true, isPreview: false };
+        const surfaceInput = { tab, scope, region: 'details' as const, active: true,
+            descriptor: { surfaceId: 'project:workspace_1:details:run-draft', resourceKey: tab.key, scope, region: 'details' as const, status: 'available' as const },
+            callbacks: { replaceTab: (_key: string, next: { resource?: unknown }) => opened(next.resource) } };
+        const renderers = createWorkspaceDetailsSurfaceRenderers({ scopeId: 'project:workspace_1', workspaceRefId: 'workspace_1',
+            workspaceCacheKey: 'workspace_1', workspaceScope: scope, serverId, machineId: 'machine_1', rootPath: '/repo', activeRootPath: '/repo',
+            presentation: 'panel', pinDetailsTab: vi.fn(), openFileTab: vi.fn(), renderWorkspaceInfo: () => null });
+        const renderer = renderers.find(candidate => candidate.canRender(surfaceInput));
+        expect(renderer).toBeDefined();
+        screen = await renderScreen(<>{renderer!.render(surfaceInput)}</>);
+        await waitFor(() => expect(composer().isSendDisabled).toBe(false));
+        expect(input().props.value).toContain('selected code');
+        await act(async () => { await sendButton().props.onPress(); });
+        await waitFor(() => expect(opened).toHaveBeenCalledWith(expect.objectContaining({ kind: 'executionRun', runId: 'run_1' })));
+        expect(emittedStarts).toEqual([expect.objectContaining({ sessionId: null, cwd: '/repo', runClass: 'long_lived' })]);
+        expect(JSON.stringify(transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('selected code');
+        expect(outbound).toEqual([]);
+    });
+
+    it('appends a later host selection to the mounted draft without replacing the question', async () => {
+        const opened = vi.fn();
+        await mount({ initialText: 'First selected line', onRunStarted: opened });
+        await waitFor(() => expect(composer().isSendDisabled).toBe(false));
+        await type('First selected line\nWhy is this here?');
+        await screen.update(<SessionInteractiveExecutionRunDraftView sessionId="session_1" serverId={serverId}
+            initialText="Second selected line" onRunStarted={opened} />);
+        await waitFor(() => expect(input().props.value).toBe('First selected line\nWhy is this here?\nSecond selected line'));
+        expect(emittedStarts).toEqual([]);
+    });
 
     it('creates nothing until rendered Send, then admits captured text to the exact new Run', async () => {
         const opened = vi.fn();

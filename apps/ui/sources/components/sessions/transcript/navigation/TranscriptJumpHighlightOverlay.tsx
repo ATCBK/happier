@@ -36,6 +36,7 @@ export function TranscriptJumpAttention(props: Readonly<{
     sessionAddress: SessionAddress | null;
     routeMessageId?: string | null;
     seq?: number | null;
+    filePath?: string | null;
     radius: number;
     style?: StyleProp<ViewStyle>;
     viewProps?: ViewProps;
@@ -46,6 +47,7 @@ export function TranscriptJumpAttention(props: Readonly<{
         sessionAddress: props.sessionAddress,
         routeMessageId: props.routeMessageId ?? null,
         seq: props.seq ?? null,
+        filePath: props.filePath ?? null,
     });
     return (
         <View {...(props.viewProps ?? null)} ref={props.viewRef} style={props.style}>

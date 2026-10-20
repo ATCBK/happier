@@ -90,7 +90,7 @@ const noBoardOnScreen = resolveSessionBoardHostVisibility({
   foreground: true,
   panes: {
     detailsOpen: false,
-    detailsFocusModeActive: false,
+    mainHidden: false,
     rightOpen: false,
     rightActiveTabId: null,
   },

@@ -88,7 +88,7 @@ import {
 import { applyCurrentSessionPresentationCommand } from './applyCurrentSessionPresentationCommand';
 import { executePromptPickerOpenAction } from '@/components/sessions/agentInput/commandMenu/promptPickerActionRuntime';
 import { executeComposerIngressAction } from '@/sync/ops/actions/composerIngressActionRuntime';
-import { resolveComposerEntityDrop, type ComposerEntityDropContext } from '@/components/sessions/composer/composerEntityDrop';
+import { buildFileReferenceOperation, resolveComposerEntityDrop, type ComposerEntityDropContext } from '@/components/sessions/composer/composerEntityDrop';
 import { buildComposerSnapshotStructuredInputMetaOverrides, placePositionlessComposerReferences } from '@/components/sessions/composer/composerScopeAdapters';
 import { createPluginUiClientExecutableRegistrationIndex } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { triageEntryDragSourceRuntime, TriageEntryDragReferenceV1Schema } from '@happier-dev/plugins-triage/happier-plugin-ui/triage-entity-drag-drop-native';
@@ -469,6 +469,9 @@ describe('composer presentation targets', () => {
             { kind: 'text.insert', text: ' @src/file.ts' },
             { kind: 'reference.insert', reference: { kind: 'happier.file', ref: 'file:src/file.ts' } },
         ] } });
+        expect(admission.effect.input).toMatchObject({ transaction: {
+            operations: buildFileReferenceOperation('src/file.ts', snapshot),
+        } });
         expect(resolveComposerEntityDrop({ ...item, path: '/repo-other/file.ts' }, context).status).toBe('refused');
         expect(resolveComposerEntityDrop({ ...item, machineId: 'other-machine' }, context).status).toBe('refused');
         expect(resolveComposerEntityDrop({ ...item, path: '../escape.ts' }, context).status).toBe('refused');

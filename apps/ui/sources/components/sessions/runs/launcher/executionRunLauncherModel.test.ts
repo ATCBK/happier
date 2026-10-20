@@ -9,6 +9,23 @@ import {
 } from './executionRunLauncherModel';
 
 describe('execution Run conversation details resources', () => {
+    it('preserves detached Machine authority when a launcher becomes a known Run with recovery', () => {
+        expect(createExecutionRunDetailsTab('run_1', { retryInputLocalId: 'input_1' }, 'Question', {
+            machineId: 'machine-a', cwd: '/work',
+        }).resource).toEqual({ kind: 'executionRun', runId: 'run_1', retryInputLocalId: 'input_1',
+            sessionId: null, workspace: { machineId: 'machine-a', cwd: '/work' } });
+    });
+    it('seeds a file question without materializing a Run or inventing a parent Session', () => {
+        const tab = createInteractiveExecutionRunDraftDetailsTab({ initialText: 'src/app.ts:2\n\n```\nconst value = 1;\n```' });
+        expect(tab.resource).toMatchObject({ mode: 'conversation', initialInstructions: 'src/app.ts:2\n\n```\nconst value = 1;\n```' });
+        expect(tab.resource).not.toHaveProperty('sessionId');
+    });
+    it('keeps a side question detached even when its tab is opened in a Session pane', () => {
+        const tab = createInteractiveExecutionRunDraftDetailsTab({ initialText: 'Question',
+            detachedWorkspace: { machineId: 'machine-a', cwd: '/work' } });
+        expect(tab.resource).toMatchObject({ kind: 'executionRunLauncher', mode: 'conversation', sessionId: null,
+            workspace: { machineId: 'machine-a', cwd: '/work' }, initialInstructions: 'Question' });
+    });
     it('keeps an unmaterialized conversation distinct from a bounded launcher and replaces it with the exact Run resource', () => {
         expect(createInteractiveExecutionRunDraftDetailsTab()).toMatchObject({
             key: 'execution-run-conversation-draft',

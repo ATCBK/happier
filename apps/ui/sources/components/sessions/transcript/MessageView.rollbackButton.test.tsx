@@ -183,10 +183,6 @@ vi.mock('@/components/sessions/transcript/structured/happierMetaEnvelope', () =>
     parseHappierMetaEnvelope: () => null,
 }));
 
-vi.mock('@/scm/utils/filePresentation', () => ({
-    getImageMimeTypeFromPath: () => null,
-}));
-
 vi.mock('@happier-dev/agents', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@happier-dev/agents')>();
     return {

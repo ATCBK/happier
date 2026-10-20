@@ -10,7 +10,7 @@ vi.mock('@/hooks/ui/useOptionalSafeAreaInsets', () => ({
     useOptionalSafeAreaInsets: () => ({ top: 47, right: 0, bottom: 34, left: 0 }),
 }));
 
-import { publishPresentationNotice, retirePresentationNotice } from './presentationNotices';
+import { publishPresentationNotice, readPresentationNotice, retirePresentationNotice } from './presentationNotices';
 import { PresentationNoticeHost } from './PresentationNoticeHost';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -21,6 +21,24 @@ afterEach(() => {
 });
 
 describe('PresentationNoticeHost', () => {
+    it('keeps a sticky inverse until exact retirement or replacement, then resumes transient expiry', async () => {
+        vi.useFakeTimers();
+        try {
+            publishPresentationNotice({ key: 'sticky', message: 'Version replaced', severity: 'info', sticky: true,
+                undo: { label: 'Undo', run: () => {} } });
+            await renderScreen(<PresentationNoticeHost />);
+            await React.act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+            expect(readPresentationNotice()?.key).toBe('sticky');
+            await React.act(async () => {
+                publishPresentationNotice({ key: 'newer', message: 'Saved', severity: 'info' });
+                retirePresentationNotice('sticky');
+            });
+            expect(readPresentationNotice()?.key).toBe('newer');
+            await React.act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+            expect(readPresentationNotice()).toBeNull();
+        } finally { vi.useRealTimers(); }
+    });
+
     it('clears the window safe region instead of resting under the notch', async () => {
         publishPresentationNotice({
             key: 'notice-safe-area',

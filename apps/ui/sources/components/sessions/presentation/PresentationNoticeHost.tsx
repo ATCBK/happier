@@ -25,11 +25,12 @@ import { NOTICE_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
 import {
     readPresentationNotice,
     retirePresentationNotice,
+    shouldSchedulePresentationNoticeRetirement,
     subscribePresentationNotices,
 } from './presentationNotices';
 
 /**
- * The app's ONE transient presentation notice, drawn.
+ * The app's ONE presentation notice, drawn.
  *
  * Every producer — the daemon presentation stream, mounted plugin `notify`, and
  * Board/Companion feedback — publishes to `presentationNotices`; this is the only
@@ -148,7 +149,7 @@ export const PresentationNoticeHost = React.memo(function PresentationNoticeHost
     }, [undo]);
 
     React.useEffect(() => {
-        if (!notice || undoControlEngaged) return;
+        if (!notice || !shouldSchedulePresentationNoticeRetirement(notice, undoControlEngaged)) return;
         const timeout = setTimeout(() => retirePresentationNotice(notice.key), 4_000);
         return () => clearTimeout(timeout);
     }, [notice, undoControlEngaged]);

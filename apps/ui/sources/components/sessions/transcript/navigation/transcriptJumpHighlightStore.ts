@@ -16,6 +16,8 @@ export type TranscriptJumpHighlightRowIdentity = Readonly<{
     sessionAddress: SessionAddress | null;
     routeMessageId?: string | null;
     seq?: number | null;
+    /** A file-return landing highlights its chip, rather than the containing message. */
+    filePath?: string | null;
 }>;
 
 export type ActiveTranscriptJumpHighlight = Readonly<{
@@ -23,6 +25,7 @@ export type ActiveTranscriptJumpHighlight = Readonly<{
     routeMessageId: string | null;
     seq: number | null;
     token: number;
+    filePath?: string;
 }>;
 
 export type TranscriptJumpLandedResult = Extract<TranscriptJumpResult, { status: 'scrolled' | 'window-rendered' }>;
@@ -85,6 +88,7 @@ export function setTranscriptJumpHighlight(identity: TranscriptJumpHighlightRowI
         routeMessageId,
         seq,
         token: nextToken,
+        ...(identity.filePath ? { filePath: identity.filePath } : {}),
     };
     nextToken += 1;
     const expiringToken = activeHighlight.token;
@@ -123,6 +127,7 @@ export function isTranscriptJumpHighlightActiveForRow(
 ): boolean {
     const rowAddress = normalizeSessionAddress(row.sessionAddress?.serverId, row.sessionAddress?.sessionId);
     if (!areSessionAddressesEqual(active.sessionAddress, rowAddress)) return false;
+    if ((active.filePath ?? null) !== (row.filePath ?? null)) return false;
     const rowRouteMessageId = normalizeRouteMessageId(row.routeMessageId);
     const rowSeq = normalizeSeq(row.seq);
     if (active.routeMessageId != null && rowRouteMessageId != null) {
@@ -142,15 +147,15 @@ export function isTranscriptJumpHighlightActiveForRow(
 export function useTranscriptJumpHighlight(row: TranscriptJumpHighlightRowIdentity): number | null {
     const serverId = row.sessionAddress?.serverId;
     const sessionId = row.sessionAddress?.sessionId;
-    const { routeMessageId = null, seq = null } = row;
+    const { routeMessageId = null, seq = null, filePath = null } = row;
     const getSnapshot = React.useCallback(() => {
         const active = activeHighlight;
         if (active == null) return null;
         return isTranscriptJumpHighlightActiveForRow(active, {
-            sessionAddress: normalizeSessionAddress(serverId, sessionId), routeMessageId, seq,
+            sessionAddress: normalizeSessionAddress(serverId, sessionId), routeMessageId, seq, filePath,
         })
             ? active.token
             : null;
-    }, [serverId, sessionId, routeMessageId, seq]);
+    }, [serverId, sessionId, routeMessageId, seq, filePath]);
     return React.useSyncExternalStore(subscribeToTranscriptJumpHighlight, getSnapshot, getSnapshot);
 }

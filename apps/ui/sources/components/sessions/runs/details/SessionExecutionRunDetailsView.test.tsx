@@ -259,10 +259,11 @@ beforeEach(async ({ task }) => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) { ExecutionRunStopRequestSchema.parse(input); return stopReply(); }
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1) { ExecutionRunCancelTurnRequestSchema.parse(input); return cancelReply(); }
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE) { ExecutionRunEnsureRequestSchema.parse(input); return resumeReply(); }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND) return { ok: true };
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [runState] };
         if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
             'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { available: true, protocolVersion: 2,
-                features: { detachedScope: true, startAndWait: true },
+                features: { detachedScope: true, startAndWait: true, exactInputResults: true },
                 backends: { codex: { available: true, intents: ['review', 'delegate'] } } } },
         } };
         if (method === RPC_METHODS.STOP_SESSION) return StopSessionResultSchema.parse({ status: 'stopped' });
@@ -346,6 +347,20 @@ afterEach(async () => {
 });
 
 describe('SessionExecutionRunDetailsView — real Home, transcript and interaction owners', () => {
+    it('reads and replies to a detached Run through its exact Machine without Session input', async () => {
+        runState = liveRun();
+        latestToolResult = { text: 'The selected line is safe.' };
+        await mount({ sessionId: null, workspace: { machineId: 'm1', cwd: '/repo' } });
+        await loaded();
+        expect(info().run.runId).toBe('run_1');
+        expect(boundary.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && request.targetId === 'm1')).toBe(true);
+        const input = screen.findAllByTestId('session-composer-input').find(node => typeof node.props.onChangeText === 'function')!;
+        await act(async () => { input.props.onChangeText('Explain the next line'); });
+        await screen.pressByTestIdAsync('session-composer-send');
+        await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toHaveLength(1));
+        expect(JSON.stringify(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('Explain the next line');
+        expect(httpReads.filter(request => request.path.includes('/sessions/'))).toEqual([]);
+    });
     it('publishes the loaded Run identity and its rename to the workspace, not the parent Agents chrome', async () => {
         routeBoundary.pathname = '/session/s1/runs/run_1';
         // The popover fixture supplies measurement, not a browser URL. Install
