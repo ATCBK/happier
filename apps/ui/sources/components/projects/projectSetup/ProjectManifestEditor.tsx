@@ -236,7 +236,7 @@ function ProjectManifestEditorLeaf(
                 oldText: conflict.document?.bytes ?? '',
                 newText: snapshot.draft.bytes,
                 filePath: '.happier/project.json',
-                subtitle: t('files.fileChangedExternally'),
+                subtitle: t('files.externalFileChange'),
               }),
           }}
           moreActions={[

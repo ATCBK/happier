@@ -7,12 +7,11 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import { FileActionToolbar, type FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
 import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/workspaces/files/file/FileScreenState';
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
-import { FileContentPanel } from '@/components/workspaces/files/file/FileContentPanel';
+import { FileContentPanel, resolveFileCodeGeometry } from '@/components/workspaces/files/file/FileContentPanel';
 import { FileViewerFindSurface } from './FileViewerFindSurface';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { FileEditorPanel } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
-import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { WorkspaceFileDownloadButton } from '@/components/workspaces/files/file/WorkspaceFileDownloadButton';
 import { WorkspaceAugmentedScmChangeDiscardButton } from '@/components/workspaces/files/details/sessionAugmentation/WorkspaceAugmentedScmChangeDiscardButton';
@@ -26,6 +25,7 @@ import { getPreferredLanguage, t } from '@/text';
 
 import { buildFileLineSelectionFingerprint, canStartLineSelection, canUseLineSelection } from '@/scm/scmLineSelection';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { allowsLiveStaging, isAtomicCommitStrategy } from '@/scm/settings/commitStrategy';
 import { useFileDetailsDiffMode } from '@/scm/diff/useFileDetailsDiffMode';
 import { buildScmDiffSnapshotSignature } from '@/scm/diffCache/scmDiffCacheKey';
@@ -35,7 +35,6 @@ import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import { useWorkspaceFileTransfers } from '@/hooks/workspaces/transfers/useWorkspaceFileTransfers';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Modal } from '@/modal';
-import { resolveShowDiffToggle } from '@/components/workspaces/files/details/workspaceFileDetails/resolveShowDiffToggle';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
@@ -49,10 +48,13 @@ import {
 import type { OpenableContentStatResultV1 } from '@happier-dev/protocol';
 
 import { useWorkspaceFileDetailsLoading } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileDetailsLoading';
+import { recordRecentWorkspaceFile } from '@/sync/domains/workspaces/files/recentWorkspaceFiles';
+import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { useWorkspaceFileEditorState } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState';
-import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraftCache';
-import { useMarkdownFileEditMode } from '@/components/workspaces/files/details/workspaceFileDetails/useMarkdownFileEditMode';
-import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
+import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
+import { useWorkspaceFileEditorCommands } from './workspaceFileDetails/useWorkspaceFileEditorCommands';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import {
     storage,
     useActiveServerAccountScope,
@@ -77,7 +79,12 @@ import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessi
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { resolveFileDetailsDisplayMode } from './workspaceFileDetails/resolveFileDetailsDisplayMode';
 import { resolveFileDetailsRenderableDiff } from './workspaceFileDetails/resolveFileDetailsRenderableDiff';
-import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
+import { useWorkspaceFileView } from './workspaceFileDetails/useWorkspaceFileView';
+import { resolveFilePageHeaderModel } from '../file/filePageModel';
+import { registerFileViewActionOwner, type FileViewActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import type { WorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
+import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
 import { buildWorkspaceFileReferenceAnchorKey } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import { extractSelectedDiffLineKeysFromPatch } from '@/scm/scmPatchSelection';
 import type { DetailsSurfaceRenderInputV1 } from '@/components/appShell/panes/details/surfaces';
@@ -109,9 +116,6 @@ import {
     type WorkspaceFileViewerMatch,
 } from './workspaceFileDetails/resolveWorkspaceFileViewer';
 
-const loadRichMarkdownEditorPanel = async () =>
-    (await import('@/components/ui/markdown/editor/RichMarkdownEditorPanel')).RichMarkdownEditorPanel;
-
 export type WorkspaceFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
     anchor: ReviewCommentAnchor;
@@ -135,6 +139,7 @@ export type WorkspaceFileDetailsViewProps = Readonly<{
     scopeId: string;
     scope: WorkspaceScopeBase | null;
     filePath: string;
+    initialView?: WorkspaceFileLinkView;
     deepLinkAnchor?: WorkspaceFileDeepLinkAnchor | null;
     findSeed?: FileFindSeed | null;
     onFindSeedConsumed?: () => void;
@@ -515,7 +520,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const constrainWidth = presentation === 'screen';
     const pane = useAppPaneScope(props.scopeId);
     const editorAccountScope = useActiveServerAccountScope(props.scope?.serverId ?? null);
-    const setDetailsTabState = pane.setDetailsTabState;
+    const patchDetailsTabState = pane.patchDetailsTabState;
     const filePath = props.filePath;
     const scope = props.scope;
     const findSurfaceId = `file:${props.scopeId}:${filePath}`;
@@ -535,11 +540,15 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const [copyContentBusy, setCopyContentBusy] = React.useState(false);
 
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
+    const { view: fileView, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
     const isActive = props.openableContentViewer?.details.active ?? (presentation === 'screen' || (pane.scopeState?.details?.isOpen === true && pane.scopeState.details.activeTabKey === tabKey));
     const persistedDraft = readWorkspaceFileEditorDraft(pane.scopeState?.details?.tabState?.[tabKey], editorAccountScope?.accountId ?? null);
     const persistDraft = React.useCallback((draft: WorkspaceFileDetailsPersistedDraft | null) => {
-        setDetailsTabState(tabKey, draft);
-    }, [setDetailsTabState, tabKey]);
+        patchDetailsTabState(tabKey, draft ?? {
+            accountId: null, isEditingFile: false, editorOriginalText: undefined,
+            editorOriginalHash: undefined, editorText: undefined,
+        });
+    }, [patchDetailsTabState, tabKey]);
 
     const deepLinkAnchor = props.deepLinkAnchor ?? null;
     const deepLinkKey = React.useMemo(() => {
@@ -556,12 +565,10 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations');
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments');
     const fileEditorFeatureEnabled = useFeatureEnabled('files.editor');
-    const markdownRichEditorFeatureEnabled = useFeatureEnabled('files.markdownRichEditor');
     const showLineNumbers = useSetting('showLineNumbers');
     const wrapLinesInDiffs = useSetting('wrapLinesInDiffs');
     const filesEditorAutoSave = useSetting('filesEditorAutoSave');
     const filesEditorChangeDebounceMs = useSetting('filesEditorChangeDebounceMs');
-    const filesEditorMaxFileBytes = useSetting('filesEditorMaxFileBytes');
     const filesEditorBridgeMaxChunkBytes = useSetting('filesEditorBridgeMaxChunkBytes');
     const filesEditorWebMonacoEnabled = useSetting('filesEditorWebMonacoEnabled');
     const filesEditorNativeCodeMirrorEnabled = useSetting('filesEditorNativeCodeMirrorEnabled');
@@ -585,15 +592,13 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const snapshotSignature = React.useMemo(() => scmSnapshot ? buildScmDiffSnapshotSignature(scmSnapshot) : null, [scmSnapshot]);
 
     const [displayMode, setDisplayMode] = React.useState<FileDisplayMode>(() => (
-        persistedDraft?.isEditingFile || deepLinkAnchor?.source === 'file' ? 'file' : 'diff'
+        persistedDraft?.isEditingFile ? 'file' : fileView.mode ?? (deepLinkAnchor?.source === 'file' ? 'file' : 'diff')
     ));
-    const displayRequestKey = `${props.scopeId}:${filePath}:${deepLinkKey}`;
-    const [displayRequest, setDisplayRequest] = React.useState<{ key: string; mode: FileDisplayMode } | null>(null);
-    const requestedDisplayMode = displayRequest?.key === displayRequestKey ? displayRequest.mode : null;
+    const requestedDisplayMode = fileView.mode ?? null;
     const onDisplayMode = React.useCallback((mode: FileDisplayMode) => {
-        setDisplayRequest({ key: displayRequestKey, mode });
+        patchFileView({ mode });
         setDisplayMode(mode);
-    }, [displayRequestKey]);
+    }, [patchFileView]);
     const [diffMode, setDiffMode] = useFileDetailsDiffMode({
         fileKey: `${scope?.serverId}:${scope?.machineId}:${scope?.rootPath}:${filePath}`,
         snapshot: scmSnapshot,
@@ -633,10 +638,11 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         () => buildFileLineSelectionFingerprint(fileEntry),
         [fileEntry]
     );
-    const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, refreshAll } = useWorkspaceFileDetailsLoading({
+    const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, refreshAll, publishSavedFile } = useWorkspaceFileDetailsLoading({
         scope, filePath, diffMode,
         fileEntryKind: fileEntry?.kind ?? null,
         fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
+        previewSlice: fileView.previewSlice,
         maxImagePreviewBytes: typeof filesImagePreviewMaxBytes === 'number' ? filesImagePreviewMaxBytes : null,
         includeDiff: displayMode === 'diff' && (scmSnapshot == null || fileEntry != null),
         includeFile: displayMode !== 'diff',
@@ -644,6 +650,20 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         isActive,
         refreshFingerprint: `${lineSelectionFingerprint ?? 'none'}:${scmSnapshot?.fetchedAt ?? 'none'}`,
     });
+    const recentActivation = React.useRef<string | null>(null);
+    React.useEffect(() => {
+        if (!isActive) { recentActivation.current = null; return; }
+        if (!scope || isLoading || isDiffLoading || error || (!fileContent && diffContent === null)) return;
+        const workspaceKey = tryBuildWorkspaceCacheKey(scope);
+        if (!workspaceKey) return;
+        const activation = `${workspaceKey}\u0000${filePath}`;
+        if (recentActivation.current === activation) return;
+        recentActivation.current = activation;
+        const state = storage.getState();
+        const previous = state.localSettings.recentWorkspaceFilesV1;
+        const next = recordRecentWorkspaceFile(previous, workspaceKey, filePath);
+        if (next !== previous) state.applyLocalSettings({ recentWorkspaceFilesV1: next });
+    }, [diffContent, error, fileContent, filePath, isActive, isDiffLoading, isLoading, scope]);
     const copyFileContent = React.useCallback(async () => {
         if (!fileContent || fileContent.isBinary || copyContentBusy) return;
         setCopyContentBusy(true);
@@ -659,7 +679,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         const result = await rawTransfers.startDownload({ path: filePath, asZip: false });
         if (!result.ok && result.canceled !== true && mountedRef.current) Modal.alert(t('common.error'), result.error);
     }, [fileEntry?.kind, filePath, mountedRef, rawTransfers.startDownload, scope]);
-    const lineSelectionEnabled = canUseLineSelection({
+    const lineSelectionEnabled = !fileContent?.partial && canUseLineSelection({
         scmWriteEnabled,
         includeExcludeEnabled,
         virtualLineSelectionEnabled,
@@ -668,7 +688,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         diffMode,
         diffContent,
     });
-    const lineSelectionCanStart = canStartLineSelection({
+    const lineSelectionCanStart = !fileContent?.partial && canStartLineSelection({
         scmWriteEnabled,
         includeExcludeEnabled,
         virtualLineSelectionEnabled,
@@ -720,8 +740,9 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     }, [lineSelectionCanStart]);
 
     const language = getFileLanguageFromPath(filePath);
+    const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime });
     const markdownPreviewAvailable = fileContent?.isBinary !== true
-        && (language === 'markdown' || language === 'mdx')
+        && fileViewer.kind === 'markdown'
         && typeof fileContent?.content === 'string';
     const hasRenderableDiff = React.useMemo(
         () => resolveFileDetailsRenderableDiff({ diffContent }),
@@ -799,44 +820,31 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(scope);
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(scope);
 
-    const {
-        editorSurfaceEnabled,
-        isEditingFile,
-        editorResetKey,
-        editorSeedText,
-        editorHandleRef,
-        onEditorChange,
-        getEditorText,
-        isSavingEdits,
-        editorDirty,
-        fileChangedExternally,
-        editorTooLarge,
-        editorChunkTooLarge,
-        startEditingFile,
-        cancelEditingFile,
-        saveFileEdits,
-        compareFileEdits,
-    } = useWorkspaceFileEditorState({
+    const approval = useActionApprovalContinuation({
+        scopeKey: JSON.stringify([scope?.serverId, editorAccountScope?.accountId, props.scopeId, filePath]),
+        serverId: scope?.serverId ?? '', onExecuted: refreshAll,
+    });
+    const editorState = useWorkspaceFileEditorState({
         scope: scope ?? { serverId: 'unknown', machineId: 'unknown', rootPath: '/' },
-        accountId: editorAccountScope?.accountId ?? null,
-        filePath,
-        displayMode,
-        fileText: fileContent?.isBinary ? null : (fileContent?.content ?? null),
-        fileHash: fileContent?.isBinary ? null : (fileContent?.contentHash ?? null),
-        fileWriteSupported,
-        setFileWriteSupported,
-        fileEditorFeatureEnabled: fileEditorFeatureEnabled === true,
+        accountId: editorAccountScope?.accountId ?? null, filePath, displayMode,
+        fileText: fileContent?.isBinary || fileContent?.partial ? null : (fileContent?.content ?? null),
+        fileHash: fileContent?.isBinary || fileContent?.partial ? null : (fileContent?.contentHash ?? null),
+        encoding: fileContent?.encoding, unreachable: checkoutReachability.unreachable,
+        fileWriteSupported, setFileWriteSupported,
+        fileEditorFeatureEnabled: fileEditorFeatureEnabled === true && !fileContent?.partial,
         filesEditorWebMonacoEnabled: filesEditorWebMonacoEnabled === true,
         filesEditorNativeCodeMirrorEnabled: filesEditorNativeCodeMirrorEnabled === true,
         filesEditorAutoSave: filesEditorAutoSave === true,
         filesEditorChangeDebounceMs: typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : 0,
-        filesEditorMaxFileBytes: typeof filesEditorMaxFileBytes === 'number' ? filesEditorMaxFileBytes : 0,
-        filesEditorBridgeMaxChunkBytes: typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : 0,
-        mountedRef,
-        refreshAll,
-        persistedDraft: persistedDraft ?? null,
-        persistDraft,
+        mountedRef, refreshAll, publishSavedFile, persistedDraft: persistedDraft ?? null, persistDraft,
+        panePersistenceFailed: pane.persistenceFailed,
+        requestApproval: approval.requestApproval,
     });
+    const { editorSurfaceEnabled, isEditingFile, editorResetKey, editorSeedText, editorHandleRef,
+        onEditorChange, editorDirty, saveFileEdits, cancelEditingFile, startEditingFile,
+        startComparison, liveValue, initialLine, onEditorReady } = editorState;
+    const codeGeometryText = fileContent?.isBinary ? editorSeedText : fileContent?.content ?? editorSeedText;
+    const codeGeometry = React.useMemo(() => resolveFileCodeGeometry({ text: codeGeometryText, reviewCommentsEnabled, reviewCommentModeActive }), [codeGeometryText, reviewCommentsEnabled, reviewCommentModeActive]);
     // The tab strip shows this tab's unsaved dot; the editor state is the only owner of that fact.
     const detailsTabChrome = useDetailsTabChrome();
     React.useEffect(() => {
@@ -848,35 +856,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         hasPersistedEditingDraft: persistedDraft?.isEditingFile === true,
     });
 
-    // Raw <-> Rich edit-mode state for markdown files (Lane I / R-A20). Owns the
-    // flush-then-reseed dance + eligibility so this view stays thin; the rich
-    // editor mounts only under `displayMode === 'file' && isEditingFile` (D5).
-    const {
-        markdownEditMode,
-        richEligible: markdownRichEligible,
-        richEligibilityPending: markdownRichEligibilityPending,
-        richDisabledReason: markdownRichDisabledReason,
-        seedText: markdownSeedText,
-        resetKey: markdownResetKey,
-        onToggle: onMarkdownEditMode,
-        onUnavailable: onMarkdownEditorUnavailable,
-    } = useMarkdownFileEditMode({
-        isActive,
-        isEditing: isEditingFile,
-        filePath,
-        editorSeedText,
-        editorResetKey,
-        editorHandleRef,
-        onEditorChange,
-        getEditorText,
-    });
-
-    // `.md` and `.mdx` both flow through the markdown seed machinery (so the raw
-    // editor reseeds consistently), but rich editing — and therefore the Raw<->Rich
-    // toggle — is offered ONLY for plain `.md` (R-A1: `.mdx` stays raw/preview-only).
-    const isMarkdownFile = language === 'markdown' || language === 'mdx';
-    const showMarkdownEditToggle = markdownRichEditorFeatureEnabled === true && language === 'markdown';
-    const useRichMarkdownEditor = showMarkdownEditToggle && markdownEditMode === 'rich' && markdownRichEligible;
+    const isMarkdownFile = fileViewer.kind === 'markdown';
 
     React.useEffect(() => {
         setDisplayMode(resolveFileDetailsDisplayMode({
@@ -889,10 +869,67 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         }));
     }, [requestedDisplayMode, deepLinkAnchor?.source, fileContent, hasRenderableDiff, isEditingFile, markdownPreviewAvailable, persistedDraft?.isEditingFile]);
 
-    const handleStartEditingFile = React.useCallback(() => {
-        props.onStartEditingFile?.();
-        startEditingFile();
-    }, [props.onStartEditingFile, startEditingFile]);
+    const handleStartEditingFile = React.useCallback((at?: { line: number }) => {
+        onDisplayMode('file'); props.onStartEditingFile?.(); startEditingFile(at);
+    }, [onDisplayMode, props.onStartEditingFile, startEditingFile]);
+    const focusedGroup = pane.scopeState?.details?.groups?.find(group => group.id === pane.scopeState?.details?.focusedGroupId);
+    const editorHeader = useWorkspaceFileEditorCommands({
+        editor: editorState, tabKey, onStart: handleStartEditingFile,
+        serverId: scope?.serverId ?? null, accountId: editorAccountScope?.accountId ?? null,
+        focused: isActive && (presentation === 'screen' || focusedGroup?.activeTabKey === tabKey),
+    });
+
+    const headerModel = resolveFilePageHeaderModel({
+        kind: fileViewer.kind,
+        hasRenderableDiff, deleted: fileEntry?.kind === 'deleted',
+        partial: Boolean(fileContent?.partial),
+        hasText: (fileContent?.isBinary === false && typeof fileContent.content === 'string') || persistedDraft?.isEditingFile === true,
+        writeSupported: fileWriteSupported || persistedDraft?.isEditingFile === true,
+        editorAvailable: editorSurfaceEnabled,
+    });
+    const fileViewActionOwner = React.useRef<FileViewActionOwner | null>(null);
+    fileViewActionOwner.current = {
+        tabId: tabKey, active: isActive, serverId: scope?.serverId ?? null,
+        accountId: editorAccountScope?.accountId ?? null,
+        mode: isEditingFile ? 'edit' : headerModel.modes.find(option => option.displayMode === displayMode)?.id ?? 'view',
+        changesScope: fileView.changesScope, blame: fileView.blame ?? false,
+        availableModes: [...headerModel.modes.map(option => option.id), ...(headerModel.editUnavailableReason === null ? ['edit' as const] : [])],
+        blameAvailable: scmSnapshot?.capabilities.readBlame === true,
+        changesScopeAvailable: scope !== null,
+        set: patch => {
+            if (patch.mode === 'edit') handleStartEditingFile();
+            else if (patch.mode) {
+                const option = headerModel.modes.find(option => option.id === patch.mode);
+                if (!option) return false;
+                onDisplayMode(option.displayMode);
+            }
+            const { mode: _mode, ...viewPatch } = patch;
+            if (Object.keys(viewPatch).length > 0) patchFileView(viewPatch);
+            return true;
+        },
+    };
+    React.useEffect(() => registerFileViewActionOwner(JSON.stringify([props.scopeId, tabKey]), () => fileViewActionOwner.current!), [props.scopeId, tabKey]);
+
+    // Navigation and the public view Action apply through the same mounted page owner.
+    const initialViewKey = JSON.stringify([filePath, props.initialView?.view, props.initialView?.blame, props.deepLinkAnchor]);
+    const appliedInitialView = React.useRef({ key: initialViewKey, view: false, blame: false });
+    React.useEffect(() => {
+        if (!isActive || (!fileContent && !hasRenderableDiff && persistedDraft?.isEditingFile !== true)) return;
+        const requested = props.initialView;
+        const owner = fileViewActionOwner.current;
+        if (appliedInitialView.current.key !== initialViewKey) appliedInitialView.current = { key: initialViewKey, view: false, blame: false };
+        if (!owner || (!requested?.view && requested?.blame === undefined)) return;
+        // References name file coordinates; Markdown/SVG therefore open their Source mode.
+        const mode = requested.view === 'view' && !owner.availableModes.includes('view')
+            ? headerModel.modes.find(option => option.displayMode === 'file')?.id ?? headerModel.modes[0]?.id : requested.view;
+        if (!appliedInitialView.current.view && mode && owner.availableModes.includes(mode)) {
+            appliedInitialView.current.view = owner.mode === mode || owner.set({ mode });
+        }
+        if (!appliedInitialView.current.blame && requested.blame !== undefined && (owner.blameAvailable || requested.blame === false)) {
+            appliedInitialView.current.blame = owner.blame === requested.blame || owner.set({ blame: requested.blame });
+        }
+    }, [initialViewKey, isActive, fileContent, hasRenderableDiff, persistedDraft?.isEditingFile,
+        headerModel.editUnavailableReason, scmSnapshot?.capabilities.readBlame]);
 
     const onStageFile = React.useCallback(() => {
         void handleStage(true);
@@ -970,35 +1007,16 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const previewTooLarge = error === t('files.fileTooLargeToPreview');
     const fatalError = Boolean(error) && !previewTooLarge && !diffContent && !fileContent;
 
-    React.useEffect(() => {
-        if (!previewTooLarge) return;
-        if (displayMode !== 'file' && displayMode !== 'markdown') return;
-        setDisplayRequest(null);
-        setDisplayMode('diff');
-    }, [displayMode, previewTooLarge]);
-
-    const imagePreviewMime = fileContent?.binaryMime?.startsWith('image/') ? fileContent.binaryMime : null;
-    const videoPreviewMime = fileContent?.binaryMime?.startsWith('video/') ? fileContent.binaryMime : null;
-    const imagePreviewCacheKey = React.useMemo(() => {
-        if (!imagePreviewMime) return null;
-        return [
-            scope?.serverId ?? '',
-            scope?.machineId ?? '',
-            scope?.rootPath ?? '',
-            filePath,
-            fileContent?.binarySizeBytes ?? '',
-            snapshotSignature ?? lineSelectionFingerprint ?? '',
-        ].join(':');
-    }, [fileContent?.binarySizeBytes, filePath, imagePreviewMime, lineSelectionFingerprint, snapshotSignature, scope?.machineId, scope?.rootPath, scope?.serverId]);
-    const imagePreview = useSessionImagePreview({
-        sessionId: sessionId || props.scopeId,
-        filePath,
+    const imagePreviewMime = fileViewer.kind === 'image' ? fileViewer.mimeType : null;
+    const videoPreviewMime = fileViewer.kind === 'video' ? fileViewer.mimeType : null;
+    const imagePreviewIdentity = scope ? buildWorkspacePreviewIdentity(scope, filePath, fileContent?.binarySizeBytes,
+        JSON.stringify([snapshotSignature ?? lineSelectionFingerprint ?? null, fileContent?.binaryPreviewRevision ?? null])) : null;
+    const imagePreview = useFilePreviewSource({
+        source: scope ? { kind: 'workspace', scope, filePath } : { kind: 'uri', uri: '' },
         enabled: isActive && Boolean(scope && imagePreviewMime),
-        cacheKey: imagePreviewCacheKey,
+        ...imagePreviewIdentity,
         mimeType: imagePreviewMime,
         sizeBytes: fileContent?.binarySizeBytes ?? null,
-        workspaceScope: scope,
-        cacheScopeId: scope ? `${scope.serverId}:${scope.machineId}:${scope.rootPath}` : null,
     });
     const imagePreviewUri = imagePreview.status === 'loaded' ? imagePreview.uri : null;
 
@@ -1011,14 +1029,14 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         />;
     }
 
-    if (isLoading) {
+    if (isLoading && !fileContent && !isEditingFile) {
         // The machine isn't answering and nothing of this file is known yet: say what it waits for
         // (once, when the page above already does) instead of an "Opening…" that never ends.
         if (checkoutReachability.unreachable) return <CheckoutUnreachableState reachability={checkoutReachability} testID="file-details-unreachable" />;
         return <FileLoadingState filePath={filePath} />;
     }
 
-    if (fatalError) {
+    if (fatalError && !isEditingFile) {
         return <FileErrorState filePath={filePath} error={error} onRetry={onRefresh} />;
     }
 
@@ -1039,7 +1057,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         && scmWriteEnabled
         && (scmSnapshot?.capabilities?.writeDiscard === true),
     );
-    const canFindText = !isBinaryFile && !useRichMarkdownEditor
+    const canFindText = !isBinaryFile
         && (displayMode === 'diff' ? typeof diffContent === 'string' : typeof fileContent?.content === 'string');
     const fileHeaderRightElement = canFindText || showDownloadAction || showDiscardAction || props.onRevealInFilesTree || props.onOpenChanges ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s20 }}>
@@ -1100,9 +1118,9 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                     }}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
-                    showDiffToggle={resolveShowDiffToggle({ diffContent, hasPendingDelta, hasIncludedDelta, fileIsBinary: isBinaryFile })}
+                    showDiffToggle={headerModel.modes.some(option => option.id === 'changes')}
                     showFileToggle={!previewTooLarge && fileEntry?.kind !== 'deleted'}
-                    showMarkdownToggle={(language === 'markdown' || language === 'mdx') && !isBinaryFile && !previewTooLarge && fileEntry?.kind !== 'deleted'}
+                    showMarkdownToggle={isMarkdownFile && !isBinaryFile && !previewTooLarge && fileEntry?.kind !== 'deleted'}
                     showWrapLinesToggle={!isBinaryFile && !previewTooLarge && displayMode !== 'markdown'}
                     diffMode={diffMode}
                     onDiffMode={setDiffMode}
@@ -1130,18 +1148,12 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                     onStartLineSelection={onStartLineSelection}
                     onStartRangeSelection={onStartRangeSelection}
                     onToggleCommentMode={onToggleReviewCommentMode}
-                    fileEditorEnabled={editorSurfaceEnabled && !editorTooLarge && !editorChunkTooLarge && !isBinaryFile && fileEntry?.kind !== 'deleted'}
+                    fileEditorEnabled={editorSurfaceEnabled && !isBinaryFile && fileEntry?.kind !== 'deleted'}
                     isEditingFile={isEditingFile}
-                    fileEditorDirty={editorDirty}
-                    fileEditorBusy={isSavingEdits}
+                    editor={editorHeader}
                     onStartEditingFile={handleStartEditingFile}
                     onCancelEditingFile={cancelEditingFile}
                     onSaveEditingFile={saveFileEdits}
-                    showMarkdownEditToggle={showMarkdownEditToggle}
-                    markdownEditMode={markdownEditMode}
-                    onMarkdownEditMode={onMarkdownEditMode}
-                    markdownRichEligible={markdownRichEligible}
-                    markdownRichDisabledReason={markdownRichDisabledReason}
                     statusLabel={headerStatusLabel}
                     diffStat={headerDiffStat}
                     summaryFacts={headerSummaryFacts}
@@ -1155,12 +1167,12 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                                     action={{ label: t('common.retry'), onPress: onRefresh }}
                                 />
                             ) : null}
-                            {fileChangedExternally ? (
+                            {editorState.conflict ? (
                                 <SurfaceFreshnessLine
                                     testID="file-editor-external-change-banner"
                                     tone="warning"
-                                    reason={t('files.fileChangedExternally')}
-                                    action={{ label: t('detailsSurface.file.compare'), onPress: compareFileEdits }}
+                                    reason={t('files.externalFileChange')}
+                                    action={{ label: t('detailsSurface.file.compare'), onPress: startComparison }}
                                 />
                             ) : null}
                         </>
@@ -1184,56 +1196,25 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                     ...(constrainWidth ? { maxWidth: layout.maxWidth, alignSelf: 'center' } : { maxWidth: '100%' }),
                 }}
             >
-                {(displayMode === 'diff' && !diffContent && isDiffLoading) || (displayMode !== 'diff' && !fileContent && !error) ? (
+                {(displayMode === 'diff' && !diffContent && isDiffLoading) || (displayMode !== 'diff' && !fileContent && !error && !isEditingFile) ? (
                     <FileLoadingState filePath={filePath} />
-                ) : displayMode === 'file' && isEditingFile && showMarkdownEditToggle ? (
-                    // Plain `.md` editing: Raw<->Rich can swap, so crossfade the body
-                    // switch keyed on `markdownEditMode` (R-A20 / §4.5). Only the active
-                    // child mounts while not transitioning, so the surface tree stays
-                    // single-mounted (preserving the existing editor testIDs/behavior).
-                    <SlideTransitionSwitch
-                        contentKey={markdownEditMode}
-                        direction={markdownEditMode === 'rich' ? 'forward' : 'backward'}
-                    >
-                        {markdownEditMode === 'rich' && markdownRichEligibilityPending ? (
-                            <FileLoadingState filePath={filePath} />
-                        ) : useRichMarkdownEditor ? (
-                            <SessionPaneLazyLoader
-                                testID="file-details-rich-editor-loading"
-                                load={loadRichMarkdownEditorPanel}
-                                props={{
-                                    resetKey: markdownResetKey,
-                                    editorRef: editorHandleRef,
-                                    value: markdownSeedText,
-                                    onChange: onEditorChange,
-                                    onUnavailable: onMarkdownEditorUnavailable,
-                                    changeDebounceMs: typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined,
-                                    bridgeMaxChunkBytes: typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined,
-                                }}
-                            />
-                        ) : (
-                            <FileEditorPanel
-                                surfaceId={findSurfaceId}
-                                active={isActive}
-                                filePath={filePath}
-                                focusRootRef={findFocusRoot}
-                                findSeed={props.findSeed}
-                                onFindSeedConsumed={props.onFindSeedConsumed}
-                                theme={theme}
-                                resetKey={markdownResetKey}
-                                editorRef={editorHandleRef}
-                                value={markdownSeedText}
-                                language={language}
-                                onChange={onEditorChange}
-                                wrapLines={wrapLinesInDiffs}
-                                showLineNumbers={showLineNumbers}
-                                changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
-                                bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
-                            />
-                        )}
-                    </SlideTransitionSwitch>
+                ) : displayMode === 'file' && isEditingFile && isMarkdownFile ? (
+                    <MarkdownCodeEditorField
+                        {...codeGeometry}
+                        value={editorSeedText} resetKey={String(editorResetKey)} filePath={filePath} language={language}
+                        onChange={onEditorChange} editorRef={editorHandleRef} liveValue={liveValue}
+                        findSurfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
+                        findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}
+                        wrapLines={wrapLinesInDiffs} showLineNumbers={showLineNumbers}
+                        changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
+                        bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
+                        onReady={onEditorReady} initialLine={initialLine}
+                    />
                 ) : displayMode === 'file' && isEditingFile ? (
                     <FileEditorPanel
+                        {...codeGeometry}
+                        onReady={onEditorReady}
+                        initialLine={initialLine}
                         surfaceId={findSurfaceId}
                         active={isActive}
                         filePath={filePath}
@@ -1241,9 +1222,9 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                         findSeed={props.findSeed}
                         onFindSeedConsumed={props.onFindSeedConsumed}
                         theme={theme}
-                        resetKey={isMarkdownFile ? markdownResetKey : String(editorResetKey)}
+                        resetKey={String(editorResetKey)}
                         editorRef={editorHandleRef}
-                        value={isMarkdownFile ? markdownSeedText : editorSeedText}
+                        value={editorSeedText}
                         language={language}
                         onChange={onEditorChange}
                         wrapLines={wrapLinesInDiffs}

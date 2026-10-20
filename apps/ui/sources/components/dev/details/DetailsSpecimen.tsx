@@ -196,7 +196,7 @@ function FileFrame(props: Readonly<{ editing?: boolean }>) {
                 statusLabel={props.editing ? null : t('detailsSurface.file.statusModified')}
                 diffStat={props.editing ? null : { added: 4, removed: 2 }}
                 notice={props.editing ? (
-                    <SurfaceFreshnessLine tone="warning" reason={t('files.fileChangedExternally')} action={{ label: t('detailsSurface.file.compare'), onPress: () => showTextComparison({ oldText: HOOK_TEXT.replace('never when the window resizes', 'only when the route changes'), newText: HOOK_TEXT, filePath: 'useSettingsRouteKey.ts', subtitle: t('files.fileChangedExternally') }) }} />
+                    <SurfaceFreshnessLine tone="warning" reason={t('files.externalFileChange')} action={{ label: t('detailsSurface.file.compare'), onPress: () => showTextComparison({ oldText: HOOK_TEXT.replace('never when the window resizes', 'only when the route changes'), newText: HOOK_TEXT, filePath: 'useSettingsRouteKey.ts', subtitle: t('files.externalFileChange') }) }} />
                 ) : null}
             />
             <View style={{ flex: 1, minHeight: 0 }}>
