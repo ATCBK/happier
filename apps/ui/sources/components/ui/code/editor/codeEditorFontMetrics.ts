@@ -1,5 +1,6 @@
 export const CODE_EDITOR_BASE_FONT_SIZE = 13;
-export const CODE_EDITOR_BASE_LINE_HEIGHT = 20;
+export const CODE_EDITOR_BASE_LINE_HEIGHT = 22;
+export { CODE_EDITOR_BASE_LINE_HEIGHT as CODE_LINE_BASE_HEIGHT };
 
 export type CodeEditorFontMetrics = Readonly<{
     scale: number;
