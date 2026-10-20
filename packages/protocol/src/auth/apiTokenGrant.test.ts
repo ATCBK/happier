@@ -62,8 +62,10 @@ describe('API token grant admission', () => {
     expect(projectApiTokenSessionSpawnAdmissionV1(authored))
       .toEqual({ ...spawn, connectedServices });
     const facts = projectApiTokenSessionSpawnAdmissionV1(authored);
-    expect(evaluate({ grant: grant({ create }), actionId: 'session.spawn_new', target: machine, spawnInput: facts }))
-      .toEqual(evaluate({ grant: grant({ create }), actionId: 'session.spawn_new', target: machine, spawnInput: spawn }));
+    const creationGrant = grant({ create: { ...create, connectedServices } });
+    expect(evaluate({ grant: creationGrant, actionId: 'session.spawn_new', target: machine, spawnInput: facts }))
+      .toEqual(evaluate({ grant: creationGrant, actionId: 'session.spawn_new', target: machine,
+        spawnInput: { ...spawn, connectedServices } }));
     expect(facts).not.toHaveProperty('initialInput');
     expect(facts).not.toHaveProperty('agentSessionStartupInstructionsV1');
   });
