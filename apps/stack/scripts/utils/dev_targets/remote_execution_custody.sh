@@ -118,16 +118,10 @@ read_test_temp_root_users() {
   while read -r observed_pid observed_group observed_state observed_uid; do
     [ "$observed_uid" = "$UID" ] || continue
     case "$observed_state" in Z*) continue ;; esac
-    # A unique allocation's binding is inherited by processes born with or
-    # after its creator. Filter older identities before reading environments,
-    # rather than walking every older same-account process on each dispatch.
+    # Recheck terminal state after the census. An older process can receive a
+    # binding through IPC and exec without changing its kernel birth token.
     heavyweight_read_process_token "$observed_pid"
     case "$heavyweight_process_state" in Z|X|x) continue ;; esac
-    observed_token=$heavyweight_process_token_value
-    case "$observed_token:$2" in
-      *[!0-9:]*|:*|*:) ;;
-      *) [ "$observed_token" -ge "$2" ] || continue ;;
-    esac
     # Read only the explicit non-secret custody binding. Unknown visibility for
     # a live process in this account means no deletion, never guessed absence.
     if ! {
@@ -139,9 +133,8 @@ ${binding#TMPDIR=}" ;; esac
       done < "/proc/$observed_pid/environ"
     } 2>/dev/null; then
       [ ! -d "/proc/$observed_pid" ] && continue
-      # A process born before the creator cannot have inherited a binding for
-      # this uniquely allocated root. Same-tick births remain conservatively
-      # unknown; unreadable newer processes prevent reclamation.
+      # Terminal tasks no longer hold scratch. Unknown live bindings retain it
+      # regardless of birth time, including processes that received it later.
       heavyweight_read_process_token "$observed_pid"
       case "$heavyweight_process_state" in Z|X|x) continue ;; esac
       observed_token=$heavyweight_process_token_value
@@ -150,10 +143,8 @@ ${binding#TMPDIR=}" ;; esac
           printf '[preferred-execution] retaining temporary scratch: process %s identity is unavailable after environment inspection failed\n' "$observed_pid" >&2
           return 1 ;;
       esac
-      if [ "$observed_token" -ge "$2" ]; then
-        printf '[preferred-execution] retaining temporary scratch: live process %s (state=%s, start=%s, creator=%s) has an unreadable environment\n' "$observed_pid" "$heavyweight_process_state" "$observed_token" "$2" >&2
-        return 1
-      fi
+      printf '[preferred-execution] retaining temporary scratch: live process %s (state=%s, start=%s, creator=%s) has an unreadable environment\n' "$observed_pid" "$heavyweight_process_state" "$observed_token" "$2" >&2
+      return 1
     fi
   done <<< "$1"
 }
@@ -270,8 +261,7 @@ cleanup() {
   [ -z "$lifetime_pid" ] || wait "$lifetime_pid" 2>/dev/null || true
   if [ -n "$command_temp" ]; then
     # Positive producer custody: all payload descendants inherit TMPDIR. Like
-    # test-root teardown, unknown newer bindings or a live group retain it.
-    # Older unreadable processes cannot have inherited this unique allocation.
+    # test-root teardown, unknown live bindings or a live group retain it.
     local snapshot binding
     case "$command_temp_token" in ''|*[!0-9]*) return ;; esac
     case "$command_temp" in *$'\n'*|*$'\r'*) return ;; esac

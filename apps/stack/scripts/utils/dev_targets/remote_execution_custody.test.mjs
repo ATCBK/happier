@@ -13,10 +13,24 @@ const custody = new URL('./remote_execution_custody.sh', import.meta.url).pathna
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const tempHelper = new URL('../../../../../scripts/testing/process/temporaryDirectories.mjs', import.meta.url).href;
 
+async function processCensusEnv(root, pids) {
+  if (process.platform !== 'linux') return { ...process.env };
+  // Scope only the OS census to the fixture's known processes. Unrelated
+  // same-UID jobs can legitimately have unreadable environments, in which
+  // case production must retain scratch. Keep real /proc and group checks.
+  writeFakeBin({ root, name: 'ps', content: `#!/bin/sh
+if [ "$*" = '-eo pid=,pgid=,stat=,uid=' ]; then
+  exec /bin/ps -p ${pids.join(',')} -o pid=,pgid=,stat=,uid=
+fi
+exec /bin/ps "$@"
+` });
+  return { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}` };
+}
+
 test('routed scratch defaults beneath the disk-backed worker home and preserves an explicit TMPDIR', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-worker-scratch-' });
   const workerHome = join(root, 'worker-home');
-  const env = { ...process.env };
+  const env = await processCensusEnv(root, [process.pid]);
   delete env.TMPDIR;
   delete env.TMP;
   delete env.TEMP;
@@ -70,6 +84,39 @@ test('default command scratch admits Chromium singleton sockets on the disk-back
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('private scratch cleanup retains an older process that receives its binding and execs', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-temp-older-process-' });
+  const handoff = join(root, 'handoff');
+  assert.equal(spawnSync('mkfifo', [handoff]).status, 0);
+  // A pre-existing worker can receive a new scratch path through IPC. exec
+  // publishes its new environment without changing the kernel birth token.
+  const older = spawn('/bin/bash', ['-c', 'IFS= read -r directory < "$1"; exec env TMPDIR="$directory" /bin/sleep 300', '-', handoff], {
+    detached: true, stdio: 'ignore',
+  });
+  t.after(async () => { const closed = once(older, 'close'); older.kill('SIGTERM'); await closed; });
+  const identity = new URL('../proc/native_process_identity.sh', import.meta.url).pathname;
+  const olderToken = Number(spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(older.pid)], { encoding: 'utf8' }).stdout);
+  assert.ok(olderToken > 0);
+  // Establish a strictly older holder, so this detects an age-based shortcut.
+  // Observe a later kernel identity without guessing a tick duration.
+  await waitFor(() => Number(spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$$"', 'identity', identity], { encoding: 'utf8' }).stdout) > olderToken,
+    'kernel birth token did not advance past the older fixture');
+  const env = await processCensusEnv(root, [older.pid]);
+  delete env.TMPDIR;
+  const result = spawnSync('/bin/bash', [custody, 'run', join(root, 'worker-home/remote-exec/older.pid'), 'older', process.execPath, '--input-type=module', '-e', `
+    import { writeFileSync, readFileSync } from 'node:fs';
+    writeFileSync(${JSON.stringify(handoff)}, process.env.TMPDIR + '\\n');
+    while (!readFileSync('/proc/${older.pid}/environ', 'utf8').split('\\0').includes('TMPDIR=' + process.env.TMPDIR)) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    console.log(process.env.TMPDIR);
+  `], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(Number(spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(older.pid)], { encoding: 'utf8' }).stdout), olderToken);
+  assert.ok(running(older.pid), 'scratch cleanup must leave the external holder alive');
+  await access(result.stdout.trim());
+});
+
 test('explicit maintenance reclaims marked dead temp owners while retaining live groups, reused PIDs and unmarked neighbors', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-temp-custody-' });
   const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
@@ -77,6 +124,7 @@ test('explicit maintenance reclaims marked dead temp owners while retaining live
   const token = spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(process.pid)], { encoding: 'utf8' }).stdout;
   const liveGroup = spawn('/bin/sleep', ['300'], { detached: true, stdio: 'ignore' });
   t.after(() => liveGroup.kill('SIGTERM'));
+  const env = await processCensusEnv(root, [process.pid, liveGroup.pid]);
   const marker = (pid, start, group) => `happier-test-temp-v1\n${bootId}\n${pid}\n${start}\n${group}\n`;
   const roots = {};
   for (const [name, owner] of Object.entries({
@@ -92,12 +140,38 @@ test('explicit maintenance reclaims marked dead temp owners while retaining live
     if (owner) await writeFile(join(directory, '.happier-test-temp-owner'), owner);
     roots[name] = directory;
   }
-  const result = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const result = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   await assert.rejects(access(roots['happier-stack-unit-dead']), { code: 'ENOENT' });
   await assert.rejects(access(roots['happier-dev-test-reused']), { code: 'ENOENT' });
   for (const name of ['happier-external-hooks-config-live', 'docs-check-child', 'docs-check-unmarked', 'unrelated-scratch']) await access(roots[name]);
   assert.ok(running(liveGroup.pid), 'temp reclamation signaled a live child group');
+});
+
+test('maintenance reclaims dead scratch when a census process exits before its environment is read', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-temp-stale-census-' });
+  const identity = new URL('../proc/native_process_identity.sh', import.meta.url).pathname;
+  const token = spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(process.pid)], { encoding: 'utf8' }).stdout;
+  const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const directory = join(root, 'happier-stack-unit-dead');
+  await mkdir(directory);
+  await writeFile(join(directory, '.happier-test-temp-owner'), `happier-test-temp-v1\n${bootId}\n2147483647\n${token}\n2147483647\n`);
+  // Keep this real exited child unreaped by blocking its Node parent below.
+  // Only ps's OS snapshot is stale; the native identity and /proc are real.
+  const exiting = spawn('/usr/bin/true', [], { stdio: 'ignore' });
+  const result = spawnSync('/bin/bash', ['-c', `
+    . ${quote(identity)}
+    while heavyweight_process_is_current ${exiting.pid} -; do sleep 0.01; done
+    ps() {
+      if [ "$*" = '-eo pid=,pgid=,stat=,uid=' ]; then
+        command ps -p ${exiting.pid} -o pid=,pgid=,stat=,uid= | awk '{$3="S"; print}'
+      else command ps "$@"; fi
+    }
+    export -f ps
+    exec /bin/bash ${quote(custody)} reap-test-temp-roots - -
+  `], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  await assert.rejects(access(directory), { code: 'ENOENT' }, result.stderr);
 });
 
 test('dispatch cost does not scale with retained temporary roots sharing one process inventory', { skip: process.platform !== 'linux' }, async t => {
@@ -157,23 +231,27 @@ test('SIGKILL temp creator retains its root until its surviving child group exit
   });
   await waitFor(() => output.includes('\n'), 'temp creator did not publish its root');
   ({ root: directory, child: childPid } = JSON.parse(output.trim()));
+  const env = await processCensusEnv(root, [process.pid, childPid]);
   const closed = once(creator, 'close');
   creator.kill('SIGKILL');
   await closed;
-  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(dispatch().status, 0);
   await access(directory);
   assert.ok(running(childPid), 'the reaper killed a surviving temp owner');
   process.kill(childPid, 'SIGTERM');
   await waitFor(() => !running(childPid), 'fixture child did not stop');
-  assert.equal(dispatch().status, 0);
-  await assert.rejects(access(directory), { code: 'ENOENT' });
+  const cleanup = dispatch();
+  assert.equal(cleanup.status, 0, cleanup.stderr);
+  await assert.rejects(access(directory), { code: 'ENOENT' }, cleanup.stderr);
 });
 
 test('remote cancellation removes roots created by its payload after the group stops', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-temp-cancel-' });
   const env = { ...process.env };
   delete env.TMPDIR;
+  const cancellationEnv = await processCensusEnv(root, [process.pid]);
+  delete cancellationEnv.TMPDIR;
   const child = spawn('/bin/bash', [custody, 'run', join(root, 'remote-exec/cancel.pid'), 'cancel', process.execPath, '--input-type=module', '-e', `
     import { createTestTempDirectory } from ${JSON.stringify(tempHelper)};
     const fixture = createTestTempDirectory('happier-dev-test-bin-');
@@ -183,7 +261,7 @@ test('remote cancellation removes roots created by its payload after the group s
     mkdtempSync(join(tmpdir(), 'yarn--'));
     console.log(fixture.root);
     setInterval(() => {}, 1000);
-  `], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  `], { env: cancellationEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', error = '';
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { error += chunk; });
@@ -226,17 +304,19 @@ test('detached descendants retain inherited temporary roots after their creator 
   });
   await waitFor(() => output.includes('\n'), 'detached creator did not publish its root');
   ({ root: directory, child: childPid } = JSON.parse(output.trim()));
+  const env = await processCensusEnv(root, [process.pid, childPid]);
   const closed = once(creator, 'close');
   creator.kill('SIGKILL');
   await closed;
-  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...process.env, TMPDIR: root }, encoding: 'utf8' });
+  const dispatch = () => spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], { env: { ...env, TMPDIR: root }, encoding: 'utf8' });
   assert.equal(dispatch().status, 0);
   await access(directory);
   assert.ok(running(childPid), 'the reaper signaled an escaped temp owner');
   process.kill(childPid, 'SIGTERM');
   await waitFor(() => !running(childPid), 'detached fixture child did not stop');
-  assert.equal(dispatch().status, 0);
-  await assert.rejects(access(directory), { code: 'ENOENT' });
+  const cleanup = dispatch();
+  assert.equal(cleanup.status, 0, cleanup.stderr);
+  await assert.rejects(access(directory), { code: 'ENOENT' }, cleanup.stderr);
 });
 function running(pid) {
   const result = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
