@@ -30,6 +30,7 @@ export { ServerScopedTransportUnavailableError };
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -103,29 +104,52 @@ function isActiveHomeUnreachable(): boolean {
 }
 
 /**
- * Settles a scoped context for the active Home as soon as that Home is known to be unreachable,
- * instead of waiting on a carrier dial that may never answer. The decision is the connection
- * supervisor's (no timer here). A context that is built after the caller was told it failed is
- * released, so its carrier does not leak; a later caller (Retry) resolves afresh.
+ * Settles when the caller leaves or the active Home becomes unreachable, without cancelling a
+ * shared carrier dial that may never answer. A context arriving after settlement is released;
+ * later callers resolve afresh. The caller or connection supervisor owns the lifetime, not a
+ * second timer here.
  */
-async function settleWhenActiveHomeUnreachable(
+async function settleScopedContext(
   build: () => Promise<Extract<ResolvedServerAccountRequestContext, { scope: 'scoped' }>>,
+  options: Readonly<{ watchActiveHome: boolean; signal?: AbortSignal }>,
 ): Promise<Extract<ResolvedServerAccountRequestContext, { scope: 'scoped' }>> {
-  if (isActiveHomeUnreachable()) throw new ServerScopedTransportUnavailableError();
+  throwIfAborted(options.signal);
+  if (options.watchActiveHome && isActiveHomeUnreachable()) throw new ServerScopedTransportUnavailableError();
+  if (!options.watchActiveHome && !options.signal) return await build();
   let unsubscribe: (() => void) | null = null;
+  let onAbort: (() => void) | null = null;
   let abandoned = false;
+  let settled = false;
   const pending = build();
-  const unreachable = new Promise<never>((_, reject) => {
-    unsubscribe = subscribeRegisteredStorageState((state) => {
-      if (state.endpointStatus !== 'offline') return;
+  const observed = pending.then(
+    (context) => { settled = true; return context; },
+    (error: unknown) => { settled = true; throw error; },
+  );
+  const cancelled = new Promise<never>((_, reject) => {
+    const abandon = (error: unknown) => {
+      if (settled) return;
       abandoned = true;
-      reject(new ServerScopedTransportUnavailableError());
-    });
+      settled = true;
+      reject(error);
+    };
+    if (options.watchActiveHome) {
+      unsubscribe = subscribeRegisteredStorageState((state) => {
+        if (state.endpointStatus === 'offline') abandon(new ServerScopedTransportUnavailableError());
+      });
+    }
+    if (options.signal) {
+      onAbort = () => {
+        try { throwIfAborted(options.signal); } catch (error) { abandon(error); }
+      };
+      options.signal.addEventListener('abort', onAbort, { once: true });
+      if (options.signal.aborted) onAbort();
+    }
   });
   try {
-    return await Promise.race([pending, unreachable]);
+    return await Promise.race([observed, cancelled]);
   } finally {
     (unsubscribe as (() => void) | null)?.();
+    if (onAbort) options.signal?.removeEventListener('abort', onAbort);
     if (abandoned) {
       pending.then(
         (context) => { void context.release?.().catch(() => undefined); },
@@ -139,7 +163,9 @@ export async function resolveServerAccountRequestContext(params: Readonly<{
   serverId?: string | null;
   timeoutMs?: number;
   preferScoped?: boolean;
+  signal?: AbortSignal;
 }>): Promise<ResolvedServerAccountRequestContext> {
+  throwIfAborted(params.signal);
   const targetServerId = normalizeId(params.serverId);
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
     ? params.timeoutMs
@@ -158,12 +184,12 @@ export async function resolveServerAccountRequestContext(params: Readonly<{
   }
 
   if (targetsActiveServer) {
-    return await settleWhenActiveHomeUnreachable(() => buildScopedContext({
+    return await settleScopedContext(() => buildScopedContext({
       serverId: activeServerId,
       serverUrl: activeSnapshot.serverUrl,
       timeoutMs,
       profile: getServerProfileById(activeServerId) ?? { serverUrl: activeSnapshot.serverUrl },
-    }));
+    }), { watchActiveHome: true, signal: params.signal });
   }
 
   const resolvedTargetServerId = resolveServerProfileScopeIdForIdentifier(targetServerId);
@@ -172,10 +198,10 @@ export async function resolveServerAccountRequestContext(params: Readonly<{
     throw new Error(`Target server profile not found for serverId "${resolvedTargetServerId}"`);
   }
 
-  return await buildScopedContext({
+  return await settleScopedContext(() => buildScopedContext({
     serverId: resolvedTargetServerId,
     serverUrl: targetProfile.serverUrl,
     timeoutMs,
     profile: targetProfile,
-  });
+  }), { watchActiveHome: false, signal: params.signal });
 }

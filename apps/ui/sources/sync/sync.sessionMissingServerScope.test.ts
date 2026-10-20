@@ -1307,13 +1307,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             agentId: 'codex',
             remoteSessionId: 'vendor-session-1',
             direction: 'older',
-        }), { serverId: 'server-owned' });
+        }), { serverId: 'server-owned', signal: expect.any(AbortSignal) });
         expect(machineExternalSessionTranscriptReadAfterMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-1',
             agentId: 'codex',
             remoteSessionId: 'vendor-session-1',
             cursor: 'tail',
-        }), { serverId: 'server-owned' });
+        }), { serverId: 'server-owned', signal: expect.any(AbortSignal) });
         expect((storage.getState().sessions[sessionId]?.metadata as any)?.externalSessionAttentionV1).toEqual({
             v: 1,
             observedProgressToken: '1:direct-msg-1',
@@ -1398,13 +1398,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             agentId: 'codex',
             remoteSessionId: 'vendor-session-1',
             direction: 'older',
-        }), { serverId: undefined });
+        }), { serverId: undefined, signal: expect.any(AbortSignal) });
         expect(machineExternalSessionTranscriptReadAfterMock).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-1',
             agentId: 'codex',
             remoteSessionId: 'vendor-session-1',
             cursor: 'tail',
-        }), { serverId: undefined });
+        }), { serverId: undefined, signal: expect.any(AbortSignal) });
         expect(storage.getState().sessionMessages[sessionId]?.isLoaded).toBe(true);
         const messagesById = storage.getState().sessionMessages[sessionId]?.messagesById ?? {};
         expect(Object.values(messagesById).some((message) => message.kind === 'user-text' && message.text === 'hello direct snapshotless')).toBe(true);
@@ -4213,7 +4213,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const credentials = { token: buildTokenWithSub(scope.accountId),
             ...(encrypted ? { secret: encodeBase64(secret, 'base64url') } : {}) };
         const previousCredentials = Reflect.get(sync, 'credentials');
-        onTestFinished(() => Reflect.set(sync, 'credentials', previousCredentials));
+        onTestFinished(() => { Reflect.set(sync, 'credentials', previousCredentials); });
         Reflect.set(sync, 'credentials', credentials);
         Reflect.set(sync, 'encryption', testEncryption);
         getCredentialsForServerUrlMock.mockResolvedValue(credentials);
@@ -4229,7 +4229,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const wireMetadata = encrypted ? await sessionEncryption.encryptMetadata(metadata) : JSON.stringify(metadata);
         storage.getState().applySessions([{ ...createSession(sessionId), metadata, metadataVersion: 2,
             encryptionMode: encrypted ? 'e2ee' : 'plain' }]);
-        storage.getState().applyMachines([{ ...createMachine('stop-machine'), encryptionMode: 'plain' }]);
+        storage.getState().applyMachines([createMachine('stop-machine')]);
         const effects: string[] = [];
         if (scenario === 'stale') storage.getState().activateProfileScope({ ...scope, accountId: 'replacement-owner' });
         requestMock.mockImplementation(async (path: string) => {
@@ -4313,6 +4313,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(sessionRpcWithPreferredSessionScopeMock).toHaveBeenCalledWith({
             sessionId: 'session-1',
             method: 'abort',
+            signal: expect.any(AbortSignal),
             payload: {
                 reason: expect.stringContaining("The user doesn't want to proceed"),
             },
@@ -4399,6 +4400,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith({
             sessionId,
+            isCurrent: expect.any(Function),
             patch: expect.objectContaining({
                 mode: 'owner_migration',
                 expectedAccountEncryptionMode: 'plain',
@@ -4490,6 +4492,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
 
         expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith({
             sessionId,
+            isCurrent: expect.any(Function),
             patch: {
                 mode: 'shared_editor',
                 metadataLayoutVersion: 1,
@@ -4616,6 +4619,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             emitSessionMetadataUpdateWithServerScopeMock,
         ).toHaveBeenCalledWith({
             sessionId,
+            isCurrent: expect.any(Function),
             patch: {
                 mode: 'owner',
                 metadataLayoutVersion: 1,
@@ -4723,6 +4727,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             name: 'Active metadata',
         });
         await setActiveServerId(activeServer.id, { scope: 'device' });
+        // An explicit target uses the target Home's stored credential and HTTP port, not the incumbent socket.
+        getCredentialsForServerUrlMock.mockResolvedValue({ token: buildTokenWithSub('scope-test-account') });
+        runtimeFetchMock.mockImplementation((url: string, init?: RequestInit) => requestMock(new URL(url).pathname, init));
         const sourceMetadata = {
             path: '/tmp/repo',
             host: 'test-host',
@@ -4804,6 +4811,11 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith({
             sessionId,
             serverId: activeServer.id,
+            isCurrent: expect.any(Function),
+            authority: expect.objectContaining({
+                scope: { serverId: activeServer.id, accountId: 'scope-test-account' },
+                request: expect.any(Function),
+            }),
             patch: expect.objectContaining({
                 mode: 'owner_migration',
                 expectedAccountEncryptionMode: 'plain',
@@ -4973,6 +4985,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         );
         expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith({
             sessionId,
+            isCurrent: expect.any(Function),
             patch: expect.objectContaining({
                 mode: 'owner_migration',
                 expectedAccountEncryptionMode: 'plain',
@@ -5893,7 +5906,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             v: 1,
             binding: invalidation.binding,
             cursor: initialCursor,
-        }, { serverId: sourceServer.id });
+        }, { serverId: sourceServer.id, signal: expect.any(AbortSignal) });
     });
 
     it('hydrates an existing stale linked-session row before accepting the newer invalidation binding', async () => {
@@ -6923,10 +6936,13 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             { serverId: getActiveServerSnapshot().serverId } as never,
         );
 
-        const messagesById = storage.getState().sessionMessages[sessionId]?.messagesById ?? {};
-        expect(Object.values(messagesById).some(
-            (message) => message.kind === 'agent-text' && message.text === 'followed direct reply',
-        )).toBe(true);
+        // The socket owner schedules its handler, so wait for its observable transcript publication.
+        await vi.waitFor(() => {
+            const messagesById = storage.getState().sessionMessages[sessionId]?.messagesById ?? {};
+            expect(Object.values(messagesById).some(
+                (message) => message.kind === 'agent-text' && message.text === 'followed direct reply',
+            )).toBe(true);
+        });
         expect((storage.getState().sessions[sessionId]?.metadata as any)?.externalSessionAttentionV1).toEqual({
             v: 1,
             observedProgressToken: '2:direct-agent-msg-1',

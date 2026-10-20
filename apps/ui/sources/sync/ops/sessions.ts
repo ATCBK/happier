@@ -1440,7 +1440,7 @@ async function archiveRequestWithContext<T>(params: ArchiveRequestParams, consum
         sessionId: params.sessionId,
     });
     if (!address) throw new Error('Archive requires an exact Home-qualified Session');
-    const context = await resolveServerAccountRequestContext({ serverId: address.serverId });
+    const context = await resolveServerAccountRequestContext({ serverId: address.serverId, signal: params.signal });
     const path = `/v2/sessions/${params.sessionId}/${params.action}`;
 
     try {
