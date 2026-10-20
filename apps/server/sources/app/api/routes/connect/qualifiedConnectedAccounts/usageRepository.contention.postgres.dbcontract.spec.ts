@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
-import type { Tx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { initEncrypt } from "@/modules/encrypt";
 import { withAuthenticatedTestApp as withAuthenticatedAppHarness } from "@/app/api/testkit/sqliteFastify";
 import type { Fastify } from "@/app/api/types";
@@ -135,6 +137,38 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
         await competitor;
     }
 
+    it("commits ordinary usage while another content writer is in domain work and preserves terminal cursors", async () => {
+        const { account, payload, headers } = await fixture();
+        const before = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+        const pending: Promise<unknown>[] = [];
+        let usageCommittedDuringDomain = false;
+        await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
+            await inTx(async peer => {
+                await acquireAccountChangePublicationLocksInTx(peer, [account.id], { intent: "content" });
+                await commitOrBlock(peer, async () => {
+                    const response = await app.inject({ method: "POST", url: route, headers, payload });
+                    expect(response.statusCode, response.body).toBe(200);
+                    usageCommittedDuringDomain = true;
+                }, pending);
+                if (usageCommittedDuringDomain) {
+                    const usage = await db.accountChange.findUniqueOrThrow({ where: {
+                        accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "provider-account-usage" },
+                    } });
+                    expect(usage.cursor).toBe(before.seq + 1);
+                    expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(usage.cursor);
+                }
+                await markAccountChanged(peer, { accountId: account.id, kind: "account", entityId: "dbperf-content-peer" });
+            });
+            await Promise.all(pending);
+        });
+        expect(usageCommittedDuringDomain, "Ordinary usage must not wait for compatible content admission").toBe(true);
+        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(before.seq + 2);
+        expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(1);
+        expect(await db.accountChange.findUniqueOrThrow({ where: {
+            accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "dbperf-content-peer" },
+        } })).toMatchObject({ cursor: before.seq + 2 });
+    });
+
     it.each(["projection", "observation"] as const)("does not read back the packed history body after a %s write", async kind => {
         const { account, payload, headers } = await fixture();
         await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
@@ -184,7 +218,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
         });
     });
 
-    it.each(["account", "group_member", "legacy"] as const)("does not retain the credential lock while a %s write waits for Account publication", async kind => {
+    it.each(["account", "group_member", "legacy"] as const)("does not retain the credential lock while a %s write waits for exclusive Account authority", async kind => {
         const input = await fixture(kind === "legacy" ? resolveLegacyQualifiedConnectedAccountService("openai-codex") : service);
         const { account, headers } = input;
         const payload = kind === "group_member" ? { ...input.payload, source: (await groupSource(input)).source } : input.payload;
@@ -193,12 +227,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
         let credentialLockError: unknown;
         let blocked = false;
         await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
-            // The peer owns the canonical Account publication row. Inspect the
+            // Credential/mode/lifecycle writers enter exclusively. Inspect the
             // real lock graph before probing the credential, without sleeps or
             // an invented lock timeout. NOWAIT is only this test's observation.
             await db.$transaction(async peer => {
                 const [{ pid }] = await peer.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
-                await peer.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                await acquireAccountSessionOwnerMetadataFenceInTx(peer, account.id, "exclusive");
                 let settled = false;
                 write = (kind === "legacy"
                     ? writeLegacyConnectedServiceQuotaCompatibilityRecord({ accountId: account.id, serviceId: "openai-codex",
@@ -224,11 +258,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
             await write;
         });
         expect(blocked).toBe(true);
-        expect(credentialLockError, "Usage must wait for Account publication before locking the credential").toBeUndefined();
+        expect(credentialLockError, "Usage must wait for exclusive Account authority before locking the credential").toBeUndefined();
         expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(1);
     });
 
-    it("leaves the usage row available to an Account-fenced writer while waiting for publication", async () => {
+    it("leaves the usage row available while waiting for an exclusive Account authority writer", async () => {
         const { account, payload, headers } = await fixture();
         let write: Promise<unknown> | undefined;
         let usageLockError: unknown;
@@ -239,7 +273,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
             const snapshot = createUsageSnapshot({ fetchedAt: payload.fetchedAt + 1000, recordKey: payload.recordKey });
             await db.$transaction(async peer => {
                 const [{ pid }] = await peer.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
-                await peer.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                await acquireAccountSessionOwnerMetadataFenceInTx(peer, account.id, "exclusive");
                 let settled = false;
                 write = app.inject({ method: "POST", url: route, headers,
                     payload: { ...payload, snapshot, fetchedAt: snapshot.fetchedAtMs } }).then(response => {
@@ -261,7 +295,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
             await write;
         });
         expect(blocked).toBe(true);
-        expect(usageLockError, "Usage must acquire Account before locking a usage row needed by Account-fenced writers").toBeUndefined();
+        expect(usageLockError, "Usage must pass exclusive authority admission before locking its usage row").toBeUndefined();
         expect(await db.providerAccountUsageRecord.findUniqueOrThrow({
             where: { accountId_recordId: { accountId: account.id, recordId: payload.recordId } },
         })).toMatchObject({ fetchedAt: new Date(payload.fetchedAt + 1000) });
@@ -438,10 +472,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
         });
     });
 
-    it("rejects credential rotation committed after usage admission without retaining its old observation", async () => {
+    it("finishes admitted usage before credential rotation and refuses later stale usage", async () => {
         const { account, payload, headers } = await fixture();
         const pending: Promise<unknown>[] = [];
         let observed = false;
+        let rotationCommitted = false;
         await withAuthenticatedTestApp(registerQualifiedConnectedAccountCredentialRoutesV4, async app => {
             try {
                 const response = await observeTransactions(tx => {
@@ -457,16 +492,22 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("q
                                     authenticationModeId: "api-key", content: { t: "plain", v: { token: "rotated-disposable-token" } },
                                     metadata: { scopes: [], providerIdentity: { accountId: payload.recordKey.accountSubjectId } } });
                                 expect(rotated.status).toBe("written");
+                                rotationCommitted = true;
                             }, pending);
+                            expect(rotationCommitted, "Exclusive rotation must wait for admitted usage").toBe(false);
                         }
                         return row;
                     }) as unknown as typeof tx.account.findUnique;
                 }, () => app.inject({ method: "POST", url: route, headers, payload }));
-                expect(response.statusCode, response.body).toBe(409);
-                expect(response.json()).toMatchObject({ error: "connect_credential_mutation_superseded" });
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json()).toMatchObject({ source: { status: "linked" } });
                 await Promise.all(pending);
-                expect(await db.providerAccountUsageRecord.count({ where: { accountId: account.id } })).toBe(0);
-                expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(0);
+                expect(rotationCommitted).toBe(true);
+                const stale = await app.inject({ method: "POST", url: route, headers, payload });
+                expect(stale.statusCode, stale.body).toBe(409);
+                expect(stale.json()).toMatchObject({ error: "connect_credential_mutation_superseded", reason: "credential_revision_mismatch" });
+                expect(await db.providerAccountUsageRecord.count({ where: { accountId: account.id } })).toBe(1);
+                expect(await db.providerAccountUsageHistory.count({ where: { accountId: account.id } })).toBe(1);
                 expect(observed).toBe(true);
             } finally { await Promise.allSettled(pending); }
         });
