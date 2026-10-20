@@ -64,6 +64,33 @@ describe('warmCachePersistence', () => {
         clearWarmCacheAccountScope();
     });
 
+    it.each(['QuotaExceededError', 'SecurityError'])('keeps the latest warm value in memory when a write raises %s', (name) => {
+        const accountId = `failed-write-${name}`;
+        const entries = { m1: { machineId: 'm1', metadataVersion: 1,
+            updatedAt: 1, active: true, activeAt: 1, revokedAt: null } };
+        saveMachineDisplayWarmCacheEntries('server-a', accountId, entries);
+        const latest = { m1: { ...entries.m1, updatedAt: 2 } };
+        set.mockImplementationOnce(() => { throw Object.assign(new Error('storage failed'), { name }); });
+        expect(() => saveMachineDisplayWarmCacheEntries('server-a', accountId, latest)).not.toThrow();
+        expect(loadMachineDisplayWarmCacheEntries('server-a', accountId)).toEqual(latest);
+        expect(warmCache.peekMachineDisplayWarmCacheEntries('server-a', accountId)).toBe(latest);
+        // A later update can persist normally; the failed write never restores the older disk value.
+        const recovered = { m1: { ...latest.m1, updatedAt: 3 } };
+        saveMachineDisplayWarmCacheEntries('server-a', accountId, recovered);
+        expect(JSON.parse(store.get(`machine-display-warm-cache-v1:server-a:${accountId}`)!)).toEqual(recovered);
+    });
+
+    it('keeps a failed removal empty and treats unavailable storage reads as warm misses', () => {
+        const accountId = 'failed-removal';
+        saveMachineDisplayWarmCacheEntries('server-a', accountId, { m1: { machineId: 'm1', metadataVersion: 1,
+            updatedAt: 1, active: true, activeAt: 1, revokedAt: null } });
+        deleteKey.mockImplementationOnce(() => { throw new Error('storage failed'); });
+        expect(() => saveMachineDisplayWarmCacheEntries('server-a', accountId, {})).not.toThrow();
+        expect(loadMachineDisplayWarmCacheEntries('server-a', accountId)).toEqual({});
+        getString.mockImplementationOnce(() => { throw new Error('storage failed'); });
+        expect(loadMachineDisplayWarmCacheEntries('server-a', 'unreadable')).toEqual({});
+    });
+
     it('retains Found results by kind, machine, Home and Account without lending online authority', () => {
         const result = { kind: 'mcp_server' as const, machineId: 'machine-a', observedAt: 10,
             result: DaemonMcpServersDetectResponseSchema.parse({ ok: true, servers: [{ provider: 'claude', name: 'one',
