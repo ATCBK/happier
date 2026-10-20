@@ -22,11 +22,16 @@ import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inv
 import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
 
 // Socket.IO is the external transport boundary. The socket factory, managed
 // supervisor, Account observer and approval coordinator all remain real.
 const wire = vi.hoisted(() => {
-  const sockets: Array<{ connected: boolean; listenerCount: () => number; wake: () => void }> = [];
+  const sockets: Array<{ connected: boolean; listenerCount: () => number; wake: () => void; update: (body: unknown) => void }> = [];
   return { sockets, io: vi.fn(() => {
     const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     const emit = (event: string, ...args: unknown[]) => {
@@ -46,6 +51,7 @@ const wire = vi.hoisted(() => {
       offAny() {},
       listenerCount: () => [...listeners.values()].reduce((total, group) => total + group.size, 0),
       wake: () => emit('connect'),
+      update: (body: unknown) => emit('update', { id: 'approval-change', seq: 1, createdAt: 2, body }),
     };
     sockets.push(socket);
     return socket;
@@ -80,6 +86,59 @@ async function expectPromiseStillPending(promise: Promise<unknown>): Promise<voi
 describe('createCliActionExecutorHarness', () => {
   beforeEach(() => { wire.sockets.length = 0; wire.io.mockClear(); });
   afterEach(() => vi.restoreAllMocks());
+  it.each(['update', 'reconnect'] as const)('delivers an independently persisted PDF rejection to the Agent MCP caller on %s', async wake => {
+    let request: ReturnType<typeof ApprovalRequestV2Schema.parse> | null = null;
+    const lifetime = new AbortController();
+    // Only Artifact persistence and Socket.IO are substituted. The native Action,
+    // approval waiter, Account invalidation, tool bridge and MCP codec stay real.
+    const harness = createCliActionExecutorHarness({ token: 'session-token', credentials: { token: 'account-token', encryption: null }, sessionId: 'pdf-agent',
+      serverId: 'pdf-home', serverHttpBaseUrl: 'https://pdf-home.test', mode: 'plain', ctx: null,
+    }, {
+      approvalsCreate: async args => { request = ApprovalRequestV2Schema.parse(args.request); return { artifactId: 'pdf-approval' }; },
+      approvalsGet: async () => request,
+      approvalsUpdate: async args => { request = ApprovalRequestV2Schema.parse(args.request); return { ok: true }; },
+    });
+    const bridge = createActionToolExecutorBridge({ surface: 'agent', executor: harness.executor,
+      defaultSessionMachineId: 'pdf-machine' });
+    const server = new McpServer({ name: 'pdf-approval', version: '1' });
+    const client = new Client({ name: 'agent', version: '1' });
+    registerHappierMcpBuiltInTools(server, { sessionId: 'pdf-agent', surface: 'agent', deps: {
+      ...bridge, changeTitle: async () => { throw new Error('Unexpected title change'); },
+    } });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let pending: ReturnType<typeof client.callTool> | undefined;
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      pending = client.callTool({ name: 'action_execute', arguments: {
+        actionId: 'artifact.publish_from_file', input: { path: 'QA84.pdf', mime: 'application/pdf' },
+      } }, undefined, { signal: lifetime.signal });
+      await vi.waitFor(() => expect(request).toMatchObject({ status: 'open', createdBy: { surface: 'agent', sessionId: 'pdf-agent' } }));
+      await vi.waitFor(() => expect(wire.sockets.some(socket => socket.connected)).toBe(true));
+      expect(wire.io).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        auth: expect.objectContaining({ clientType: 'user-scoped', token: 'account-token' }),
+      }));
+      // A different process writes the durable decision: do not use the local
+      // harness update wrapper, which would hide a broken Account wake binding.
+      request = ApprovalRequestV2Schema.parse({ ...request, status: 'rejected', updatedAtMs: 2,
+        decision: { kind: 'reject', decidedAtMs: 2 } });
+      for (const socket of wire.sockets) {
+        if (wake === 'update') socket.update({ t: 'account-change' });
+        else socket.wake();
+      }
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      const content = result.content;
+      if (!Array.isArray(content) || content[0]?.type !== 'text') throw new Error('Expected typed MCP text');
+      expect(JSON.parse(content[0].text)).toMatchObject({ errorCode: 'approval_rejected' });
+      expect(wire.sockets.every(socket => !socket.connected && socket.listenerCount() === 0)).toBe(true);
+    } finally {
+      lifetime.abort();
+      await pending?.catch(() => undefined);
+      await client.close();
+      await server.close();
+    }
+  });
   it('resolves admitted UI audience confirmation against live harness policy', () => {
     const actionId = 'widgets.item.move';
     let settings = normalizeActionsSettingsV1({ v: 1 });

@@ -144,7 +144,9 @@ export function createCliActionExecutorHarness(
         serverId: args.serverId,
         signal: args.signal,
         subscribeChanges: (onChange, onError) => observeAccountChanges({
-          token: params.token,
+          // The Artifact store uses Account credentials; the Session transport
+          // bearer cannot subscribe to the Account's decision invalidations.
+          token: params.credentials?.token ?? params.token,
           serverUrl,
           entityId: args.artifactId,
         }, { onChange, onError }),
