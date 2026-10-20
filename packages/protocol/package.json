@@ -6949,6 +6949,11 @@
       "types": "./dist/machines/workspaceFiles.d.ts",
       "default": "./dist/machines/workspaceFiles.js"
     },
+    "./machines/workspaceFilesReplace": {
+      "happier-source": "./src/machines/workspaceFilesReplace.ts",
+      "types": "./dist/machines/workspaceFilesReplace.d.ts",
+      "default": "./dist/machines/workspaceFilesReplace.js"
+    },
     "./execution/runs/interactionAffordances": {
       "happier-source": "./src/execution/runs/interactionAffordances.ts",
       "types": "./dist/execution/runs/interactionAffordances.d.ts",
