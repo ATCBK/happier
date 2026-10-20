@@ -12,6 +12,7 @@ export const TELEGRAM_CHANNEL_ACTION_IDS = Object.freeze({
   endpointResolve: 'telegram/choose-chat',
   observationsPoll: 'telegram/poll-updates',
   messageDeliver: 'telegram/post-message',
+  attachmentFetch: 'telegram/fetch-attachments',
 });
 
 /**

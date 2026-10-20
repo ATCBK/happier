@@ -29,6 +29,7 @@ import {
 } from './automationEvents.js';
 import {
   deliverTelegramMessage,
+  fetchTelegramAttachments,
   pollTelegramObservations,
   setupTelegramChatEventSource,
   remediateTelegramWebhook,
@@ -68,7 +69,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
         reason: 'Verify the selected Telegram bot and inspect its polling transport through the Bot API.',
         scope: {
           targets: [{ kind: 'fixedOrigin', origin: 'https://api.telegram.org' }],
-          methods: ['POST'],
+          methods: ['POST', 'GET'],
         },
       },
       {
@@ -258,6 +259,17 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
       dangerLevel: providers.operations.messageDeliver.declaration.dangerLevel,
       run: deliverTelegramMessage,
     },
+    [TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch]: {
+      title: 'Fetch Telegram Channel attachments',
+      description: 'Downloads admitted Telegram attachments when a Session materializes them.',
+      inputSchema: providers.operations.attachmentFetch.declaration.input.schema.jsonSchema,
+      resultSchema: providers.operations.attachmentFetch.declaration.resultSchema.jsonSchema,
+      surfaces: providers.operations.attachmentFetch.declaration.surfaces,
+      hostAccess: ['telegram-bot-api', TELEGRAM_BOT_CREDENTIAL_PURPOSE],
+      connectedAccountPurposeBindings: [{ path: 'credentialRef', purpose: TELEGRAM_BOT_CREDENTIAL_PURPOSE }],
+      dangerLevel: providers.operations.attachmentFetch.declaration.dangerLevel,
+      run: fetchTelegramAttachments,
+    },
     [TELEGRAM_AUTOMATION_MESSAGE_SETUP_ACTION_ID]: {
       title: 'Choose a Telegram chat to watch',
       description: 'Resolves a Telegram chat to immutable source facts for an Automation Event.',
@@ -321,6 +333,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
               TELEGRAM_AUTOMATION_MESSAGE_ADMIT_ACTION_ID,
             ),
             messageDeliver: providers.operations.messageDeliver.bind(TELEGRAM_CHANNEL_ACTION_IDS.messageDeliver),
+            attachmentFetch: providers.operations.attachmentFetch.bind(TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch),
           },
         }),
       },

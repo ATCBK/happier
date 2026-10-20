@@ -31,6 +31,7 @@ const TELEGRAM_CHANNEL_PROVIDER_OPERATIONS = Object.freeze({
   observationsPoll: TELEGRAM_CHANNEL_ACTION_IDS.observationsPoll,
   automationEventAdmit: TELEGRAM_AUTOMATION_MESSAGE_ADMIT_ACTION_ID,
   messageDeliver: TELEGRAM_CHANNEL_ACTION_IDS.messageDeliver,
+  attachmentFetch: TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch,
 });
 
 function response(value: unknown): Readonly<{
@@ -154,6 +155,7 @@ describe('Telegram Channel plugin activation', () => {
         { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.endpointResolve },
         { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.observationsPoll },
         { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.messageDeliver },
+        { family: 'actions', localId: TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch },
         { family: 'actions', localId: TELEGRAM_AUTOMATION_MESSAGE_SETUP_ACTION_ID },
         { family: 'actions', localId: TELEGRAM_AUTOMATION_MESSAGE_ADMIT_ACTION_ID },
         { family: 'connectedAccountDescriptors', localId: 'telegram-bot' },
@@ -213,6 +215,7 @@ describe('Telegram Channel plugin activation', () => {
         TELEGRAM_CHANNEL_ACTION_IDS.endpointResolve,
         TELEGRAM_CHANNEL_ACTION_IDS.observationsPoll,
         TELEGRAM_CHANNEL_ACTION_IDS.messageDeliver,
+        TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch,
         TELEGRAM_AUTOMATION_MESSAGE_SETUP_ACTION_ID,
         TELEGRAM_AUTOMATION_MESSAGE_ADMIT_ACTION_ID,
       ]);
@@ -242,6 +245,7 @@ describe('Telegram Channel plugin activation', () => {
         [TELEGRAM_CHANNEL_ACTION_IDS.endpointResolve, ConversationProvidersContributionProtocolV1.operations.endpointResolve],
         [TELEGRAM_CHANNEL_ACTION_IDS.observationsPoll, ConversationProvidersContributionProtocolV1.operations.observationsPoll],
         [TELEGRAM_CHANNEL_ACTION_IDS.messageDeliver, ConversationProvidersContributionProtocolV1.operations.messageDeliver],
+        [TELEGRAM_CHANNEL_ACTION_IDS.attachmentFetch, ConversationProvidersContributionProtocolV1.operations.attachmentFetch],
       ] as const) {
         const action = PLUGIN_MANIFEST.contributes.actions?.find((candidate) => candidate.id === id);
         expect(action?.inputSchema).toEqual(role.declaration.input.schema.jsonSchema);
@@ -335,7 +339,7 @@ describe('Telegram Channel plugin activation', () => {
         overlapSafety: 'providerExclusive',
         replayContinuity: 'checkpointed',
         recommendedMaximumObservationAgeMs: 86_400_000,
-        outboundTextLimit: { maximum: 4096, unit: 'unicodeCodePoints' },
+        outboundTextLimit: { maximum: 4096, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
         // This bot has group privacy enabled, so Telegram withholds ordinary
         // group and supergroup messages. Setup carries that authenticated
         // truth so no binding can promise `allAllowedMessages` there.

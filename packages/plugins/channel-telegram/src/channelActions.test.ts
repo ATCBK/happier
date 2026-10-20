@@ -7,6 +7,7 @@ type TelegramHttpRequestInput =
 
 import {
   deliverTelegramMessage,
+  fetchTelegramAttachments,
   pollTelegramObservations,
   remediateTelegramWebhook,
   resolveTelegramEndpoint,
@@ -104,6 +105,70 @@ function botIdentity() {
 }
 
 describe('Telegram Channel provider actions', () => {
+  it('fetches a descriptor after observation using fresh HTTP state and refuses message and credential mismatches', async () => {
+    const observed = await pollTelegramObservations({ ...connection,
+      checkpoint: { v: 1, offset: '42', caughtUpAtMs: Date.now() }, limit: 10, waitMs: 0,
+    }, coreContext({ async request(input) { return response(input.url.endsWith('/getMe') ? botIdentity() : {
+      ok: true, result: [{ update_id: 42, message: {
+        message_id: 2, date: 1700000000, chat: { id: 456, type: 'private' },
+        from: { id: 789, is_bot: false }, caption: '@HappierBot inspect',
+        caption_entities: [{ type: 'mention', offset: 0, length: 11 }],
+        document: { file_id: 'native-file', file_name: 'notes.txt', mime_type: 'text/plain', file_size: 5 },
+      } }],
+    }); } }));
+    if (observed.kind !== 'batch') throw new Error('Expected attachment observation');
+    const ingress = observed.observations[0]?.observation;
+    if (ingress?.kind !== 'fullText') throw new Error('Expected full attachment ingress');
+    expect(ingress.observation.message.addressingEvidence).toBe('directIntegrationMention');
+    const attachmentId = ingress.observation.message.attachments?.[0]?.attachmentId;
+    if (!attachmentId) throw new Error('Expected durable attachment ID');
+    const request = { ...connection, messageId: '2', attachmentIds: [attachmentId] };
+    const http = { request: vi.fn(async (input: TelegramHttpRequestInput) => {
+      if (input.url.endsWith('/getMe')) return response(botIdentity());
+      if (input.url.endsWith('/getFile')) return response({ ok: true, result: { file_id: 'native-file', file_path: 'documents/file.txt', file_size: 5 } });
+      return { ...response(null), finalUrl: input.url, body: new TextEncoder().encode('hello') };
+    }) };
+    await expect(fetchTelegramAttachments(request, coreContext(http))).resolves.toEqual({ kind: 'fetched', attachments: [{ attachmentId, base64: 'aGVsbG8=' }] });
+    expect(http.request.mock.calls.some(([input]) => input.method === 'GET')).toBe(true);
+    http.request.mockClear();
+    await expect(fetchTelegramAttachments({ ...request, messageId: '3' }, coreContext(http))).resolves.toMatchObject({ kind: 'notReady', reason: 'unsupported' });
+    expect(http.request.mock.calls.every(([input]) => input.url.endsWith('/getMe'))).toBe(true);
+    http.request.mockClear();
+    await expect(fetchTelegramAttachments({ ...request, providerConnectionKey: 'telegram-bot:999' }, coreContext(http))).resolves.toMatchObject({ kind: 'notReady', reason: 'invalidConfiguration' });
+    expect(http.request.mock.calls.every(([input]) => input.url.endsWith('/getMe'))).toBe(true);
+  });
+
+  it('refuses cancelled attachment materialization before credential use or HTTP', async () => {
+    const controller = new AbortController();
+    const reason = new Error('attachment dispatch retired');
+    controller.abort(reason);
+    const materialize = vi.fn();
+    const http = { request: vi.fn() };
+    await expect(fetchTelegramAttachments({ ...connection, messageId: '2', attachmentIds: ['opaque'] },
+      coreContext(http, { signal: controller.signal, materialize }))).rejects.toBe(reason);
+    expect(materialize).not.toHaveBeenCalled();
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it('admits an attachment-only update with durable descriptors and caption addressing without fetching bytes', async () => {
+    const http = { request: vi.fn(async (input: TelegramHttpRequestInput) => response(
+      input.url.endsWith('/getMe') ? botIdentity() : { ok: true, result: [{ update_id: 42, message: {
+        message_id: 2, date: 1700000000, chat: { id: 456, type: 'private' },
+        from: { id: 789, is_bot: false },
+        document: { file_id: 'native-file', file_name: 'notes.txt', mime_type: 'text/plain', file_size: 12 },
+      } }] },
+    )) };
+    const result = await pollTelegramObservations({ ...connection,
+      checkpoint: { v: 1, offset: '42', caughtUpAtMs: Date.now() }, limit: 10, waitMs: 0,
+    }, coreContext(http));
+    expect(result).toMatchObject({ kind: 'batch', observations: [{ observation: {
+      kind: 'fullText', observation: { message: { id: '2', text: '', attachments: [{
+        attachmentId: expect.any(String), name: 'notes.txt', mediaType: 'text/plain', byteLength: 12,
+      }] } },
+    } }] });
+    expect(http.request.mock.calls.every(([request]) => !request.url.includes('/getFile') && request.method !== 'GET')).toBe(true);
+  });
+
   it('refuses unsupported new threads before any Telegram request', async () => {
     const http = { request: vi.fn(async () => { throw new Error('Unsupported starts must not call Telegram'); }) };
     await expect(deliverTelegramMessage({

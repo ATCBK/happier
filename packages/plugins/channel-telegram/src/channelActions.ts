@@ -1,6 +1,8 @@
 import {
   CONVERSATION_CORE_PLUGIN_ID_V1,
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
+  ConversationAttachmentFetchInputV1Schema,
+  ConversationAttachmentFetchResultV1Schema,
   ConversationConnectionTestInputV1Schema,
   classifyConversationProviderMaterializationFailureV1,
   ConversationConnectionTestResultV1Schema,
@@ -17,6 +19,7 @@ import {
   ConversationProviderConnectionsSnapshotV1Schema,
   hasCurrentConversationProviderConnectionV1,
   type ConversationConnectionTestResultV1,
+  type ConversationAttachmentFetchResultV1,
   type ConversationAuthenticatedObservationShellV1,
   type ConversationDeliveryInputV1,
   type ConversationDeliveryResultV1,
@@ -56,6 +59,7 @@ import {
   type TelegramChat,
   type TelegramGetUpdatesResult,
   type TelegramIncomingMessage,
+  type TelegramIncomingAttachment,
   type TelegramUpdate,
   TELEGRAM_MAX_MESSAGE_CODE_POINTS,
 } from './telegramBotApi.js';
@@ -395,16 +399,58 @@ function normalizedIngressFromUpdate(
   }
   const shell: ConversationAuthenticatedObservationShellV1 = { ...envelope, message: messageFacts };
   const commandText = commandTextFromMessage(message, identity);
-  if (commandText === null) {
+  if (commandText === null && message.attachments.length === 0) {
     return { kind: 'routableNonAdmission', shell, reason: 'unsupportedContent' };
   }
   return {
     kind: 'fullText',
     observation: {
       ...shell,
-      message: { ...shell.message, text: commandText },
+      message: { ...shell.message, text: commandText ?? '',
+        ...(message.attachments.length === 0 ? {} : { attachments: message.attachments.map(file => ({
+          attachmentId: telegramAttachmentId(identity.id, message.messageId, file),
+          name: file.name, mediaType: file.mediaType,
+          ...(file.byteLength === undefined ? {} : { byteLength: file.byteLength }),
+        })) }),
+      },
     },
   };
+}
+
+function telegramAttachmentId(botId: string, messageId: string, file: TelegramIncomingAttachment): string {
+  return `telegram-file:v1:${Buffer.from(JSON.stringify([botId, messageId, file.fileId, file.byteLength ?? null])).toString('base64url')}`;
+}
+
+function readTelegramAttachmentId(value: string, botId: string, messageId: string): Readonly<{ fileId: string; byteLength?: number }> | null {
+  const prefix = 'telegram-file:v1:';
+  if (!value.startsWith(prefix)) return null;
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value.slice(prefix.length), 'base64url').toString('utf8'));
+    if (!Array.isArray(decoded) || decoded.length !== 4 || decoded[0] !== botId || decoded[1] !== messageId
+      || typeof decoded[2] !== 'string' || !decoded[2]
+      || (decoded[3] !== null && (typeof decoded[3] !== 'number' || !Number.isSafeInteger(decoded[3]) || decoded[3] < 0))) return null;
+    return { fileId: decoded[2], ...(decoded[3] === null ? {} : { byteLength: decoded[3] }) };
+  } catch { return null; }
+}
+
+/** Materialization only: stable native file IDs outlive Telegram's temporary download paths. */
+export async function fetchTelegramAttachments(input: unknown, context: PluginInvocationContext): Promise<ConversationAttachmentFetchResultV1> {
+  assertTelegramChannelsCoreCaller(context);
+  context.signal.throwIfAborted();
+  const request = ConversationAttachmentFetchInputV1Schema.parse(input);
+  const ready = await readyConnection(context, request);
+  if ('kind' in ready) return ready;
+  const files = request.attachmentIds.map(id => readTelegramAttachmentId(id, ready.identity.id, request.messageId));
+  if (files.some(file => file === null)) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'The Telegram attachment does not belong to this bot and message.' };
+  const attachments: { attachmentId: string; base64: string }[] = [];
+  for (const [index, file] of files.entries()) {
+    if (file === null) throw new Error('Validated Telegram attachment is missing');
+    const result = await ready.api.downloadFile(file, { signal: context.signal });
+    context.signal.throwIfAborted();
+    if (result.kind !== 'downloaded') return ConversationAttachmentFetchResultV1Schema.parse(result);
+    attachments.push({ attachmentId: request.attachmentIds[index]!, base64: Buffer.from(result.bytes).toString('base64') });
+  }
+  return ConversationAttachmentFetchResultV1Schema.parse({ kind: 'fetched', attachments });
 }
 
 type TelegramEndpointAddress = Readonly<{
@@ -547,7 +593,7 @@ export async function setupTelegramChannels(
     replayContinuity: 'checkpointed',
     // Bot API update retention: https://core.telegram.org/bots/api#getting-updates
     recommendedMaximumObservationAgeMs: 86_400_000,
-    outboundTextLimit: { maximum: TELEGRAM_MAX_MESSAGE_CODE_POINTS, unit: 'unicodeCodePoints' },
+    outboundTextLimit: { maximum: TELEGRAM_MAX_MESSAGE_CODE_POINTS, unit: 'unicodeCodePoints', formatting: 'preservesNativeUnits' },
     // The authenticated delivery truth travels with the connection instead of
     // being discarded into the opaque provider configuration.
     sharedEndpointInputModes: telegramSharedEndpointInputModes(identity),

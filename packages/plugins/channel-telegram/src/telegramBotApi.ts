@@ -1,7 +1,10 @@
-import { countConversationTextUnits } from '@happier-dev/channels-protocol/v1';
+import { countConversationTextUnits, type ConversationProviderFailureV1 } from '@happier-dev/channels-protocol/v1';
 import type { HttpService } from '@happier-dev/plugin-sdk/http';
 
 const TELEGRAM_BOT_API_BASE_URL = 'https://api.telegram.org';
+// Cloud Bot API getFile boundary: https://core.telegram.org/bots/api#getfile
+// Exact bytes: telegram-bot-api/Client.h MAX_DOWNLOAD_FILE_SIZE = 20 << 20.
+export const TELEGRAM_MAX_DOWNLOAD_FILE_BYTES = 20 * 1024 * 1024;
 const TELEGRAM_MAX_UPDATE_ID = 2 ** 52 - 1;
 const TELEGRAM_MAX_UPDATE_OFFSET = TELEGRAM_MAX_UPDATE_ID + 1;
 const TELEGRAM_API_REQUEST_TIMEOUT_MS = 15_000;
@@ -61,12 +64,20 @@ export type TelegramIncomingMessage = Readonly<{
   senderIsChat: boolean;
   text: string | null;
   textEntities: readonly TelegramTextEntity[];
+  attachments: readonly TelegramIncomingAttachment[];
   replyToMessageId: string | null;
   replyToSenderId: string | null;
   forwarded: boolean;
   viaBotId: string | null;
   sentAtMs: number;
   editedAtMs: number | null;
+}>;
+
+export type TelegramIncomingAttachment = Readonly<{
+  fileId: string;
+  name: string;
+  mediaType: string;
+  byteLength?: number;
 }>;
 
 export type TelegramUpdate = Readonly<{
@@ -117,6 +128,9 @@ export type TelegramDeleteWebhookResult =
   | Readonly<{ kind: 'outcomeUnknown' }>;
 
 export type TelegramBotApi = Readonly<{
+  downloadFile(input: Readonly<{ fileId: string; byteLength?: number }>, options?: TelegramRequestOptions): Promise<
+    Readonly<{ kind: 'downloaded'; bytes: Uint8Array }> | ConversationProviderFailureV1
+  >;
   getMe(options?: TelegramRequestOptions): Promise<TelegramBotIdentity | TelegramGetUpdatesResult>;
   getWebhookInfo(options?: TelegramRequestOptions): Promise<TelegramWebhookInfo | TelegramGetUpdatesResult>;
   deleteWebhook(options?: TelegramRequestOptions): Promise<TelegramDeleteWebhookResult>;
@@ -268,6 +282,37 @@ function parseTextEntities(value: unknown, text: string | null): readonly Telegr
   return entities;
 }
 
+function parseIncomingAttachments(message: JsonRecord, messageId: string): readonly TelegramIncomingAttachment[] {
+  const attachments: TelegramIncomingAttachment[] = [];
+  function add(value: unknown, name: string, mediaType: string): void {
+    if (!isRecord(value)) return;
+    const fileId = readString(value.file_id);
+    if (!fileId || attachments.some(file => file.fileId === fileId)) return;
+    const size = readSafeInteger(value.file_size);
+    attachments.push({ fileId, name: readString(value.file_name)?.trim() || name,
+      mediaType: readString(value.mime_type)?.trim() || mediaType,
+      ...(size === null || size < 0 ? {} : { byteLength: size }),
+    });
+  }
+  if (Array.isArray(message.photo)) {
+    const photos = message.photo.filter((value): value is JsonRecord => {
+      if (!isRecord(value) || !readString(value.file_id)) return false;
+      const width = readSafeInteger(value.width);
+      const height = readSafeInteger(value.height);
+      return width !== null && width > 0 && height !== null && height > 0;
+    });
+    photos.sort((a, b) => Number(b.width) * Number(b.height) - Number(a.width) * Number(a.height));
+    add(photos[0], `photo-${messageId}.jpg`, 'image/jpeg');
+  }
+  // Telegram also populates document for animations (Bot API Message contract).
+  add(message.animation, `animation-${messageId}.mp4`, 'video/mp4');
+  add(message.document, `document-${messageId}`, 'application/octet-stream');
+  add(message.audio, `audio-${messageId}.mp3`, 'audio/mpeg');
+  add(message.voice, `voice-${messageId}.ogg`, 'audio/ogg');
+  add(message.video, `video-${messageId}.mp4`, 'video/mp4');
+  return attachments;
+}
+
 function parseIncomingMessage(value: unknown): TelegramIncomingMessage | null {
   if (!isRecord(value)) return null;
   const messageId = readSafeInteger(value.message_id);
@@ -299,8 +344,9 @@ function parseIncomingMessage(value: unknown): TelegramIncomingMessage | null {
   const replyToSenderId = replySender?.isBot === true ? replySender.id : null;
   const viaBot = isRecord(value.via_bot) ? value.via_bot : null;
   const viaBotId = viaBot ? readSafeInteger(viaBot.id) : null;
-  const text = readString(value.text);
-  const textEntities = parseTextEntities(value.entities, text);
+  const nativeText = readString(value.text);
+  const text = nativeText ?? readString(value.caption);
+  const textEntities = parseTextEntities(nativeText === null ? value.caption_entities : value.entities, text);
   if (textEntities === null) return null;
   return {
     messageId: String(messageId),
@@ -313,6 +359,7 @@ function parseIncomingMessage(value: unknown): TelegramIncomingMessage | null {
     senderIsChat,
     text,
     textEntities,
+    attachments: parseIncomingAttachments(value, String(messageId)),
     replyToMessageId: replyToMessageId === null ? null : String(replyToMessageId),
     replyToSenderId: replyToSenderId === null ? null : String(replyToSenderId),
     forwarded: 'forward_origin' in value
@@ -382,6 +429,46 @@ export function createTelegramBotApi(input: Readonly<{
   }
 
   return {
+    async downloadFile(file, options) {
+      options?.signal?.throwIfAborted();
+      const unsupported = { kind: 'notReady', reason: 'unsupported', diagnostic: 'The Telegram attachment is unavailable or exceeds the Cloud Bot API 20 MiB download limit.' } as const;
+      if (file.byteLength !== undefined && file.byteLength > TELEGRAM_MAX_DOWNLOAD_FILE_BYTES) return unsupported;
+      const envelope = await request('getFile', { file_id: file.fileId }, options);
+      options?.signal?.throwIfAborted();
+      if (!envelope) return { kind: 'notReady', reason: 'network' };
+      if (!envelope.ok) {
+        const failure = mapReadFailure(envelope);
+        return { kind: 'notReady', reason: failure.kind === 'providerConflict' ? 'providerConflict' : failure.reason,
+          ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: failure.retryAfterMs }),
+          diagnostic: 'Telegram could not resolve the attachment.',
+        };
+      }
+      const result = isRecord(envelope.result) ? envelope.result : null;
+      const size = result ? readSafeInteger(result.file_size) : null;
+      if (size !== null && size > TELEGRAM_MAX_DOWNLOAD_FILE_BYTES) return unsupported;
+      const path = result ? readString(result.file_path) : null;
+      if (!path || path.startsWith('/') || /^[a-z][a-z0-9+.-]*:/iu.test(path) || path.includes('\\') || path.includes('?') || path.includes('#')) return unsupported;
+      // Decode each segment before checking traversal, then encode it as one
+      // path segment. No native path can change the authenticated file origin.
+      let segments: string[];
+      try { segments = path.split('/').map(segment => decodeURIComponent(segment)); }
+      catch { return unsupported; }
+      if (segments.some(segment => !segment || segment === '.' || segment === '..' || /[/\\\u0000-\u001f]/u.test(segment))) return unsupported;
+      const url = `${TELEGRAM_BOT_API_BASE_URL}/file/bot${token}/${segments.map(segment => encodeURIComponent(segment)).join('/')}`;
+      try {
+        const response = await input.http.request({ url, method: 'GET', redirect: 'error' }, options);
+        options?.signal?.throwIfAborted();
+        if (response.status < 200 || response.status >= 300 || response.finalUrl !== url) {
+          return { kind: 'notReady', reason: 'network', diagnostic: 'Telegram could not download the attachment.' };
+        }
+        if (response.body.byteLength > TELEGRAM_MAX_DOWNLOAD_FILE_BYTES) return unsupported;
+        return { kind: 'downloaded', bytes: response.body };
+      } catch (error) {
+        if (options?.signal?.aborted) throw error;
+        return { kind: 'notReady', reason: 'network', diagnostic: 'Telegram could not download the attachment.' };
+      }
+    },
+
     async getMe(options) {
       const envelope = await request('getMe', undefined, options);
       if (!envelope) return { kind: 'notReady', reason: 'network' };

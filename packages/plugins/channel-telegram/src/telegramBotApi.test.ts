@@ -1,8 +1,10 @@
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { describe, expect, it } from 'vitest';
 
 import {
   createTelegramBotApi,
   createTelegramPairingDeepLink,
+  TELEGRAM_MAX_DOWNLOAD_FILE_BYTES,
 } from './telegramBotApi.js';
 
 type RecordedRequest = Readonly<{
@@ -27,6 +29,134 @@ function jsonResponse(value: unknown, status = 200): Readonly<{
 }
 
 describe('Telegram Bot API adapter', () => {
+  it.each(['getFile', 'download'])('propagates host retirement during %s instead of reporting a provider network failure', async phase => {
+    const retired = new PluginError({ code: 'plugin_final_generation_retired', message: 'The provider generation is retired.' });
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+      if (phase === 'getFile' || input.method === 'GET') throw retired;
+      return jsonResponse({ ok: true, result: { file_path: 'documents/file.txt' } });
+    } } });
+    await expect(api.downloadFile({ fileId: 'native-file' }, { signal: new AbortController().signal })).rejects.toBe(retired);
+  });
+
+  it('renews getFile paths on each materialization and passes cancellation to both HTTP phases', async () => {
+    let renewal = 0;
+    const controller = new AbortController();
+    const requests: RecordedRequest[] = [];
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input, options) {
+      requests.push(input);
+      expect(options?.signal).toBe(controller.signal);
+      if (input.method === 'POST') {
+        renewal += 1;
+        expect(JSON.parse(new TextDecoder().decode(input.body))).toEqual({ file_id: 'native-file' });
+        return jsonResponse({ ok: true, result: { file_id: 'native-file', file_path: `documents/fresh-${renewal}.txt`, file_size: 5 } });
+      }
+      expect(input.redirect).toBe('error');
+      expect(input.timeoutMs).toBeUndefined();
+      return { ...jsonResponse(null), finalUrl: input.url, body: new TextEncoder().encode('hello') };
+    } } });
+    for (let count = 0; count < 2; count += 1) {
+      await expect(api.downloadFile({ fileId: 'native-file' }, { signal: controller.signal })).resolves.toEqual({
+        kind: 'downloaded', bytes: new TextEncoder().encode('hello'),
+      });
+    }
+    expect(requests.filter(request => request.method === 'GET').map(request => request.url)).toEqual([
+      'https://api.telegram.org/file/botsecret-token/documents/fresh-1.txt',
+      'https://api.telegram.org/file/botsecret-token/documents/fresh-2.txt',
+    ]);
+  });
+
+  it.each(['../other/file', '%2e%2e/other/file', '//outside.example/file', 'https://outside.example/file', 'documents/%2fsecret', 'documents/file?token=secret'])('refuses an unsafe native download path %s without a GET', async path => {
+    const calls: string[] = [];
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+      calls.push(input.method ?? '');
+      return jsonResponse({ ok: true, result: { file_path: path } });
+    } } });
+    await expect(api.downloadFile({ fileId: 'native-file' })).resolves.toMatchObject({ kind: 'notReady', reason: 'unsupported' });
+    expect(calls).toEqual(['POST']);
+  });
+
+  it('retains the exact Cloud boundary and reports overlimit descriptors without requesting bytes', async () => {
+    const requests: RecordedRequest[] = [];
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+      requests.push(input);
+      return input.method === 'GET'
+        ? { ...jsonResponse(null), finalUrl: input.url, body: new Uint8Array(0) }
+        : jsonResponse({ ok: true, result: { file_path: 'documents/file.txt', file_size: TELEGRAM_MAX_DOWNLOAD_FILE_BYTES } });
+    } } });
+    await expect(api.downloadFile({ fileId: 'big', byteLength: TELEGRAM_MAX_DOWNLOAD_FILE_BYTES + 1 })).resolves.toMatchObject({ kind: 'notReady', reason: 'unsupported' });
+    expect(requests).toHaveLength(0);
+    await expect(api.downloadFile({ fileId: 'allowed', byteLength: TELEGRAM_MAX_DOWNLOAD_FILE_BYTES })).resolves.toMatchObject({ kind: 'downloaded' });
+    expect(requests).toHaveLength(2);
+  });
+
+  it('sanitizes getFile and download failures instead of exposing token-bearing URLs', async () => {
+    for (const failurePhase of ['lookup', 'download', 'redirect']) {
+      const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+        if (input.method === 'POST') return failurePhase === 'lookup'
+          ? jsonResponse({ ok: false, error_code: 400, description: 'https://api.telegram.org/file/botsecret-token/secret' }, 400)
+          : jsonResponse({ ok: true, result: { file_path: 'documents/file.txt' } });
+        if (failurePhase === 'redirect') return { ...jsonResponse(null), status: 302, finalUrl: 'https://outside.example/secret-token' };
+        throw new Error('https://api.telegram.org/file/botsecret-token/secret');
+      } } });
+      const result = await api.downloadFile({ fileId: 'native-file' });
+      expect(result).toMatchObject({ kind: 'notReady' });
+      expect(JSON.stringify(result)).not.toContain('secret-token');
+    }
+  });
+
+  it('propagates cancellation during file download', async () => {
+    const controller = new AbortController();
+    const reason = new Error('materialization retired');
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+      if (input.method === 'POST') return jsonResponse({ ok: true, result: { file_path: 'documents/file.txt' } });
+      controller.abort(reason);
+      throw reason;
+    } } });
+    await expect(api.downloadFile({ fileId: 'native-file' }, { signal: controller.signal })).rejects.toBe(reason);
+  });
+
+  it('retains captions, caption entities and the largest valid photo without downloading during observation', async () => {
+    const calls: string[] = [];
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request(input) {
+      calls.push(input.url);
+      return jsonResponse({ ok: true, result: [{ update_id: 1, message: {
+        message_id: 2, date: 1700000000, chat: { id: 456, type: 'private' },
+        from: { id: 789, is_bot: false }, caption: '@HappierBot inspect',
+        caption_entities: [{ type: 'mention', offset: 0, length: 11 }],
+        photo: [
+          { file_id: 'large', width: 800, height: 600, file_size: 1000 },
+          { file_id: 'small', width: 80, height: 60, file_size: 100 },
+          { file_id: 'invalid', width: -1, height: 900 },
+        ],
+      } }] });
+    } } });
+    const result = await api.getUpdates({ offset: '1', limit: 1, timeoutSeconds: 0 });
+    expect(result).toMatchObject({ kind: 'updates', updates: [{ message: {
+      text: '@HappierBot inspect', textEntities: [{ type: 'mention', text: '@HappierBot' }],
+      attachments: [{ fileId: 'large', name: 'photo-2.jpg', mediaType: 'image/jpeg', byteLength: 1000 }],
+    } }] });
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    ['document', 'notes.txt', 'text/plain'], ['audio', 'song.mp3', 'audio/mpeg'],
+    ['voice', 'voice-2.ogg', 'audio/ogg'], ['video', 'clip.mp4', 'video/mp4'],
+    ['animation', 'animation.gif', 'image/gif'],
+  ])('observes a %s file and deduplicates the animation document alias', async (kind, name, mediaType) => {
+    const media = { file_id: 'native-file', file_unique_id: 'unique', file_name: name, mime_type: mediaType, file_size: 30000000 };
+    const api = createTelegramBotApi({ token: 'secret-token', http: { async request() {
+      return jsonResponse({ ok: true, result: [{ update_id: 1, message: {
+        message_id: 2, date: 1700000000, chat: { id: 456, type: 'private' },
+        [kind]: media, ...(kind === 'animation' ? { document: { ...media, file_id: 'document-alias' } } : {}),
+      } }] });
+    } } });
+    const result = await api.getUpdates({ offset: '1', limit: 1, timeoutSeconds: 0 });
+    expect(result).toMatchObject({ kind: 'updates', updates: [{ message: {
+      attachments: [{ fileId: 'native-file', name, mediaType, byteLength: 30000000 }],
+    } }] });
+    if (result.kind === 'updates') expect(result.updates[0]?.message?.attachments).toHaveLength(1);
+  });
+
   it('creates the official direct-message pairing deep link only for a valid normalized token', () => {
     expect(createTelegramPairingDeepLink({ username: 'HappierBot', token: 'ABCD2345' })).toBe(
       'https://t.me/HappierBot?start=ABCD2345',
