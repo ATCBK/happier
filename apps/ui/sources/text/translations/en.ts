@@ -12918,6 +12918,11 @@ const enBrowserShell = {
     previewElsewhereTitleUnknownMachine: ({ service }: { service: string }) =>
       `${service} runs on another machine`,
     previewElsewhere: `This device can’t open it directly. Share a link from Local services to open it here.`,
+    previewEndedTitle: `This preview has ended`,
+    previewEnded: `Its service stopped sharing it, or the link was revoked. Open it again from Local services.`,
+    previewTransportUnavailableTitle: `Can’t reach this preview`,
+    previewTransportUnavailable: `The machine running it isn’t answering right now. Reload to try again.`,
+    closeTab: `Close tab`,
     desktopEngineUnavailable:
       'The in-app browser engine is unavailable on this machine.',
     desktopWebView:
@@ -13121,7 +13126,7 @@ const enBrowserDiagnostics = {
     title: 'Browser diagnostics',
     eventCount: ({ count }: { count: string }) => `${count} diagnostic events`,
     untrustedNotice:
-      'Injected diagnostics are page-tamperable and lower fidelity.',
+      'Collected inside the page, so the page can change what it reports.',
     untrustedEvent: 'Untrusted injected event',
     eventsEmpty: 'No browser diagnostics captured yet.',
     eventTitle: ({ family, kind }: { family: string; kind: string }) =>
@@ -13199,8 +13204,12 @@ const enBrowserDiagnostics = {
       title: 'Interactive diagnostics',
       enabled: 'Interactive diagnostics enabled',
       disabled: 'Interactive diagnostics disabled',
-      unavailable: ({ reasonCode }: { reasonCode: string }) =>
-        `Interactive diagnostics unavailable: ${reasonCode}`,
+      unavailableReason: {
+        adapter: `Interactive tools aren’t available for this kind of page.`,
+        collector: `Interactive tools appear once the page connects its diagnostics.`,
+        policy: `Interactive tools aren’t allowed here.`,
+        generic: `Interactive tools aren’t available right now.`,
+      },
       ownerOnly: 'Only the session owner can enable interactive diagnostics.',
       enable: 'Enable interaction',
       disable: 'Disable interaction',
