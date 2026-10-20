@@ -163,11 +163,12 @@ describe('standalone MCP machine placement', () => {
       ok: false, errorCode: 'approvals_not_supported',
     });
   });
-  it.each(['sessions.external.candidates.list', 'sessions.external.candidate.delete', 'sessions.external.operation.status.get'] as const)(
+  it.each(['sessions.external.candidates.list', 'sessions.external.candidate.delete', 'sessions.external.transcript.page', 'sessions.external.operation.status.get'] as const)(
     'delivers %s to the addressed daemon, even with another local Machine', async actionId => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const history = { ok: true, candidates: [], nextCursor: 'history-next', contentCoverage: 'partial' };
     const deleted = { ok: true, deleted: true };
+    const transcript = { ok: true, items: [], hasMore: false, nextCursor: null };
     const operationRef = { sessionId: 'c1234567890123456789012345', operationId: 'operation-1', revision: 4 };
     const operation = { ok: true, progress: {
       v: 1, operationId: operationRef.operationId, revision: operationRef.revision,
@@ -208,6 +209,7 @@ describe('standalone MCP machine placement', () => {
         const method = String(request.method);
         ack({ ok: true, result: method.endsWith(RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) ? history
           : method.endsWith(RPC_METHODS.DAEMON_EXTERNAL_SESSION_CANDIDATE_DELETE) ? deleted
+          : method.endsWith(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE) ? transcript
           : method.endsWith(RPC_METHODS.DAEMON_EXTERNAL_SESSION_OPERATION_STATUS_GET) ? operation : files });
       });
     });
@@ -234,13 +236,15 @@ describe('standalone MCP machine placement', () => {
       const input = actionId === 'sessions.external.operation.status.get' ? operationRef : { machineId: 'addressed-machine', agentId: 'claude',
         source: { kind: 'claudeConfig', configDir: '/tmp/test-claude' },
         ...(actionId === 'sessions.external.candidates.list'
-          ? { searchTerm: 'needle', searchTarget: 'content' } : { remoteSessionId: 'external-1' }) };
+          ? { searchTerm: 'needle', searchTarget: 'content' } : { remoteSessionId: 'external-1',
+            ...(actionId === 'sessions.external.transcript.page' ? { direction: 'older' } : {}) }) };
       const spec = getActionSpec(actionId);
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       const result = CallToolResultSchema.parse(await client.callTool({ name: spec.bindings!.mcpToolName!, arguments: input }));
       const content = result.content.find(entry => entry.type === 'text');
       expect(content?.type === 'text' ? JSON.parse(content.text) : null).toEqual(actionId.endsWith('.list') ? history
         : actionId === 'sessions.external.candidate.delete' ? deleted
+        : actionId === 'sessions.external.transcript.page' ? transcript
         : { ok: true, operation: operationRef, presentation: { v: 1, operationId: 'operation-1', revision: 4,
           kind: 'materialize', status: 'running', phase: 'validating' } });
       expect(result.isError).not.toBe(true);

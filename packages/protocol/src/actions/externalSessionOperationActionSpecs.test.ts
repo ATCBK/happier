@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import { serializeActionSpec } from './actionCatalog.js';
-import { getActionSpec } from './actionSpecs.js';
+import { getActionSpec, resolveActionExecutionPlacementForInput } from './actionSpecs.js';
+import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 
 describe('external-session operation ActionSpecs', () => {
+  it('exposes native discovery, linking and initial transcript reads through canonical Agent/MCP/CLI Actions', () => {
+    const input = { machineId: 'machine-1', agentId: 'claude', remoteSessionId: 'native-1',
+      source: { kind: 'claudeConfig', projectId: '-tmp' }, direction: 'older' };
+    for (const actionId of ['sessions.external.candidates.list', 'sessions.external.link.ensure', 'sessions.external.transcript.page'] as const) {
+      const spec = getActionSpec(actionId);
+      for (const surface of ['agent', 'mcp', 'cli'] as const) {
+        expect(resolveActionSurfaceAvailability({ actionId, surface, requireToolBinding: surface !== 'cli' }), `${actionId}:${surface}`)
+          .toMatchObject({ available: true });
+      }
+      expect(resolveActionExecutionPlacementForInput(spec, input)).toBe('machine');
+    }
+  });
   it('admits reference-only materialize receipt replay without weakening status or control results', async () => {
     const operation = {
       sessionId: 'session-1',
