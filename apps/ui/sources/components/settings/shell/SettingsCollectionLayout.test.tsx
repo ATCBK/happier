@@ -27,8 +27,9 @@ installSettingsViewCommonModuleMocks({
 const { SettingsCollectionLayout } = await import('./SettingsCollectionLayout');
 const { SettingsFloatingControlsHost } = await import('./SettingsModalFloatingControls');
 const { PageHeader } = await import('@/components/ui/layout/PageHeader');
-const { useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
+const { COLLECTION_RAIL_MIN_WIDTH_PX, useHappierCollectionLayout } = await import('@happier-dev/plugin-ui/presentation');
 const { HAPPIER_COLLECTION_RAIL_WIDTH_PX } = await import('@happier-dev/plugin-ui/advanced');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
 
 const modeSeen: Array<string | null> = [];
 const detailMounts = { count: 0 };
@@ -78,6 +79,26 @@ describe('SettingsCollectionLayout', () => {
         windowState.fontScale = 1;
         windowState.width = 1200;
         windowState.height = 800;
+        getStorage().getState().applyLocalSettings({ collectionRailWidthsV1: {} });
+    });
+
+    it('restores each navigator width and keeps the preference when a narrow pane temporarily clamps it', async () => {
+        getStorage().getState().applyLocalSettings({ collectionRailWidthsV1: { machines: 380, teams: 310 } });
+        const screen = await renderCollection();
+        const railWidth = () => [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
+            .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {}).width;
+        await layoutAt(screen, 1200);
+        expect(railWidth()).toBe(380);
+        await layoutAt(screen, 780);
+        expect(railWidth()).toBe(300);
+        expect(getStorage().getState().localSettings.collectionRailWidthsV1.machines).toBe(380);
+        await layoutAt(screen, 1200);
+        expect(railWidth()).toBe(380);
+        await act(async () => screen.tree.update(<SettingsCollectionLayout navigator="teams" rootPathname="/settings/teams"
+            resolveChildRoute={() => 'index'} rail={<View />} railWidth="standard" detailMinWidthPx={480}
+            testID="settings-machines" />));
+        await layoutAt(screen, 1200);
+        expect(railWidth()).toBe(310);
     });
 
     /** The options the collection gives the one phone header above both panes. */
@@ -155,14 +176,14 @@ describe('SettingsCollectionLayout', () => {
 
     it('needs room for the rail and the detail minimum at the current text scale before splitting', async () => {
         const screen = await renderCollection();
-        // 272 + 480 = 752: one pixel short stays stacked, the exact width splits.
-        await layoutAt(screen, 751);
+        const needed = COLLECTION_RAIL_MIN_WIDTH_PX + 480;
+        await layoutAt(screen, needed - 1);
         expect(hostByTestID(screen, 'machines-rail')).toBeNull();
-        await layoutAt(screen, 752);
+        await layoutAt(screen, needed);
         expect(hostByTestID(screen, 'machines-rail')).not.toBeNull();
     });
 
-    it('reads the rail width from its role: standard and detailed each need their own rail plus the detail minimum', async () => {
+    it('defaults each rail to its role width while both roles can shrink to the row-derived minimum', async () => {
         const renderRole = (railWidth: 'standard' | 'detailed') => renderScreen(
             <SettingsCollectionLayout navigator="machines" rootPathname="/settings/machines"
                 resolveChildRoute={() => '[id]'} rail={<View testID="machines-rail" />}
@@ -170,7 +191,11 @@ describe('SettingsCollectionLayout', () => {
         );
         for (const role of ['standard', 'detailed'] as const) {
             const screen = await renderRole(role);
-            const needed = HAPPIER_COLLECTION_RAIL_WIDTH_PX[role] + 480;
+            await layoutAt(screen, 1200);
+            const railStyle = [hostByTestID(screen, 'settings-machines-list-pane')?.props.style].flat(Infinity)
+                .filter(Boolean).reduce((merged, part) => ({ ...merged, ...part }), {});
+            expect(railStyle.width).toBe(HAPPIER_COLLECTION_RAIL_WIDTH_PX[role]);
+            const needed = COLLECTION_RAIL_MIN_WIDTH_PX + 480;
             await layoutAt(screen, needed - 1);
             expect(hostByTestID(screen, 'machines-rail'), `${role} one pixel short`).toBeNull();
             await layoutAt(screen, needed);
@@ -204,9 +229,10 @@ describe('SettingsCollectionLayout', () => {
     it('scales the rail and detail minimums with larger text', async () => {
         windowState.fontScale = 1.5;
         const screen = await renderCollection();
-        await layoutAt(screen, 1127);
+        const needed = (COLLECTION_RAIL_MIN_WIDTH_PX + 480) * windowState.fontScale;
+        await layoutAt(screen, needed - 1);
         expect(hostByTestID(screen, 'machines-rail')).toBeNull();
-        await layoutAt(screen, 1128);
+        await layoutAt(screen, needed);
         expect(hostByTestID(screen, 'machines-rail')).not.toBeNull();
     });
 
